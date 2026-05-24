@@ -116,6 +116,17 @@ export async function setupSkills(
     }
   }
   let next: OpenClawConfig = cfg;
+  if (installable.length === 0 && missing.length === 0) {
+    await prompter.note(
+      [
+        "No missing skill dependencies to install.",
+        `To inspect available skills, run: ${formatCliCommand("openclaw skills list --verbose")}`,
+        `To check skill status, run: ${formatCliCommand("openclaw skills check")}`,
+      ].join("\n"),
+      t("wizard.skills.allReadyTitle") ?? "All skills ready",
+    );
+    return next;
+  }
   if (installable.length > 0) {
     const toInstall = await prompter.multiselect({
       message: t("wizard.skills.installDeps"),

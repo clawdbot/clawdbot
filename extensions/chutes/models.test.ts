@@ -85,6 +85,20 @@ describe("chutes-models", () => {
     expect(def.compat.supportsUsageInStreaming).toBe(false);
   });
 
+  it("keeps Qwen VL image limits in the runtime catalog", () => {
+    const visionModelIds = ["Qwen/Qwen2.5-VL-32B-Instruct", "Qwen/Qwen3-VL-235B-A22B-Instruct"];
+    for (const id of visionModelIds) {
+      const model = CHUTES_MODEL_CATALOG.find((candidate) => candidate.id === id);
+      expect(model).toBeDefined();
+      if (!model) {
+        throw new Error(`expected ${id}`);
+      }
+      expect(buildChutesModelDefinition(model).mediaInput).toEqual({
+        image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+      });
+    }
+  });
+
   it("discoverChutesModels returns static catalog when accessToken is empty", async () => {
     const models = await discoverChutesModels("");
     expect(models).toHaveLength(CHUTES_MODEL_CATALOG.length);

@@ -174,16 +174,22 @@ describe("happy path prompt snapshots", () => {
     const group = readCommittedSnapshot("discord-group-codex-message-tool.md");
     const heartbeat = readCommittedSnapshot("telegram-heartbeat-codex-tool.md");
     const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
+    const agentSoulHeading = "## OpenClaw Agent Soul";
 
     expect(direct).toContain('"collaborationMode": {');
-    expect(direct).toContain('"developer_instructions": null');
+    expect(direct).toContain('"developer_instructions": "# Collaboration Mode: Default');
+    expect(direct).toContain(agentSoulHeading);
     expect(group).toContain('"collaborationMode": {');
-    expect(group).toContain('"developer_instructions": null');
+    expect(group).toContain('"developer_instructions": "# Collaboration Mode: Default');
+    expect(group).toContain(agentSoulHeading);
     expect(direct).not.toContain(heartbeatPhrase);
     expect(group).not.toContain(heartbeatPhrase);
+    expect(direct).not.toContain("This is an OpenClaw heartbeat turn.");
+    expect(group).not.toContain("This is an OpenClaw heartbeat turn.");
 
     expect(heartbeat).toContain('"collaborationMode": {');
     expect(heartbeat).toContain('"developer_instructions": "This is an OpenClaw heartbeat turn.');
+    expect(heartbeat).toContain(agentSoulHeading);
     const openClawRuntimeInstructions = renderedPromptSection(
       heartbeat,
       "### Developer: OpenClaw Runtime Instructions",

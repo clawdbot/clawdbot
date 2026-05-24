@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { readFlagValue } from "./arg-utils.mjs";
+import { createManagedCommandInvocation } from "./managed-child-process.mjs";
 
 const CORE_TEST_CONFIGS = new Set([
   "tsconfig.core.test.json",
@@ -130,11 +131,16 @@ function conditionalRequiredPaths(entries, cwd, fileExists) {
 }
 
 function getGitBooleanConfig(name, { cwd }) {
-  const result = spawnSync("git", ["config", "--get", "--bool", name], {
+  const git = createManagedCommandInvocation({
+    args: ["config", "--get", "--bool", name],
+    bin: "git",
+  });
+  const result = spawnSync(git.command, git.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: git.shell,
+    windowsVerbatimArguments: git.windowsVerbatimArguments,
   });
 
   if (result.error || (result.status ?? 1) !== 0) {
@@ -145,11 +151,16 @@ function getGitBooleanConfig(name, { cwd }) {
 }
 
 function getSparseCheckoutPatterns({ cwd }) {
-  const result = spawnSync("git", ["sparse-checkout", "list"], {
+  const git = createManagedCommandInvocation({
+    args: ["sparse-checkout", "list"],
+    bin: "git",
+  });
+  const result = spawnSync(git.command, git.args, {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
-    shell: process.platform === "win32",
+    shell: git.shell,
+    windowsVerbatimArguments: git.windowsVerbatimArguments,
   });
 
   if (result.error || (result.status ?? 1) !== 0) {

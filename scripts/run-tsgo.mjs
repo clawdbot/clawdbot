@@ -12,6 +12,7 @@ import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mjs";
+import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 
 const { args: finalArgs, env } = applyLocalTsgoPolicy(
   process.argv.slice(2),
@@ -45,10 +46,16 @@ try {
       process.exitCode = 1;
     }
   } else {
-    const result = spawnSync(tsgoPath, finalArgs, {
+    const tsgo = createManagedCommandInvocation({
+      args: finalArgs,
+      bin: tsgoPath,
+      env,
+    });
+    const result = spawnSync(tsgo.command, tsgo.args, {
       stdio: "inherit",
       env,
-      shell: process.platform === "win32",
+      shell: tsgo.shell,
+      windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
     });
 
     if (result.error) {

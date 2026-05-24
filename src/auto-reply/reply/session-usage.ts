@@ -90,6 +90,7 @@ export async function persistSessionUsageUpdate(params: {
   cliSessionId?: string;
   cliSessionBinding?: import("../../config/sessions.js").CliSessionBinding;
   preserveFreshTotalTokensOnStaleUsage?: boolean;
+  preserveUserFacingSessionModelState?: boolean;
   logLabel?: string;
 }): Promise<void> {
   const { storePath, sessionKey } = params;
@@ -113,7 +114,12 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
-          const resolvedContextTokens = params.contextTokensUsed ?? entry.contextTokens;
+          const preserveSessionModelState =
+            params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+          const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+          const resolvedContextTokens = preserveUserFacingRunState
+            ? entry.contextTokens
+            : (params.contextTokensUsed ?? entry.contextTokens);
           // Use last-call usage for totalTokens when available. The accumulated
           // `usage.input` sums input tokens from every API call in the run
           // (tool-use loops, compaction retries), overstating actual context.
@@ -121,30 +127,36 @@ export async function persistSessionUsageUpdate(params: {
           const usageForContext =
             params.lastCallUsage ??
             (params.usageIsContextSnapshot === true ? params.usage : undefined);
-          const totalTokens = hasFreshContextSnapshot
-            ? deriveSessionTotalTokens({
-                usage: usageForContext,
-                contextTokens: resolvedContextTokens,
-                promptTokens: params.promptTokens,
-              })
-            : undefined;
-          const runEstimatedCostUsd = estimateSessionRunCostUsd({
-            cfg,
-            usage: params.usage,
-            providerUsed: params.providerUsed ?? entry.modelProvider,
-            modelUsed: params.modelUsed ?? entry.model,
-          });
+          const totalTokens =
+            hasFreshContextSnapshot && !preserveUserFacingRunState
+              ? deriveSessionTotalTokens({
+                  usage: usageForContext,
+                  contextTokens: resolvedContextTokens,
+                  promptTokens: params.promptTokens,
+                })
+              : undefined;
+          const runEstimatedCostUsd = preserveUserFacingRunState
+            ? undefined
+            : estimateSessionRunCostUsd({
+                cfg,
+                usage: params.usage,
+                providerUsed: params.providerUsed ?? entry.modelProvider,
+                modelUsed: params.modelUsed ?? entry.model,
+              });
           const patch: Partial<SessionEntry> = {
-            modelProvider:
-              params.isHeartbeat === true
-                ? entry.modelProvider
-                : (params.providerUsed ?? entry.modelProvider),
-            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
-            contextTokens: resolvedContextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            modelProvider: preserveSessionModelState
+              ? entry.modelProvider
+              : (params.providerUsed ?? entry.modelProvider),
+            model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+            ...(resolvedContextTokens !== undefined
+              ? { contextTokens: resolvedContextTokens }
+              : {}),
+            systemPromptReport: preserveUserFacingRunState
+              ? entry.systemPromptReport
+              : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          if (hasUsage) {
+          if (hasUsage && !preserveUserFacingRunState) {
             patch.inputTokens = params.usage?.input ?? 0;
             patch.outputTokens = params.usage?.output ?? 0;
             // Cache counters should reflect the latest context snapshot when
@@ -159,16 +171,19 @@ export async function persistSessionUsageUpdate(params: {
           if (runEstimatedCostUsd !== undefined) {
             patch.estimatedCostUsd = runEstimatedCostUsd;
           }
-          if (hasFreshContextSnapshot) {
+          if (hasFreshContextSnapshot && !preserveUserFacingRunState) {
             patch.totalTokens = totalTokens;
             patch.totalTokensFresh = true;
           } else if (
-            params.preserveFreshTotalTokensOnStaleUsage !== true ||
-            entry.totalTokensFresh !== true
+            !preserveUserFacingRunState &&
+            (params.preserveFreshTotalTokensOnStaleUsage !== true ||
+              entry.totalTokensFresh !== true)
           ) {
             patch.totalTokensFresh = false;
           }
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          return preserveUserFacingRunState
+            ? patch
+            : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {
@@ -183,17 +198,26 @@ export async function persistSessionUsageUpdate(params: {
         storePath,
         sessionKey,
         update: async (entry) => {
+          const preserveSessionModelState =
+            params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
+          const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+          const contextTokens = preserveUserFacingRunState
+            ? entry.contextTokens
+            : (params.contextTokensUsed ?? entry.contextTokens);
           const patch: Partial<SessionEntry> = {
-            modelProvider:
-              params.isHeartbeat === true
-                ? entry.modelProvider
-                : (params.providerUsed ?? entry.modelProvider),
-            model: params.isHeartbeat === true ? entry.model : (params.modelUsed ?? entry.model),
-            contextTokens: params.contextTokensUsed ?? entry.contextTokens,
-            systemPromptReport: params.systemPromptReport ?? entry.systemPromptReport,
+            modelProvider: preserveSessionModelState
+              ? entry.modelProvider
+              : (params.providerUsed ?? entry.modelProvider),
+            model: preserveSessionModelState ? entry.model : (params.modelUsed ?? entry.model),
+            ...(contextTokens !== undefined ? { contextTokens } : {}),
+            systemPromptReport: preserveUserFacingRunState
+              ? entry.systemPromptReport
+              : (params.systemPromptReport ?? entry.systemPromptReport),
             updatedAt: Date.now(),
           };
-          return applyCliSessionIdToSessionPatch(params, entry, patch);
+          return preserveUserFacingRunState
+            ? patch
+            : applyCliSessionIdToSessionPatch(params, entry, patch);
         },
       });
     } catch (err) {

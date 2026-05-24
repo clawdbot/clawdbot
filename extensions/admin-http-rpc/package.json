@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/admin-http-rpc",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "private": true,
   "description": "OpenClaw admin HTTP RPC endpoint",
   "type": "module",

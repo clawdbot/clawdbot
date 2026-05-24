@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../scripts/lib/workspace-bootstrap-smoke.mjs";
 import {
@@ -284,34 +285,122 @@ describe("resolveNpmCommandInvocation", () => {
     expect(
       resolveNpmCommandInvocation({
         npmExecPath: "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
+        npmArgs: ["view", "openclaw", "version"],
         nodeExecPath: "/usr/local/bin/node",
         platform: "linux",
       }),
     ).toEqual({
       command: "/usr/local/bin/node",
-      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js"],
+      args: ["/usr/local/lib/node_modules/npm/bin/npm-cli.js", "view", "openclaw", "version"],
     });
   });
 
   it("falls back to the npm command when npm_execpath points to pnpm", () => {
     expect(
       resolveNpmCommandInvocation({
+        npmArgs: ["pack"],
         npmExecPath: "/home/test/.cache/node/corepack/v1/pnpm/10.23.0/bin/pnpm.cjs",
         nodeExecPath: "/usr/local/bin/node",
         platform: "linux",
       }),
     ).toEqual({
       command: "npm",
-      args: [],
+      args: ["pack"],
     });
   });
 
-  it("uses the platform npm command when npm_execpath is missing", () => {
-    expect(resolveNpmCommandInvocation({ npmExecPath: "", platform: "win32" })).toEqual({
-      command: "npm.cmd",
-      args: [],
+  it("wraps the Windows npm command when npm_execpath is missing", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["view", "openclaw@beta", "version"],
+        npmExecPath: "",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "npm.cmd view openclaw@beta version"],
+      windowsVerbatimArguments: true,
     });
   });
+
+  it("wraps Windows npm_execpath command shims", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        npmArgs: ["install", "-g", "C:\\tmp\\openclaw package.tgz"],
+        npmExecPath: "C:\\Program Files\\nodejs\\npm.cmd",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '"C:\\Program Files\\nodejs\\npm.cmd" install -g "C:\\tmp\\openclaw package.tgz"',
+      ],
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("runs Windows npm_execpath executables directly", () => {
+    expect(
+      resolveNpmCommandInvocation({
+        npmArgs: ["--version"],
+        npmExecPath: "C:\\Program Files\\nodejs\\npm.exe",
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\npm.exe",
+      args: ["--version"],
+    });
+  });
+
+  if (process.platform === "win32") {
+    it("executes fallback npm.cmd through cmd.exe on Windows", () => {
+      const dir = mkdtempSync(join(tmpdir(), "openclaw-fake-npm-cmd-"));
+      try {
+        const outputPath = join(dir, "args.json");
+        writeFileSync(
+          join(dir, "fake-npm.js"),
+          [
+            "const fs = require('node:fs');",
+            "fs.writeFileSync(process.env.OPENCLAW_FAKE_NPM_OUT, JSON.stringify(process.argv.slice(2)));",
+          ].join("\n"),
+        );
+        writeFileSync(
+          join(dir, "npm.cmd"),
+          `@echo off\r\n"${process.execPath}" "%~dp0fake-npm.js" %*\r\n`,
+        );
+
+        const invocation = resolveNpmCommandInvocation({
+          comSpec: process.env.ComSpec ?? "cmd.exe",
+          npmArgs: ["view", "openclaw@beta", "version"],
+          npmExecPath: "",
+          platform: "win32",
+        });
+        execFileSync(invocation.command, invocation.args, {
+          cwd: dir,
+          env: {
+            ...process.env,
+            OPENCLAW_FAKE_NPM_OUT: outputPath,
+            PATH: `${dir}${delimiter}${process.env.PATH ?? ""}`,
+          },
+          windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+        });
+
+        expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual([
+          "view",
+          "openclaw@beta",
+          "version",
+        ]);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 });
 
 describe("parseNpmPackJsonOutput", () => {

@@ -22,6 +22,7 @@ import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks, splitTelegramHtmlChunks } from "./format.js";
 import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 export const TELEGRAM_POLL_OPTION_LIMIT = 10;
@@ -228,7 +229,9 @@ export function createTelegramOutboundAdapter(
     },
     pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
       const { pinMessageTelegram } = await loadSendModule();
-      await pinMessageTelegram(target.to, messageId, {
+      const outboundTo = normalizeTelegramOutboundTarget(target.to);
+      const pinTarget = parseTelegramTarget(outboundTo);
+      await pinMessageTelegram(pinTarget.chatId, messageId, {
         cfg,
         accountId: target.accountId ?? undefined,
         notify: pin.notify,
@@ -254,6 +257,7 @@ export function createTelegramOutboundAdapter(
         silent,
         gatewayClientScopes,
       }) => {
+        const outboundTo = normalizeTelegramOutboundTarget(to);
         const { send, baseOpts } = await resolveTelegramSendContext({
           cfg,
           deps,
@@ -265,7 +269,7 @@ export function createTelegramOutboundAdapter(
           gatewayClientScopes,
           resolveSend,
         });
-        return await send(to, text, {
+        return await send(outboundTo, text, {
           ...baseOpts,
         });
       },
@@ -285,6 +289,7 @@ export function createTelegramOutboundAdapter(
         silent,
         gatewayClientScopes,
       }) => {
+        const outboundTo = normalizeTelegramOutboundTarget(to);
         const { send, baseOpts } = await resolveTelegramSendContext({
           cfg,
           deps,
@@ -296,7 +301,7 @@ export function createTelegramOutboundAdapter(
           gatewayClientScopes,
           resolveSend,
         });
-        return await send(to, text, {
+        return await send(outboundTo, text, {
           ...baseOpts,
           mediaUrl,
           mediaLocalRoots,
@@ -320,6 +325,7 @@ export function createTelegramOutboundAdapter(
       silent,
       gatewayClientScopes,
     }) => {
+      const outboundTo = normalizeTelegramOutboundTarget(to);
       const { send, baseOpts } = await resolveTelegramSendContext({
         cfg,
         deps,
@@ -333,7 +339,7 @@ export function createTelegramOutboundAdapter(
       });
       const result = await sendTelegramPayloadMessages({
         send,
-        to,
+        to: outboundTo,
         payload,
         baseOpts: {
           ...baseOpts,
@@ -354,8 +360,9 @@ export function createTelegramOutboundAdapter(
       isAnonymous,
       gatewayClientScopes,
     }) => {
+      const outboundTo = normalizeTelegramOutboundTarget(to);
       const { sendPollTelegram } = await loadSendModule();
-      return await sendPollTelegram(to, poll, {
+      return await sendPollTelegram(outboundTo, poll, {
         cfg,
         accountId: accountId ?? undefined,
         messageThreadId: parseTelegramThreadId(threadId),

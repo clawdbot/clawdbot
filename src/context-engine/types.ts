@@ -135,6 +135,8 @@ export type TranscriptRewriteReplacement = {
 export type TranscriptRewriteRequest = {
   /** Message entry replacements to apply in one branch-and-reappend pass. */
   replacements: TranscriptRewriteReplacement[];
+  /** Optional entry-id set that must cover every active-branch entry from the first replacement onward. */
+  allowedRewriteSuffixEntryIds?: string[];
 };
 
 export type TranscriptRewriteResult = {

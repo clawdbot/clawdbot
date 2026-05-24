@@ -1,5 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
+import { extractExplicitGroupId } from "./group-id.js";
+
+afterEach(() => {
+  setActivePluginRegistry(createTestRegistry());
+});
 
 describe("extractSimpleExplicitGroupId", () => {
   it("returns undefined for empty/null input", () => {
@@ -40,5 +50,55 @@ describe("extractSimpleExplicitGroupId", () => {
   it("returns undefined for unrecognized formats", () => {
     expect(extractSimpleExplicitGroupId("user:12345")).toBeUndefined();
     expect(extractSimpleExplicitGroupId("just-a-string")).toBeUndefined();
+  });
+});
+
+describe("extractExplicitGroupId", () => {
+  it("strips Telegram numeric topic shorthand after target normalization", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "telegram",
+              capabilities: { chatTypes: ["group"] },
+            }),
+            messaging: {
+              normalizeTarget: () => "telegram:-100200300:77",
+              inferTargetChatType: () => "group",
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(extractExplicitGroupId("telegram:-100200300:77")).toBe("-100200300");
+  });
+
+  it("keeps legacy parser-only group target extraction quarantined", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "legacygroup",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "legacygroup",
+              capabilities: { chatTypes: ["group"] },
+            }),
+            messaging: {
+              parseExplicitTarget: ({ raw }: { raw: string }) =>
+                raw.startsWith("legacygroup:")
+                  ? { to: "group:room-a:topic:77", chatType: "group" as const }
+                  : null,
+            },
+          },
+        },
+      ]),
+    );
+
+    expect(extractExplicitGroupId("legacygroup:room-a:topic:77")).toBe("room-a");
   });
 });

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isCliRuntimeAliasForProvider, isCliRuntimeProvider } from "../model-runtime-aliases.js";
 import type { CompactEmbeddedPiSessionParams } from "../pi-embedded-runner/compact.types.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -59,6 +60,11 @@ type AgentHarnessSelectionDecision = {
     | "forced_plugin"
     // Implicit Codex preference found no registered Codex harness, so PI handled the run.
     | "implicit_plugin_unavailable_pi"
+    // Explicit provider-owned CLI runtime aliases have no agent harness plugin
+    // counterpart. PI is returned as the transcript-composition placeholder; the
+    // actual run is routed through CLI dispatch by callers that consult model
+    // runtime policy (see `assertModelFallbackCandidateHarnessAvailable`).
+    | "cli_runtime_passthrough_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
@@ -168,6 +174,17 @@ function selectAgentHarnessDecision(params: {
           runtime: "pi",
         },
         selectedReason: "implicit_plugin_unavailable_pi",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+      return buildSelectionDecision({
+        harness: piHarness,
+        policy: {
+          ...policy,
+          runtime: "pi",
+        },
+        selectedReason: "cli_runtime_passthrough_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
@@ -442,6 +459,18 @@ function logAgentHarnessSelection(
 export async function maybeCompactAgentHarnessSession(
   params: CompactEmbeddedPiSessionParams,
 ): Promise<EmbeddedPiCompactResult | undefined> {
+  if (params.provider && isCliRuntimeProvider(params.provider)) {
+    return undefined;
+  }
+  const runtime = resolveConfiguredAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.config,
+    sessionKey: params.sessionKey,
+  }).runtime;
+  if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+    return undefined;
+  }
   const harness = selectAgentHarness({
     provider: params.provider ?? "",
     modelId: params.model,

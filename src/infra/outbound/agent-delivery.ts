@@ -1,4 +1,5 @@
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -10,6 +11,8 @@ import {
   normalizeMessageChannel,
   type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import { resolveOutboundSessionRoute } from "./outbound-session.js";
 import type { OutboundTargetResolution } from "./targets.js";
 import {
   resolveOutboundTarget,
@@ -127,6 +130,67 @@ export function resolveAgentDeliveryPlan(params: {
     resolvedAccountId,
     resolvedThreadId: baseDelivery.threadId,
     deliveryTargetMode,
+  };
+}
+
+export async function resolveAgentDeliveryPlanWithSessionRoute(
+  params: Parameters<typeof resolveAgentDeliveryPlan>[0] & {
+    cfg: OpenClawConfig;
+    agentId: string;
+    currentSessionKey?: string;
+  },
+): Promise<AgentDeliveryPlan> {
+  const plan = resolveAgentDeliveryPlan(params);
+  if (
+    !params.wantsDelivery ||
+    !plan.resolvedTo ||
+    !isDeliverableMessageChannel(plan.resolvedChannel) ||
+    !resolveOutboundChannelPlugin({
+      channel: plan.resolvedChannel,
+      cfg: params.cfg,
+      allowBootstrap: true,
+    })?.messaging?.resolveOutboundSessionRoute
+  ) {
+    return plan;
+  }
+  const normalizedTarget = resolveOutboundTarget({
+    channel: plan.resolvedChannel,
+    to: plan.resolvedTo,
+    cfg: params.cfg,
+    accountId: plan.resolvedAccountId,
+    mode: plan.deliveryTargetMode ?? "explicit",
+  });
+  if (!normalizedTarget.ok) {
+    return plan;
+  }
+  const explicitThreadId =
+    params.explicitThreadId != null && params.explicitThreadId !== ""
+      ? params.explicitThreadId
+      : undefined;
+  const route = await (async () => {
+    try {
+      return await resolveOutboundSessionRoute({
+        cfg: params.cfg,
+        channel: plan.resolvedChannel as ChannelId,
+        agentId: params.agentId,
+        accountId: plan.resolvedAccountId,
+        target: normalizedTarget.to,
+        currentSessionKey: params.currentSessionKey,
+        threadId: plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId,
+      });
+    } catch {
+      return null;
+    }
+  })();
+  if (!route) {
+    return plan;
+  }
+  return {
+    ...plan,
+    resolvedTo: route.to,
+    resolvedThreadId:
+      route.threadId ??
+      (plan.deliveryTargetMode === "explicit" ? explicitThreadId : plan.resolvedThreadId),
   };
 }
 

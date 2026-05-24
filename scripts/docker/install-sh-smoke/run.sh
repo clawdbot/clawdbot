@@ -149,11 +149,22 @@ resolve_update_baseline_version() {
   UPDATE_BASELINE_VERSION="$resolved_version"
 }
 
+run_installer_for_package_spec() {
+  local install_url="$1"
+  local package_spec="$2"
+
+  timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+    bash -c "curl -fsSL \"\$1\" | bash -s -- --install-method npm --version \"\$2\" --no-prompt --no-onboard" \
+    _ "$install_url" "$package_spec"
+}
+
 run_install_smoke() {
   if [[ -n "$FRESH_VERSION" && -n "$FRESH_TAG_URL" ]]; then
     echo "package=$PACKAGE_NAME latest=$FRESH_VERSION source=$FRESH_TAG_URL"
-    echo "==> Install latest release tarball"
-    npm_install_global "install latest release tarball" --omit=optional "$FRESH_TAG_URL"
+    echo "==> Run official installer one-liner for latest release tarball"
+    OPENCLAW_NO_ONBOARD=1 OPENCLAW_NO_PROMPT=1 \
+      run_with_heartbeat "installer latest release tarball" \
+        run_installer_for_package_spec "$INSTALL_URL" "$FRESH_TAG_URL"
     print_install_audit "fresh install"
 
     echo "==> Verify installed version"

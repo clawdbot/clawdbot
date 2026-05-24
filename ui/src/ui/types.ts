@@ -290,6 +290,9 @@ export type ConfigSnapshot = {
   hash?: string | null;
   parsed?: unknown;
   valid?: boolean | null;
+  sourceConfig?: Record<string, unknown> | null;
+  resolved?: Record<string, unknown> | null;
+  runtimeConfig?: Record<string, unknown> | null;
   config?: Record<string, unknown> | null;
   issues?: ConfigSnapshotIssue[] | null;
 };

@@ -6,7 +6,7 @@ describe("subagents tool", () => {
     const tool = createSubagentsTool();
 
     expect(tool.description).toBe(
-      "List/kill/steer spawned subagents for requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
+      "List active and recent subagents for the requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
     );
   });
 });

@@ -240,6 +240,99 @@ describe("stripInlineDirectiveTagsFromMessageForDisplay", () => {
       content: "plain text",
     };
     const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
-    expect(result).toEqual(input);
+    expect(result).toBe(input);
+  });
+
+  test("returns original message reference when no directives are present", () => {
+    const input = {
+      role: "assistant",
+      content: [{ type: "text", text: "plain text without directives" }],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toBe(input);
+  });
+
+  test("returns original message reference when content has only non-text parts", () => {
+    const input = {
+      role: "assistant",
+      content: [{ type: "image", url: "https://example.test/x.png" }],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).toBe(input);
+  });
+
+  test("preserves unchanged text-part references when only some parts change", () => {
+    const unchangedPart = { type: "text" as const, text: "plain text" };
+    const changedPart = { type: "text" as const, text: "with [[reply_to_current]] tag" };
+    const nonTextPart = { type: "image" as const, url: "https://example.test/x.png" };
+    const input = {
+      role: "assistant",
+      content: [unchangedPart, changedPart, nonTextPart],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).not.toBe(input);
+    const content = result?.content as Array<Record<string, unknown>>;
+    expect(content[0]).toBe(unchangedPart);
+    expect(content[1]).not.toBe(changedPart);
+    expect(content[1]).toEqual({ type: "text", text: "with  tag" });
+    expect(content[2]).toBe(nonTextPart);
+  });
+
+  test("preserves trailing references when only the first part changes", () => {
+    const changedPart = { type: "text" as const, text: "first [[reply_to_current]]" };
+    const unchangedText = { type: "text" as const, text: "second" };
+    const unchangedImage = { type: "image" as const, url: "https://example.test/x.png" };
+    const input = {
+      role: "assistant",
+      content: [changedPart, unchangedText, unchangedImage],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).not.toBe(input);
+    const content = result?.content as Array<Record<string, unknown>>;
+    expect(content).toHaveLength(3);
+    expect(content[0]).not.toBe(changedPart);
+    expect(content[0]).toEqual({ type: "text", text: "first " });
+    expect(content[1]).toBe(unchangedText);
+    expect(content[2]).toBe(unchangedImage);
+  });
+
+  test("preserves leading references when only the last part changes", () => {
+    const unchangedText = { type: "text" as const, text: "first" };
+    const unchangedImage = { type: "image" as const, url: "https://example.test/x.png" };
+    const changedPart = { type: "text" as const, text: "last [[reply_to_current]]" };
+    const input = {
+      role: "assistant",
+      content: [unchangedText, unchangedImage, changedPart],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    expect(result).not.toBe(input);
+    const content = result?.content as Array<Record<string, unknown>>;
+    expect(content).toHaveLength(3);
+    expect(content[0]).toBe(unchangedText);
+    expect(content[1]).toBe(unchangedImage);
+    expect(content[2]).not.toBe(changedPart);
+    expect(content[2]).toEqual({ type: "text", text: "last " });
+  });
+
+  test("preserves arbitrary extra fields on rebuilt text parts", () => {
+    const input = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "with [[reply_to_current]] tag",
+          id: "part-1",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+    };
+    const result = stripInlineDirectiveTagsFromMessageForDisplay(input);
+    const content = result?.content as Array<Record<string, unknown>>;
+    expect(content[0]).toEqual({
+      type: "text",
+      text: "with  tag",
+      id: "part-1",
+      cache_control: { type: "ephemeral" },
+    });
   });
 });

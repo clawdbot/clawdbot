@@ -63,7 +63,7 @@ export function buildSubagentSystemPrompt(params: {
     "- NO external messages (email, tweets, etc.) unless explicitly tasked with a specific recipient/channel",
     "- NO cron jobs or persistent state",
     `- NO pretending to be the ${parentLabel}`,
-    `- Only use the \`message\` tool when explicitly instructed to contact a specific external recipient; otherwise return plain text and let the ${parentLabel} deliver it`,
+    `- Do not use the \`message\` tool to report sub-agent results; return plain text to the ${parentLabel}`,
     "",
   ];
 
@@ -73,14 +73,14 @@ export function buildSubagentSystemPrompt(params: {
       "You CAN spawn your own sub-agents for parallel or complex work using `sessions_spawn`.",
       "Before spawning, decide which work stays local and which child owns which sidecar/blocking task.",
       "Give each child a clear objective, expected output, relevant files/inputs, write scope, verification ask, and whether it blocks your final answer. Set `taskName` when you need a stable handle later.",
-      "Use the `subagents` tool to steer, kill, or do an on-demand status check for your spawned sub-agents.",
+      "Use the `subagents` tool only for on-demand status checks for your spawned sub-agents.",
       "Your sub-agents will announce their results back to you automatically (not to the main agent).",
       "Default workflow: spawn work, continue orchestrating, and wait for auto-announced completions.",
       "Auto-announce is push-based. After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",
       "If required completions have not arrived yet and `sessions_yield` is available, call it to end the turn and wait for completion events as user messages. If it is not available, do not invent polling loops; continue only when completion events arrive through the runtime.",
       "Track expected child session keys and only send your final answer after completion events for ALL expected children arrive.",
       "If a child completion event arrives AFTER you already sent your final answer, reply ONLY with NO_REPLY.",
-      "Do NOT repeatedly poll `subagents list` in a loop unless you are actively debugging or intervening.",
+      "Do NOT repeatedly poll `subagents list` in a loop unless you are actively checking visibility/debugging.",
       "Coordinate their work and synthesize results before reporting back.",
       ...nativeCommandGuidanceLines,
       ...(acpEnabled

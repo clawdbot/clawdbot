@@ -121,6 +121,7 @@ describe("gateway-watch tmux wrapper", () => {
     expect(code).toBe(0);
     const command = spawnShellCommand(spawnSync, 1);
     expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_DIR=.artifacts/gateway-watch-profiles'");
+    expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES=40'");
     expect(command).toContain("'OPENCLAW_TRACE_SYNC_IO=0'");
     expect(command).not.toContain("--benchmark");
     expect(command).toContain("'gateway'");
@@ -128,6 +129,31 @@ describe("gateway-watch tmux wrapper", () => {
     expect(stderr.chunks.join("")).toContain(
       "gateway:watch benchmark CPU profiles: .artifacts/gateway-watch-profiles",
     );
+  });
+
+  it("preserves an explicit benchmark CPU profile retention cap", () => {
+    const stdout = createOutput();
+    const stderr = createOutput();
+    const spawnSync = vi
+      .fn()
+      .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" })
+      .mockReturnValueOnce({ status: 0, stdout: "", stderr: "" });
+
+    const code = runGatewayWatchTmuxMain({
+      args: ["gateway", "--force", "--benchmark"],
+      cwd: "/repo",
+      env: { OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES: "8", SHELL: "/bin/zsh" },
+      nodePath: "/node",
+      spawnSync,
+      stderr: stderr.stream,
+      stdout: stdout.stream,
+    });
+
+    expect(code).toBe(0);
+    const command = spawnShellCommand(spawnSync, 1);
+    expect(command).toContain("'OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES=8'");
   });
 
   it("preserves explicit sync I/O tracing in benchmark mode", () => {

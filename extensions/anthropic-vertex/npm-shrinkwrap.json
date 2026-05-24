@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/anthropic-vertex-provider",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/anthropic-vertex-provider",
-      "version": "2026.5.22",
+      "version": "2026.5.24",
       "dependencies": {
         "@anthropic-ai/vertex-sdk": "0.16.1",
         "@earendil-works/pi-agent-core": "0.75.4",

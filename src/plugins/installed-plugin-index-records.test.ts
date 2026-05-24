@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
@@ -13,6 +14,7 @@ import {
   resolveInstalledPluginIndexRecordsStorePath,
   withoutPluginInstallRecords,
   writePersistedInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "./installed-plugin-index-records.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
@@ -57,6 +59,7 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 }
 
 afterEach(() => {
+  clearLoadInstalledPluginIndexInstallRecordsCache();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -166,6 +169,111 @@ describe("plugin index install records store", () => {
       persisted: {
         source: "npm",
         spec: "persisted@1.0.0",
+      },
+    });
+  });
+
+  it("returns cloned cached records", async () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "cached");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        cached: {
+          source: "npm",
+          spec: "cached@1.0.0",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    const first = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
+    first.cached.spec = "mutated@1.0.0";
+
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
+      cached: {
+        source: "npm",
+        spec: "cached@1.0.0",
+      },
+    });
+  });
+
+  it("invalidates cached records when the persisted index is rewritten", () => {
+    const stateDir = makeStateDir();
+    const first = createPluginCandidate(stateDir, "first");
+    writePersistedInstalledPluginIndexInstallRecordsSync(
+      {
+        first: {
+          source: "npm",
+          spec: "first@1.0.0",
+        },
+      },
+      { stateDir, candidates: [first] },
+    );
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
+      first: {
+        source: "npm",
+        spec: "first@1.0.0",
+      },
+    });
+
+    const second = createPluginCandidate(stateDir, "second");
+    writePersistedInstalledPluginIndexInstallRecordsSync(
+      {
+        second: {
+          source: "npm",
+          spec: "second@1.0.0",
+        },
+      },
+      { stateDir, candidates: [second] },
+    );
+
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
+      second: {
+        source: "npm",
+        spec: "second@1.0.0",
+      },
+    });
+  });
+
+  it("reloads cached records after an external index write", () => {
+    const stateDir = makeStateDir();
+    const candidate = createPluginCandidate(stateDir, "external");
+    writePersistedInstalledPluginIndexInstallRecordsSync(
+      {
+        external: {
+          source: "npm",
+          spec: "external@1.0.0",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
+      external: {
+        source: "npm",
+        spec: "external@1.0.0",
+      },
+    });
+
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    const persisted = JSON.parse(fs.readFileSync(indexPath, "utf8")) as Record<string, unknown>;
+    fs.writeFileSync(
+      indexPath,
+      JSON.stringify({
+        ...persisted,
+        installRecords: {
+          external: {
+            source: "npm",
+            spec: "external-plugin@2.0.0",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    expect(loadInstalledPluginIndexInstallRecordsSync({ stateDir })).toEqual({
+      external: {
+        source: "npm",
+        spec: "external-plugin@2.0.0",
       },
     });
   });
@@ -316,6 +424,49 @@ describe("plugin index install records store", () => {
     expectRecordFields(loadedSync.codex, {
       version: "2026.5.18-beta.1",
       resolvedVersion: "2026.5.18-beta.1",
+    });
+  });
+
+  it("reloads recovered managed npm records after package manifest changes", () => {
+    const stateDir = makeStateDir();
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.5.18-beta.1",
+    });
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, JSON.stringify({ installRecords: {}, plugins: [] }), "utf8");
+
+    expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).codex, {
+      source: "npm",
+      spec: "@openclaw/codex@2026.5.18-beta.1",
+      installPath: codexDir,
+      version: "2026.5.18-beta.1",
+    });
+
+    const packagePath = path.join(codexDir, "package.json");
+    const packageManifest = JSON.parse(fs.readFileSync(packagePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    fs.writeFileSync(
+      packagePath,
+      JSON.stringify({
+        ...packageManifest,
+        version: "2026.5.19-beta.1",
+      }),
+      "utf8",
+    );
+
+    expectRecordFields(loadInstalledPluginIndexInstallRecordsSync({ stateDir }).codex, {
+      source: "npm",
+      spec: "@openclaw/codex@2026.5.18-beta.1",
+      installPath: codexDir,
+      version: "2026.5.19-beta.1",
+      resolvedVersion: "2026.5.19-beta.1",
+      resolvedSpec: "@openclaw/codex@2026.5.19-beta.1",
     });
   });
 

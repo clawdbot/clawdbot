@@ -77,6 +77,7 @@ export async function finalizeSetupWizard(
   options: FinalizeOnboardingOptions,
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
+  const suppressGatewayTokenOutput = opts.suppressGatewayTokenOutput === true;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
   let resolvedGatewayPassword = "";
 
@@ -392,7 +393,7 @@ export async function finalizeSetupWizard(
     tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
   });
   const authedUrl =
-    settings.authMode === "token" && settings.gatewayToken
+    settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
       ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
       : links.httpUrl;
   if (opts.skipHealth || !gatewayProbe.ok) {
@@ -419,7 +420,7 @@ export async function finalizeSetupWizard(
   await prompter.note(
     [
       t("wizard.finalize.webUiUrl", { url: links.httpUrl }),
-      settings.authMode === "token" && settings.gatewayToken
+      settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
         ? t("wizard.finalize.webUiWithTokenUrl", { url: authedUrl })
         : undefined,
       t("wizard.finalize.gatewayWsUrl", { url: links.wsUrl }),
@@ -450,24 +451,22 @@ export async function finalizeSetupWizard(
     }
 
     if (gatewayProbe.ok) {
-      await prompter.note(
-        [
-          t("wizard.finalize.gatewayTokenShared"),
-          t("wizard.finalize.gatewayTokenStored"),
-          t("wizard.finalize.gatewayTokenView", {
-            command: formatCliCommand("openclaw config get gateway.auth.token"),
-          }),
-          t("wizard.finalize.gatewayTokenGenerate", {
-            command: formatCliCommand("openclaw doctor --generate-gateway-token"),
-          }),
-          t("wizard.finalize.dashboardTokenMemory"),
-          t("wizard.finalize.dashboardOpenAnytime", {
-            command: formatCliCommand("openclaw dashboard --no-open"),
-          }),
-          t("wizard.finalize.dashboardTokenPrompt"),
-        ].join("\n"),
-        "Token",
-      );
+      const tokenNotes = [
+        t("wizard.finalize.gatewayTokenShared"),
+        t("wizard.finalize.gatewayTokenStored"),
+        t("wizard.finalize.gatewayTokenView", {
+          command: formatCliCommand("openclaw config get gateway.auth.token"),
+        }),
+        t("wizard.finalize.gatewayTokenGenerate", {
+          command: formatCliCommand("openclaw doctor --generate-gateway-token"),
+        }),
+        suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenMemory"),
+        t("wizard.finalize.dashboardOpenAnytime", {
+          command: formatCliCommand("openclaw dashboard --no-open"),
+        }),
+        suppressGatewayTokenOutput ? undefined : t("wizard.finalize.dashboardTokenPrompt"),
+      ].filter(Boolean);
+      await prompter.note(tokenNotes.join("\n"), "Token");
     }
 
     const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
@@ -505,14 +504,20 @@ export async function finalizeSetupWizard(
           controlUiOpenHint = formatControlUiSshHint({
             port: settings.port,
             basePath: controlUiBasePath,
-            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+            token:
+              settings.authMode === "token" && !suppressGatewayTokenOutput
+                ? settings.gatewayToken
+                : undefined,
           });
         }
       } else {
         controlUiOpenHint = formatControlUiSshHint({
           port: settings.port,
           basePath: controlUiBasePath,
-          token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+          token:
+            settings.authMode === "token" && !suppressGatewayTokenOutput
+              ? settings.gatewayToken
+              : undefined,
         });
       }
       await prompter.note(
@@ -553,6 +558,7 @@ export async function finalizeSetupWizard(
     gatewayProbe.ok &&
     settings.authMode === "token" &&
     Boolean(settings.gatewayToken) &&
+    !suppressGatewayTokenOutput &&
     hatchChoice === null;
   if (shouldOpenControlUi) {
     const browserSupport = await detectBrowserOpenSupport();

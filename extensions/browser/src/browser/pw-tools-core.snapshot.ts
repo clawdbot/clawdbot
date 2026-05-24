@@ -140,6 +140,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   limit?: number;
+  timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
   const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
@@ -157,7 +158,11 @@ export async function snapshotAriaViaPlaywright(opts: {
       targetId: opts.targetId,
     });
   }
-  const res = (await withPageScopedCdpClient({
+  const ariaTimeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs)))
+      : undefined;
+  const collectAxTree = withPageScopedCdpClient({
     cdpUrl: opts.cdpUrl,
     page,
     targetId: opts.targetId,
@@ -167,7 +172,23 @@ export async function snapshotAriaViaPlaywright(opts: {
         nodes?: RawAXNode[];
       };
     },
-  })) as {
+  });
+  const res = (await (ariaTimeoutMs === undefined
+    ? collectAxTree
+    : (() => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(`Aria snapshot via Playwright timed out after ${ariaTimeoutMs}ms.`));
+          }, ariaTimeoutMs);
+          timer.unref?.();
+        });
+        return Promise.race([collectAxTree, timeout]).finally(() => {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        });
+      })())) as {
     nodes?: RawAXNode[];
   };
   const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
@@ -241,6 +262,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   refsMode?: "role" | "aria";
   options?: RoleSnapshotOptions;
   urls?: boolean;
+  timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
 }): Promise<{
   snapshot: string;
@@ -262,13 +284,15 @@ export async function snapshotRoleViaPlaywright(opts: {
     });
   }
 
+  const ariaSnapshotTimeout = Math.max(500, Math.min(60_000, Math.floor(opts.timeoutMs ?? 5000)));
+
   if (opts.refsMode === "aria") {
     if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
       throw new Error("refs=aria does not support selector/frame snapshots yet.");
     }
     const snapshot = await page.ariaSnapshot({
       mode: "ai",
-      timeout: 5000,
+      timeout: ariaSnapshotTimeout,
     });
     const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
     const snapshotWithUrls = opts.urls
@@ -298,7 +322,7 @@ export async function snapshotRoleViaPlaywright(opts: {
       ? page.locator(selector)
       : page.locator(":root");
 
-  const ariaSnapshot = await locator.ariaSnapshot();
+  const ariaSnapshot = await locator.ariaSnapshot({ timeout: ariaSnapshotTimeout });
   const built = buildRoleSnapshotFromAriaSnapshot(ariaSnapshot ?? "", opts.options);
   const snapshotWithUrls = opts.urls
     ? appendSnapshotUrls(built.snapshot, await collectSnapshotUrls(page))

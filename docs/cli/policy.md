@@ -120,6 +120,21 @@ posture, and tool metadata looks like this:
   },
   "tools": {
     "requireMetadata": ["risk", "sensitivity", "owner"],
+    "profiles": {
+      "allow": ["messaging", "minimal"],
+    },
+    "fs": {
+      "requireWorkspaceOnly": true,
+    },
+    "exec": {
+      "allowSecurity": ["deny", "allowlist"],
+      "requireAsk": ["always"],
+      "allowHosts": ["sandbox"],
+    },
+    "elevated": {
+      "allow": false,
+    },
+    "denyTools": ["group:runtime", "group:fs"],
   },
 }
 ```
@@ -129,19 +144,113 @@ when a concrete rule is present. OpenClaw reads current `channels.*` settings
 `mcp.servers.*`, `models.providers.*`, selected agent model refs, network SSRF
 settings, Gateway bind/auth/Control UI/Tailscale/remote/HTTP posture, OpenClaw
 config agent sandbox workspace access and tool deny posture, config secret
-provider and SecretRef provenance, config auth profile metadata, and `TOOLS.md`
-declarations as evidence, then reports observed state that does not conform. If
-a policy denies non-loopback Gateway binds, omit `gateway.bind` only when you
+provider and SecretRef provenance, config auth profile metadata, configured
+global/per-agent tool posture, and `TOOLS.md` declarations as evidence, then
+reports observed state that does not conform. If a policy denies non-loopback
+Gateway binds, omit `gateway.bind` only when you
 are willing to review the runtime default; set `gateway.bind=loopback` for
 strict config conformance. For read-only agent posture, configure sandbox mode
 on the applicable defaults or agent and set `workspaceAccess` to `none` or
 `ro`; omitted or `off` sandbox mode does not satisfy a read-only/no-write
 policy. `agents.workspace.denyTools` supports `exec`, `process`, `write`,
 `edit`, and `apply_patch`; OpenClaw config `group:fs` covers file mutation tools
-and `group:runtime` covers shell/process tools. Secret evidence records
+and `group:runtime` covers shell/process tools. Tool posture policy observes
+`tools.profile`, `tools.allow`, `tools.alsoAllow`, `tools.deny`,
+`tools.fs.workspaceOnly`, `tools.exec.security`, `tools.exec.ask`,
+`tools.exec.host`, `tools.elevated.enabled`, and the same per-agent
+`agents.list[].tools.*` overrides. It does not read runtime/operator approval
+state such as exec-approvals.json, and it does not enforce tool calls at
+runtime. Secret evidence records
 provider/source posture and SecretRef metadata, never raw secret values. Policy
 does not read or attest per-agent credential stores such as `auth-profiles.json`;
 those stores remain owned by the existing auth and credential flows.
+
+### Policy rule reference
+
+Each policy field below is optional. A check runs only when the matching rule is
+present in `policy.jsonc`. The observed state is existing OpenClaw config or
+workspace metadata; policy reports drift but does not rewrite runtime behavior
+unless a repair path is explicitly available and enabled.
+
+#### Channels
+
+| Policy field                         | Observed state                          | Use when                                                     |
+| ------------------------------------ | --------------------------------------- | ------------------------------------------------------------ |
+| `channels.denyRules[].when.provider` | `channels.*` provider and enabled state | Deny configured channels from a provider such as `telegram`. |
+| `channels.denyRules[].reason`        | Finding message and repair hint context | Explain why the provider is denied.                          |
+
+#### MCP servers
+
+| Policy field        | Observed state      | Use when                                                   |
+| ------------------- | ------------------- | ---------------------------------------------------------- |
+| `mcp.servers.allow` | `mcp.servers.*` ids | Require every configured MCP server to be in an allowlist. |
+| `mcp.servers.deny`  | `mcp.servers.*` ids | Deny specific configured MCP server ids.                   |
+
+#### Model providers
+
+| Policy field             | Observed state                                   | Use when                                                                        |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `models.providers.allow` | `models.providers.*` ids and selected model refs | Require configured providers and selected model refs to use approved providers. |
+| `models.providers.deny`  | `models.providers.*` ids and selected model refs | Deny configured providers and selected model refs by provider id.               |
+
+#### Network
+
+| Policy field                   | Observed state                      | Use when                                                           |
+| ------------------------------ | ----------------------------------- | ------------------------------------------------------------------ |
+| `network.privateNetwork.allow` | Private-network SSRF escape hatches | Set to `false` to require private-network access to stay disabled. |
+
+#### Gateway
+
+| Policy field                            | Observed state                                 | Use when                                                     |
+| --------------------------------------- | ---------------------------------------------- | ------------------------------------------------------------ |
+| `gateway.exposure.allowNonLoopbackBind` | `gateway.bind`                                 | Set to `false` to require loopback Gateway binding.          |
+| `gateway.exposure.allowTailscaleFunnel` | Tailscale serve/funnel Gateway posture         | Set to `false` to deny Tailscale Funnel exposure.            |
+| `gateway.auth.requireAuth`              | `gateway.auth.mode`                            | Set to `true` to reject disabled Gateway auth.               |
+| `gateway.auth.requireExplicitRateLimit` | `gateway.auth.rateLimit`                       | Set to `true` to require explicit auth rate-limit config.    |
+| `gateway.controlUi.allowInsecure`       | Control UI insecure auth/device/origin toggles | Set to `false` to deny insecure Control UI exposure toggles. |
+| `gateway.remote.allow`                  | Remote Gateway mode/config                     | Set to `false` to deny remote Gateway mode.                  |
+| `gateway.http.denyEndpoints`            | Gateway HTTP API endpoints                     | Deny endpoint ids such as `chatCompletions` or `responses`.  |
+| `gateway.http.requireUrlAllowlists`     | Gateway HTTP URL-fetch inputs                  | Set to `true` to require URL allowlists on URL-fetch inputs. |
+
+#### Agent workspace
+
+| Policy field                     | Observed state                                                                        | Use when                                                                                                            |
+| -------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `agents.workspace.allowedAccess` | `agents.defaults.sandbox.workspaceAccess` and `agents.list[].sandbox.workspaceAccess` | Allow only sandbox workspace access values such as `none` or `ro`.                                                  |
+| `agents.workspace.denyTools`     | Global and per-agent tool deny config                                                 | Require workspace/runtime mutation tools such as `exec`, `process`, `write`, `edit`, or `apply_patch` to be denied. |
+
+#### Secrets
+
+| Policy field                      | Observed state                                           | Use when                                                                |
+| --------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `secrets.requireManagedProviders` | Config SecretRefs and `secrets.providers.*` declarations | Set to `true` to require SecretRefs to point at declared providers.     |
+| `secrets.denySources`             | Secret provider sources and SecretRef sources            | Deny sources such as `exec`, `file`, or another configured source name. |
+| `secrets.allowInsecureProviders`  | Insecure secret-provider posture flags                   | Set to `false` to reject providers that opt into insecure posture.      |
+
+#### Auth profiles
+
+| Policy field                    | Observed state                               | Use when                                                                                   |
+| ------------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `auth.profiles.requireMetadata` | `auth.profiles.*` provider and mode metadata | Require metadata keys such as `provider` and `mode` on config auth profiles.               |
+| `auth.profiles.allowModes`      | `auth.profiles.*.mode`                       | Allow only supported auth profile modes such as `api_key`, `aws-sdk`, `oauth`, or `token`. |
+
+#### Tool metadata
+
+| Policy field            | Observed state                   | Use when                                                                                   |
+| ----------------------- | -------------------------------- | ------------------------------------------------------------------------------------------ |
+| `tools.requireMetadata` | Governed `TOOLS.md` declarations | Require governed tools to declare metadata keys such as `risk`, `sensitivity`, or `owner`. |
+
+#### Tool posture
+
+| Policy field                    | Observed state                                              | Use when                                                                                                 |
+| ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `tools.profiles.allow`          | `tools.profile` and `agents.list[].tools.profile`           | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
+| `tools.fs.requireWorkspaceOnly` | `tools.fs.workspaceOnly` and per-agent `tools.fs` overrides | Set to `true` to require workspace-only filesystem tool posture.                                         |
+| `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny` or `allowlist`.                                            |
+| `tools.exec.requireAsk`         | `tools.exec.ask` and per-agent exec ask mode                | Require approval posture such as `always`.                                                               |
+| `tools.exec.allowHosts`         | `tools.exec.host` and per-agent exec host routing           | Allow only exec host routing modes such as `sandbox`.                                                    |
+| `tools.elevated.allow`          | `tools.elevated.enabled` and per-agent elevated posture     | Set to `false` to require elevated tool mode to stay disabled.                                           |
+| `tools.denyTools`               | `tools.deny` and `agents.list[].tools.deny`                 | Require configured tool deny lists to include tool ids or groups such as `group:runtime` and `group:fs`. |
 
 Run policy-only checks during authoring:
 
@@ -378,6 +487,8 @@ only `expectedAttestationHash` usually changes.
 Enabling or upgrading `agents.workspace` rules adds `agentWorkspace` evidence to
 the workspace hash and attestation hash. Operators should review the new
 evidence and refresh accepted attestation hashes after enabling these rules.
+Enabling or upgrading tool posture rules adds `toolPosture` evidence in the
+same way.
 
 `openclaw policy watch` runs the same check repeatedly and reports when the
 current evidence no longer matches `expectedAttestationHash`:
@@ -416,6 +527,13 @@ Policy currently verifies:
 | `policy/gateway-http-url-fetch-unrestricted` | Gateway HTTP URL-fetch input lacks a required URL allowlist.                     |
 | `policy/agents-workspace-access-denied`      | Agent sandbox mode or workspace access is outside the policy allowlist.          |
 | `policy/agents-tool-not-denied`              | An agent or default config does not deny a tool required by policy.              |
+| `policy/tools-profile-unapproved`            | A configured global or per-agent tool profile is outside the allowlist.          |
+| `policy/tools-fs-workspace-only-required`    | Filesystem tools are not configured with workspace-only path posture.            |
+| `policy/tools-exec-security-unapproved`      | Exec security mode is outside the policy allowlist.                              |
+| `policy/tools-exec-ask-unapproved`           | Exec ask mode is outside the policy allowlist.                                   |
+| `policy/tools-exec-host-unapproved`          | Exec host routing is outside the policy allowlist.                               |
+| `policy/tools-elevated-enabled`              | Elevated tool mode is enabled when policy denies it.                             |
+| `policy/tools-required-deny-missing`         | A global or per-agent tool deny list does not include a required denied tool.    |
 | `policy/secrets-unmanaged-provider`          | A config SecretRef references a provider not declared under `secrets.providers`. |
 | `policy/secrets-denied-provider-source`      | A config secret provider or SecretRef uses a source denied by policy.            |
 | `policy/secrets-insecure-provider`           | A secret provider opts into insecure posture when policy denies it.              |

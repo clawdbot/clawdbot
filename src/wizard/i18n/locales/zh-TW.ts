@@ -318,6 +318,7 @@ export const zh_TW = {
       setEnv: "為 {name} 設定 {env}？",
       skipDepsHint: "繼續，不安裝依賴",
       statusTitle: "技能狀態",
+      allReadyTitle: "所有技能已就緒",
     },
     channels: {
       account: "{label} 帳號",

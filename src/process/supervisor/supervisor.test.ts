@@ -159,10 +159,47 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(5);
 
     const exit = await exitPromise;
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
     expect(exit.reason).toBe("no-output-timeout");
     expect(exit.noOutputTimedOut).toBe(true);
     expect(exit.timedOut).toBe(true);
+  });
+
+  it("escalates cancellation to SIGKILL when graceful shutdown does not settle", async () => {
+    vi.useFakeTimers();
+    const adapter = createStubChildAdapter({
+      onKill: (signal, current) => {
+        if (signal === "SIGKILL") {
+          current.settle(null, signal);
+        }
+      },
+    });
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    const run = await spawnChild(supervisor, {
+      sessionId: "s1",
+      argv: createSilentIdleArgv(),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+    });
+
+    const exitPromise = run.wait();
+    run.cancel("manual-cancel");
+
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
+    expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
+
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(adapter.killMock).not.toHaveBeenCalledWith("SIGKILL");
+
+    await vi.advanceTimersByTimeAsync(1);
+    const exit = await exitPromise;
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(exit.reason).toBe("manual-cancel");
+    expect(exit.exitSignal).toBe("SIGKILL");
   });
 
   it("cancels prior scoped run when replaceExistingScope is enabled", async () => {
@@ -197,7 +234,7 @@ describe("process supervisor", () => {
 
     const firstExit = await firstRun.wait();
     const secondExit = await secondRun.wait();
-    expect(first.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(first.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(["manual-cancel", "signal"]).toContain(firstExit.reason);
     expect(secondExit.reason).toBe("exit");
     expect(secondExit.stdout).toBe("new");
@@ -224,7 +261,7 @@ describe("process supervisor", () => {
     await vi.advanceTimersByTimeAsync(1);
 
     const exit = await exitPromise;
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(adapter.killMock).toHaveBeenCalledWith("SIGTERM");
     expect(exit.reason).toBe("overall-timeout");
     expect(exit.timedOut).toBe(true);
   });

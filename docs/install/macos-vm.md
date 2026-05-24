@@ -105,10 +105,10 @@ In the VNC window:
 3. Create a user account (remember the username and password)
 4. Skip all optional features
 
-After setup completes, enable SSH:
+After setup completes:
 
-1. Open System Settings → General → Sharing
-2. Enable "Remote Login"
+1. Enable SSH: Open System Settings -> General -> Sharing and enable "Remote Login".
+2. For headless VM use, enable auto-login: Open System Settings -> Users & Groups, select "Automatically log in as:", and choose the VM user.
 
 ---
 

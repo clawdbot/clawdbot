@@ -166,13 +166,11 @@ DeepSeek provider's thinking controls.
     | `minimax-m25`                          | MiniMax M2.5                       | 198k    | Reasoning                  |
   </Accordion>
 
-  <Accordion title="Anonymized models (15) — via Venice proxy">
+  <Accordion title="Anonymized models (12) — via Venice proxy">
     | Model ID                        | Name                           | Context | Features                  |
     | ------------------------------- | ------------------------------ | ------- | ------------------------- |
     | `claude-opus-4-6`               | Claude Opus 4.6 (via Venice)   | 1M      | Reasoning, vision         |
-    | `claude-opus-4-5`               | Claude Opus 4.5 (via Venice)   | 198k    | Reasoning, vision         |
     | `claude-sonnet-4-6`             | Claude Sonnet 4.6 (via Venice) | 1M      | Reasoning, vision         |
-    | `claude-sonnet-4-5`             | Claude Sonnet 4.5 (via Venice) | 198k    | Reasoning, vision         |
     | `openai-gpt-54`                 | GPT-5.4 (via Venice)           | 1M      | Reasoning, vision         |
     | `openai-gpt-53-codex`           | GPT-5.3 Codex (via Venice)     | 400k    | Reasoning, vision, coding |
     | `openai-gpt-52`                 | GPT-5.2 (via Venice)           | 256k    | Reasoning                 |
@@ -183,7 +181,6 @@ DeepSeek provider's thinking controls.
     | `gemini-3-pro-preview`          | Gemini 3 Pro (via Venice)      | 198k    | Reasoning, vision         |
     | `gemini-3-flash-preview`        | Gemini 3 Flash (via Venice)    | 256k    | Reasoning, vision         |
     | `grok-41-fast`                  | Grok 4.1 Fast (via Venice)     | 1M      | Reasoning, vision         |
-    | `grok-code-fast-1`              | Grok Code Fast 1 (via Venice)  | 256k    | Reasoning, coding         |
   </Accordion>
 </AccordionGroup>
 

@@ -1,4 +1,10 @@
-import { resolveRouteTargetForLoadedChannel } from "../channels/plugins/target-parsing-loaded.js";
+import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded-read.js";
+import type { ChannelId } from "../channels/plugins/types.public.js";
+import {
+  stripTargetKindPrefix,
+  stripTargetProviderPrefix,
+  stripTargetTopicSuffix,
+} from "../infra/outbound/channel-target-prefix.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   deliveryContextFromSession,
@@ -12,31 +18,20 @@ import type {
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 export type { DeliveryContext } from "../utils/delivery-context.types.js";
 
-function stripThreadRouteSuffix(target: string): string {
-  return /^(.*):topic:[^:]+$/u.exec(target)?.[1] ?? target;
-}
-
 function normalizeAnnounceRouteTarget(context?: DeliveryContext): string | undefined {
   const rawTo = normalizeOptionalString(context?.to);
   if (!rawTo) {
     return undefined;
   }
   const channel = normalizeOptionalString(context?.channel);
-  const parsed = channel
-    ? resolveRouteTargetForLoadedChannel({
-        channel,
-        rawTarget: rawTo,
-        fallbackThreadId: context?.threadId,
-      })
-    : null;
-  let route = stripThreadRouteSuffix(parsed?.to ?? rawTo);
-  if (channel && route.toLowerCase().startsWith(`${channel}:`)) {
-    route = route.slice(channel.length + 1);
-  }
-  if (route.startsWith("group:") || route.startsWith("channel:")) {
-    route = route.slice(route.indexOf(":") + 1);
-  }
-  return route || undefined;
+  const messaging = channel
+    ? getLoadedChannelPluginForRead(channel as ChannelId)?.messaging
+    : undefined;
+  const route = stripTargetTopicSuffix(
+    stripTargetKindPrefix(stripTargetProviderPrefix(rawTo, channel ?? ""), ["group", "channel"]),
+  );
+  const normalized = messaging?.normalizeTarget?.(route) ?? route;
+  return normalized || undefined;
 }
 
 function shouldStripThreadFromAnnounceEntry(

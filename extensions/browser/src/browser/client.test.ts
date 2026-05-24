@@ -112,6 +112,33 @@ describe("browser client", () => {
     expect(parsed.searchParams.get("refs")).toBe("aria");
   });
 
+  it("forwards an explicit snapshot timeoutMs into the query string", async () => {
+    const calls: string[] = [];
+    stubSnapshotFetch(calls);
+
+    await browserSnapshot("http://127.0.0.1:18791", {
+      format: "ai",
+      timeoutMs: 4321,
+    });
+
+    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    expect(snapshotCall).toBeTruthy();
+    const parsed = new URL(snapshotCall as string);
+    expect(parsed.searchParams.get("timeoutMs")).toBe("4321");
+  });
+
+  it("falls back to the default snapshot timeout when none is supplied", async () => {
+    const calls: string[] = [];
+    stubSnapshotFetch(calls);
+
+    await browserSnapshot("http://127.0.0.1:18791", { format: "ai" });
+
+    const snapshotCall = calls.find((url) => url.includes("/snapshot?"));
+    expect(snapshotCall).toBeTruthy();
+    const parsed = new URL(snapshotCall as string);
+    expect(parsed.searchParams.get("timeoutMs")).toBe("20000");
+  });
+
   it("omits format when the caller wants server-side snapshot capability defaults", async () => {
     const calls: string[] = [];
     stubSnapshotFetch(calls);

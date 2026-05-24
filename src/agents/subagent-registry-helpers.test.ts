@@ -65,8 +65,11 @@ describe("logAnnounceGiveUp", () => {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const entry = createRunEntry({
       endedAt: 4_000,
-      announceRetryCount: 3,
-      lastAnnounceDeliveryError: "direct-primary: routed-dispatch-did-not-queue-final",
+      delivery: {
+        status: "failed",
+        attemptCount: 3,
+        lastError: "direct-primary: routed-dispatch-did-not-queue-final",
+      },
     });
 
     logAnnounceGiveUp(entry, "retry-limit");
@@ -80,7 +83,10 @@ describe("logAnnounceGiveUp", () => {
   it("normalizes multiline delivery errors onto one gateway log line", () => {
     const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const entry = createRunEntry({
-      lastAnnounceDeliveryError: "gateway timeout\nphase: routed dispatch failed",
+      delivery: {
+        status: "failed",
+        lastError: "gateway timeout\nphase: routed dispatch failed",
+      },
     });
 
     logAnnounceGiveUp(entry, "expiry");

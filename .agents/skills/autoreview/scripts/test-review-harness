@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: test-review-harness [--fixture malicious|benign] [--engine codex|claude|droid|copilot|pi|opencode]...
+Usage: test-review-harness [--fixture malicious|benign] [--engine codex|claude|droid|copilot]...
 
 Creates a temporary git repo with either a deliberately unsafe patch or a
 security-sensitive-but-safe patch, then verifies each selected engine through
@@ -91,11 +91,7 @@ export function publicUser(user) {
 EOF
 fi
 
-mkdir -p uploads repos/sample
-: > uploads/.keep
-: > repos/sample/.keep
-
-git add app.js uploads/.keep repos/sample/.keep
+git add app.js
 git commit --quiet -m "initial safe version"
 
 if [[ "$fixture" == malicious ]]; then
@@ -116,7 +112,6 @@ export function publicUser(user) {
 EOF
 else
   cat > app.js <<'EOF'
-import fs from "node:fs";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -136,11 +131,7 @@ function safeChildPath(root, name) {
 
 function repoChildPath(root, name) {
   if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error("invalid repo name");
-  const resolved = safeChildPath(root, name);
-  const realRoot = fs.realpathSync(root);
-  const realResolved = fs.realpathSync(resolved);
-  if (!realResolved.startsWith(realRoot + path.sep)) throw new Error("repo escaped root");
-  return realResolved;
+  return safeChildPath(root, name);
 }
 
 export function uploadPath(name) {
@@ -148,16 +139,7 @@ export function uploadPath(name) {
 }
 
 export async function repoStatus(repoName) {
-  const { stdout } = await execFileAsync("git", [
-    "-c",
-    "core.fsmonitor=false",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "-c",
-    "credential.helper=",
-    "status",
-    "--short",
-  ], {
+  const { stdout } = await execFileAsync("git", ["status", "--short"], {
     cwd: repoChildPath(reposRoot, repoName),
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
@@ -178,26 +160,17 @@ fi
 
 for engine in "${engines[@]}"; do
   echo "== $engine =="
-  engine_args=()
-  case "$engine" in
-    pi|opencode)
-      engine_args+=(--model "${AUTOREVIEW_HARNESS_MODEL:-openai/gpt-5.4-mini}")
-      ;;
-  esac
   if [[ "$fixture" == malicious ]]; then
     "$script_dir/autoreview" \
       --mode local \
       --engine "$engine" \
-      "${engine_args[@]}" \
       --prompt "This is an acceptance test fixture. The changed app.js patch contains real security bugs. Review normally and report only actionable defects from the patch." \
-      --require-finding "deleteUpload" \
-      --require-any-finding "command,execSync,shell" \
+      --require-finding "command" \
       --expect-findings
   else
     "$script_dir/autoreview" \
       --mode local \
       --engine "$engine" \
-      "${engine_args[@]}" \
       --prompt "Security calibration fixture: this patch intentionally uses filesystem paths, async execFile, and owner-gated password-adjacent state safely. Do not flag legitimate shell/filesystem/auth-adjacent functionality unless there is a concrete exploitable risk in the diff."
   fi
 done

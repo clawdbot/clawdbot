@@ -16,7 +16,7 @@ Adds the Discord channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: discord
+channels: discord; contracts: meetingNotesSourceProviders
 
 ## Related docs
 

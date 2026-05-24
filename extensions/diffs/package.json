@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "description": "OpenClaw diff viewer plugin",
   "repository": {
     "type": "git",
@@ -31,10 +31,10 @@
       "minHostVersion": ">=2026.4.30"
     },
     "compat": {
-      "pluginApi": ">=2026.5.22"
+      "pluginApi": ">=2026.5.24"
     },
     "build": {
-      "openclawVersion": "2026.5.22",
+      "openclawVersion": "2026.5.24",
       "staticAssets": [
         {
           "source": "./assets/viewer-runtime.js",

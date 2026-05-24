@@ -19,6 +19,7 @@ import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js
 import type { SessionScope } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -115,7 +116,30 @@ function isLegacyGroupKey(key: string): boolean {
 }
 
 function buildLegacyMigrationPreview(plan: ChannelLegacyStateMigrationPlan): string {
+  if (plan.kind === "plugin-state-import") {
+    return plan.preview ?? `- ${plan.label}: ${plan.sourcePath}`;
+  }
   return `- ${plan.label}: ${plan.sourcePath} → ${plan.targetPath}`;
+}
+
+async function withPluginStateImportEnv<T>(
+  plan: Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>,
+  run: () => Promise<T>,
+): Promise<T> {
+  if (!plan.stateDir) {
+    return await run();
+  }
+  const previous = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = plan.stateDir;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previous;
+    }
+  }
 }
 
 async function runLegacyMigrationPlans(
@@ -124,6 +148,68 @@ async function runLegacyMigrationPlans(
   const changes: string[] = [];
   const warnings: string[] = [];
   for (const plan of plans) {
+    if (plan.kind === "plugin-state-import") {
+      await withPluginStateImportEnv(plan, async () => {
+        let storeEntries: Array<{ key: string }> = [];
+        const store = createPluginStateKeyedStore<unknown>(plan.pluginId, {
+          namespace: plan.namespace,
+          maxEntries: plan.maxEntries,
+        });
+        try {
+          storeEntries = await store.entries();
+        } catch (err) {
+          warnings.push(
+            `Failed reading ${plan.label} plugin state before migration: ${String(err)}`,
+          );
+          return;
+        }
+        const existingKeys = new Set(storeEntries.map(({ key }) => key));
+        let remainingCapacity = Math.max(0, plan.maxEntries - storeEntries.length);
+        const entries = await plan.readEntries();
+        let imported = 0;
+        for (const entry of entries) {
+          const targetKey = `${plan.scopeKey}:${entry.key}`;
+          if (existingKeys.has(targetKey)) {
+            continue;
+          }
+          if (remainingCapacity <= 0) {
+            break;
+          }
+          try {
+            await store.register(targetKey, entry.value);
+            existingKeys.add(targetKey);
+            remainingCapacity--;
+            imported++;
+          } catch (err) {
+            warnings.push(`Failed migrating ${plan.label} entry ${entry.key}: ${String(err)}`);
+          }
+        }
+        if (imported > 0) {
+          changes.push(
+            `Migrated ${imported} ${plan.label} ${imported === 1 ? "entry" : "entries"} → plugin state`,
+          );
+        }
+        const allEntriesCovered =
+          entries.length > 0 &&
+          entries.every(({ key }) => existingKeys.has(`${plan.scopeKey}:${key}`));
+        if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
+          const archivedPath = `${plan.sourcePath}.migrated`;
+          if (fileExists(archivedPath)) {
+            warnings.push(
+              `Left migrated ${plan.label} source in place because ${archivedPath} already exists`,
+            );
+            return;
+          }
+          try {
+            fs.renameSync(plan.sourcePath, archivedPath);
+            changes.push(`Archived ${plan.label} legacy source → ${archivedPath}`);
+          } catch (err) {
+            warnings.push(`Failed archiving ${plan.label} legacy source: ${String(err)}`);
+          }
+        }
+      });
+      continue;
+    }
     if (fileExists(plan.targetPath)) {
       continue;
     }
@@ -678,7 +764,13 @@ async function collectChannelLegacyStateMigrationPlans(params: {
       oauthDir: params.oauthDir,
     });
     if (detected?.length) {
-      plans.push(...detected);
+      for (const detectedPlan of detected) {
+        const plan =
+          detectedPlan.kind === "plugin-state-import" && !detectedPlan.stateDir
+            ? { ...detectedPlan, stateDir: params.stateDir }
+            : detectedPlan;
+        plans.push(plan);
+      }
     }
   }
   return plans;
@@ -948,29 +1040,33 @@ export async function migrateLegacyAgentDir(
   return { changes, warnings };
 }
 
-async function migrateChannelLegacyStatePlans(
-  detected: LegacyStateDetection,
-): Promise<{ changes: string[]; warnings: string[] }> {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  if (!detected.channelPlans.hasLegacy) {
-    return { changes, warnings };
-  }
-  return await runLegacyMigrationPlans(detected.channelPlans.plans);
-}
-
 export async function runLegacyStateMigrations(params: {
   detected: LegacyStateDetection;
   now?: () => number;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const now = params.now ?? (() => Date.now());
   const detected = params.detected;
+  const preSessionChannelPlans = await runLegacyMigrationPlans(
+    detected.channelPlans.plans.filter((plan) => plan.kind === "plugin-state-import"),
+  );
   const sessions = await migrateLegacySessions(detected, now);
   const agentDir = await migrateLegacyAgentDir(detected, now);
-  const channelPlans = await migrateChannelLegacyStatePlans(detected);
+  const channelPlans = await runLegacyMigrationPlans(
+    detected.channelPlans.plans.filter((plan) => plan.kind !== "plugin-state-import"),
+  );
   return {
-    changes: [...sessions.changes, ...agentDir.changes, ...channelPlans.changes],
-    warnings: [...sessions.warnings, ...agentDir.warnings, ...channelPlans.warnings],
+    changes: [
+      ...preSessionChannelPlans.changes,
+      ...sessions.changes,
+      ...agentDir.changes,
+      ...channelPlans.changes,
+    ],
+    warnings: [
+      ...preSessionChannelPlans.warnings,
+      ...sessions.warnings,
+      ...agentDir.warnings,
+      ...channelPlans.warnings,
+    ],
   };
 }
 

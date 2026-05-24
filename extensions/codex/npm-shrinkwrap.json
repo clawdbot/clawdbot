@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/codex",
-      "version": "2026.5.22",
+      "version": "2026.5.24",
       "dependencies": {
         "@earendil-works/pi-coding-agent": "0.75.4",
         "@openai/codex": "0.132.0",

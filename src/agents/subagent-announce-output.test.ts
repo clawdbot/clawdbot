@@ -7,16 +7,20 @@ import {
 } from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
-type ReadLatestAssistantReply = typeof import("./tools/agent-step.js").readLatestAssistantReply;
+type ReadSessionMessagesAsync =
+  typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
 
-function installOutputDeps(params: { messages: Array<unknown>; latestAssistantReply?: string }) {
+function installOutputDeps(params: {
+  messages: Array<unknown>;
+  transcriptMessages?: Array<unknown>;
+}) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
-  const readLatestAssistantReply = vi.fn(async () => params.latestAssistantReply);
+  const readSessionMessagesAsync = vi.fn(async () => params.transcriptMessages ?? []);
   testing.setDepsForTest({
     callGateway: callGateway as unknown as CallGateway,
-    readLatestAssistantReply: readLatestAssistantReply as unknown as ReadLatestAssistantReply,
+    readSessionMessagesAsync: readSessionMessagesAsync as unknown as ReadSessionMessagesAsync,
   });
-  return { callGateway, readLatestAssistantReply };
+  return { callGateway, readSessionMessagesAsync };
 }
 
 function sessionsYieldTurn(message = "Waiting for subagent completion.") {
@@ -57,11 +61,10 @@ describe("readSubagentOutput", () => {
   it("does not treat a sessions_yield wait turn as subagent completion output", async () => {
     const deps = installOutputDeps({
       messages: sessionsYieldTurn(),
-      latestAssistantReply: "Waiting for subagent completion.",
     });
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
-    expect(deps.readLatestAssistantReply).not.toHaveBeenCalled();
+    expect(deps.callGateway).toHaveBeenCalledOnce();
   });
 
   it("returns final assistant output that arrives after a sessions_yield wait turn", async () => {
@@ -79,7 +82,6 @@ describe("readSubagentOutput", () => {
           content: [{ type: "text", text: "Created /tmp/final-deck.pptx" }],
         },
       ],
-      latestAssistantReply: "Waiting for subagent completion.",
     });
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
@@ -87,7 +89,7 @@ describe("readSubagentOutput", () => {
     );
   });
 
-  it("keeps normal tool-use assistant output when the tool is not sessions_yield", async () => {
+  it("returns only the latest assistant turn, not trailing tool output", async () => {
     installOutputDeps({
       messages: [
         {
@@ -98,12 +100,108 @@ describe("readSubagentOutput", () => {
             { type: "toolCall", id: "call-read", name: "read", arguments: {} },
           ],
         },
+        {
+          role: "toolResult",
+          content: "tool result should not become the child result",
+        },
       ],
     });
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
       "Mapped the code path.",
     );
+  });
+
+  it("keeps earlier visible assistant text across a trailing empty assistant turn", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Mapped the code path." }],
+        },
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          content: "tool result should not become the child result",
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "Mapped the code path.",
+    );
+  });
+
+  it("does not fall back to tool output when the last assistant turn is empty", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "toolResult",
+          content: "tool output only",
+        },
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+  });
+
+  it("reads recovered output from the private transcript before gateway history", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "stale visible output" }],
+        },
+      ],
+      transcriptMessages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "fresh recovered output" }],
+        },
+      ],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", undefined, {
+        sessionFile: "/tmp/openclaw-internal-run.jsonl",
+      }),
+    ).resolves.toBe("fresh recovered output");
+    expect(deps.readSessionMessagesAsync).toHaveBeenCalledWith(
+      "agent:main:subagent:child",
+      undefined,
+      "/tmp/openclaw-internal-run.jsonl",
+      { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
+    );
+    expect(deps.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not read visible gateway history when a private transcript is empty", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "stale visible output" }],
+        },
+      ],
+      transcriptMessages: [],
+    });
+
+    await expect(
+      readSubagentOutput("agent:main:subagent:child", undefined, {
+        sessionFile: "/tmp/openclaw-empty-internal-run.jsonl",
+      }),
+    ).resolves.toBeUndefined();
+    expect(deps.callGateway).not.toHaveBeenCalled();
   });
 });
 
@@ -114,7 +212,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        frozenResultText: "ANNOUNCE_SKIP",
+        completion: { resultText: "ANNOUNCE_SKIP" },
         outcome: { status: "ok" },
       },
     ]);
@@ -128,7 +226,7 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        frozenResultText: "ANNOUNCE_SKIP",
+        completion: { resultText: "ANNOUNCE_SKIP" },
         outcome: { status: "error", error: "boom" },
       },
     ]);
@@ -143,14 +241,14 @@ describe("buildChildCompletionFindings", () => {
         childSessionKey: "agent:main:subagent:silent",
         task: "silent task",
         createdAt: 1,
-        frozenResultText: "ANNOUNCE_SKIP",
+        completion: { resultText: "ANNOUNCE_SKIP" },
         outcome: { status: "ok" },
       },
       {
         childSessionKey: "agent:main:subagent:visible",
         task: "visible task",
         createdAt: 2,
-        frozenResultText: "actual output",
+        completion: { resultText: "actual output" },
         outcome: { status: "ok" },
       },
     ]);

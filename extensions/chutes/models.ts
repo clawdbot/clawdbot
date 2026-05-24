@@ -349,6 +349,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen2.5-VL-32B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 16384,
     maxTokens: 16384,
     cost: { input: 0.05, output: 0.22, cacheRead: 0, cacheWrite: 0 },
@@ -358,6 +361,9 @@ export const CHUTES_MODEL_CATALOG: ModelDefinitionConfig[] = [
     name: "Qwen/Qwen3-VL-235B-A22B-Instruct",
     reasoning: false,
     input: ["text", "image"],
+    mediaInput: {
+      image: { maxPixels: 12845056, preferredSidePx: 2048, tokenMode: "provider" },
+    },
     contextWindow: 262144,
     maxTokens: 262144,
     cost: { input: 0.3, output: 1.2, cacheRead: 0, cacheWrite: 0 },

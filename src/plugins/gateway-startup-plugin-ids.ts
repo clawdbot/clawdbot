@@ -23,7 +23,7 @@ import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   isPluginMetadataSnapshotCompatible,
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import {
@@ -938,10 +938,11 @@ export function loadGatewayStartupPluginPlan(params: {
       index: params.index,
     })
       ? params.metadataSnapshot
-      : loadPluginMetadataSnapshot({
+      : resolvePluginMetadataSnapshot({
           config: snapshotConfig,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
         });
   return resolveGatewayStartupPluginPlanFromRegistry({

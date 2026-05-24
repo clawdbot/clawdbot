@@ -958,7 +958,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work.",
+    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound, only when requester channel supports thread bindings. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -1072,22 +1072,16 @@
   },
   {
     "deferLoading": true,
-    "description": "List/kill/steer spawned subagents for requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
+    "description": "List active and recent subagents for the requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
     "inputSchema": {
       "properties": {
         "action": {
-          "enum": ["list", "kill", "steer"],
-          "type": "string"
-        },
-        "message": {
+          "enum": ["list"],
           "type": "string"
         },
         "recentMinutes": {
           "minimum": 1,
           "type": "number"
-        },
-        "target": {
-          "type": "string"
         }
       },
       "type": "object"

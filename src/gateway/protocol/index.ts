@@ -71,6 +71,10 @@ import {
   TalkClientCreateParamsSchema,
   type TalkClientCreateResult,
   TalkClientCreateResultSchema,
+  type TalkAgentControlResult,
+  TalkAgentControlResultSchema,
+  type TalkClientSteerParams,
+  TalkClientSteerParamsSchema,
   type TalkClientToolCallParams,
   TalkClientToolCallParamsSchema,
   type TalkClientToolCallResult,
@@ -97,6 +101,8 @@ import {
   TalkSessionJoinResultSchema,
   type TalkSessionOkResult,
   TalkSessionOkResultSchema,
+  type TalkSessionSteerParams,
+  TalkSessionSteerParamsSchema,
   type TalkSessionSubmitToolResultParams,
   TalkSessionSubmitToolResultParamsSchema,
   type TalkSessionTurnResult,
@@ -672,6 +678,12 @@ export const validateTalkClientToolCallParams = lazyCompile<TalkClientToolCallPa
 export const validateTalkClientToolCallResult = lazyCompile<TalkClientToolCallResult>(
   TalkClientToolCallResultSchema,
 );
+export const validateTalkClientSteerParams = lazyCompile<TalkClientSteerParams>(
+  TalkClientSteerParamsSchema,
+);
+export const validateTalkAgentControlResult = lazyCompile<TalkAgentControlResult>(
+  TalkAgentControlResultSchema,
+);
 export const validateTalkSessionCreateParams = lazyCompile<TalkSessionCreateParams>(
   TalkSessionCreateParamsSchema,
 );
@@ -698,6 +710,9 @@ export const validateTalkSessionCancelOutputParams = lazyCompile<TalkSessionCanc
 );
 export const validateTalkSessionTurnResult = lazyCompile<TalkSessionTurnResult>(
   TalkSessionTurnResultSchema,
+);
+export const validateTalkSessionSteerParams = lazyCompile<TalkSessionSteerParams>(
+  TalkSessionSteerParamsSchema,
 );
 export const validateTalkSessionSubmitToolResultParams =
   lazyCompile<TalkSessionSubmitToolResultParams>(TalkSessionSubmitToolResultParamsSchema);
@@ -948,6 +963,8 @@ export {
   TalkCatalogResultSchema,
   TalkClientCreateParamsSchema,
   TalkClientCreateResultSchema,
+  TalkAgentControlResultSchema,
+  TalkClientSteerParamsSchema,
   TalkClientToolCallParamsSchema,
   TalkClientToolCallResultSchema,
   TalkConfigParamsSchema,
@@ -961,6 +978,7 @@ export {
   TalkSessionJoinResultSchema,
   TalkSessionTurnParamsSchema,
   TalkSessionTurnResultSchema,
+  TalkSessionSteerParamsSchema,
   TalkSessionSubmitToolResultParamsSchema,
   TalkSessionCloseParamsSchema,
   TalkSessionOkResultSchema,
@@ -1081,6 +1099,8 @@ export type {
   TalkCatalogResult,
   TalkClientCreateParams,
   TalkClientCreateResult,
+  TalkClientSteerParams,
+  TalkAgentControlResult,
   TalkClientToolCallParams,
   TalkClientToolCallResult,
   TalkConfigParams,
@@ -1094,6 +1114,7 @@ export type {
   TalkSessionJoinResult,
   TalkSessionTurnParams,
   TalkSessionTurnResult,
+  TalkSessionSteerParams,
   TalkSessionSubmitToolResultParams,
   TalkSessionCloseParams,
   TalkSessionOkResult,

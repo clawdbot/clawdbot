@@ -162,7 +162,15 @@ Candidate sources:
   published version.
 - `source=ref`: pack a trusted branch, tag, or commit with the selected current
   harness.
-- `source=url`: validate an HTTPS tarball with required `package_sha256`.
+- `source=url`: validate a public HTTPS tarball with required `package_sha256`.
+  This path rejects URL credentials, non-default HTTPS ports, private/internal
+  hostnames or DNS/IP results, special-use IP space, and unsafe redirects.
+- `source=trusted-url`: validate an HTTPS tarball with required
+  `package_sha256` and `trusted_source_id` against the maintainer-owned policy
+  in `.github/package-trusted-sources.json`. Use this for enterprise/private
+  mirrors instead of weakening `source=url` with an input-level allow-private
+  switch. Bearer auth, when configured by policy, uses the fixed
+  `OPENCLAW_TRUSTED_PACKAGE_TOKEN` secret.
 - `source=artifact`: reuse a tarball uploaded by another Actions run.
 
 Full Release Validation uses `source=artifact` by default, built from the

@@ -140,13 +140,33 @@ runs:
       run: |
         set -euo pipefail
         credentials=",$CREDENTIALS,"
-        if [[ "$credentials" == *",openai,"* ]]; then
-          [[ -n "${OPENAI_API_KEY:-}" ]] || {
-            echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
-            exit 1
-          }
-        fi
-        if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-          echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+        require_any() {
+          local label="$1"
+          shift
+          local key
+          for key in "$@"; do
+            if [[ -n "${!key:-}" ]]; then
+              return 0
+            fi
+          done
+          echo "Missing credential for ${label}: expected one of $*" >&2
           exit 1
+        }
+        if [[ "$credentials" == *",openai,"* ]]; then
+          require_any OpenAI OPENAI_API_KEY
+        fi
+        if [[ "$credentials" == *",codex,"* ]]; then
+          require_any Codex OPENCLAW_CODEX_AUTH_JSON
+        fi
+        if [[ "$credentials" == *",anthropic,"* ]]; then
+          require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
+        fi
+        if [[ "$credentials" == *",factory,"* ]]; then
+          require_any Factory FACTORY_API_KEY
+        fi
+        if [[ "$credentials" == *",gemini,"* ]]; then
+          require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON
+        fi
+        if [[ "$credentials" == *",opencode,"* ]]; then
+          require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY
         fi

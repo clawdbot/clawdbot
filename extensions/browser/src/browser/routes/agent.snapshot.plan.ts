@@ -32,6 +32,7 @@ type BrowserSnapshotPlan = {
   refsMode?: "aria" | "role";
   selectorValue?: string;
   frameSelectorValue?: string;
+  timeoutMs?: number;
   wantsRoleSnapshot: boolean;
 };
 
@@ -79,6 +80,11 @@ export function resolveSnapshotPlan(params: {
     depthRaw ?? (mode === "efficient" ? DEFAULT_AI_SNAPSHOT_EFFICIENT_DEPTH : undefined);
   const selectorValue = normalizeOptionalString(toStringOrEmpty(params.query.selector));
   const frameSelectorValue = normalizeOptionalString(toStringOrEmpty(params.query.frame));
+  const timeoutMsRaw = toNumber(params.query.timeoutMs);
+  const timeoutMs =
+    timeoutMsRaw !== undefined && Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0
+      ? Math.max(1, Math.floor(timeoutMsRaw))
+      : undefined;
 
   return {
     format,
@@ -93,6 +99,7 @@ export function resolveSnapshotPlan(params: {
     refsMode,
     selectorValue,
     frameSelectorValue,
+    timeoutMs,
     wantsRoleSnapshot:
       labels === true ||
       urls === true ||

@@ -1,5 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
+import { resetBundledPluginPublicArtifactLoaderForTest } from "../plugins/public-surface-loader.js";
 import type { OpenClawConfig } from "./config.js";
 import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 
@@ -15,6 +17,8 @@ function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
 
 describe("config pruning defaults", () => {
   beforeEach(() => {
+    setBundledPluginsDirOverrideForTest(path.resolve(import.meta.dirname, "../../extensions"));
+    resetBundledPluginPublicArtifactLoaderForTest();
     vi.stubEnv(
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
       path.resolve(import.meta.dirname, "../../extensions"),
@@ -22,6 +26,8 @@ describe("config pruning defaults", () => {
   });
 
   afterEach(() => {
+    setBundledPluginsDirOverrideForTest(undefined);
+    resetBundledPluginPublicArtifactLoaderForTest();
     vi.unstubAllEnvs();
   });
 
@@ -88,26 +94,6 @@ describe("config pruning defaults", () => {
     expectAnthropicPruningDefaults(cfg);
     expect(
       cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
-    ).toBe("short");
-  });
-
-  it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
-    const cfg = applyAnthropicDefaultsForTest({
-      auth: {
-        profiles: {
-          "anthropic:api": { provider: "anthropic", mode: "api_key" },
-        },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-20250514" },
-        },
-      },
-    });
-
-    expectAnthropicPruningDefaults(cfg);
-    expect(
-      cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params?.cacheRetention,
     ).toBe("short");
   });
 

@@ -216,20 +216,52 @@ ${windowsScopedEnvFunction}
 function Remove-FuturePluginEntries {
   $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
   if (-not (Test-Path $configPath)) { return }
-  try { $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable } catch { return }
-  $plugins = $config['plugins']
-  if (-not ($plugins -is [hashtable])) { return }
-  $entries = $plugins['entries']
-  if ($entries -is [hashtable]) {
+  try { $config = Get-Content $configPath -Raw | ConvertFrom-Json } catch { return }
+  $plugins = Get-OpenClawJsonProperty $config 'plugins'
+  if ($null -eq $plugins) { return }
+  $entries = Get-OpenClawJsonProperty $plugins 'entries'
+  if ($null -ne $entries) {
     foreach ($pluginId in @('feishu', 'whatsapp', 'openai')) {
-      if ($entries.ContainsKey($pluginId)) { $entries.Remove($pluginId) }
+      Remove-OpenClawJsonProperty $entries $pluginId
     }
   }
-  $allow = $plugins['allow']
+  $allow = Get-OpenClawJsonProperty $plugins 'allow'
   if ($allow -is [array]) {
-    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp', 'openai') })
+    Set-OpenClawJsonProperty $plugins 'allow' @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp', 'openai') })
   }
   $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
+}
+function Get-OpenClawJsonProperty {
+  param([object]$Object, [string]$Name)
+  if ($null -eq $Object) { return $null }
+  if ($Object -is [System.Collections.IDictionary]) { return $Object[$Name] }
+  $property = $Object.PSObject.Properties[$Name]
+  if ($null -eq $property) { return $null }
+  return $property.Value
+}
+function Set-OpenClawJsonProperty {
+  param([object]$Object, [string]$Name, [object]$Value)
+  if ($Object -is [System.Collections.IDictionary]) {
+    $Object[$Name] = $Value
+    return
+  }
+  $property = $Object.PSObject.Properties[$Name]
+  if ($null -ne $property) {
+    $property.Value = $Value
+    return
+  }
+  $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value
+}
+function Remove-OpenClawJsonProperty {
+  param([object]$Object, [string]$Name)
+  if ($null -eq $Object) { return }
+  if ($Object -is [System.Collections.IDictionary]) {
+    if ($Object.Contains($Name)) { $Object.Remove($Name) }
+    return
+  }
+  if ($null -ne $Object.PSObject.Properties[$Name]) {
+    $Object.PSObject.Properties.Remove($Name)
+  }
 }
 function Stop-OpenClawGatewayProcesses {
   Invoke-OpenClaw gateway stop *>&1 | Out-Host

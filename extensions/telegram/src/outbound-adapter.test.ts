@@ -4,9 +4,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
 const pinMessageTelegramMock = vi.fn();
+const sendPollTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
   pinMessageTelegram: (...args: unknown[]) => pinMessageTelegramMock(...args),
+  sendPollTelegram: (...args: unknown[]) => sendPollTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -57,6 +59,7 @@ function callOptionsFromEnd(
 describe("telegramOutbound", () => {
   beforeEach(() => {
     pinMessageTelegramMock.mockReset();
+    sendPollTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
 
@@ -381,6 +384,98 @@ describe("telegramOutbound", () => {
     expect(options.textMode).toBeUndefined();
   });
 
+  it("normalizes legacy durable group retry targets before Telegram sends", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-group-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "group:-1001234567890",
+      text: "retry reminder",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "-1001234567890", "retry reminder");
+  });
+
+  it("keeps numeric durable retry targets unchanged", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-direct-retry",
+      chatId: "123456789",
+    });
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "123456789",
+      text: "retry direct",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "123456789", "retry direct");
+  });
+
+  it("normalizes legacy durable group retry targets with topic suffixes", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-topic-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "group:-1001234567890:topic:77",
+      text: "",
+      payload: { text: "topic retry" },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "-1001234567890:topic:77", "topic retry");
+  });
+
+  it("does not make non-numeric legacy group targets look valid", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-invalid-retry",
+      chatId: "group:not-a-number",
+    });
+
+    await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "group:not-a-number",
+      text: "bad retry target",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    lastCallOptions(sendMessageTelegramMock, "group:not-a-number", "bad retry target");
+  });
+
+  it("normalizes legacy durable group retry topic targets before Telegram polls", async () => {
+    sendPollTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-poll-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.sendPoll?.({
+      cfg: {} as never,
+      to: "group:-1001234567890:topic:77",
+      poll: { question: "Retry?", options: ["Yes", "No"] },
+      accountId: "ops",
+    });
+
+    expect(sendPollTelegramMock).toHaveBeenCalledWith(
+      "-1001234567890:topic:77",
+      { question: "Retry?", options: ["Yes", "No"] },
+      {
+        cfg: {},
+        accountId: "ops",
+        messageThreadId: undefined,
+        silent: undefined,
+        isAnonymous: undefined,
+        gatewayClientScopes: undefined,
+      },
+    );
+  });
+
   it("forwards audioAsVoice payload media to Telegram voice sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-voice", chatId: "12345" });
 
@@ -506,5 +601,43 @@ describe("telegramOutbound", () => {
     expect(options.accountId).toBe("ops");
     expect(options.notify).toBe(true);
     expect(options.verbose).toBe(false);
+  });
+
+  it("normalizes legacy durable group retry targets before Telegram pinning", async () => {
+    pinMessageTelegramMock.mockResolvedValueOnce({
+      ok: true,
+      messageId: "tg-group-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.pinDeliveredMessage?.({
+      cfg: {} as never,
+      target: { channel: "telegram", to: "group:-1001234567890", accountId: "ops" },
+      messageId: "tg-group-retry",
+      pin: { enabled: true, notify: false },
+    });
+
+    const options = callOptionsAt(pinMessageTelegramMock, 0, "-1001234567890", "tg-group-retry");
+    expect(options.accountId).toBe("ops");
+    expect(options.notify).toBe(false);
+  });
+
+  it("normalizes legacy durable group retry topic targets before Telegram pinning", async () => {
+    pinMessageTelegramMock.mockResolvedValueOnce({
+      ok: true,
+      messageId: "tg-topic-retry",
+      chatId: "-1001234567890",
+    });
+
+    await telegramOutbound.pinDeliveredMessage?.({
+      cfg: {} as never,
+      target: { channel: "telegram", to: "group:-1001234567890:topic:77", accountId: "ops" },
+      messageId: "tg-topic-retry",
+      pin: { enabled: true, notify: false },
+    });
+
+    const options = callOptionsAt(pinMessageTelegramMock, 0, "-1001234567890", "tg-topic-retry");
+    expect(options.accountId).toBe("ops");
+    expect(options.notify).toBe(false);
   });
 });

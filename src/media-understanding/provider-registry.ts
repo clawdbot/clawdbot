@@ -20,6 +20,7 @@ function mergeProviderIntoRegistry(
         defaultModels: provider.defaultModels ?? existing.defaultModels,
         autoPriority: provider.autoPriority ?? existing.autoPriority,
         nativeDocumentInputs: provider.nativeDocumentInputs ?? existing.nativeDocumentInputs,
+        documentModels: provider.documentModels ?? existing.documentModels,
       }
     : provider;
   registry.set(normalizedKey, hydrateModelBackedMediaProvider(merged));

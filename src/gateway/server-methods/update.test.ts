@@ -114,7 +114,7 @@ vi.mock("./restart-request.js", () => ({
     sessionKey: params.sessionKey,
     note: params.note,
     continuationMessage: params.continuationMessage,
-    restartDelayMs: undefined,
+    restartDelayMs: params.restartDelayMs,
   }),
 }));
 
@@ -367,6 +367,7 @@ describe("update.run restart scheduling", () => {
       expect.objectContaining({
         root: "/tmp/openclaw",
         handoffId: expect.any(String),
+        supervisor: "launchd",
         meta: expect.objectContaining({
           handoffId: expect.any(String),
         }),
@@ -412,6 +413,33 @@ describe("update.run restart scheduling", () => {
         stats: expect.objectContaining({
           reason: "managed-service-handoff-started",
         }),
+      }),
+    );
+  });
+
+  it("keeps a startup grace before restarting after systemd handoff spawn", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "global",
+      mode: "npm",
+      root: "/tmp/openclaw-global",
+      packageRoot: "/tmp/openclaw-global",
+    });
+
+    await invokeUpdateRun({ restartDelayMs: 0 });
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        supervisor: "systemd",
+        restartDelayMs: 0,
+      }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delayMs: 2000,
+        reason: "update.run",
+        skipCooldown: true,
+        skipDeferral: true,
       }),
     );
   });

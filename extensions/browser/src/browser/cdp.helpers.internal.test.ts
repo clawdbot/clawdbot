@@ -3,6 +3,11 @@ import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
+  registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
+    () => undefined,
+  ),
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -11,6 +16,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
 });
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
 
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import {
@@ -43,6 +52,8 @@ describe("cdp.helpers internal", () => {
 
   afterEach(async () => {
     fetchWithSsrFGuardMock.mockReset();
+    registerManagedProxyBrowserCdpBypassMock.mockReset();
+    registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
     if (wss) {
       await new Promise<void>((resolve) => wss?.close(() => resolve()));
       wss = null;
@@ -114,6 +125,28 @@ describe("cdp.helpers internal", () => {
       await guardedRelease();
       // The underlying release must be invoked exactly once.
       expect(release).toHaveBeenCalledTimes(1);
+    });
+
+    it("registers a managed-proxy bypass for the exact sanitized fetch URL", async () => {
+      const release = vi.fn();
+      registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response: { ok: true, status: 200 } as unknown as Response,
+        release: vi.fn(async () => {}),
+      });
+
+      const { release: guardedRelease } = await fetchCdpChecked(
+        "http://openclaw:secret@127.0.0.1:9222/json/version",
+        250,
+        undefined,
+        { dangerouslyAllowPrivateNetwork: false, allowedHostnames: ["127.0.0.1"] },
+      );
+
+      expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:9222/json/version",
+      );
+      expect(release).toHaveBeenCalledOnce();
+      await guardedRelease();
     });
 
     it("converts SSRF-blocked errors from the underlying fetch into a browser-scoped error", async () => {
@@ -476,6 +509,36 @@ describe("openCdpWebSocket option handling", () => {
       handshakeTimeoutMs: 500,
     });
     expect(ws.url).toBe(url);
+    ws.once("error", () => {});
+    ws.close();
+  });
+
+  it("registers a managed-proxy bypass for the exact websocket URL during construction", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+    const url = "ws://127.0.0.1:1/devtools/browser/X";
+    const ws = openCdpWebSocket(url, {
+      handshakeTimeoutMs: 500,
+    });
+
+    expect(ws.url).toBe(url);
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(url);
+    expect(release).toHaveBeenCalledOnce();
+    ws.once("error", () => {});
+    ws.close();
+  });
+
+  it("registers websocket managed-proxy bypass without URL credentials", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+    const ws = openCdpWebSocket("ws://user:secret@127.0.0.1:1/devtools/browser/X", {
+      handshakeTimeoutMs: 500,
+    });
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "ws://127.0.0.1:1/devtools/browser/X",
+    );
+    expect(release).toHaveBeenCalledOnce();
     ws.once("error", () => {});
     ws.close();
   });

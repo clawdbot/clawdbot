@@ -173,6 +173,31 @@ describe("createGatewayCloseHandler", () => {
     expect(deps.chatRunState.clear).toHaveBeenCalledTimes(1);
   });
 
+  it("stops plugin services before channel runtimes", async () => {
+    const events: string[] = [];
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugin-services");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    await close({ reason: "test" });
+
+    expect(events).toEqual(["plugin-services", "channel:discord"]);
+    expect(pluginServices.stop).toHaveBeenCalledTimes(1);
+    expect(stopChannel).toHaveBeenCalledWith("discord");
+  });
+
   it("emits gateway shutdown and pre-restart hooks", async () => {
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 

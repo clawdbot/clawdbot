@@ -98,6 +98,32 @@ describe("anthropic provider policy public artifact", () => {
     expect(nextConfig.agents?.defaults?.contextPruning?.ttl).toBe("1h");
   });
 
+  it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
+    const nextConfig = applyConfigDefaults({
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:default": {
+              provider: "anthropic",
+              mode: "api_key",
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-sonnet-4-20250514" },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(
+      nextConfig.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params
+        ?.cacheRetention,
+    ).toBe("short");
+  });
+
   it("exposes Claude Opus 4.7 thinking levels without loading the full provider plugin", () => {
     const profile = resolveThinkingProfile({
       provider: "anthropic",

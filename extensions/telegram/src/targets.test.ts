@@ -14,6 +14,7 @@ import {
   isNumericTelegramChatId,
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
+  normalizeTelegramOutboundTarget,
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
@@ -104,6 +105,25 @@ describe("telegram numeric target normalization", () => {
       expect(normalize("123456789")).toBe("123456789");
     },
   );
+});
+
+describe("normalizeTelegramOutboundTarget", () => {
+  it("normalizes legacy durable group retry targets for Telegram sends", () => {
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890")).toBe("-1001234567890");
+  });
+
+  it("normalizes legacy durable group retry targets with topic suffixes", () => {
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:topic:77")).toBe(
+      "-1001234567890:topic:77",
+    );
+    expect(normalizeTelegramOutboundTarget("group:-1001234567890:77")).toBe("-1001234567890:77");
+  });
+
+  it("keeps already-valid numeric and non-numeric targets on the send path", () => {
+    expect(normalizeTelegramOutboundTarget("-1001234567890")).toBe("-1001234567890");
+    expect(normalizeTelegramOutboundTarget("group:not-a-number")).toBe("group:not-a-number");
+    expect(normalizeTelegramOutboundTarget("@mychannel")).toBe("@mychannel");
+  });
 });
 
 describe("normalizeTelegramChatId", () => {

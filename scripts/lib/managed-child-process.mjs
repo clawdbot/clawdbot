@@ -1,7 +1,10 @@
 import { spawn } from "node:child_process";
+import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
+const managedChildren = new Set();
+const signalHandlers = new Map();
 
 /**
  * @param {NodeJS.Signals} signal
@@ -48,6 +51,9 @@ function terminateManagedChild(child, signal = "SIGTERM") {
  *   env?: NodeJS.ProcessEnv;
  *   stdio?: import("node:child_process").StdioOptions;
  *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
  *   onReady?: (child: import("node:child_process").ChildProcess) => void;
  * }} options
  * @returns {Promise<number>}
@@ -59,47 +65,186 @@ export async function runManagedCommand({
   env,
   stdio = "inherit",
   shell = process.platform === "win32",
+  windowsVerbatimArguments,
+  platform = process.platform,
+  comSpec,
   onReady,
 }) {
-  const child = spawn(bin, args, {
+  const spawnSpec = createManagedCommandSpawnSpec({
+    bin,
+    args,
     cwd,
     env,
     stdio,
     shell,
-    detached: process.platform !== "win32",
+    windowsVerbatimArguments,
+    platform,
+    comSpec,
   });
-
-  let receivedSignal = null;
-  let forceKillTimer = null;
-
-  const forwardSignal = (signal) => {
-    receivedSignal ??= signal;
-    terminateManagedChild(child, signal);
-    forceKillTimer ??= setTimeout(() => {
-      terminateManagedChild(child, "SIGKILL");
-    }, FORCE_KILL_DELAY_MS);
+  const child = spawn(spawnSpec.command, spawnSpec.args, spawnSpec.options);
+  const managedChild = {
+    child,
+    forceKillTimer: null,
+    receivedSignal: null,
   };
-
-  for (const signal of FORWARDED_SIGNALS) {
-    process.once(signal, forwardSignal);
-  }
+  addManagedChild(managedChild);
   onReady?.(child);
 
   try {
     return await new Promise((resolve, reject) => {
       child.once("error", reject);
       child.once("close", (status) => {
-        if (forceKillTimer) {
-          clearTimeout(forceKillTimer);
+        if (managedChild.forceKillTimer) {
+          clearTimeout(managedChild.forceKillTimer);
         }
-        resolve(receivedSignal ? signalExitCode(receivedSignal) : (status ?? 1));
+        resolve(managedChild.receivedSignal ? signalExitCode(managedChild.receivedSignal) : (status ?? 1));
       });
     });
   } finally {
-    for (const signal of FORWARDED_SIGNALS) {
-      process.off(signal, forwardSignal);
-    }
+    removeManagedChild(managedChild);
   }
+}
+
+/**
+ * @param {{
+ *   child: import("node:child_process").ChildProcess;
+ *   forceKillTimer: NodeJS.Timeout | null;
+ *   receivedSignal: NodeJS.Signals | null;
+ * }} managedChild
+ */
+function addManagedChild(managedChild) {
+  managedChildren.add(managedChild);
+  installSignalHandlers();
+}
+
+/**
+ * @param {{
+ *   child: import("node:child_process").ChildProcess;
+ *   forceKillTimer: NodeJS.Timeout | null;
+ *   receivedSignal: NodeJS.Signals | null;
+ * }} managedChild
+ */
+function removeManagedChild(managedChild) {
+  managedChildren.delete(managedChild);
+  if (managedChildren.size === 0) {
+    removeSignalHandlers();
+  }
+}
+
+function installSignalHandlers() {
+  for (const signal of FORWARDED_SIGNALS) {
+    if (signalHandlers.has(signal)) {
+      continue;
+    }
+    const handler = () => forwardSignalToManagedChildren(signal);
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+}
+
+function removeSignalHandlers() {
+  for (const [signal, handler] of signalHandlers) {
+    process.off(signal, handler);
+  }
+  signalHandlers.clear();
+}
+
+/**
+ * @param {NodeJS.Signals} signal
+ */
+function forwardSignalToManagedChildren(signal) {
+  for (const managedChild of managedChildren) {
+    managedChild.receivedSignal ??= signal;
+    terminateManagedChild(managedChild.child, signal);
+    managedChild.forceKillTimer ??= setTimeout(() => {
+      terminateManagedChild(managedChild.child, "SIGKILL");
+    }, FORCE_KILL_DELAY_MS);
+  }
+}
+
+/**
+ * @param {{
+ *   bin: string;
+ *   args?: string[];
+ *   cwd?: string;
+ *   env?: NodeJS.ProcessEnv;
+ *   stdio?: import("node:child_process").StdioOptions;
+ *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
+ * }} options
+ */
+export function createManagedCommandSpawnSpec({
+  bin,
+  args = [],
+  cwd,
+  env,
+  stdio = "inherit",
+  shell = process.platform === "win32",
+  windowsVerbatimArguments,
+  platform = process.platform,
+  comSpec,
+}) {
+  const invocation = createManagedCommandInvocation({
+    bin,
+    args,
+    env,
+    shell,
+    windowsVerbatimArguments,
+    platform,
+    comSpec,
+  });
+
+  return {
+    args: invocation.args,
+    command: invocation.command,
+    options: {
+      cwd,
+      env,
+      stdio,
+      shell: invocation.shell,
+      detached: platform !== "win32",
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    },
+  };
+}
+
+/**
+ * @param {{
+ *   bin: string;
+ *   args?: string[];
+ *   env?: NodeJS.ProcessEnv;
+ *   shell?: boolean;
+ *   windowsVerbatimArguments?: boolean;
+ *   platform?: NodeJS.Platform;
+ *   comSpec?: string;
+ * }} options
+ */
+export function createManagedCommandInvocation({
+  bin,
+  args = [],
+  env,
+  shell = process.platform === "win32",
+  windowsVerbatimArguments,
+  platform = process.platform,
+  comSpec,
+}) {
+  if (platform === "win32" && shell && args.length > 0) {
+    return {
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(bin, args)],
+      command: comSpec ?? env?.ComSpec ?? env?.COMSPEC ?? process.env.ComSpec ?? "cmd.exe",
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    args,
+    command: bin,
+    shell,
+    windowsVerbatimArguments,
+  };
 }
 
 function signalNumberFor(signal) {

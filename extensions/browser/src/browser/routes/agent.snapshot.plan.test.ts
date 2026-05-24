@@ -47,4 +47,31 @@ describe("resolveSnapshotPlan", () => {
     expect(plan.urls).toBe(true);
     expect(plan.wantsRoleSnapshot).toBe(true);
   });
+
+  it("parses timeoutMs from the snapshot query string", () => {
+    const plan = resolveSnapshotPlan({
+      profile: profile("openclaw"),
+      query: { timeoutMs: "12345" },
+      hasPlaywright: true,
+    });
+
+    expect(plan.timeoutMs).toBe(12345);
+  });
+
+  it("ignores non-positive timeoutMs values", () => {
+    expect(
+      resolveSnapshotPlan({
+        profile: profile("openclaw"),
+        query: { timeoutMs: "0" },
+        hasPlaywright: true,
+      }).timeoutMs,
+    ).toBeUndefined();
+    expect(
+      resolveSnapshotPlan({
+        profile: profile("openclaw"),
+        query: { timeoutMs: "not-a-number" },
+        hasPlaywright: true,
+      }).timeoutMs,
+    ).toBeUndefined();
+  });
 });

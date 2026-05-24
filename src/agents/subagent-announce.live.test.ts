@@ -314,11 +314,11 @@ describeLive("subagent announce live", () => {
         return listSubagentRunsForRequester(sessionKey).find(
           (run) =>
             run.taskName === "issue_82913_child" &&
-            run.frozenResultText?.includes(childToken) === true &&
+            run.completion?.resultText?.includes(childToken) === true &&
             run.outcome?.status === "ok",
         );
       });
-      expect(completedRunBeforeDelivery.completionAnnouncedAt).toBeUndefined();
+      expect(completedRunBeforeDelivery.delivery?.announcedAt).toBeUndefined();
       expect(parentObservedAt).toBeUndefined();
 
       const parent = await initialRequest;
@@ -330,14 +330,14 @@ describeLive("subagent announce live", () => {
         listSubagentRunsForRequester(sessionKey).find(
           (run) =>
             run.runId === completedRunBeforeDelivery.runId &&
-            typeof run.completionEnqueuedAt === "number" &&
-            typeof run.completionDeliveredAt === "number" &&
-            typeof run.completionAnnouncedAt === "number",
+            typeof run.delivery?.enqueuedAt === "number" &&
+            typeof run.delivery?.deliveredAt === "number" &&
+            typeof run.delivery?.announcedAt === "number",
         ),
       );
-      const enqueuedAt = completedRun.completionEnqueuedAt!;
-      const deliveredAt = completedRun.completionDeliveredAt!;
-      const announcedAt = completedRun.completionAnnouncedAt!;
+      const enqueuedAt = completedRun.delivery?.enqueuedAt ?? 0;
+      const deliveredAt = completedRun.delivery?.deliveredAt ?? 0;
+      const announcedAt = completedRun.delivery?.announcedAt ?? 0;
       const enqueuedToDeliveredMs = deliveredAt - enqueuedAt;
       const announcedToParentObservedMs = Math.abs(parentObservedAt - announcedAt);
       console.log(
@@ -352,7 +352,7 @@ describeLive("subagent announce live", () => {
           announcedToParentObservedMs,
         })}`,
       );
-      expect(completedRun.completionAnnouncedAt).toBe(deliveredAt);
+      expect(completedRun.delivery?.announcedAt).toBe(deliveredAt);
       expect(enqueuedToDeliveredMs).toBeGreaterThan(10_000);
       expect(announcedToParentObservedMs).toBeLessThan(20_000);
     },
@@ -499,12 +499,12 @@ describeLive("subagent announce live", () => {
         return listSubagentRunsForRequester(sessionKey).find(
           (run) =>
             run.taskName === "steered_child" &&
-            run.frozenResultText?.includes(childToken) === true &&
+            run.completion?.resultText?.includes(childToken) === true &&
             run.outcome?.status === "ok",
         );
       });
       expect(steeredRun.endedReason).toBe("subagent-complete");
-      expect(steeredRun.lastAnnounceDeliveryError).toBeUndefined();
+      expect(steeredRun.delivery?.lastError).toBeUndefined();
 
       await waitFor("in-process subagent completion agent dispatch start", () => {
         if (initialError) {
@@ -659,7 +659,8 @@ describeLive("subagent announce live", () => {
         const completed = childTokens.every((childToken) =>
           runs.some(
             (run) =>
-              run.frozenResultText?.includes(childToken) === true && run.outcome?.status === "ok",
+              run.completion?.resultText?.includes(childToken) === true &&
+              run.outcome?.status === "ok",
           ),
         );
         return completed ? runs : undefined;
@@ -667,7 +668,9 @@ describeLive("subagent announce live", () => {
 
       expect(completedRuns).toHaveLength(3);
       for (const childToken of childTokens) {
-        expect(completedRuns.some((run) => run.frozenResultText?.includes(childToken))).toBe(true);
+        expect(completedRuns.some((run) => run.completion?.resultText?.includes(childToken))).toBe(
+          true,
+        );
       }
 
       const parent = await initialRequest;

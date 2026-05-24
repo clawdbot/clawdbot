@@ -1,6 +1,6 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { spawnPnpmRunner } from "../pnpm-runner.mjs";
 import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
@@ -9,21 +9,24 @@ import {
 const scriptFile = fileURLToPath(import.meta.url);
 const scriptDir = path.dirname(scriptFile);
 const repoRoot = path.resolve(scriptDir, "../..");
-const pnpm = "pnpm";
 
 export async function runVitestBatch(params) {
   return await new Promise((resolve, reject) => {
-    const child = spawn(
-      pnpm,
-      ["exec", "vitest", "run", "--config", params.config, ...params.targets, ...params.args],
-      {
-        cwd: repoRoot,
-        detached: shouldUseDetachedVitestProcessGroup(),
-        stdio: "inherit",
-        shell: process.platform === "win32",
-        env: params.env,
-      },
-    );
+    const child = spawnPnpmRunner({
+      cwd: repoRoot,
+      detached: shouldUseDetachedVitestProcessGroup(),
+      env: params.env,
+      pnpmArgs: [
+        "exec",
+        "vitest",
+        "run",
+        "--config",
+        params.config,
+        ...params.targets,
+        ...params.args,
+      ],
+      stdio: "inherit",
+    });
     const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
 
     child.on("error", (error) => {

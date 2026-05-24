@@ -55,6 +55,13 @@ const TalkBrainSchema = Type.Union([
   Type.Literal("none"),
 ]);
 
+const TalkAgentControlModeSchema = Type.Union([
+  Type.Literal("status"),
+  Type.Literal("steer"),
+  Type.Literal("cancel"),
+  Type.Literal("followup"),
+]);
+
 const TalkEventTypeSchema = Type.Union([
   Type.Literal("session.started"),
   Type.Literal("session.ready"),
@@ -193,6 +200,45 @@ export const TalkClientToolCallResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const TalkClientSteerParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    text: NonEmptyString,
+    mode: Type.Optional(TalkAgentControlModeSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkAgentControlResultSchema = Type.Object(
+  {
+    ok: Type.Boolean(),
+    mode: TalkAgentControlModeSchema,
+    sessionKey: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    active: Type.Boolean(),
+    queued: Type.Optional(Type.Boolean()),
+    aborted: Type.Optional(Type.Boolean()),
+    target: Type.Optional(Type.Union([Type.Literal("embedded_run"), Type.Literal("reply_run")])),
+    reason: Type.Optional(Type.String()),
+    message: Type.String(),
+    speak: Type.Boolean(),
+    show: Type.Boolean(),
+    suppress: Type.Boolean(),
+    providerResult: Type.Optional(
+      Type.Object(
+        {
+          status: Type.Literal("cancelled"),
+          message: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    enqueuedAtMs: Type.Optional(Type.Number()),
+    deliveredAtMs: Type.Optional(Type.Number()),
+  },
+  { additionalProperties: false },
+);
+
 export const TalkSessionJoinParamsSchema = Type.Object(
   {
     sessionId: NonEmptyString,
@@ -269,6 +315,16 @@ export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+  },
+  { additionalProperties: false },
+);
+
+export const TalkSessionSteerParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    sessionKey: Type.Optional(NonEmptyString),
+    text: NonEmptyString,
+    mode: Type.Optional(TalkAgentControlModeSchema),
   },
   { additionalProperties: false },
 );

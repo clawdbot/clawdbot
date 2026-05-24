@@ -32,15 +32,25 @@ import {
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
   "openclaw.callId",
+  "openclaw.call_id",
   "openclaw.chatId",
+  "openclaw.chat_id",
   "openclaw.messageId",
+  "openclaw.message_id",
   "openclaw.parentSpanId",
+  "openclaw.parent_span_id",
   "openclaw.runId",
+  "openclaw.run_id",
   "openclaw.sessionId",
+  "openclaw.session_id",
   "openclaw.sessionKey",
+  "openclaw.session_key",
   "openclaw.spanId",
+  "openclaw.span_id",
   "openclaw.toolCallId",
+  "openclaw.tool_call_id",
   "openclaw.traceId",
+  "openclaw.trace_id",
 ]);
 const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const MAX_OTEL_CONTENT_ATTRIBUTE_CHARS = 4 * 1024;

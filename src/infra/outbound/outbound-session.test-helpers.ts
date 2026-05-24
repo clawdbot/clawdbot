@@ -585,9 +585,19 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
         capabilities: { chatTypes: ["direct", "group", "channel"] },
       }),
       messaging: {
-        parseExplicitTarget: ({ raw }) =>
-          raw.startsWith("spaces/") ? { to: raw, chatType: "group" } : null,
+        inferTargetChatType: ({ to }) => (to.startsWith("spaces/") ? "group" : undefined),
         targetPrefixes: ["fallbackchat"],
+      },
+    },
+    {
+      ...createChannelTestPluginBase({
+        id: "legacyparser",
+        label: "Legacy Parser",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      messaging: {
+        parseExplicitTarget: ({ raw }) =>
+          raw === "team-ops" ? { to: raw, chatType: "group" } : null,
       },
     },
   ];

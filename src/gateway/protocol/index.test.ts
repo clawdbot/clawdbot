@@ -16,7 +16,9 @@ import {
   validateTalkConfigResult,
   validateTalkEvent,
   validateTalkClientCreateParams,
+  validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
+  validateTalkAgentControlResult,
   validateTalkSessionAppendAudioParams,
   validateTalkSessionCancelOutputParams,
   validateTalkSessionCancelTurnParams,
@@ -24,6 +26,7 @@ import {
   validateTalkSessionJoinParams,
   validateTalkSessionJoinResult,
   validateTalkSessionSubmitToolResultParams,
+  validateTalkSessionSteerParams,
   validateTalkSessionTurnParams,
   validateTalkSessionTurnResult,
   validateWakeParams,
@@ -449,6 +452,44 @@ describe("validateTalkClientToolCallParams", () => {
         callId: "call-1",
         name: "openclaw_agent_consult",
         args: { question: "what now" },
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("validateTalkAgentControlParams", () => {
+  it("accepts client and session steering params plus structured outcomes", () => {
+    expect(
+      validateTalkClientSteerParams({
+        sessionKey: "agent:main:main",
+        text: "use the safer path",
+        mode: "steer",
+      }),
+    ).toBe(true);
+    expect(
+      validateTalkSessionSteerParams({
+        sessionId: "talk-1",
+        sessionKey: "agent:main:main",
+        text: "status",
+        mode: "status",
+      }),
+    ).toBe(true);
+    expect(
+      validateTalkAgentControlResult({
+        ok: true,
+        mode: "cancel",
+        sessionKey: "agent:main:main",
+        sessionId: "session-1",
+        active: true,
+        aborted: true,
+        message: "Cancelled the active OpenClaw run.",
+        speak: true,
+        show: true,
+        suppress: false,
+        providerResult: {
+          status: "cancelled",
+          message: "Cancelled the active OpenClaw run.",
+        },
       }),
     ).toBe(true);
   });

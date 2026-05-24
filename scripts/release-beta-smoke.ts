@@ -84,16 +84,18 @@ function requireValue(argv: string[], index: number, flag: string): string {
   return value;
 }
 
+const CAPTURE_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+
 function run(command: string, args: string[], input?: { capture?: boolean }): string {
   const result = spawnSync(command, args, {
     encoding: "utf8",
+    maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
     stdio: input?.capture ? ["ignore", "pipe", "pipe"] : "inherit",
   });
   if (result.status !== 0) {
+    const reason = result.status ?? result.signal ?? result.error?.message ?? "unknown";
     const stderr = result.stderr ? `\n${result.stderr}` : "";
-    throw new Error(
-      `${command} ${args.join(" ")} failed with ${result.status ?? "signal"}${stderr}`,
-    );
+    throw new Error(`${command} ${args.join(" ")} failed with ${reason}${stderr}`);
   }
   return result.stdout ?? "";
 }

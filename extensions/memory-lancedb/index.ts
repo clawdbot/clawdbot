@@ -694,6 +694,14 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+    api.registerMemoryCapability?.({
+      publicArtifacts: {
+        async listArtifacts(params) {
+          const { listMemoryHostPublicArtifacts } = await loadMemoryHostCoreModule();
+          return await listMemoryHostPublicArtifacts(params);
+        },
+      },
+    });
 
     // ========================================================================
     // Tools

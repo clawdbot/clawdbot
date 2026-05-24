@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
+import { normalizeHealthCheck } from "./health-check-adapter.js";
+import type { RunnableHealthCheck } from "./health-check-runner-types.js";
 import type { HealthCheck, HealthCheckContext } from "./health-checks.js";
 
 const ctx: HealthCheckContext = {
@@ -17,7 +19,7 @@ function check(id: string, detect: HealthCheck["detect"]): HealthCheck {
     id,
     kind: "core",
     description: id,
-    detect,
+    detect: detect ?? (async () => []),
   };
 }
 
@@ -34,6 +36,34 @@ describe("runDoctorLintChecks", () => {
     expect(result.checksRun).toBe(1);
     expect(result.checksSkipped).toBe(1);
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
+  });
+
+  it("supports single-run checks in lint mode", async () => {
+    const runnable: RunnableHealthCheck = {
+      id: "run-check",
+      kind: "core",
+      description: "run check",
+      async run(runCtx) {
+        expect(runCtx).toMatchObject({
+          mode: "lint",
+          repair: false,
+        });
+        return {
+          findings: [
+            {
+              checkId: "run-check",
+              severity: "warning",
+              message: "warn",
+            },
+          ],
+        };
+      },
+    };
+    const check = normalizeHealthCheck(runnable);
+
+    const result = await runDoctorLintChecks(ctx, { checks: [check] });
+
+    expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
   });
 
   it("turns thrown checks into error findings", async () => {

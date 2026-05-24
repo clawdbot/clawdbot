@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectOverrideViolations,
   collectPnpmLockViolations,
+  createNpmShrinkwrapCommand,
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
@@ -13,6 +14,30 @@ import {
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
 
 describe("generate-npm-shrinkwrap", () => {
+  function repoRelativePath(value: string): string {
+    return path.relative(process.cwd(), value).replaceAll("\\", "/");
+  }
+
+  it("runs npm shrinkwrap through cmd.exe for Windows npm shims", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    expect(
+      createNpmShrinkwrapCommand(["shrinkwrap", "--ignore-scripts"], {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        execPath,
+        existsSync: (candidate: string) => candidate === npmCmdPath,
+        platform: "win32",
+      }),
+    ).toEqual({
+      args: ["/d", "/s", "/c", `${npmCmdPath} shrinkwrap --ignore-scripts`],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
   it("extracts exact versions from npm override specs", () => {
     expect(exactVersionFromOverrideSpec("8.4.0")).toBe("8.4.0");
     expect(exactVersionFromOverrideSpec("npm:@nolyfill/domexception@1.0.28")).toBe("1.0.28");
@@ -152,13 +177,13 @@ describe("generate-npm-shrinkwrap", () => {
       shrinkwrapPackageDirsForChangedPaths([
         "extensions/acpx/package.json",
         "extensions/acpx/npm-shrinkwrap.json",
-      ]).map((packageDir) => path.relative(process.cwd(), packageDir)),
+      ]).map(repoRelativePath),
     ).toEqual(["extensions/acpx"]);
   });
 
   it("falls back to every shrinkwrap when lockfile ownership is ambiguous", () => {
-    const packageDirs = shrinkwrapPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map((packageDir) =>
-      path.relative(process.cwd(), packageDir),
+    const packageDirs = shrinkwrapPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map(
+      repoRelativePath,
     );
 
     expect(packageDirs).toContain("");
@@ -169,7 +194,7 @@ describe("generate-npm-shrinkwrap", () => {
     const packageDirs = shrinkwrapPackageDirsForChangedPaths([
       "extensions/acpx/package.json",
       "pnpm-lock.yaml",
-    ]).map((packageDir) => path.relative(process.cwd(), packageDir));
+    ]).map(repoRelativePath);
 
     expect(packageDirs).toContain("");
     expect(packageDirs).toContain("extensions/acpx");

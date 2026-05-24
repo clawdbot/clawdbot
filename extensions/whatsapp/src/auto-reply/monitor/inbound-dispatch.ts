@@ -79,6 +79,14 @@ type WhatsAppMediaOnlyFlushResult = {
   droppedDuplicateMedia: number;
 };
 
+function normalizeErrForLog(err: unknown): unknown {
+  if (err instanceof Error) {
+    const ownEnumerableProps = Object.fromEntries(Object.entries(err));
+    return { ...ownEnumerableProps, type: err.name, message: err.message, stack: err.stack };
+  }
+  return err;
+}
+
 function logWhatsAppReplyDeliveryError(params: {
   err: unknown;
   info: ReplyDeliveryInfo;
@@ -89,7 +97,7 @@ function logWhatsAppReplyDeliveryError(params: {
 }) {
   params.replyLogger.error(
     {
-      err: params.err,
+      err: normalizeErrForLog(params.err),
       replyKind: params.info.kind,
       correlationId: params.msg.id ?? null,
       connectionId: params.connectionId,

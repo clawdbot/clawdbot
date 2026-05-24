@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -217,19 +218,27 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
       loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
+  const coercePreflightSnapshot = (
+    value: unknown,
+    sourceConfig: OpenClawConfig,
+  ): PreparedSecretsRuntimeSnapshot | null => {
+    if (!value || typeof value !== "object") {
+      return null;
+    }
+    const candidate = value as PreparedSecretsRuntimeSnapshot;
+    return isDeepStrictEqual(candidate.sourceConfig, sourceConfig) ? candidate : null;
+  };
   activateSecretsRuntimeSnapshotState({
     snapshot,
     refreshContext,
     refreshHandler: {
-      refresh: async ({ sourceConfig, includeAuthStoreRefs }) => {
+      preflight: async ({ sourceConfig, includeAuthStoreRefs }) => {
         const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
         const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
         if (!activeSnapshot || !activeRefreshContext) {
           return false;
         }
-        const oneShotSkipAuthStoreRefs =
-          includeAuthStoreRefs === false && activeRefreshContext.includeAuthStoreRefs;
-        const refreshed = await prepareSecretsRuntimeSnapshot({
+        return await prepareSecretsRuntimeSnapshot({
           config: sourceConfig,
           env: activeRefreshContext.env,
           agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
@@ -239,6 +248,27 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
             ? { loadAuthStore: activeRefreshContext.loadAuthStore }
             : {}),
         });
+      },
+      refresh: async ({ sourceConfig, includeAuthStoreRefs, preflightResult }) => {
+        const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
+        const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
+        if (!activeSnapshot || !activeRefreshContext) {
+          return false;
+        }
+        const oneShotSkipAuthStoreRefs =
+          includeAuthStoreRefs === false && activeRefreshContext.includeAuthStoreRefs;
+        const refreshed =
+          coercePreflightSnapshot(preflightResult, sourceConfig) ??
+          (await prepareSecretsRuntimeSnapshot({
+            config: sourceConfig,
+            env: activeRefreshContext.env,
+            agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
+            includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
+            loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+            ...(activeRefreshContext.loadAuthStore
+              ? { loadAuthStore: activeRefreshContext.loadAuthStore }
+              : {}),
+          }));
         if (oneShotSkipAuthStoreRefs) {
           refreshed.authStores = getLiveSecretsRuntimeAuthStores();
           setPreparedSecretsRuntimeSnapshotRefreshContext(refreshed, activeRefreshContext);

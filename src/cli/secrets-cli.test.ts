@@ -293,6 +293,40 @@ describe("secrets CLI", () => {
     expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 
+  it("shows the irreversibility warning on the interactive apply path (#83883)", async () => {
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResult({ changed: true }),
+    );
+    // Interactive path: no --apply flag. First confirm is "Apply this plan
+    // now?", second must be the one-way-migration irreversibility warning.
+    confirm.mockResolvedValueOnce(true); // Apply this plan now?
+    confirm.mockResolvedValueOnce(true); // one-way migration warning
+    runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
+
+    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+
+    // Before the fix the interactive path skipped the irreversibility prompt
+    // (it checked opts.apply), so confirm was called only once.
+    expect(confirm).toHaveBeenCalledTimes(2);
+    const secondPrompt = confirm.mock.calls[1]?.[0] as { message?: string } | undefined;
+    expect(secondPrompt?.message ?? "").toContain("one-way");
+    expect(runSecretsApply).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels apply when the interactive irreversibility warning is declined (#83883)", async () => {
+    runSecretsConfigureInteractive.mockResolvedValue(
+      createConfigureInteractiveResult({ changed: true }),
+    );
+    confirm.mockResolvedValueOnce(true); // Apply this plan now?
+    confirm.mockResolvedValueOnce(false); // decline the irreversibility warning
+
+    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(runSecretsApply).not.toHaveBeenCalled();
+    expect(runtimeLogs.at(-1)).toContain("Apply cancelled");
+  });
+
   it("forwards --agent to secrets configure", async () => {
     runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
     confirm.mockResolvedValue(false);

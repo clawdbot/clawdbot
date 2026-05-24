@@ -9,7 +9,7 @@ import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
 } from "../plugins/manifest-contract-eligibility.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -137,22 +137,20 @@ export function loadManifestModelCatalog(params: {
   fallbackToMetadataScan?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): ModelCatalogEntry[] {
-  const snapshot =
-    params.metadataSnapshot ??
-    getCurrentPluginMetadataSnapshot({
-      config: params.config,
-      env: params.env,
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-      ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
-    });
   const resolvedSnapshot =
-    snapshot ??
+    params.metadataSnapshot ??
     (params.fallbackToMetadataScan === false
-      ? undefined
-      : loadPluginMetadataSnapshot({
+      ? getCurrentPluginMetadataSnapshot({
+          config: params.config,
+          env: params.env,
+          ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+          ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
+        })
+      : resolvePluginMetadataSnapshot({
           config: params.config,
           ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
           env: params.env ?? process.env,
+          allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
         }));
   if (!resolvedSnapshot) {
     return [];
@@ -362,9 +360,10 @@ function loadReadOnlyStaticModelCatalog(params?: {
 
   const configuredManifestPlugins = hasConfiguredProviderRowsNeedingManifestLookup(cfg)
     ? (params?.metadataSnapshot?.plugins ??
-      loadPluginMetadataSnapshot({
+      resolvePluginMetadataSnapshot({
         config: cfg,
         env: process.env,
+        allowWorkspaceScopedCurrent: true,
       }).plugins)
     : [];
   const configuredModels = buildConfiguredModelCatalog({
@@ -415,14 +414,19 @@ export async function loadModelCatalog(params?: {
     const sortModels = sortModelCatalogEntries;
     try {
       const cfg = params?.config ?? getRuntimeConfig();
+      let manifestMetadataSnapshot: PluginMetadataSnapshot | undefined;
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
-      const getManifestPlugins = () => {
-        manifestPlugins ??=
-          params?.metadataSnapshot?.plugins ??
+      const getManifestMetadataSnapshot = () => {
+        manifestMetadataSnapshot ??=
+          params?.metadataSnapshot ??
           loadManifestMetadataSnapshot({
             config: cfg,
             env: process.env,
-          }).plugins;
+          });
+        return manifestMetadataSnapshot;
+      };
+      const getManifestPlugins = () => {
+        manifestPlugins ??= getManifestMetadataSnapshot().plugins;
         return manifestPlugins;
       };
       if (!readOnly) {
@@ -493,6 +497,15 @@ export async function loadModelCatalog(params?: {
           compat,
         });
       }
+      appendCatalogEntriesIfAbsent(
+        models,
+        loadManifestModelCatalog({
+          config: cfg,
+          env: process.env,
+          metadataSnapshot: getManifestMetadataSnapshot(),
+        }),
+      );
+      logStage("manifest-models-merged", `entries=${models.length}`);
       if (!readOnly) {
         const supplemental = await augmentModelCatalogWithProviderPlugins({
           config: cfg,

@@ -1,45 +1,34 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const metadataMocks = vi.hoisted(() => ({
-  getCurrentPluginMetadataSnapshot: vi.fn(() => undefined),
-  loadPluginMetadataSnapshot: vi.fn(() => ({ plugins: [] })),
-}));
-
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: metadataMocks.getCurrentPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: vi.fn(() => ({ plugins: [] })),
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: metadataMocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: metadataMocks.resolvePluginMetadataSnapshot,
 }));
 
 describe("getSecretTargetRegistry metadata reuse", () => {
   beforeEach(() => {
     vi.resetModules();
-    metadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
-    metadataMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(undefined);
-    metadataMocks.loadPluginMetadataSnapshot.mockClear();
-    metadataMocks.loadPluginMetadataSnapshot.mockReturnValue({ plugins: [] });
+    metadataMocks.resolvePluginMetadataSnapshot.mockClear();
+    metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [] });
   });
 
-  it("does not request workspace-scoped current metadata for the configless global cache", async () => {
+  it("uses configless global metadata without a workspace-scoped current request", async () => {
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");
 
     getSecretTargetRegistry();
 
-    expect(metadataMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+    expect(metadataMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
       config: {},
       env: process.env,
     });
-    const calls = metadataMocks.getCurrentPluginMetadataSnapshot.mock.calls as unknown as Array<
-      [{ allowWorkspaceScopedSnapshot?: boolean }]
+    const calls = metadataMocks.resolvePluginMetadataSnapshot.mock.calls as unknown as Array<
+      [{ allowWorkspaceScopedCurrent?: boolean }]
     >;
     for (const [call] of calls) {
-      expect(call.allowWorkspaceScopedSnapshot).not.toBe(true);
+      expect(call.allowWorkspaceScopedCurrent).not.toBe(true);
     }
-    expect(metadataMocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {},
-      env: process.env,
-    });
   });
 });

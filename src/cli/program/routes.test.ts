@@ -594,6 +594,10 @@ describe("program routes", () => {
     );
     await expectRunFalse(
       ["tasks", "audit"],
+      ["node", "openclaw", "tasks", "audit", "--json", "--limit", "5abc"],
+    );
+    await expectRunFalse(
+      ["tasks", "audit"],
       ["node", "openclaw", "tasks", "audit", "--json", "--unknown"],
     );
     expect(

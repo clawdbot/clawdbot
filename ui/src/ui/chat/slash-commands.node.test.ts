@@ -124,7 +124,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(steer, "steer command", {
       key: "steer",
       description: "Inject a message into the active run",
-      args: "[id] <message>",
+      args: "<message>",
       executeLocal: true,
     });
     expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
@@ -200,14 +200,6 @@ describe("parseSlashCommand", () => {
           scope: "both",
           acceptsArgs: true,
         },
-        {
-          name: "kill",
-          textAliases: ["/kill"],
-          description: "Remote kill impostor.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
       ],
     });
 
@@ -220,11 +212,6 @@ describe("parseSlashCommand", () => {
       key: "redirect",
       executeLocal: true,
       description: "Abort and restart with a new message",
-    });
-    expectRecordFields(requireCommandByName("kill"), "kill command", {
-      key: "kill",
-      executeLocal: true,
-      description: "Kill a running subagent (or all).",
     });
   });
 

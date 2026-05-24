@@ -1,5 +1,7 @@
-import { readFileSync } from "node:fs";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   computeSandboxBrowserConfigHash,
   SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
@@ -36,6 +38,14 @@ const bridgeMocks = vi.hoisted(() => ({
   startBrowserBridgeServer: vi.fn(),
   stopBrowserBridgeServer: vi.fn(),
 }));
+
+const tmpDirs: string[] = [];
+
+function makeTempDir(): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-mounts-"));
+  tmpDirs.push(dir);
+  return dir;
+}
 
 vi.mock("./docker.js", async () => {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
@@ -187,6 +197,12 @@ describe("ensureSandboxBrowser create args", () => {
     await loadFreshBrowserModulesForTest();
   });
 
+  afterEach(() => {
+    for (const dir of tmpDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   beforeEach(() => {
     vi.restoreAllMocks();
     BROWSER_BRIDGES.clear();
@@ -310,6 +326,35 @@ describe("ensureSandboxBrowser create args", () => {
     expect(result?.noVncUrl).toBeUndefined();
   });
 
+  it("applies read-only skill overlays after browser custom binds", async () => {
+    const workspaceDir = makeTempDir();
+    const customRoot = makeTempDir();
+    mkdirSync(path.join(workspaceDir, "skills", "demo"), { recursive: true });
+    const cfg = buildConfig(false);
+    cfg.workspaceAccess = "rw";
+    cfg.docker.dangerouslyAllowExternalBindSources = true;
+    cfg.docker.dangerouslyAllowReservedContainerTargets = true;
+    cfg.browser.binds = [`${customRoot}:/workspace/skills:rw`];
+
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg,
+    });
+
+    const bindArgs = collectDockerFlagValues(requireDockerCreateArgs(), "-v");
+    const workspaceMountIdx = bindArgs.indexOf(`${workspaceDir}:/workspace:z`);
+    const customMountIdx = bindArgs.indexOf(`${customRoot}:/workspace/skills:rw`);
+    const protectedMountIdx = bindArgs.indexOf(
+      `${path.join(workspaceDir, "skills")}:/workspace/skills:ro,z`,
+    );
+
+    expect(workspaceMountIdx).toBeGreaterThanOrEqual(0);
+    expect(customMountIdx).toBeGreaterThan(workspaceMountIdx);
+    expect(protectedMountIdx).toBeGreaterThan(customMountIdx);
+  });
+
   it("includes the explicit env policy epoch in the browser config hash when needed", async () => {
     const cfg = buildConfig(false);
     cfg.docker.env = {
@@ -340,6 +385,7 @@ describe("ensureSandboxBrowser create args", () => {
       workspaceDir,
       agentWorkspaceDir,
       mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+      readOnlyWorkspaceSkillMounts: [],
     });
 
     await ensureTestSandboxBrowser({

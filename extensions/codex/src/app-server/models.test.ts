@@ -172,13 +172,13 @@ describe("listCodexAppServerModels", () => {
       result: {
         data: [
           {
-            id: "gpt-5.2",
-            model: "gpt-5.2",
+            id: "gpt-5.5",
+            model: "gpt-5.5",
             upgrade: null,
             upgradeInfo: null,
             availabilityNux: null,
-            displayName: "gpt-5.2",
-            description: "GPT-5.2",
+            displayName: "gpt-5.5",
+            description: "GPT-5.5",
             hidden: false,
             inputModalities: ["text", "image"],
             supportedReasoningEfforts: [],
@@ -193,7 +193,7 @@ describe("listCodexAppServerModels", () => {
     });
 
     const list = await listPromise;
-    expect(list.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.2"]);
+    expect(list.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.5"]);
     harness.client.close();
     startSpy.mockRestore();
   });

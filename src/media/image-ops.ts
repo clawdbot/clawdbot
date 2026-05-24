@@ -536,7 +536,7 @@ function readJpegMetadata(buffer: Buffer): ImageMetadata | null {
   return null;
 }
 
-function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
+export function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
   return (
     readPngMetadata(buffer) ??
     readGifMetadata(buffer) ??
@@ -1235,6 +1235,7 @@ export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
 export async function optimizeImageToPng(
   buffer: Buffer,
   maxBytes: number,
+  options?: { sides?: readonly number[] },
 ): Promise<{
   buffer: Buffer;
   optimizedSize: number;
@@ -1243,7 +1244,7 @@ export async function optimizeImageToPng(
 }> {
   // Try a grid of sizes/compression levels until under the limit.
   // PNG uses compression levels 0-9 (higher = smaller but slower).
-  const sides = [2048, 1536, 1280, 1024, 800];
+  const sides = options?.sides?.length ? [...options.sides] : [2048, 1536, 1280, 1024, 800];
   const compressionLevels = [6, 7, 8, 9];
   let smallest: {
     buffer: Buffer;

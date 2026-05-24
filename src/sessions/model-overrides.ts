@@ -99,6 +99,13 @@ export function applyModelOverrideToSessionEntry(params: {
     delete entry.contextTokens;
     updated = true;
   }
+  if (
+    entry.contextBudgetStatus !== undefined &&
+    (selectionUpdated || (runtimePresent && !runtimeAligned))
+  ) {
+    delete entry.contextBudgetStatus;
+    updated = true;
+  }
 
   if (profileOverride) {
     if (entry.authProfileOverride !== profileOverride) {

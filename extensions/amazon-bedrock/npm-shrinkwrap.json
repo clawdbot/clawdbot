@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/amazon-bedrock-provider",
-      "version": "2026.5.22",
+      "version": "2026.5.24",
       "dependencies": {
         "@aws-sdk/client-bedrock": "3.1051.0",
         "@aws-sdk/client-bedrock-runtime": "3.1051.0",

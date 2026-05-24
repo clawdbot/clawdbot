@@ -5,6 +5,7 @@ import {
   type AuthStorage,
   type ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
+import type { ModelMediaInputConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -363,6 +364,29 @@ function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | unde
   return Math.floor(timeoutSeconds) * 1000;
 }
 
+function mergeModelMediaInput(
+  base: ModelMediaInputConfig | undefined,
+  override: ModelMediaInputConfig | undefined,
+): ModelMediaInputConfig | undefined {
+  if (!base) {
+    return override;
+  }
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+    image:
+      base.image || override.image
+        ? {
+            ...base.image,
+            ...override.image,
+          }
+        : undefined,
+  };
+}
+
 function matchesProviderScopedModelId(params: {
   candidateId?: string;
   provider: string;
@@ -702,6 +726,10 @@ function applyConfiguredProviderOverrides(params: {
         ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
         headers: requestConfig.headers,
         compat: metadataOverrideModel?.compat ?? discoveredModel.compat,
+        mediaInput: mergeModelMediaInput(
+          discoveredModel.mediaInput,
+          metadataOverrideModel?.mediaInput,
+        ),
       },
       providerRequest,
     ),
@@ -913,7 +941,10 @@ function resolveConfiguredFallbackModel(params: {
   }
   const fallbackTransport = resolveProviderTransport({
     provider,
-    api: normalizeResolvedTransportApi(configuredModel?.api) ?? resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
+    api:
+      normalizeResolvedTransportApi(configuredModel?.api) ??
+      resolveConfiguredProviderDefaultApi(providerConfig) ??
+      "openai-responses",
     baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
     cfg,
     workspaceDir,
@@ -968,6 +999,7 @@ function resolveConfiguredFallbackModel(params: {
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
+          mediaInput: configuredModel?.mediaInput,
         } as Model<Api>,
         providerRequest,
       ),
@@ -1268,6 +1300,20 @@ export async function resolveModelAsync(
         model: overriddenStaticCatalogModel,
         runtimeHooks,
       });
+    }
+  }
+  if (model && options?.allowBundledStaticCatalogFallback) {
+    const staticCatalogModel = resolveBundledStaticCatalogModel({
+      provider: normalizedRef.provider,
+      modelId: normalizedRef.model,
+      cfg,
+      workspaceDir,
+    });
+    const staticMediaInput = (staticCatalogModel as ProviderRuntimeModel | undefined)?.mediaInput;
+    const resolvedMediaInput = (model as ProviderRuntimeModel).mediaInput;
+    const mediaInput = mergeModelMediaInput(staticMediaInput, resolvedMediaInput);
+    if (mediaInput) {
+      model = { ...(model as ProviderRuntimeModel), mediaInput } as typeof model;
     }
   }
   if (model) {

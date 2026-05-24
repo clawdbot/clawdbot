@@ -18,6 +18,9 @@ capacity:
     - us-west-2
 actions:
   workflow: .github/workflows/crabbox-hydrate.yml
+  # Default AWS hydration uses local Actions replay. Use
+  # `crabbox actions hydrate --github-runner --job hydrate-github` when the
+  # hydrate job needs GitHub secrets.
   job: hydrate
   ref: main
   runnerLabels:

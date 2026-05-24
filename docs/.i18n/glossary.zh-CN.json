@@ -1036,6 +1036,22 @@
     "target": "Gateway 暴露运行手册"
   },
   {
+    "source": "Meeting Notes CLI",
+    "target": "Meeting Notes CLI"
+  },
+  {
+    "source": "Discord voice",
+    "target": "Discord 语音"
+  },
+  {
+    "source": "Plugin management",
+    "target": "插件管理"
+  },
+  {
+    "source": "Plugin architecture",
+    "target": "插件架构"
+  },
+  {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
   }

@@ -137,8 +137,11 @@ function isMessageTextPart(part: MessagePart): part is MessageTextPart {
 }
 
 /**
- * Strips inline directive tags from message text blocks while preserving message shape.
+ * Strips inline directive tags from text content while preserving message shape.
  * Empty post-strip text stays empty-string to preserve caller semantics.
+ * Returns the input message reference (including the original content array) when
+ * no text part changed, and reuses unchanged text-part references in mixed content,
+ * so identity-equality consumers avoid spurious churn.
  */
 export function stripInlineDirectiveTagsFromMessageForDisplay(
   message: DisplayMessageWithContent | undefined,
@@ -149,16 +152,29 @@ export function stripInlineDirectiveTagsFromMessageForDisplay(
   if (!Array.isArray(message.content)) {
     return message;
   }
-  const cleaned = message.content.map((part) => {
-    if (!part || typeof part !== "object") {
-      return part;
+  let cleaned: unknown[] | undefined;
+  for (let i = 0; i < message.content.length; i++) {
+    const part = message.content[i];
+    let next: unknown = part;
+    if (part && typeof part === "object" && isMessageTextPart(part as MessagePart)) {
+      const record = part as MessageTextPart;
+      const stripped = stripInlineDirectiveTagsForDisplay(record.text);
+      if (stripped.changed) {
+        next = { ...record, text: stripped.text };
+      }
     }
-    const record = part as MessagePart;
-    if (!isMessageTextPart(record)) {
-      return part;
+    if (next === part) {
+      cleaned?.push(part);
+      continue;
     }
-    return { ...record, text: stripInlineDirectiveTagsForDisplay(record.text).text };
-  });
+    if (!cleaned) {
+      cleaned = message.content.slice(0, i);
+    }
+    cleaned.push(next);
+  }
+  if (!cleaned) {
+    return message;
+  }
   return { ...message, content: cleaned };
 }
 

@@ -431,7 +431,7 @@ async function waitForGatewayReady(child, port, logPath) {
       lastError = error instanceof Error ? error.message : String(error);
     }
     if (fs.existsSync(logPath) && fs.readFileSync(logPath, "utf8").includes("[gateway] ready")) {
-      return;
+      lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
     await delay(250);
   }

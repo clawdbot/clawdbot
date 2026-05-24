@@ -27,7 +27,7 @@ Both transports are production-ready and reach feature parity for messaging, sla
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Public Gateway URL           | Not required                                                                                                                                         | Required (DNS, TLS, reverse proxy or tunnel)                                                                   |
 | Outbound network             | Outbound WSS to `wss-primary.slack.com` must be reachable                                                                                            | No outbound WS; inbound HTTPS only                                                                             |
-| Tokens needed                | Bot token (`xoxb-...`) + App-Level Token (`xapp-...`) with `connections:write`                                                                       | Bot token (`xoxb-...`) + Signing Secret                                                                        |
+| Tokens needed                | Bot token + App-Level Token with `connections:write`                                                                                                 | Bot token + Signing Secret                                                                                     |
 | Dev laptop / behind firewall | Works as-is                                                                                                                                          | Needs a public tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel) or staging Gateway                          |
 | Horizontal scaling           | One Socket Mode session per app per host; multiple Gateways need separate Slack apps                                                                 | Stateless POST handler; multiple Gateway replicas can share one app behind a load balancer                     |
 | Multi-account on one Gateway | Supported; each account opens its own WS                                                                                                             | Supported; each account needs a unique `webhookPath` (default `/slack/events`) so registrations do not collide |
@@ -222,8 +222,8 @@ openclaw plugins install @openclaw/slack
 
         After Slack creates the app:
 
-        - **Basic Information → App-Level Tokens → Generate Token and Scopes**: add `connections:write`, save, copy the `xapp-...` value.
-        - **Install App → Install to Workspace**: copy the `xoxb-...` Bot User OAuth Token.
+        - **Basic Information -> App-Level Tokens -> Generate Token and Scopes**: add `connections:write`, save, copy the App-Level Token.
+        - **Install App -> Install to Workspace**: copy the Bot User OAuth Token.
 
       </Step>
 
@@ -232,8 +232,8 @@ openclaw plugins install @openclaw/slack
         Recommended SecretRef setup:
 
 ```bash
-export SLACK_APP_TOKEN=xapp-...
-export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_APP_TOKEN=slack-app-token-example
+export SLACK_BOT_TOKEN=slack-bot-token-example
 cat > slack.socket.patch.json5 <<'JSON5'
 {
   channels: {
@@ -253,8 +253,8 @@ openclaw config patch --file ./slack.socket.patch.json5
         Env fallback (default account only):
 
 ```bash
-SLACK_APP_TOKEN=xapp-...
-SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=slack-app-token-example
+SLACK_BOT_TOKEN=slack-bot-token-example
 ```
 
       </Step>
@@ -455,7 +455,7 @@ openclaw gateway
         After Slack creates the app:
 
         - **Basic Information → App Credentials**: copy the **Signing Secret** for request verification.
-        - **Install App → Install to Workspace**: copy the `xoxb-...` Bot User OAuth Token.
+        - **Install App -> Install to Workspace**: copy the Bot User OAuth Token.
 
       </Step>
 
@@ -464,7 +464,7 @@ openclaw gateway
         Recommended SecretRef setup:
 
 ```bash
-export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_BOT_TOKEN=slack-bot-token-example
 export SLACK_SIGNING_SECRET=...
 cat > slack.http.patch.json5 <<'JSON5'
 {
@@ -867,7 +867,7 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
   strings or SecretRef objects.
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
-- `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
+- `userToken` is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
 
 Status snapshot behavior:
 
@@ -1462,7 +1462,7 @@ openclaw pairing list slack
 
   <Accordion title="Socket mode not connecting">
     Validate bot + app tokens and Socket Mode enablement in Slack app settings.
-    The `xapp-...` App-Level Token needs `connections:write`, and the `xoxb-...`
+    The App-Level Token needs `connections:write`, and the Bot User OAuth Token
     bot token must belong to the same Slack app/workspace as the app token.
 
     If `openclaw channels status --probe --json` shows `botTokenStatus` or
@@ -1532,7 +1532,7 @@ Slack can attach downloaded media to the agent turn when Slack file downloads su
 
 When a Slack message with file attachments arrives:
 
-1. OpenClaw downloads the file from Slack's private URL using the bot token (`xoxb-...`).
+1. OpenClaw downloads the file from Slack's private URL using the bot token.
 2. The file is written to the media store on success.
 3. Downloaded media paths and content types are added to the inbound context.
 4. Image-capable model/tool paths can use image attachments from that context.

@@ -169,6 +169,7 @@ openclaw models fallbacks list
 openclaw models auth add
 openclaw models auth list [--provider <id>] [--json]
 openclaw models auth login --provider <id>
+openclaw models auth login --provider openai --profile-id openai:work
 openclaw models auth paste-api-key --provider <id>
 openclaw models auth setup-token --provider <id>
 openclaw models auth paste-token
@@ -205,6 +206,9 @@ openclaw models auth list --provider openai
 
 Notes:
 
+- `login` accepts `--profile-id <id>` for providers that support named
+  profiles during login. Use this to keep multiple logins for the same
+  provider separate.
 - `paste-api-key` accepts API keys generated elsewhere, prompts for the key
   value, and writes it to the default profile id `<provider>:manual` unless you
   pass `--profile-id`. In automation, pipe the key on stdin, for example

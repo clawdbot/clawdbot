@@ -673,6 +673,60 @@ describe("run-node script", () => {
     });
   });
 
+  it("rotates old Node CPU profiles when a retention cap is set", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await setupTrackedProject(tmp, {
+        files: {
+          [ROOT_SRC]: "export const value = 1;\n",
+        },
+        oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
+        buildPaths: [DIST_ENTRY, BUILD_STAMP],
+      });
+      const profileDir = path.join(tmp, ".artifacts", "profiles");
+      fsSync.mkdirSync(profileDir, { recursive: true });
+      const oldProfiles = [
+        "openclaw-status-oldest.cpuprofile",
+        "openclaw-status-middle.cpuprofile",
+        "openclaw-status-newest.cpuprofile",
+      ];
+      for (const [index, name] of oldProfiles.entries()) {
+        const filePath = path.join(profileDir, name);
+        fsSync.writeFileSync(filePath, "{}");
+        const mtime = new Date(1_700_000_000_000 + index * 1000);
+        fsSync.utimesSync(filePath, mtime, mtime);
+      }
+      fsSync.writeFileSync(path.join(profileDir, "openclaw-models-old.cpuprofile"), "{}");
+
+      const spawn = () => createExitedProcess(0);
+      const { spawnSync } = createSpawnRecorder({
+        gitHead: "abc123\n",
+        gitStatus: "",
+      });
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_CPU_PROF_DIR: ".artifacts/profiles",
+          OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES: "2",
+        },
+        spawn,
+        spawnSync,
+        execPath: process.execPath,
+        platform: process.platform,
+        process: createFakeProcess(),
+      });
+
+      expect(exitCode).toBe(0);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[0]))).toBe(false);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[1]))).toBe(false);
+      expect(fsSync.existsSync(path.join(profileDir, oldProfiles[2]))).toBe(true);
+      expect(fsSync.existsSync(path.join(profileDir, "openclaw-models-old.cpuprofile"))).toBe(true);
+    });
+  });
+
   it("adds Node sync I/O tracing flag to the launched OpenClaw child when requested", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp, {

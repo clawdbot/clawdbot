@@ -199,11 +199,11 @@ openclaw_live_append_array() {
   local source_array="${2:?source array required}"
   local count
 
-  eval "count=\${#$source_array[@]}"
+  eval "count=\${#${source_array}[@]}"
   if ((count == 0)); then
     return 0
   fi
-  eval "$target_array+=(\"\${$source_array[@]}\")"
+  eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
 openclaw_live_stage_auth_into_home() {

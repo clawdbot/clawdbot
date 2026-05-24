@@ -39,6 +39,22 @@ describe("agent fallback chip styles", () => {
   });
 });
 
+describe("field select styles", () => {
+  it("keeps light-mode native select arrows visible without tiling", () => {
+    const css = readComponentsCss();
+
+    expect(css).toMatch(
+      /\.field select \{[\s\S]*background-image: url\("data:image\/svg\+xml,[^"]*stroke='%23a1a1aa'[^"]*"\);[\s\S]*background-repeat: no-repeat;[\s\S]*background-position: right 10px center;/,
+    );
+    expect(css).toMatch(
+      /:root\[data-theme-mode="light"\] \.field input,[\s\S]*:root\[data-theme-mode="light"\] \.field textarea,[\s\S]*:root\[data-theme-mode="light"\] \.field select \{[\s\S]*background-color: var\(--card\);[\s\S]*border-color: var\(--input\);[\s\S]*\}\n\n:root\[data-theme-mode="light"\] \.field select \{[\s\S]*background-image: url\("data:image\/svg\+xml,[^"]*stroke='%23444'[^"]*"\);/,
+    );
+    expect(css).not.toContain(
+      ':root[data-theme-mode="light"] .field select {\n  background: var(--card);',
+    );
+  });
+});
+
 describe("sessions filter styles", () => {
   it("keeps the expanded sessions filters on one row until the mobile breakpoint", () => {
     const css = readComponentsCss();

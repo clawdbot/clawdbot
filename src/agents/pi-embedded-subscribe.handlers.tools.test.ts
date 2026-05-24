@@ -489,7 +489,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("marks successful subagents control actions as replay-invalid", async () => {
+  it("marks successful legacy subagents control actions as replay-invalid", async () => {
     const { ctx } = createTestContext();
 
     await handleToolExecutionStart(

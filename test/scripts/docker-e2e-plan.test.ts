@@ -660,6 +660,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
   it("plans a live-only selected lane without package e2e images", () => {
     const plan = planFor({ selectedLaneNames: ["live-models"] });
 
+    expect(plan.credentials).toEqual(["anthropic", "gemini"]);
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["live-models"]);
     expect(plan.needs).toEqual({
       bareImage: false,
@@ -668,6 +669,28 @@ describe("scripts/lib/docker-e2e-plan", () => {
       liveImage: true,
       package: false,
     });
+  });
+
+  it("derives live Docker credentials from lane resources", () => {
+    const cases = [
+      { credentials: ["anthropic", "gemini"], name: "live-models" },
+      { credentials: ["anthropic", "gemini"], name: "live-gateway" },
+      { credentials: ["anthropic"], name: "live-cli-backend-claude" },
+      { credentials: ["gemini"], name: "live-cli-backend-gemini" },
+      { credentials: ["codex"], name: "live-codex-harness" },
+      { credentials: ["openai"], name: "live-codex-media-path" },
+      { credentials: ["openai"], name: "live-subagent-announce" },
+      { credentials: ["codex"], name: "live-codex-bind" },
+      { credentials: ["anthropic"], name: "live-acp-bind-claude" },
+      { credentials: ["codex", "openai"], name: "live-acp-bind-codex" },
+      { credentials: ["factory"], name: "live-acp-bind-droid" },
+      { credentials: ["gemini"], name: "live-acp-bind-gemini" },
+      { credentials: ["opencode"], name: "live-acp-bind-opencode" },
+    ] as const;
+
+    for (const { credentials, name } of cases) {
+      expect(planFor({ selectedLaneNames: [name] }).credentials, name).toEqual(credentials);
+    }
   });
 
   it("plans the Codex npm plugin live lane as package-backed OpenAI proof", () => {
@@ -746,6 +769,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.needs.bareImage).toBe(true);
     expect(plan.needs.liveImage).toBe(true);
     expect(plan.needs.package).toBe(true);
+  });
+
+  it("plans the Droid ACP bind live lane as Factory-auth proof", () => {
+    const plan = planFor({ selectedLaneNames: ["live-acp-bind-droid"] });
+
+    expect(plan.credentials).toEqual(["factory"]);
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe(
+      'OPENCLAW_LIVE_ACP_BIND_AGENT=droid OPENCLAW_LIVE_ACP_BIND_REQUIRE_TRANSCRIPT=1 OPENCLAW_SKIP_DOCKER_BUILD=1 bash -c \'harness="${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/test-live-acp-bind-docker.sh"\'',
+    );
+    expect(lane.imageKind).toBeUndefined();
+    expect(lane.live).toBe(true);
+    expect(lane.name).toBe("live-acp-bind-droid");
+    expect(lane.resources).toEqual(["docker", "live", "live:droid", "npm"]);
+    expect(lane.timeoutMs).toBe(1_200_000);
+    expect(plan.needs.liveImage).toBe(true);
   });
 
   it("plans Open WebUI as a live-auth functional image lane", () => {

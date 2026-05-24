@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { Bot } from "grammy";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAutoTopicLabelConfig as resolveAutoTopicLabelConfigRuntime } from "./auto-topic-label-config.js";
@@ -7,6 +8,12 @@ import {
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
 import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
+import {
+  buildTelegramConversationContext,
+  createTelegramMessageCache,
+  resolveTelegramMessageCachePath,
+} from "./message-cache.js";
+import { recordOutboundMessageForPromptContext as recordOutboundMessageForPromptContextActual } from "./outbound-message-context.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -20,6 +27,7 @@ const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
 const deliverReplies = vi.hoisted(() => vi.fn());
 const deliverInboundReplyWithMessageSendContext = vi.hoisted(() => vi.fn());
 const emitInternalMessageSentHook = vi.hoisted(() => vi.fn());
+const recordOutboundMessageForPromptContext = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
 const deleteMessageTelegram = vi.hoisted(() => vi.fn());
 const editForumTopicTelegram = vi.hoisted(() => vi.fn());
@@ -189,6 +197,8 @@ const telegramDepsForTest: TelegramBotDeps = {
   emitInternalMessageSentHook:
     emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
   editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
+  recordOutboundMessageForPromptContext:
+    recordOutboundMessageForPromptContext as TelegramBotDeps["recordOutboundMessageForPromptContext"],
 };
 
 describe("dispatchTelegramMessage draft streaming", () => {
@@ -207,6 +217,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockReset();
     deliverInboundReplyWithMessageSendContext.mockReset();
     emitInternalMessageSentHook.mockReset();
+    recordOutboundMessageForPromptContext.mockReset();
     createForumTopicTelegram.mockReset();
     deleteMessageTelegram.mockReset();
     editForumTopicTelegram.mockReset();
@@ -970,6 +981,69 @@ describe("dispatchTelegramMessage draft streaming", () => {
       content: "Final answer",
       messageId: 2001,
     });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "123",
+      messageId: 2001,
+      text: "Final answer",
+      messageThreadId: 777,
+    });
+  });
+
+  it("records streamed final replies into the prompt context cache", async () => {
+    const storePath = `/tmp/openclaw-telegram-stream-context-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    try {
+      setupDraftStreams({ answerMessageId: 1497 });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+        await dispatcherOptions.deliver(
+          { text: "Done already: timeoutSeconds is now 7200s." },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        cfg: { session: { store: storePath } },
+        telegramDeps: {
+          ...telegramDepsForTest,
+          recordOutboundMessageForPromptContext: recordOutboundMessageForPromptContextActual,
+        },
+      });
+
+      const cache = createTelegramMessageCache({ persistedPath });
+      await cache.record({
+        accountId: "default",
+        chatId: "123",
+        threadId: 777,
+        msg: {
+          chat: { id: 123, type: "private", first_name: "Keshav" },
+          message_thread_id: 777,
+          message_id: 1521,
+          date: 1_779_425_460,
+          text: "Did all Amazon crons run fine",
+          from: { id: 5185575566, is_bot: false, first_name: "Keshav" },
+        },
+      });
+
+      const context = await buildTelegramConversationContext({
+        cache,
+        accountId: "default",
+        chatId: "123",
+        threadId: 777,
+        messageId: "1521",
+        replyChainNodes: [],
+        recentLimit: 10,
+        replyTargetWindowSize: 2,
+      });
+
+      expect(context.map((entry) => entry.node.messageId)).toContain("1497");
+      expect(context.map((entry) => entry.node.body)).toContain(
+        "Done already: timeoutSeconds is now 7200s.",
+      );
+    } finally {
+      fs.rmSync(persistedPath, { force: true });
+    }
   });
 
   it("suppresses text-only tool payloads delivered after the final answer", async () => {
@@ -1778,6 +1852,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     const firstChunk = answerDraftStream.update.mock.calls.at(-1)?.[0] ?? "";
     expect(firstChunk.length).toBeLessThanOrEqual(80);
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      messageId: 2001,
+      text: firstChunk,
+    });
     expect(deliverReplies).toHaveBeenCalled();
     const followUpTexts = deliverReplies.mock.calls.flatMap((call: unknown[]) =>
       ((call[0] as { replies?: Array<{ text?: string }> }).replies ?? []).map(

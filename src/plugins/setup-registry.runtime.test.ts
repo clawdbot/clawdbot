@@ -22,9 +22,23 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./manifest-registry-installed.js")>()),
   loadPluginManifestRegistryForInstalledIndex: loadPluginManifestRegistryForInstalledIndexMock,
 }));
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
-}));
+vi.mock("./plugin-metadata-snapshot.js", async () => {
+  const current = await import("./current-plugin-metadata-snapshot.js");
+  return {
+    loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+    resolvePluginMetadataSnapshot: (
+      params: Parameters<typeof current.getCurrentPluginMetadataSnapshot>[0] & {
+        allowWorkspaceScopedCurrent?: boolean;
+      },
+    ) =>
+      current.getCurrentPluginMetadataSnapshot({
+        config: params.config,
+        env: params.env,
+        workspaceDir: params.workspaceDir,
+        allowWorkspaceScopedSnapshot: params.allowWorkspaceScopedCurrent,
+      }) ?? loadPluginMetadataSnapshotMock(params),
+  };
+});
 
 afterEach(() => {
   clearCurrentPluginMetadataSnapshot();

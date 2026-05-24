@@ -1,9 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestContractSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
+import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import {
   hasNonEmptyManifestEnvCandidate,
@@ -11,7 +8,7 @@ import {
   manifestPluginSetupProviderEnvVars,
   manifestProviderBaseUrlGuardPasses,
 } from "../../plugins/manifest-tool-availability.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runtime-state.js";
 import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
@@ -81,23 +78,12 @@ export function loadCapabilityMetadataSnapshot(params: {
   env?: NodeJS.ProcessEnv;
 }): Pick<PluginMetadataSnapshot, "index" | "plugins"> {
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
+  return resolvePluginMetadataSnapshot({
+    config: params.config ?? {},
+    env: params.env ?? process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: workspaceDir === undefined,
   });
-  if (current) {
-    return current;
-  }
-  return workspaceDir
-    ? loadManifestContractSnapshot({
-        config: params.config,
-        env: params.env,
-        workspaceDir,
-      })
-    : loadPluginMetadataSnapshot({
-        config: params.config ?? {},
-        env: params.env ?? process.env,
-      });
 }
 
 export function hasSnapshotCapabilityAvailability(params: {

@@ -103,7 +103,6 @@ export async function createModelSelectionState(params: {
   provider: string;
   model: string;
   hasModelDirective: boolean;
-  hasOneTurnModelOverride?: boolean;
   skipStoredModelOverride?: boolean;
   /** True when heartbeat.model was explicitly resolved for this run.
    *  In that case, skip session-stored overrides so the heartbeat selection wins. */
@@ -137,7 +136,6 @@ export async function createModelSelectionState(params: {
   let model = params.model;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
-  const hasOneTurnModelOverride = params.hasOneTurnModelOverride === true;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
   const visibility = parseConfiguredModelVisibilityEntries({ cfg });
@@ -217,13 +215,7 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  if (
-    sessionEntry &&
-    sessionStore &&
-    sessionKey &&
-    directStoredOverride &&
-    !hasOneTurnModelOverride
-  ) {
+  if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
     const normalizedOverride = normalizeModelRef(
       directStoredOverride.provider,
       directStoredOverride.model,
@@ -282,7 +274,6 @@ export async function createModelSelectionState(params: {
   // configured default.
   const skipStoredOverride =
     params.skipStoredModelOverride === true ||
-    hasOneTurnModelOverride ||
     params.hasResolvedHeartbeatModelOverride === true ||
     (staleHeartbeatAutoFallbackOverride && storedOverride?.source === "session");
 
@@ -298,7 +289,7 @@ export async function createModelSelectionState(params: {
     }
   }
 
-  if (!params.hasModelDirective && !hasOneTurnModelOverride) {
+  if (!params.hasModelDirective) {
     const allowedInitialSelection = visibilityPolicy.resolveSelection({
       provider,
       model,

@@ -116,6 +116,25 @@ describe("runMessageAction send validation", () => {
         },
       },
     });
+    if (result.kind !== "send") {
+      throw new Error(`expected send result, got ${result.kind}`);
+    }
+    expect(result.toolResult?.content).toEqual([
+      {
+        type: "text",
+        text: "Sent visible reply to the current webchat conversation via internal-ui.",
+      },
+    ]);
+    expect(result.toolResult?.details).toEqual({
+      status: "ok",
+      deliveryStatus: "sent",
+      channel: "webchat",
+      target: "current-run",
+      sourceReplyDeliveryMode: "message_tool_only",
+      sourceReplySink: "internal-ui",
+      dryRun: false,
+    });
+    expect(JSON.stringify(result.toolResult)).not.toContain("hello from codex");
   });
 
   it("strips unsupported citation control markers from internal UI source replies", async () => {

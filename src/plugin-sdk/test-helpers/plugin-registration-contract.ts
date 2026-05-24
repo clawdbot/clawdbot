@@ -11,6 +11,7 @@ type PluginRegistrationContractParams = {
   realtimeTranscriptionProviderIds?: string[];
   realtimeVoiceProviderIds?: string[];
   mediaUnderstandingProviderIds?: string[];
+  meetingNotesSourceProviderIds?: string[];
   imageGenerationProviderIds?: string[];
   videoGenerationProviderIds?: string[];
   musicGenerationProviderIds?: string[];
@@ -97,6 +98,14 @@ export function describePluginRegistrationContract(params: PluginRegistrationCon
       it("keeps bundled media-understanding ownership explicit", () => {
         expect(findRegistration(params.pluginId).mediaUnderstandingProviderIds).toEqual(
           params.mediaUnderstandingProviderIds,
+        );
+      });
+    }
+
+    if (params.meetingNotesSourceProviderIds) {
+      it("keeps bundled meeting-notes source ownership explicit", () => {
+        expect(findRegistration(params.pluginId).meetingNotesSourceProviderIds).toEqual(
+          params.meetingNotesSourceProviderIds,
         );
       });
     }

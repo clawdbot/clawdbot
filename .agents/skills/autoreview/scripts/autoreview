@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import copy
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,15 @@ import textwrap
 import time
 from pathlib import Path
 from typing import Any
+
+
+ENGINES = ("codex", "claude", "droid", "copilot")
+THINKING_LEVELS_BY_ENGINE = {
+    "codex": {"low", "medium", "high", "xhigh"},
+    "claude": {"low", "medium", "high", "xhigh", "max"},
+    "droid": set(),
+    "copilot": set(),
+}
 
 
 SCHEMA: dict[str, Any] = {
@@ -68,19 +78,11 @@ SCHEMA: dict[str, Any] = {
 }
 
 
-def run(
-    args: list[str],
-    cwd: Path,
-    *,
-    input_text: str | None = None,
-    env: dict[str, str] | None = None,
-    check: bool = True,
-) -> subprocess.CompletedProcess[str]:
+def run(args: list[str], cwd: Path, *, input_text: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         args,
         cwd=cwd,
         input=input_text,
-        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -146,6 +148,13 @@ def bounded(text: str, limit: int = 180_000) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n\n[truncated at {limit} characters]\n"
+
+
+def bounded_field(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    suffix = "\n\n[truncated]"
+    return text[: max(0, limit - len(suffix))] + suffix
 
 
 def read_text(path: Path, limit: int = 40_000) -> str:
@@ -294,6 +303,8 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.append("--search")
     if args.model:
         cmd.extend(["--model", args.model])
+    if args.thinking:
+        cmd.extend(["-c", f'model_reasoning_effort="{args.thinking}"'])
     cmd.extend(
         [
             "exec",
@@ -336,6 +347,8 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--tools", ""])
     if args.model:
         cmd.extend(["--model", args.model])
+    if args.thinking:
+        cmd.extend(["--effort", args.thinking])
     result = run(cmd, repo, input_text=prompt, check=False)
     if result.returncode != 0:
         raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
@@ -343,6 +356,8 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 
 
 def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if args.thinking:
+        raise SystemExit("--thinking is not supported by the droid engine")
     prompt_path = Path(tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False).name)
     prompt_path.write_text(prompt)
     cmd = [
@@ -367,6 +382,8 @@ def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
 
 
 def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if args.thinking:
+        raise SystemExit("--thinking is not supported by the copilot engine")
     if not args.tools:
         raise SystemExit("--no-tools is not supported by the copilot engine; copilot requires a read-only file view tool to load the review bundle without exposing it in argv")
     with tempfile.TemporaryDirectory(prefix="autoreview-copilot.") as tempdir:
@@ -403,127 +420,6 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     if result.returncode != 0:
         raise SystemExit(f"copilot engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
-
-
-def run_pi(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    if not args.tools:
-        raise SystemExit("--no-tools is not supported by the pi engine; use --tools read-only allowlist for review")
-    if not args.model:
-        raise SystemExit("--engine pi requires --model because autoreview isolates PI_CODING_AGENT_DIR from user settings")
-    with tempfile.TemporaryDirectory(prefix="autoreview-pi.") as tempdir:
-        temp = Path(tempdir)
-        prompt_path = temp / "prompt.txt"
-        prompt_path.write_text(prompt)
-        os.chmod(prompt_path, 0o600)
-        env = os.environ.copy()
-        agent_dir = temp / "agent"
-        agent_dir.mkdir()
-        env["PI_CODING_AGENT_DIR"] = str(agent_dir)
-        env["PI_CODING_AGENT_SESSION_DIR"] = str(temp / "sessions")
-        env["PI_TELEMETRY"] = "0"
-        cmd = [
-            args.pi_bin,
-            "--no-session",
-            "--no-context-files",
-            "--no-extensions",
-            "--no-skills",
-            "--no-prompt-templates",
-            "--no-themes",
-            "--tools",
-            pi_readonly_tools(args),
-            "--mode",
-            "json",
-        ]
-        if args.model:
-            cmd.extend(["--model", args.model])
-        cmd.extend(["-p", f"@{prompt_path}", "Read the attached review prompt and follow it exactly."])
-        result = run(cmd, repo, env=env, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f"pi engine failed ({result.returncode})\n{result.stderr or result.stdout}")
-    return result.stdout
-
-
-def run_opencode(args: argparse.Namespace, repo: Path, prompt: str) -> str:
-    if not args.tools:
-        raise SystemExit("--no-tools is not supported by the opencode engine; opencode requires read-only tools to load the review bundle")
-    with tempfile.TemporaryDirectory(prefix="autoreview-opencode.") as tempdir:
-        temp = Path(tempdir)
-        config_dir = temp / "config"
-        config_dir.mkdir()
-        prompt_path = temp / "prompt.txt"
-        prompt_path.write_text(prompt)
-        os.chmod(prompt_path, 0o600)
-        env = os.environ.copy()
-        env.update(
-            {
-                "OPENCODE_CONFIG_DIR": str(config_dir),
-                "OPENCODE_CONFIG_CONTENT": json.dumps(opencode_review_config(args)),
-                "OPENCODE_DISABLE_PROJECT_CONFIG": "1",
-                "OPENCODE_PURE": "1",
-                "OPENCODE_DISABLE_AUTOUPDATE": "1",
-                "OPENCODE_DISABLE_AUTOCOMPACT": "1",
-                "OPENCODE_DISABLE_MODELS_FETCH": "1",
-            }
-        )
-        cmd = [
-            args.opencode_bin,
-            "run",
-            "--pure",
-            "--format",
-            "json",
-            "--agent",
-            "autoreview",
-            "--dir",
-            str(repo),
-            "-f",
-            str(prompt_path),
-        ]
-        if args.model:
-            cmd.extend(["--model", args.model])
-        cmd.append("Read the attached review prompt and follow it exactly. Return only the requested JSON object.")
-        result = run(cmd, repo, env=env, check=False)
-    if result.returncode != 0:
-        raise SystemExit(f"opencode engine failed ({result.returncode})\n{result.stderr or result.stdout}")
-    return result.stdout
-
-
-def pi_readonly_tools(args: argparse.Namespace) -> str:
-    return "read,grep,find,ls"
-
-
-def opencode_review_config(args: argparse.Namespace) -> dict[str, Any]:
-    permission = {
-        "*": "deny",
-        "read": "allow",
-        "grep": "allow",
-        "glob": "allow",
-        "list": "allow",
-        "edit": "deny",
-        "bash": "deny",
-        "task": "deny",
-        "todowrite": "deny",
-        "question": "deny",
-        "repo_clone": "deny",
-        "repo_overview": "deny",
-        "skill": "deny",
-    }
-    if args.web_search:
-        permission.update(
-            {
-                "webfetch": "allow",
-                "websearch": "allow",
-            }
-        )
-    return {
-        "agent": {
-            "autoreview": {
-                "description": "Read-only structured code review agent",
-                "mode": "primary",
-                "steps": 8,
-                "permission": permission,
-            }
-        }
-    }
 
 
 def claude_allowed_tools(args: argparse.Namespace) -> str:
@@ -564,7 +460,6 @@ def extract_json(text: str) -> dict[str, Any]:
 
 def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
     candidates: list[str] = []
-    assistant_stream: list[str] = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -575,63 +470,19 @@ def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
             continue
         if not isinstance(event, dict):
             continue
-        if isinstance(event.get("text"), str):
-            candidates.append(event["text"])
-            assistant_stream.append(event["text"])
-        if isinstance(event.get("delta"), str):
-            assistant_stream.append(event["delta"])
         part = event.get("part")
         if isinstance(part, dict) and isinstance(part.get("text"), str):
             candidates.append(part["text"])
-            assistant_stream.append(part["text"])
-        assistant_event = event.get("assistantMessageEvent")
-        if isinstance(assistant_event, dict):
-            if isinstance(assistant_event.get("content"), str):
-                candidates.append(assistant_event["content"])
-            if isinstance(assistant_event.get("delta"), str):
-                assistant_stream.append(assistant_event["delta"])
-            partial = assistant_event.get("partial")
-            if isinstance(partial, dict):
-                candidates.extend(extract_text_blocks(partial.get("content")))
         data = event.get("data")
         if isinstance(data, dict) and isinstance(data.get("content"), str):
             candidates.append(data["content"])
         if isinstance(event.get("result"), str):
             candidates.append(event["result"])
-        message = event.get("message")
-        if isinstance(message, dict):
-            texts = extract_text_blocks(message.get("content"))
-            candidates.extend(texts)
-            if message.get("role") == "assistant":
-                assistant_stream.extend(texts)
-        messages = event.get("messages")
-        if isinstance(messages, list):
-            for item in messages:
-                if not isinstance(item, dict):
-                    continue
-                texts = extract_text_blocks(item.get("content"))
-                candidates.extend(texts)
-                if item.get("role") == "assistant":
-                    assistant_stream.extend(texts)
-    if assistant_stream:
-        candidates.append("".join(assistant_stream))
     for candidate in reversed(candidates):
         parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
     return None
-
-
-def extract_text_blocks(value: Any) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    if not isinstance(value, list):
-        return []
-    result: list[str] = []
-    for item in value:
-        if isinstance(item, dict) and isinstance(item.get("text"), str):
-            result.append(item["text"])
-    return result
 
 
 def parse_json_candidate(text: str) -> Any | None:
@@ -643,30 +494,14 @@ def parse_json_candidate(text: str) -> Any | None:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
-        repaired = repair_invalid_json_escapes(stripped)
-        if repaired == stripped:
-            return None
-        try:
-            parsed = json.loads(repaired)
-        except json.JSONDecodeError:
-            return None
+        return None
     if isinstance(parsed, str) and parsed != text:
         nested = parse_json_candidate(parsed)
         return nested if nested is not None else parsed
     return parsed
 
 
-def repair_invalid_json_escapes(text: str) -> str:
-    return re.sub(r'\\(?!["\\/bfnrtu])', "", text)
-
-
-def validate_report(
-    report: dict[str, Any],
-    repo: Path,
-    changed_paths: set[str],
-    required: list[str],
-    required_any: list[str],
-) -> None:
+def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
     allowed_top = {"findings", "overall_correctness", "overall_explanation", "overall_confidence"}
     extra_top = set(report) - allowed_top
     if extra_top:
@@ -725,24 +560,20 @@ def validate_report(
     for needle in required:
         if needle.lower() not in haystack:
             raise SystemExit(f"required finding text not found: {needle}")
-    for group in required_any:
-        needles = [needle.strip().lower() for needle in group.split(",") if needle.strip()]
-        if needles and not any(needle in haystack for needle in needles):
-            raise SystemExit(f"required finding text not found; need one of: {', '.join(needles)}")
 
 
 def number_in_range(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
 
 
-def print_report(report: dict[str, Any]) -> None:
+def print_report(report: dict[str, Any], *, label: str = "autoreview") -> None:
     findings = report["findings"]
     if findings:
-        print(f"autoreview findings: {len(findings)}")
+        print(f"{label} findings: {len(findings)}")
     elif report["overall_correctness"] == "patch is incorrect":
-        print("autoreview verdict: patch is incorrect without discrete findings")
+        print(f"{label} verdict: patch is incorrect without discrete findings")
     else:
-        print("autoreview clean: no accepted/actionable findings reported")
+        print(f"{label} clean: no accepted/actionable findings reported")
     for finding in findings:
         loc = finding["code_location"]
         print(f"[{finding['priority']}] {finding['title']}")
@@ -769,15 +600,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
-    parser.add_argument("--engine", choices=["codex", "claude", "droid", "copilot", "pi", "opencode"], default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
-    parser.add_argument("--model")
+    parser.add_argument("--engine", choices=ENGINES, default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
+    parser.add_argument("--reviewers", help="Comma-separated review panel, e.g. codex,claude or codex:gpt-5:high.")
+    parser.add_argument("--panel", action="store_true", help="Run a Codex/Claude review panel unless --engine changes the first reviewer.")
+    parser.add_argument("--model", action="append", help="Model for all reviewers or engine=model. Repeatable.")
+    parser.add_argument("--thinking", action="append", help="Thinking/effort for all reviewers or engine=level. Repeatable. Codex: low, medium, high, xhigh. Claude: low, medium, high, xhigh, max.")
+    parser.add_argument("--allow-partial-panel", action="store_true", help="Continue panel output when one reviewer fails.")
     parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
     parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
     parser.add_argument("--droid-bin", default=os.environ.get("DROID_BIN", "droid"))
     parser.add_argument("--copilot-bin", default=os.environ.get("COPILOT_BIN", "copilot"))
-    parser.add_argument("--pi-bin", default=os.environ.get("PI_BIN", "pi"))
-    parser.add_argument("--opencode-bin", default=os.environ.get("OPENCODE_BIN", "opencode"))
-    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, copilot, pi, and opencode reject no-tools review.")
+    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex and copilot reject no-tools review.")
     parser.add_argument("--no-web-search", dest="web_search", action="store_false", default=True)
     parser.add_argument(
         "--claude-allowed-tools",
@@ -793,11 +626,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json-output", help="Write validated structured review JSON.")
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
     parser.add_argument("--require-finding", action="append", default=[], help="Require finding text to contain this substring.")
-    parser.add_argument("--require-any-finding", action="append", default=[], help="Require finding text to contain at least one comma-separated substring.")
     parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if args.engine not in {"codex", "claude", "droid", "copilot", "pi", "opencode"}:
+    if args.engine not in ENGINES:
         raise SystemExit(f"invalid --engine/AUTOREVIEW_ENGINE: {args.engine}")
     return args
 
@@ -811,20 +643,171 @@ def run_engine(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         return run_droid(args, repo, prompt)
     if args.engine == "copilot":
         return run_copilot(args, repo, prompt)
-    if args.engine == "pi":
-        return run_pi(args, repo, prompt)
-    if args.engine == "opencode":
-        return run_opencode(args, repo, prompt)
     raise SystemExit(f"unsupported engine: {args.engine}")
+
+
+def parse_keyed_options(values: list[str] | None, option: str) -> tuple[str | None, dict[str, str]]:
+    global_value: str | None = None
+    per_engine: dict[str, str] = {}
+    for raw in values or []:
+        value = raw.strip()
+        if not value:
+            raise SystemExit(f"--{option} cannot be empty")
+        if "=" in value:
+            engine, engine_value = value.split("=", 1)
+            engine = engine.strip()
+            engine_value = engine_value.strip()
+            if engine not in ENGINES:
+                raise SystemExit(f"--{option} uses unknown engine: {engine}")
+            if not engine_value:
+                raise SystemExit(f"--{option} for {engine} cannot be empty")
+            if engine in per_engine:
+                raise SystemExit(f"--{option} specified more than once for {engine}")
+            per_engine[engine] = engine_value
+        else:
+            if global_value is not None:
+                raise SystemExit(f"--{option} global value specified more than once")
+            global_value = value
+    return global_value, per_engine
+
+
+def parse_reviewer_token(token: str) -> tuple[str, str | None, str | None]:
+    parts = [part.strip() for part in token.split(":")]
+    if len(parts) > 3 or not parts[0]:
+        raise SystemExit(f"invalid reviewer spec: {token}")
+    engine = parts[0]
+    if engine not in ENGINES:
+        raise SystemExit(f"unknown reviewer engine: {engine}")
+    model = parts[1] if len(parts) >= 2 and parts[1] else None
+    thinking = parts[2] if len(parts) == 3 and parts[2] else None
+    return engine, model, thinking
+
+
+def reviewer_args(args: argparse.Namespace) -> list[argparse.Namespace]:
+    global_model, model_by_engine = parse_keyed_options(args.model, "model")
+    global_thinking, thinking_by_engine = parse_keyed_options(args.thinking, "thinking")
+    reviewers: list[tuple[str, str | None, str | None]] = []
+    if args.reviewers:
+        tokens = [token.strip() for token in args.reviewers.split(",") if token.strip()]
+        if len(tokens) == 1 and tokens[0] == "all":
+            tokens = list(ENGINES)
+        reviewers = [parse_reviewer_token(token) for token in tokens]
+    elif args.panel:
+        engines = [args.engine]
+        for engine in ("codex", "claude"):
+            if engine not in engines:
+                engines.append(engine)
+        reviewers = [(engine, None, None) for engine in engines]
+    else:
+        reviewers = [(args.engine, None, None)]
+
+    seen: set[str] = set()
+    result: list[argparse.Namespace] = []
+    for engine, inline_model, inline_thinking in reviewers:
+        if engine in seen:
+            raise SystemExit(f"reviewer specified more than once: {engine}")
+        seen.add(engine)
+        model = inline_model or model_by_engine.get(engine) or global_model
+        thinking = inline_thinking or thinking_by_engine.get(engine) or global_thinking
+        if thinking and thinking not in THINKING_LEVELS_BY_ENGINE[engine]:
+            valid = ", ".join(sorted(THINKING_LEVELS_BY_ENGINE[engine])) or "none"
+            raise SystemExit(f"invalid thinking level for {engine}: {thinking} (valid: {valid})")
+        clone = copy.copy(args)
+        clone.engine = engine
+        clone.model = model
+        clone.thinking = thinking
+        result.append(clone)
+    return result
+
+
+def reviewer_label(args: argparse.Namespace) -> str:
+    parts = [args.engine]
+    if args.model:
+        parts.append(f"model={args.model}")
+    if args.thinking:
+        parts.append(f"thinking={args.thinking}")
+    return " ".join(parts)
+
+
+def run_reviewer(args: argparse.Namespace, repo: Path, prompt: str, changed_paths: set[str], required: list[str]) -> dict[str, Any]:
+    raw = run_engine(args, repo, prompt)
+    report = extract_json(raw)
+    validate_report(report, repo, changed_paths, required)
+    return report
+
+
+def merge_panel_reports(reports: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    findings: list[dict[str, Any]] = []
+    seen: set[tuple[str, int, str, str]] = set()
+    for label, report in reports:
+        for finding in report["findings"]:
+            location = finding["code_location"]
+            key = (
+                location["file_path"],
+                location["line"],
+                finding["category"],
+                " ".join(finding["title"].lower().split()),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged = copy.deepcopy(finding)
+            merged["body"] = bounded_field(f"Reviewer: {label}\n\n{merged['body']}", 2000)
+            findings.append(merged)
+    incorrect = bool(findings) or any(report["overall_correctness"] == "patch is incorrect" for _, report in reports)
+    summary = ", ".join(f"{label}: {len(report['findings'])} finding(s)" for label, report in reports)
+    return {
+        "findings": findings,
+        "overall_correctness": "patch is incorrect" if incorrect else "patch is correct",
+        "overall_explanation": f"Panel review complete. {summary}.",
+        "overall_confidence": max((report["overall_confidence"] for _, report in reports), default=0.5),
+    }
+
+
+def run_panel(args: argparse.Namespace, reviewers: list[argparse.Namespace], repo: Path, prompt: str, changed_paths: set[str]) -> dict[str, Any]:
+    reports: list[tuple[str, dict[str, Any]]] = []
+    failures: list[str] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(reviewers)) as executor:
+        future_by_label = {
+            executor.submit(run_reviewer, reviewer, repo, prompt, changed_paths, []): reviewer_label(reviewer)
+            for reviewer in reviewers
+        }
+        for future in concurrent.futures.as_completed(future_by_label):
+            label = future_by_label[future]
+            try:
+                reports.append((label, future.result()))
+            except SystemExit as exc:
+                failures.append(f"{label}: {exc}")
+            except Exception as exc:
+                failures.append(f"{label}: {exc}")
+    if failures and not args.allow_partial_panel:
+        raise SystemExit("autoreview panel failed\n" + "\n".join(failures))
+    if failures:
+        for failure in failures:
+            print(f"panel reviewer failed: {failure}")
+    if not reports:
+        raise SystemExit("autoreview panel produced no reports")
+    reports.sort(key=lambda item: item[0])
+    report = merge_panel_reports(reports)
+    validate_report(report, repo, changed_paths, args.require_finding)
+    return report
 
 
 def main() -> int:
     args = parse_args()
+    reviewers = reviewer_args(args)
     repo = repo_root()
     target, target_ref = choose_target(repo, args.mode, args.base)
     print(f"autoreview target: {target}")
     print(f"branch: {current_branch(repo)}")
-    print(f"engine: {args.engine}")
+    if len(reviewers) == 1 and not args.reviewers and not args.panel:
+        print(f"engine: {reviewers[0].engine}")
+        if reviewers[0].model:
+            print(f"model: {reviewers[0].model}")
+        if reviewers[0].thinking:
+            print(f"thinking: {reviewers[0].thinking}")
+    else:
+        print(f"reviewers: {', '.join(reviewer_label(reviewer) for reviewer in reviewers)}")
     print(f"tools: {'on' if args.tools else 'off'}")
     print(f"web_search: {'on' if args.web_search else 'off'}")
     display_ref = args.commit if target == "commit" else target_ref
@@ -849,9 +832,12 @@ def main() -> int:
     if args.parallel_tests:
         tests_proc = start_parallel_tests(args.parallel_tests, repo)
     try:
-        raw = run_engine(args, repo, prompt)
-        report = extract_json(raw)
-        validate_report(report, repo, changed_paths, args.require_finding, args.require_any_finding)
+        if len(reviewers) == 1:
+            report = run_reviewer(reviewers[0], repo, prompt, changed_paths, args.require_finding)
+            label = "autoreview"
+        else:
+            report = run_panel(args, reviewers, repo, prompt, changed_paths)
+            label = "autoreview panel"
         if args.json_output:
             Path(args.json_output).write_text(json.dumps(report, indent=2) + "\n")
 
@@ -859,10 +845,10 @@ def main() -> int:
             original_stdout = sys.stdout
             with Path(args.output).open("w") as handle:
                 sys.stdout = Tee(original_stdout, handle)
-                print_report(report)
+                print_report(report, label=label)
                 sys.stdout = original_stdout
         else:
-            print_report(report)
+            print_report(report, label=label)
     finally:
         tests_status = finish_parallel_tests(*tests_proc) if tests_proc else 0
 

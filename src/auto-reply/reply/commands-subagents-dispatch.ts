@@ -3,7 +3,6 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 export {
   COMMAND,
-  COMMAND_KILL,
   resolveHandledPrefix,
   resolveRequesterSessionKey,
   resolveSubagentsAction,

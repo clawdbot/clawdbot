@@ -5,11 +5,13 @@ import type { ProviderPlugin } from "../plugins/types.js";
 const mocks = vi.hoisted(() => ({
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   runProviderCatalog: vi.fn(),
+  runProviderStaticCatalog: vi.fn(),
 }));
 
 vi.mock("../plugins/provider-discovery.js", () => ({
   resolveRuntimePluginDiscoveryProviders: mocks.resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog: mocks.runProviderCatalog,
+  runProviderStaticCatalog: mocks.runProviderStaticCatalog,
   groupPluginDiscoveryProvidersByOrder: (providers: ProviderPlugin[]) => ({
     simple: providers,
     profile: [],
@@ -55,6 +57,16 @@ function createProvider(id: string): ProviderPlugin {
   };
 }
 
+function createProviderWithStaticCatalog(id: string): ProviderPlugin {
+  return {
+    ...createProvider(id),
+    staticCatalog: {
+      order: "simple",
+      run: async () => null,
+    },
+  };
+}
+
 function createTextModel(id: string, name: string) {
   return {
     id,
@@ -80,6 +92,15 @@ describe("resolveImplicitProviders startup discovery scope", () => {
     vi.clearAllMocks();
     mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([createProvider("openai")]);
     mocks.runProviderCatalog.mockResolvedValue({
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [],
+        },
+      },
+    });
+    mocks.runProviderStaticCatalog.mockResolvedValue({
       providers: {
         openai: {
           baseUrl: "https://api.openai.com/v1",
@@ -132,6 +153,23 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       "runtime plugin discovery",
     ) as { discoveryEntriesOnly?: boolean };
     expect(discoveryOptions?.discoveryEntriesOnly).toBe(true);
+  });
+
+  it("uses static provider catalogs for entries-only startup discovery", async () => {
+    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([
+      createProviderWithStaticCatalog("codex"),
+    ]);
+
+    await resolveImplicitProviders({
+      agentDir: "/tmp/openclaw-agent",
+      config: {},
+      env: {} as NodeJS.ProcessEnv,
+      explicitProviders: {},
+      providerDiscoveryEntriesOnly: true,
+    });
+
+    expect(mocks.runProviderStaticCatalog).toHaveBeenCalledTimes(1);
+    expect(mocks.runProviderCatalog).not.toHaveBeenCalled();
   });
 
   it("keeps explicit provider models manual without provider wildcard visibility", async () => {

@@ -1104,22 +1104,16 @@
   },
   {
     "deferLoading": true,
-    "description": "List/kill/steer spawned subagents for requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
+    "description": "List active and recent subagents for the requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
     "inputSchema": {
       "properties": {
         "action": {
-          "enum": ["list", "kill", "steer"],
-          "type": "string"
-        },
-        "message": {
+          "enum": ["list"],
           "type": "string"
         },
         "recentMinutes": {
           "minimum": 1,
           "type": "number"
-        },
-        "target": {
-          "type": "string"
         }
       },
       "type": "object"

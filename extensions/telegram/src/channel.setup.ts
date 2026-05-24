@@ -12,7 +12,6 @@ export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, Telegra
     setup: telegramSetupAdapter,
   }),
   lifecycle: {
-    detectLegacyStateMigrations: ({ cfg, env }) =>
-      detectTelegramLegacyStateMigrations({ cfg, env }),
+    detectLegacyStateMigrations: (params) => detectTelegramLegacyStateMigrations(params),
   },
 };

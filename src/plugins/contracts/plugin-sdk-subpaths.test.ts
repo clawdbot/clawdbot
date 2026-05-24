@@ -860,7 +860,6 @@ describe("plugin-sdk subpath exports", () => {
       pattern:
         /\b(?:ComparableChannelTarget|resolveComparableTargetFor(?:Channel|LoadedChannel)|comparableChannelTargets(?:Match|ShareRoute))\b/u,
       exclude: [
-        "src/channels/plugins/target-parsing.ts",
         "src/channels/plugins/target-parsing-loaded.ts",
         "src/channels/plugins/target-parsing.test.ts",
         "src/plugins/compat/registry.ts",

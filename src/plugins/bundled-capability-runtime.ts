@@ -158,6 +158,7 @@ function createCapabilityPluginRecord(params: {
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
+    meetingNotesSourceProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
     musicGenerationProviderIds: [],
@@ -328,6 +329,9 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       record.mediaUnderstandingProviderIds.push(
         ...captured.mediaUnderstandingProviders.map((entry) => entry.id),
       );
+      record.meetingNotesSourceProviderIds.push(
+        ...captured.meetingNotesSourceProviders.map((entry) => entry.id),
+      );
       record.imageGenerationProviderIds.push(
         ...captured.imageGenerationProviders.map((entry) => entry.id),
       );
@@ -411,6 +415,15 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
       );
       registry.mediaUnderstandingProviders.push(
         ...captured.mediaUnderstandingProviders.map((provider) => ({
+          pluginId: record.id,
+          pluginName: record.name,
+          provider,
+          source: record.source,
+          rootDir: record.rootDir,
+        })),
+      );
+      registry.meetingNotesSourceProviders.push(
+        ...captured.meetingNotesSourceProviders.map((provider) => ({
           pluginId: record.id,
           pluginName: record.name,
           provider,

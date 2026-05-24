@@ -106,6 +106,28 @@ describe("computeSandboxConfigHash", () => {
     });
     expect(left).not.toBe(right);
   });
+  it("changes when read-only workspace skill mount state changes", () => {
+    const shared = {
+      docker: createDockerConfig(),
+      dockerEnvPolicyEpoch: undefined,
+      workspaceAccess: "rw" as const,
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    };
+
+    const withoutSkills = computeSandboxConfigHash({
+      ...shared,
+      readOnlyWorkspaceSkillMounts: [],
+    });
+
+    const withSkills = computeSandboxConfigHash({
+      ...shared,
+      readOnlyWorkspaceSkillMounts: ["/tmp/workspace/skills:/workspace/skills:ro"],
+    });
+
+    expect(withoutSkills).not.toBe(withSkills);
+  });
 });
 
 describe("computeSandboxBrowserConfigHash", () => {

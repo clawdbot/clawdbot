@@ -8,6 +8,7 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveOutboundSendDep } from "../infra/outbound/send-deps.js";
+import { buildChannelOutboundSessionRoute } from "../plugin-sdk/core.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 
@@ -164,13 +165,47 @@ export function setupIsolatedAgentTurnMocks(params?: { fast?: boolean }): void {
           id: "telegram",
           outbound: telegramOutboundForTest,
           messaging: {
-            parseExplicitTarget: ({ raw }) => {
-              const target = parseTelegramTargetForTest(raw);
-              return {
-                to: target.chatId,
-                threadId: target.messageThreadId,
-                chatType: target.chatType === "unknown" ? undefined : target.chatType,
-              };
+            inferTargetChatType: ({ to }) => {
+              const target = parseTelegramTargetForTest(to);
+              return target.chatType === "unknown" ? undefined : target.chatType;
+            },
+            targetResolver: {
+              resolveTarget: async ({ input }) => {
+                const parsed = parseTelegramTargetForTest(input);
+                if (!parsed.chatId) {
+                  return null;
+                }
+                return {
+                  to:
+                    parsed.messageThreadId == null
+                      ? parsed.chatId
+                      : `${parsed.chatId}:topic:${parsed.messageThreadId}`,
+                  kind: parsed.chatType === "direct" ? "user" : "group",
+                  source: "normalized",
+                };
+              },
+            },
+            resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target, threadId }) => {
+              const parsed = parseTelegramTargetForTest(target);
+              const resolvedThreadId = parsed.messageThreadId ?? threadId ?? undefined;
+              const chatType = parsed.chatType === "direct" ? "direct" : "group";
+              return buildChannelOutboundSessionRoute({
+                cfg,
+                agentId,
+                channel: "telegram",
+                accountId,
+                peer: {
+                  kind: chatType,
+                  id:
+                    chatType === "group" && resolvedThreadId !== undefined
+                      ? `${parsed.chatId}:topic:${resolvedThreadId}`
+                      : parsed.chatId,
+                },
+                chatType,
+                from: `telegram:${parsed.chatId}`,
+                to: parsed.chatId,
+                ...(resolvedThreadId !== undefined ? { threadId: resolvedThreadId } : {}),
+              });
             },
           },
         }),

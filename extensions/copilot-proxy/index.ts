@@ -16,12 +16,10 @@ const DEFAULT_MODEL_IDS = [
   "gpt-5.1-codex-max",
   "gpt-5-mini",
   "claude-opus-4.6",
-  "claude-opus-4.5",
-  "claude-sonnet-4.5",
-  "claude-haiku-4.5",
+  "claude-opus-4.7",
+  "claude-sonnet-4.6",
   "gemini-3-pro",
   "gemini-3-flash",
-  "grok-code-fast-1",
 ] as const;
 
 function normalizeBaseUrl(value: string): string {

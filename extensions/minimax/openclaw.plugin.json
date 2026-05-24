@@ -85,6 +85,12 @@
       "defaultModels": {
         "image": "MiniMax-VL-01"
       },
+      "documentModels": {
+        "pdf": {
+          "textExtraction": "MiniMax-M2.7",
+          "image": false
+        }
+      },
       "autoPriority": {
         "image": 40
       }
@@ -93,6 +99,12 @@
       "capabilities": ["image"],
       "defaultModels": {
         "image": "MiniMax-VL-01"
+      },
+      "documentModels": {
+        "pdf": {
+          "textExtraction": "MiniMax-M2.7",
+          "image": false
+        }
       },
       "autoPriority": {
         "image": 50

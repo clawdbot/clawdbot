@@ -3,7 +3,7 @@ summary: "Steer an active run without changing queue mode"
 read_when:
   - Using /steer or /tell while an agent is already running
   - Comparing /steer with /queue modes
-  - Deciding whether to steer the current run, a sub-agent, or an ACP session
+  - Deciding whether to steer the current run or an ACP session
 title: "Steer"
 sidebarTitle: "Steer"
 ---
@@ -55,15 +55,8 @@ For queue modes and steering boundaries, see [Command queue](/concepts/queue) an
 
 ## Sub-agents
 
-Use `/subagents steer` when the target is a child run:
-
-```text
-/subagents steer 2 focus only on the API surface
-```
-
-Top-level `/steer` does not select a sub-agent by id or list index. It always
-targets the current session's active run. See [Sub-agents](/tools/subagents) for
-sub-agent ids, labels, and control commands.
+Top-level `/steer` targets the current session's active run. Sub-agents report
+back to their parent/requester session; `/subagents` is for visibility only.
 
 ## ACP sessions
 

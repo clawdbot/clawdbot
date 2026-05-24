@@ -12,6 +12,41 @@ const TARGET_KIND_PREFIXES = new Set([
   "user",
 ]);
 
+export function stripTargetProviderPrefix(raw: string, ...providers: string[]): string {
+  const trimmed = raw.trim();
+  const lower = normalizeOptionalLowercaseString(trimmed) ?? "";
+  for (const provider of providers) {
+    const normalizedProvider = normalizeOptionalLowercaseString(provider);
+    if (normalizedProvider && lower.startsWith(`${normalizedProvider}:`)) {
+      return trimmed.slice(normalizedProvider.length + 1).trim();
+    }
+  }
+  return trimmed;
+}
+
+export function stripTargetKindPrefix(
+  raw: string,
+  kinds: readonly string[] = ["channel", "conversation", "dm", "group", "room", "thread", "user"],
+): string {
+  const kindPattern = kinds
+    .map((kind) => normalizeOptionalLowercaseString(kind))
+    .filter((kind): kind is string => Boolean(kind))
+    .join("|");
+  return kindPattern ? raw.replace(new RegExp(`^(${kindPattern}):`, "i"), "").trim() : raw.trim();
+}
+
+export function stripTargetTopicSuffix(
+  raw: string,
+  options: { allowNumericShorthand?: boolean } = {},
+): string {
+  const trimmed = raw.trim();
+  const numericTopicMatch = options.allowNumericShorthand ? /^(-?\d+):(\d+)$/.exec(trimmed) : null;
+  if (numericTopicMatch?.[1]) {
+    return numericTopicMatch[1];
+  }
+  return trimmed.replace(/:topic:.*$/i, "").trim();
+}
+
 export type ChannelTargetProviderPrefix = {
   prefix: string;
   channel: string;

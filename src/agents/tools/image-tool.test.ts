@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { encodePngRgba, fillPixel } from "../../media/png-encode.js";
 import type {
   ImageDescriptionRequest,
   ImagesDescriptionRequest,
@@ -223,7 +224,53 @@ async function withTempAgentDir<T>(run: (agentDir: string) => Promise<T>): Promi
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 const ONE_PIXEL_GIF_B64 = "R0lGODlhAQABAIABAP///wAAACwAAAAAAQABAAACAkQBADs=";
-const ONE_PIXEL_JPEG_B64 = "QUJDRA==";
+
+function createLargeColorBlockPng(size: number): Buffer {
+  const buf = Buffer.alloc(size * size * 4, 255);
+  const centerStart = Math.floor(size * 0.25);
+  const centerEnd = Math.floor(size * 0.75);
+  for (let y = 0; y < size; y += 1) {
+    for (let x = 0; x < size; x += 1) {
+      const inCenter = x >= centerStart && x < centerEnd && y >= centerStart && y < centerEnd;
+      fillPixel(buf, x, y, size, inCenter ? 230 : 30, inCenter ? 40 : 110, inCenter ? 35 : 220);
+    }
+  }
+  return encodePngRgba(buf, size, size);
+}
+
+function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  let offset = 2;
+  while (offset + 9 < buffer.length) {
+    if (buffer[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+    const marker = buffer[offset + 1];
+    offset += 2;
+    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+      continue;
+    }
+    const segmentLength = buffer.readUInt16BE(offset);
+    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
+      return {
+        height: buffer.readUInt16BE(offset + 3),
+        width: buffer.readUInt16BE(offset + 5),
+      };
+    }
+    offset += segmentLength;
+  }
+  throw new Error("JPEG dimensions not found");
+}
+
+function readPngDimensions(buffer: Buffer): { width: number; height: number } {
+  if (buffer.length < 24 || buffer.toString("ascii", 12, 16) !== "IHDR") {
+    throw new Error("PNG dimensions not found");
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
+}
 
 async function withTempWorkspacePng(
   cb: (args: { workspaceDir: string; imagePath: string }) => Promise<void>,
@@ -1370,7 +1417,7 @@ describe("image tool implicit imageModel config", () => {
       ).toBe(true);
       expect(userContent.some((block) => block.type === "image_url")).toBe(true);
       expect(userContent.find((block) => block.type === "image_url")?.image_url?.url).toContain(
-        "data:image/png;base64,",
+        "data:image/",
       );
       expect(bodyRaw).not.toContain('"role":"developer"');
       expectToolText(result, "ok moonshot");
@@ -1783,6 +1830,136 @@ describe("image tool data URL support", () => {
       bufferFromSpy.mockRestore();
     }
   });
+
+  it("applies model image maxBytes to data URLs", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      installImageUnderstandingProviderStubs();
+      const model = {
+        ...makeModelDefinition("tiny-vision", ["text", "image"]),
+        mediaInput: { image: { maxBytes: 1 } },
+      } satisfies ModelDefinitionConfig;
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/tiny-vision" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              models: [model],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "Describe this image.",
+          image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        }),
+      ).rejects.toThrow(/could not be reduced below/i);
+    });
+  });
+
+  it("downscales data URL images to the resolved model side limit", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      let observedDimensions: { width: number; height: number } | undefined;
+      installImageUnderstandingProviderStubs({
+        id: "openai",
+        capabilities: ["image"],
+        describeImage: async (params) => {
+          observedDimensions =
+            params.mime === "image/png"
+              ? readPngDimensions(params.buffer)
+              : readJpegDimensions(params.buffer);
+          return { text: "ok", model: params.model };
+        },
+      });
+      const model = {
+        ...makeModelDefinition("tiny-vision", ["text", "image"]),
+        mediaInput: { image: { maxSidePx: 512, preferredSidePx: 512 } },
+      } satisfies ModelDefinitionConfig;
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/tiny-vision" },
+            imageQuality: "high",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+              models: [model],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+      const source = createLargeColorBlockPng(1600);
+      await expectImageToolExecOk(tool, `data:image/png;base64,${source.toString("base64")}`);
+
+      expect(observedDimensions).toBeDefined();
+      if (!observedDimensions) {
+        throw new Error("expected observed data URL dimensions");
+      }
+      expect(Math.max(observedDimensions.width, observedDimensions.height)).toBeLessThanOrEqual(
+        512,
+      );
+    });
+  });
+
+  it("applies configured image quality to data URLs without model media metadata", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      let observedDimensions: { width: number; height: number } | undefined;
+      installImageUnderstandingProviderStubs({
+        id: "openai",
+        capabilities: ["image"],
+        describeImage: async (params) => {
+          observedDimensions =
+            params.mime === "image/png"
+              ? readPngDimensions(params.buffer)
+              : readJpegDimensions(params.buffer);
+          return { text: "ok", model: params.model };
+        },
+      });
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            imageModel: { primary: "openai/plain-vision" },
+            imageQuality: "efficient",
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              apiKey: "test-key",
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeModelDefinition("plain-vision", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const tool = createRequiredImageTool({ config: cfg, agentDir });
+      const source = createLargeColorBlockPng(1600);
+      await expectImageToolExecOk(tool, `data:image/png;base64,${source.toString("base64")}`);
+
+      expect(observedDimensions).toBeDefined();
+      if (!observedDimensions) {
+        throw new Error("expected observed data URL dimensions");
+      }
+      expect(Math.max(observedDimensions.width, observedDimensions.height)).toBeLessThanOrEqual(
+        1280,
+      );
+    });
+  });
 });
 
 describe("image tool MiniMax VLM routing", () => {
@@ -1832,7 +2009,7 @@ describe("image tool MiniMax VLM routing", () => {
     expect(init?.method).toBe("POST");
     expect((init?.headers as Record<string, string>)?.Authorization).toBe("Bearer minimax-test");
     expect(String(init?.body)).toContain('"prompt":"Describe the image."');
-    expect(String(init?.body)).toContain('"image_url":"data:image/png;base64,');
+    expect(String(init?.body)).toContain('"image_url":"data:image/');
 
     const text = res.content?.find((b) => b.type === "text")?.text ?? "";
     expect(text).toBe("ok");
@@ -1840,10 +2017,11 @@ describe("image tool MiniMax VLM routing", () => {
 
   it("accepts images[] for multi-image requests", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+    const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const res = await tool.execute("t1", {
       prompt: "Compare these images.",
-      images: [`data:image/png;base64,${pngB64}`, `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`],
+      images: [`data:image/png;base64,${pngB64}`, `data:image/png;base64,${secondPngB64}`],
     });
 
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -1857,14 +2035,15 @@ describe("image tool MiniMax VLM routing", () => {
 
   it("combines image + images with dedupe and enforces maxImages", async () => {
     const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+    const secondPngB64 = createLargeColorBlockPng(2).toString("base64");
 
     const deduped = await tool.execute("t1", {
       prompt: "Compare these images.",
       image: `data:image/png;base64,${pngB64}`,
       images: [
         `data:image/png;base64,${pngB64}`,
-        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
-        `data:image/jpeg;base64,${ONE_PIXEL_JPEG_B64}`,
+        `data:image/png;base64,${secondPngB64}`,
+        `data:image/png;base64,${secondPngB64}`,
       ],
     });
 
@@ -2164,5 +2343,137 @@ describe("image tool response validation", () => {
     });
 
     expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(false);
+  });
+});
+
+describe("image compression policy", () => {
+  const cfgWithImageModelMetadata = {
+    agents: {
+      defaults: {
+        imageQuality: "high",
+      },
+    },
+    models: {
+      providers: {
+        anthropic: {
+          baseUrl: "https://api.anthropic.com",
+          api: "anthropic-messages",
+          models: [
+            {
+              id: "claude-opus-4-7",
+              name: "Claude Opus 4.7",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+              },
+            },
+            {
+              id: "claude-opus-4-6",
+              name: "Claude Opus 4.6",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 1_000_000,
+              maxTokens: 64_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+              },
+            },
+          ],
+        },
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "gpt-5.5",
+              name: "GPT-5.5",
+              reasoning: true,
+              input: ["text", "image"],
+              contextWindow: 272_000,
+              maxTokens: 128_000,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              mediaInput: {
+                image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+              },
+            },
+          ],
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+
+  it("derives model metadata, quality preference, and image count from config", async () => {
+    const cfg = {
+      ...cfgWithImageModelMetadata,
+    } satisfies OpenClawConfig;
+
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg,
+        imageModelConfig: { primary: "anthropic/claude-opus-4-7" },
+        imageCount: 2,
+      }),
+    ).resolves.toEqual({
+      quality: "high",
+      imageCount: 2,
+      models: [{ maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" }],
+    });
+  });
+
+  it("keeps unset image quality as adaptive auto behavior and includes fallback models", async () => {
+    const { agents: _agents, ...cfg } = cfgWithImageModelMetadata;
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg,
+        imageModelConfig: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-opus-4-6", "unknown/custom-image"],
+        },
+        imageCount: 1,
+      }),
+    ).resolves.toEqual({
+      imageCount: 1,
+      models: [
+        { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+        { maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" },
+        {},
+      ],
+    });
+  });
+
+  it("uses a model override as the compression candidate", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: cfgWithImageModelMetadata,
+        imageModelConfig: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-opus-4-6"],
+        },
+        modelOverride: "anthropic/claude-opus-4-6",
+        imageCount: 1,
+      }),
+    ).resolves.toMatchObject({
+      models: [{ maxSidePx: 1568, preferredSidePx: 1568, tokenMode: "provider" }],
+    });
+  });
+
+  it("resolves providerless overrides before reading compression metadata", async () => {
+    await expect(
+      testing.resolveImageCompressionPolicy({
+        cfg: cfgWithImageModelMetadata,
+        imageModelConfig: {
+          primary: "anthropic/claude-opus-4-6",
+        },
+        modelOverride: "gpt-5.5",
+        imageCount: 1,
+      }),
+    ).resolves.toMatchObject({
+      models: [{ maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" }],
+    });
   });
 });

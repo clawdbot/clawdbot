@@ -20,6 +20,7 @@ vi.mock("./cli-auth-seam.js", async (importActual) => {
 });
 
 const { buildAnthropicCliMigrationResult, hasClaudeCliAuth } = await import("./cli-migration.js");
+const { resolveKnownAnthropicModelRef } = await import("./claude-model-refs.js");
 const { createTestWizardPrompter, registerSingleProviderPlugin } =
   await import("openclaw/plugin-sdk/plugin-test-runtime");
 const { default: anthropicPlugin } = await import("./index.js");
@@ -32,6 +33,29 @@ beforeEach(() => {
 afterAll(() => {
   vi.doUnmock("./cli-auth-seam.js");
   vi.resetModules();
+});
+
+describe("anthropic Claude model refs", () => {
+  it("upgrades retired refs without rewriting future canonical refs", () => {
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5")).toBe(
+      "anthropic/claude-opus-4-7",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-5@anthropic:work")).toBe(
+      "anthropic/claude-opus-4-7@anthropic:work",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-20250514")).toBe(
+      "anthropic/claude-sonnet-4-6",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-5-0")).toBe(
+      "anthropic/claude-opus-5-0",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-opus-4-10")).toBe(
+      "anthropic/claude-opus-4-10",
+    );
+    expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-7")).toBe(
+      "anthropic/claude-sonnet-4-7",
+    );
+  });
 });
 
 async function resolveAnthropicCliAuthMethod() {
@@ -142,9 +166,6 @@ describe("anthropic cli migration", () => {
               alias: "Opus",
               agentRuntime: { id: "claude-cli" },
             },
-            "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } },
             "openai/gpt-5.2": {},
           },
         },
@@ -235,9 +256,6 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },
@@ -282,9 +300,6 @@ describe("anthropic cli migration", () => {
             "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
             "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-sonnet-4-5": { agentRuntime: { id: "claude-cli" } },
-            "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } },
           },
         },
       },

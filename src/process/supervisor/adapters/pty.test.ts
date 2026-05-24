@@ -4,10 +4,10 @@ import {
   expectWaitStaysPendingUntilSigkillFallback,
 } from "./test-support.js";
 
-const { spawnMock, ptyKillMock, killProcessTreeMock } = vi.hoisted(() => ({
+const { spawnMock, ptyKillMock, signalProcessTreeMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
   ptyKillMock: vi.fn(),
-  killProcessTreeMock: vi.fn(),
+  signalProcessTreeMock: vi.fn(),
 }));
 
 vi.mock("@lydell/node-pty", () => ({
@@ -15,7 +15,7 @@ vi.mock("@lydell/node-pty", () => ({
 }));
 
 vi.mock("../../kill-tree.js", () => ({
-  killProcessTree: (...args: unknown[]) => killProcessTreeMock(...args),
+  signalProcessTree: (...args: unknown[]) => signalProcessTreeMock(...args),
 }));
 
 function createStubPty(pid = 1234) {
@@ -76,7 +76,7 @@ describe("createPtyAdapter", () => {
   beforeEach(() => {
     spawnMock.mockClear();
     ptyKillMock.mockClear();
-    killProcessTreeMock.mockClear();
+    signalProcessTreeMock.mockClear();
     vi.useRealTimers();
   });
 
@@ -85,7 +85,7 @@ describe("createPtyAdapter", () => {
     vi.clearAllMocks();
   });
 
-  it("forwards explicit signals to node-pty kill on non-Windows", async () => {
+  it("forwards non-SIGTERM explicit signals to node-pty kill on non-Windows", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     try {
@@ -96,14 +96,27 @@ describe("createPtyAdapter", () => {
         args: ["-lc", "sleep 10"],
       });
 
-      adapter.kill("SIGTERM");
-      expect(ptyKillMock).toHaveBeenCalledWith("SIGTERM");
-      expect(killProcessTreeMock).not.toHaveBeenCalled();
+      adapter.kill("SIGINT");
+      expect(ptyKillMock).toHaveBeenCalledWith("SIGINT");
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
       }
     }
+  });
+
+  it("uses process-tree kill for graceful SIGTERM cancellation", async () => {
+    spawnMock.mockReturnValue(createStubPty(1234));
+
+    const adapter = await createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "sleep 10"],
+    });
+
+    adapter.kill("SIGTERM");
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGTERM");
+    expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
   it("uses process-tree kill for SIGKILL by default", async () => {
@@ -115,7 +128,7 @@ describe("createPtyAdapter", () => {
     });
 
     adapter.kill();
-    expect(killProcessTreeMock).toHaveBeenCalledWith(1234);
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(1234, "SIGKILL");
     expect(ptyKillMock).not.toHaveBeenCalled();
   });
 
@@ -272,7 +285,7 @@ describe("createPtyAdapter", () => {
     expect(expectSpawnEnv()).toEqual({ FOO: "bar", COUNT: "12" });
   });
 
-  it("does not pass a signal to node-pty on Windows", async () => {
+  it("does not pass non-SIGTERM explicit signals to node-pty on Windows", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     try {
@@ -283,9 +296,9 @@ describe("createPtyAdapter", () => {
         args: ["-NoLogo"],
       });
 
-      adapter.kill("SIGTERM");
+      adapter.kill("SIGINT");
       expect(ptyKillMock).toHaveBeenCalledWith(undefined);
-      expect(killProcessTreeMock).not.toHaveBeenCalled();
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {
         Object.defineProperty(process, "platform", originalPlatform);
@@ -305,7 +318,7 @@ describe("createPtyAdapter", () => {
       });
 
       adapter.kill("SIGKILL");
-      expect(killProcessTreeMock).toHaveBeenCalledWith(4567);
+      expect(signalProcessTreeMock).toHaveBeenCalledWith(4567, "SIGKILL");
       expect(ptyKillMock).not.toHaveBeenCalled();
     } finally {
       if (originalPlatform) {

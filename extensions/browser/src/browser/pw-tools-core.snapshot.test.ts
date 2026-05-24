@@ -92,6 +92,45 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
   });
 
+  it("races snapshotAriaViaPlaywright against an explicit timeoutMs", async () => {
+    vi.useFakeTimers();
+    try {
+      const page = { id: "page-1" };
+      getPageForTargetId.mockResolvedValue(page);
+      withPageScopedCdpClient.mockImplementation(() => new Promise(() => {}));
+
+      const mod = await import("./pw-tools-core.snapshot.js");
+      const promise = mod.snapshotAriaViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        timeoutMs: 750,
+      });
+      void promise.catch(() => {});
+
+      await vi.advanceTimersByTimeAsync(750);
+
+      await expect(promise).rejects.toThrow(/Aria snapshot via Playwright timed out/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("forwards an explicit timeoutMs into the role-aria Playwright ariaSnapshot call", async () => {
+    const ariaSnapshotMock = vi.fn().mockResolvedValue("");
+    const page = { ariaSnapshot: ariaSnapshotMock };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refsMode: "aria",
+      timeoutMs: 8888,
+    });
+
+    expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 8888 });
+  });
+
   it("stores role fallback metadata when backend markers are unavailable", async () => {
     const page = { id: "page-1" };
     const mod = await import("./pw-tools-core.snapshot.js");

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export function collectPresentOpenClawTools(
@@ -26,4 +27,57 @@ export function isUpdatePlanToolEnabledForOpenClawTools(params: {
     provider: params.modelProvider,
     modelId: params.modelId,
   });
+}
+
+function mergeOpenClawToolPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
+  const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
+  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+}
+
+function isToolExplicitlyAllowedByOpenClawToolPolicy(params: {
+  toolName: string;
+  allowlist?: string[];
+  denylist?: string[];
+}): boolean {
+  if (!params.allowlist?.some((entry) => typeof entry === "string" && entry.trim().length > 0)) {
+    return false;
+  }
+  return isToolAllowedByPolicyName(params.toolName, {
+    allow: params.allowlist,
+    deny: params.denylist,
+  });
+}
+
+export function shouldIncludeUpdatePlanToolForOpenClawTools(params: {
+  config?: OpenClawConfig;
+  agentSessionKey?: string;
+  agentId?: string | null;
+  modelProvider?: string;
+  modelId?: string;
+  pluginToolAllowlist?: string[];
+  pluginToolDenylist?: string[];
+}): boolean {
+  const allowlist = mergeOpenClawToolPolicyList(
+    params.config?.tools?.allow,
+    params.config?.tools?.alsoAllow,
+    params.pluginToolAllowlist,
+  );
+  const denylist = mergeOpenClawToolPolicyList(
+    params.config?.tools?.deny,
+    params.pluginToolDenylist,
+  );
+  return (
+    isToolExplicitlyAllowedByOpenClawToolPolicy({
+      toolName: "update_plan",
+      allowlist,
+      denylist,
+    }) ||
+    isUpdatePlanToolEnabledForOpenClawTools({
+      config: params.config,
+      agentSessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+    })
+  );
 }

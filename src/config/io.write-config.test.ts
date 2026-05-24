@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearLoadPluginMetadataSnapshotMemo } from "../plugins/plugin-metadata-snapshot.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
@@ -12,6 +13,7 @@ import {
   registerConfigWriteListener,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshotRefreshHandler,
   writeConfigFile,
 } from "./io.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
@@ -86,6 +88,7 @@ describe("config io write", () => {
 
   afterEach(() => {
     resetConfigRuntimeState();
+    clearLoadPluginMetadataSnapshotMemo();
     mockMaintainConfigBackups.mockReset();
     mockMaintainConfigBackups.mockResolvedValue(undefined);
   });
@@ -464,6 +467,10 @@ describe("config io write", () => {
   });
 
   it("keeps shipped plugin install config records when index migration fails", async () => {
+    mockLoadPluginManifestRegistry.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    } satisfies PluginManifestRegistry);
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const unwritableStatePath = path.join(home, ".openclaw");
@@ -907,6 +914,56 @@ describe("config io write", () => {
           )}.`,
         ],
       ]);
+    });
+  });
+
+  it("does not preflight runtime secrets before rejecting blocked root writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        meta: { lastTouchedVersion: "2026.4.30" },
+        gateway: { mode: "local", port: 18789 },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        configPath,
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+      let preflightCalls = 0;
+
+      await expectConfigWriteRejected(
+        io.writeConfigFile(
+          { update: { channel: "beta" } },
+          {
+            baseSnapshot,
+            preCommitRuntimePreflight: async () => {
+              preflightCalls += 1;
+              throw new Error("should not preflight rejected writes");
+            },
+          },
+        ),
+      );
+
+      expect(preflightCalls).toBe(0);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
     });
   });
 
@@ -1417,6 +1474,309 @@ describe("config io write", () => {
           delete process.env.OPENCLAW_CONFIG_PATH;
         } else {
           process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
+  it("rolls back the root config when post-write runtime refresh fails", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+
+      try {
+        setRuntimeConfigSnapshotRefreshHandler({
+          refresh: () => {
+            throw new Error("synthetic refresh failure");
+          },
+        });
+
+        await expect(writeConfigFile({ gateway: { mode: "local", port: 19001 } })).rejects.toThrow(
+          /runtime snapshot refresh failed: synthetic refresh failure/,
+        );
+
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
+  it("does not delete an existing root config when rollback has no previous raw payload", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf-8");
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: null,
+        parsed: initialConfig,
+        sourceConfig: initialConfig,
+        resolved: initialConfig,
+        valid: true,
+        runtimeConfig: initialConfig,
+        config: initialConfig,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      try {
+        setRuntimeConfigSnapshotRefreshHandler({
+          refresh: () => {
+            throw new Error("synthetic refresh failure");
+          },
+        });
+
+        await expect(
+          writeConfigFile(
+            { gateway: { mode: "local", port: 19001 } },
+            {
+              baseSnapshot,
+            },
+          ),
+        ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+        expect(persisted.gateway).toEqual({ mode: "local", port: 19001 });
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
+  it("does not overwrite concurrent root config edits during failed refresh rollback", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local", port: 18789 } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const concurrentRaw = `${JSON.stringify(
+        { gateway: { mode: "local", port: 19191 } },
+        null,
+        2,
+      )}\n`;
+
+      try {
+        setRuntimeConfigSnapshotRefreshHandler({
+          refresh: async () => {
+            await fs.writeFile(configPath, concurrentRaw, "utf-8");
+            throw new Error("synthetic refresh failure");
+          },
+        });
+
+        await expect(writeConfigFile({ gateway: { mode: "local", port: 19001 } })).rejects.toThrow(
+          /runtime snapshot refresh failed: synthetic refresh failure/,
+        );
+
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(concurrentRaw);
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
+  it("rolls back plugin install index migration when runtime refresh fails", async () => {
+    await withSuiteHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const pluginDir = path.join(stateDir, "plugins", "demo");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const initialConfig = {
+        plugins: {
+          entries: { demo: { enabled: true } },
+          installs: {
+            demo: {
+              source: "npm",
+              spec: "demo@1.0.0",
+              installPath: pluginDir,
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+
+      try {
+        setRuntimeConfigSnapshotRefreshHandler({
+          refresh: () => {
+            throw new Error("synthetic refresh failure");
+          },
+        });
+
+        await expect(
+          writeConfigFile({ plugins: { entries: { demo: { enabled: true } } } }),
+        ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+        await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+        if (previousStateDir === undefined) {
+          delete process.env.OPENCLAW_STATE_DIR;
+        } else {
+          process.env.OPENCLAW_STATE_DIR = previousStateDir;
+        }
+      }
+    });
+  });
+
+  it("blocks runtime preflight failures before committing root writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      const initialRaw = `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`;
+      let observedSource: OpenClawConfig | undefined;
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+      try {
+        setRuntimeConfigSnapshotRefreshHandler({
+          preflight: async ({ sourceConfig }) => {
+            observedSource = sourceConfig;
+            throw new Error("missing included secret");
+          },
+          refresh: () => true,
+        });
+
+        await expect(
+          writeConfigFile({
+            gateway: { mode: "local", port: 19001 },
+            logging: { level: "debug" },
+          }),
+        ).rejects.toThrow(/active SecretRef resolution failed: missing included secret/);
+
+        expect(observedSource?.gateway?.port).toBe(19001);
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+      }
+    });
+  });
+
+  it("blocks runtime preflight failures before direct config IO commits root writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const initialRaw = `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`;
+      const env = {
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+      } as NodeJS.ProcessEnv;
+      let observedSource: OpenClawConfig | undefined;
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+
+      try {
+        setRuntimeConfigSnapshotRefreshHandler({
+          preflight: async ({ sourceConfig }) => {
+            observedSource = sourceConfig;
+            throw new Error("missing direct IO secret");
+          },
+          refresh: () => true,
+        });
+
+        await expect(
+          createConfigIO({ env, logger: silentLogger }).writeConfigFile({
+            gateway: { mode: "local", port: 19001 },
+          }),
+        ).rejects.toThrow(/active SecretRef resolution failed: missing direct IO secret/);
+
+        expect(observedSource?.gateway?.port).toBe(19001);
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+      }
+    });
+  });
+
+  it("restores config env vars when post-write runtime refresh rollback succeeds", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+      const envKey = "OPENCLAW_TEST_RUNTIME_ROLLBACK_ENV";
+      const previousEnvValue = process.env[envKey];
+      const initialConfig = { gateway: { mode: "local", port: 18789 } } satisfies OpenClawConfig;
+      const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
+
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, initialRaw, "utf-8");
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      delete process.env[envKey];
+
+      try {
+        setRuntimeConfigSnapshotRefreshHandler({
+          refresh: () => {
+            expect(process.env[envKey]).toBe("written-env-value");
+            throw new Error("synthetic refresh failure");
+          },
+        });
+
+        await expect(
+          writeConfigFile({
+            gateway: { mode: "local", port: 19001 },
+            env: { vars: { [envKey]: "written-env-value" } },
+          }),
+        ).rejects.toThrow(/runtime snapshot refresh failed: synthetic refresh failure/);
+
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+        expect(process.env[envKey]).toBeUndefined();
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+        if (previousConfigPath === undefined) {
+          delete process.env.OPENCLAW_CONFIG_PATH;
+        } else {
+          process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+        }
+        if (previousEnvValue === undefined) {
+          delete process.env[envKey];
+        } else {
+          process.env[envKey] = previousEnvValue;
         }
       }
     });

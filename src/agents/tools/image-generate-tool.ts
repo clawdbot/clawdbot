@@ -200,7 +200,7 @@ const ImageGenerateToolSchema = Type.Object({
   ),
   timeoutMs: Type.Optional(
     Type.Number({
-      description: "Provider timeout ms.",
+      description: "Provider timeout ms (300000 tends to be a safe amount).",
       minimum: 1,
     }),
   ),

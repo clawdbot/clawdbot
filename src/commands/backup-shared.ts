@@ -6,7 +6,6 @@ import {
   resolveOAuthDir,
   resolveStateDir,
 } from "../config/config.js";
-import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { pathExists, shortenHomePath } from "../utils.js";
 import { buildCleanupPlan, isPathWithin } from "./cleanup-utils.js";
 
@@ -58,8 +57,28 @@ function backupAssetPriority(kind: BackupAssetKind): number {
   throw new Error("Unsupported backup asset kind");
 }
 
+export function formatBackupArchiveTimestamp(
+  nowMs = Date.now(),
+  offsetMinutes = -new Date(nowMs).getTimezoneOffset(),
+): string {
+  const shifted = nowMs + offsetMinutes * 60_000;
+  const local = new Date(shifted);
+  const sign = offsetMinutes >= 0 ? "+" : "-";
+  const absOffsetMinutes = Math.abs(offsetMinutes);
+  const offsetHours = String(Math.floor(absOffsetMinutes / 60)).padStart(2, "0");
+  const offsetMins = String(absOffsetMinutes % 60).padStart(2, "0");
+  const year = String(local.getUTCFullYear()).padStart(4, "0");
+  const month = String(local.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(local.getUTCDate()).padStart(2, "0");
+  const hours = String(local.getUTCHours()).padStart(2, "0");
+  const minutes = String(local.getUTCMinutes()).padStart(2, "0");
+  const seconds = String(local.getUTCSeconds()).padStart(2, "0");
+  const millis = String(local.getUTCMilliseconds()).padStart(3, "0");
+  return `${year}-${month}-${day}T${hours}-${minutes}-${seconds}.${millis}${sign}${offsetHours}-${offsetMins}`;
+}
+
 export function buildBackupArchiveRoot(nowMs = Date.now()): string {
-  return `${formatSessionArchiveTimestamp(nowMs)}-openclaw-backup`;
+  return `${formatBackupArchiveTimestamp(nowMs)}-openclaw-backup`;
 }
 
 export function buildBackupArchiveBasename(nowMs = Date.now()): string {

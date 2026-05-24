@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/whatsapp",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/whatsapp",
-      "version": "2026.5.22",
+      "version": "2026.5.24",
       "dependencies": {
         "audio-decode": "2.2.3",
         "baileys": "7.0.0-rc13",
@@ -15,7 +15,7 @@
         "typebox": "1.1.38"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.22"
+        "openclaw": ">=2026.5.24"
       },
       "peerDependenciesMeta": {
         "openclaw": {

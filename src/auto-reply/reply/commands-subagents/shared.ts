@@ -32,38 +32,14 @@ export { resolveCommandSurfaceChannel, resolveChannelAccountId };
 export type { ChatMessage } from "../commands-subagents-text.js";
 
 export const COMMAND = "/subagents";
-export const COMMAND_KILL = "/kill";
 const COMMAND_FOCUS = "/focus";
 const COMMAND_UNFOCUS = "/unfocus";
 const COMMAND_AGENTS = "/agents";
-const ACTIONS = new Set([
-  "list",
-  "kill",
-  "log",
-  "send",
-  "steer",
-  "info",
-  "spawn",
-  "focus",
-  "unfocus",
-  "agents",
-  "help",
-]);
+const ACTIONS = new Set(["list", "log", "info", "help"]);
 
 export const RECENT_WINDOW_MINUTES = 30;
 
-type SubagentsAction =
-  | "list"
-  | "kill"
-  | "log"
-  | "send"
-  | "steer"
-  | "info"
-  | "spawn"
-  | "focus"
-  | "unfocus"
-  | "agents"
-  | "help";
+type SubagentsAction = "list" | "log" | "info" | "focus" | "unfocus" | "agents" | "help";
 
 type SubagentsCommandParams = Parameters<CommandHandler>[0];
 
@@ -169,15 +145,13 @@ export function resolveCommandSubagentController(
 export function resolveHandledPrefix(normalized: string): string | null {
   return normalized.startsWith(COMMAND)
     ? COMMAND
-    : normalized.startsWith(COMMAND_KILL)
-      ? COMMAND_KILL
-      : normalized.startsWith(COMMAND_FOCUS)
-        ? COMMAND_FOCUS
-        : normalized.startsWith(COMMAND_UNFOCUS)
-          ? COMMAND_UNFOCUS
-          : normalized.startsWith(COMMAND_AGENTS)
-            ? COMMAND_AGENTS
-            : null;
+    : normalized.startsWith(COMMAND_FOCUS)
+      ? COMMAND_FOCUS
+      : normalized.startsWith(COMMAND_UNFOCUS)
+        ? COMMAND_UNFOCUS
+        : normalized.startsWith(COMMAND_AGENTS)
+          ? COMMAND_AGENTS
+          : null;
 }
 
 export function resolveSubagentsAction(params: {
@@ -192,9 +166,6 @@ export function resolveSubagentsAction(params: {
     }
     params.restTokens.splice(0, 1);
     return action;
-  }
-  if (params.handledPrefix === COMMAND_KILL) {
-    return "kill";
   }
   if (params.handledPrefix === COMMAND_FOCUS) {
     return "focus";
@@ -275,18 +246,13 @@ export function buildSubagentsHelp() {
     "Subagents",
     "Usage:",
     "- /subagents list",
-    "- /subagents kill <id|#|all>",
     "- /subagents log <id|#> [limit] [tools]",
     "- /subagents info <id|#>",
-    "- /subagents send <id|#> <message>",
-    "- /subagents steer <id|#> <message>",
-    "- /subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]",
     "- /focus <subagent-label|session-key|session-id|session-label>",
     "- /unfocus",
     "- /agents",
     "- /session idle <duration|off>",
     "- /session max-age <duration|off>",
-    "- /kill <id|#|all>",
     "",
     "Ids: use the list index (#), runId/session prefix, label, or full session key.",
   ].join("\n");

@@ -99,6 +99,6 @@ describe("models load-config", () => {
     const result = await loadModelsConfigWithSource({ commandName: "models list" });
 
     expect(result.sourceConfig).toBe(runtimeConfig);
-    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig);
+    expect(mocks.setRuntimeConfigSnapshot).toHaveBeenCalledWith(resolvedConfig, runtimeConfig);
   });
 });

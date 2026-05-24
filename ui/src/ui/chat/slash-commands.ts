@@ -74,7 +74,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   fast: "zap",
   agents: "monitor",
   subagents: "folder",
-  kill: "x",
   steer: "send",
   tts: "volume2",
 };
@@ -93,7 +92,6 @@ const LOCAL_COMMANDS = new Set([
   "export-session",
   "usage",
   "agents",
-  "kill",
   "steer",
   "redirect",
 ]);
@@ -112,7 +110,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     key: "redirect",
     name: "redirect",
     description: "Abort and restart with a new message",
-    args: "[id] <message>",
+    args: "<message>",
     icon: "refresh",
     category: "agents",
     executeLocal: true,
@@ -131,7 +129,6 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   tts: "tools",
   agents: "agents",
   subagents: "agents",
-  kill: "agents",
   steer: "agents",
   redirect: "agents",
   session: "session",
@@ -156,7 +153,7 @@ const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "[id] <message>",
+  steer: "<message>",
 };
 
 function normalizeUiKey(command: CommandLike): string {

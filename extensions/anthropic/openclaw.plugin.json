@@ -6,6 +6,38 @@
   "enabledByDefault": true,
   "providers": ["anthropic"],
   "providerCatalogEntry": "./provider-discovery.ts",
+  "modelCatalog": {
+    "providers": {
+      "claude-cli": {
+        "models": [
+          {
+            "id": "claude-opus-4-7",
+            "name": "Claude Opus 4.7 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000
+          },
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Claude Sonnet 4.6 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000
+          },
+          {
+            "id": "claude-opus-4-6",
+            "name": "Claude Opus 4.6 (Claude CLI)",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "claude-cli": "static"
+    }
+  },
   "modelSupport": {
     "modelPrefixes": ["claude-"]
   },
@@ -14,9 +46,7 @@
       "anthropic": {
         "aliases": {
           "opus-4.6": "claude-opus-4-6",
-          "opus-4.5": "claude-opus-4-5",
-          "sonnet-4.6": "claude-sonnet-4-6",
-          "sonnet-4.5": "claude-sonnet-4-5"
+          "sonnet-4.6": "claude-sonnet-4-6"
         }
       }
     }

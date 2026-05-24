@@ -330,34 +330,12 @@
             }
           },
           {
-            "id": "claude-opus-4-5",
-            "name": "Claude Opus 4.5 (via Venice)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 198000,
-            "maxTokens": 32768,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
             "id": "claude-opus-4-6",
             "name": "Claude Opus 4.6 (via Venice)",
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 128000,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
-            "id": "claude-sonnet-4-5",
-            "name": "Claude Sonnet 4.5 (via Venice)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "contextWindow": 198000,
-            "maxTokens": 64000,
             "compat": {
               "supportsUsageInStreaming": false
             }
@@ -479,17 +457,6 @@
             "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 30000,
-            "compat": {
-              "supportsUsageInStreaming": false
-            }
-          },
-          {
-            "id": "grok-code-fast-1",
-            "name": "Grok Code Fast 1 (via Venice)",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 10000,
             "compat": {
               "supportsUsageInStreaming": false
             }

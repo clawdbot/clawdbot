@@ -17,6 +17,7 @@ on:
           - npm
           - ref
           - url
+          - trusted-url
           - artifact
       package_ref:
         description: Trusted package source ref when source=ref
@@ -29,12 +30,17 @@ on:
         default: openclaw@beta
         type: string
       package_url:
-        description: HTTPS .tgz URL when source=url
+        description: HTTPS .tgz URL when source=url or source=trusted-url
         required: false
         default: ""
         type: string
       package_sha256:
-        description: Expected package SHA-256; required for source=url
+        description: Expected package SHA-256; required for source=url or source=trusted-url
+        required: false
+        default: ""
+        type: string
+      trusted_source_id:
+        description: Named trusted source policy when source=trusted-url
         required: false
         default: ""
         type: string
@@ -111,7 +117,7 @@ on:
         default: main
         type: string
       source:
-        description: "Package candidate source: npm, ref, url, or artifact"
+        description: "Package candidate source: npm, ref, url, trusted-url, or artifact"
         required: true
         type: string
       package_ref:
@@ -125,12 +131,17 @@ on:
         default: openclaw@beta
         type: string
       package_url:
-        description: HTTPS .tgz URL when source=url
+        description: HTTPS .tgz URL when source=url or source=trusted-url
         required: false
         default: ""
         type: string
       package_sha256:
-        description: Expected package SHA-256; required for source=url
+        description: Expected package SHA-256; required for source=url or source=trusted-url
+        required: false
+        default: ""
+        type: string
+      trusted_source_id:
+        description: Named trusted source policy when source=trusted-url
         required: false
         default: ""
         type: string
@@ -180,6 +191,8 @@ on:
         default: ""
         type: string
     secrets:
+      OPENCLAW_TRUSTED_PACKAGE_TOKEN:
+        required: false
       OPENAI_API_KEY:
         required: false
       OPENAI_BASE_URL:
@@ -189,6 +202,8 @@ on:
       ANTHROPIC_API_KEY_OLD:
         required: false
       ANTHROPIC_API_TOKEN:
+        required: false
+      FACTORY_API_KEY:
         required: false
       BYTEPLUS_API_KEY:
         required: false
@@ -353,6 +368,8 @@ jobs:
           PACKAGE_SPEC: ${{ inputs.package_spec }}
           PACKAGE_URL: ${{ inputs.package_url }}
           PACKAGE_SHA256: ${{ inputs.package_sha256 }}
+          TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}
+          OPENCLAW_TRUSTED_PACKAGE_TOKEN: ${{ secrets.OPENCLAW_TRUSTED_PACKAGE_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -367,6 +384,7 @@ jobs:
             --package-spec "$PACKAGE_SPEC" \
             --package-url "$PACKAGE_URL" \
             --package-sha256 "$PACKAGE_SHA256" \
+            --trusted-source-id "$TRUSTED_SOURCE_ID" \
             --artifact-dir "${artifact_dir:-.}" \
             --output-dir .artifacts/docker-e2e-package \
             --output-name openclaw-current.tgz \
@@ -488,6 +506,7 @@ jobs:
           PACKAGE_SHA256: ${{ steps.resolve.outputs.sha256 }}
           PACKAGE_VERSION: ${{ steps.resolve.outputs.package_version }}
           PACKAGE_REF: ${{ inputs.package_ref }}
+          TRUSTED_SOURCE_ID: ${{ inputs.trusted_source_id }}
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           WORKFLOW_REF: ${{ inputs.workflow_ref }}
@@ -503,6 +522,9 @@ jobs:
             echo "- Workflow ref: \`${WORKFLOW_REF}\`"
             if [[ "${SOURCE}" == "ref" ]]; then
               echo "- Package ref: \`${PACKAGE_REF}\`"
+            fi
+            if [[ "${SOURCE}" == "trusted-url" ]]; then
+              echo "- Trusted source: \`${TRUSTED_SOURCE_ID}\`"
             fi
             echo "- Version: \`${PACKAGE_VERSION}\`"
             echo "- SHA-256: \`${PACKAGE_SHA256}\`"
@@ -541,6 +563,11 @@ jobs:
   docker_acceptance:
     name: Docker product acceptance
     needs: [resolve_package, package_integrity]
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
       advisory: ${{ inputs.advisory }}
@@ -561,6 +588,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}

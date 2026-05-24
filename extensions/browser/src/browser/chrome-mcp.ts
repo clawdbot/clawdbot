@@ -72,10 +72,12 @@ type ChromeMcpSessionFactory = (
 const DEFAULT_CHROME_MCP_COMMAND = "npx";
 const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@latest"];
 const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
+  "--no-usage-statistics",
   // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
   "--experimentalStructuredContent",
   "--experimental-page-id-routing",
 ];
+const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 const CHROME_MCP_CONNECTION_FLAGS = new Set([
   "--autoConnect",
   "--auto-connect",
@@ -342,10 +344,15 @@ async function closeChromeMcpSessionsForProfile(
 function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOptions): string[] {
   const commandPrefix =
     options.command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : [];
+  const defaultFeatureArgs = options.extraArgs.some((arg) =>
+    CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg),
+  )
+    ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
+    : DEFAULT_CHROME_MCP_FEATURE_ARGS;
   return [
     ...commandPrefix,
     ...buildChromeMcpConnectionArgs(options),
-    ...DEFAULT_CHROME_MCP_FEATURE_ARGS,
+    ...defaultFeatureArgs,
     ...buildChromeMcpUserDataDirArgs(options),
     ...options.extraArgs,
   ];
@@ -1012,6 +1019,7 @@ export async function takeChromeMcpSnapshot(params: {
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
+  timeoutMs?: number;
 }): Promise<ChromeMcpSnapshotNode> {
   const result = await callTool(
     params.profileName,
@@ -1020,6 +1028,7 @@ export async function takeChromeMcpSnapshot(params: {
     {
       pageId: parsePageId(params.targetId),
     },
+    { timeoutMs: params.timeoutMs },
   );
   return extractSnapshot(result);
 }

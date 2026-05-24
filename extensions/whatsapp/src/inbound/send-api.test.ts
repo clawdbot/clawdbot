@@ -557,6 +557,28 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
     expect("poll" in payload).toBe(true);
   });
 
+  it("resolves PN to LID for sendReaction", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendReaction("+15555550000", "msg-2", "1️⃣", true);
+    expect(requireMockArg(sendMessage, 0, 0, "send reaction")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "send reaction"),
+      "send reaction payload",
+    );
+    const react = requireRecord(payload.react, "reaction content");
+    expect(react.text).toBe("1️⃣");
+    expect(requireRecord(react.key, "reaction key")).toMatchObject({
+      remoteJid: "987654@lid",
+      id: "msg-2",
+      fromMe: true,
+    });
+    expect(requireRecord(react.key, "reaction key").participant).toBeUndefined();
+  });
+
   it("resolves PN to LID for sendComposingTo presence", async () => {
     const api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },

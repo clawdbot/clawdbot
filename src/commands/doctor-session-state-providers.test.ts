@@ -1,10 +1,30 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applySessionRouteStateRepair,
   resolveConfiguredDoctorSessionStateRoute,
+  runPluginSessionStateDoctorRepairs,
   scanSessionRouteStateOwners,
   storeMayContainPluginSessionRouteState,
 } from "./doctor-session-state-providers.js";
+
+vi.mock("../plugins/doctor-contract-registry.js", async () => {
+  const actual = await vi.importActual<typeof import("../plugins/doctor-contract-registry.js")>(
+    "../plugins/doctor-contract-registry.js",
+  );
+  return {
+    ...actual,
+    listPluginDoctorSessionRouteStateOwners: vi.fn(() => [
+      {
+        id: "codex",
+        label: "Codex",
+        providerIds: ["codex", "codex-cli", "openai-codex"],
+        runtimeIds: ["codex", "codex-cli"],
+        cliSessionKeys: ["codex-cli"],
+        authProfilePrefixes: ["codex:", "codex-cli:", "openai-codex:"],
+      },
+    ]),
+  };
+});
 
 const codexOwner = {
   id: "codex",
@@ -458,5 +478,81 @@ describe("doctor session state provider routes", () => {
     expect(entry.updatedAt).toBe(123);
     expect(entry.agentHarnessId).toBeUndefined();
     expect(entry.agentRuntimeOverride).toBe("claude-cli");
+  });
+
+  it("skips entries without plugin route state and memoizes routes per agentId", async () => {
+    // Sentinel cfg makes resolveConfiguredDoctorSessionStateRoute cheap and
+    // deterministic. The important assertions are observable through the
+    // resulting scan: entries with no route-state fields contribute no
+    // repairs/manual-review and the run completes immediately.
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4" },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {},
+        },
+      },
+    } as unknown as Parameters<typeof runPluginSessionStateDoctorRepairs>[0]["cfg"];
+
+    // Build a store with 200 entries belonging to one agent. Two carry route
+    // state that the codex owner cares about; the rest are bare. The old
+    // implementation resolved a route for all 200; the new one only resolves
+    // for the 2 that matter, deduplicated by agentId.
+    const store: Record<string, Record<string, unknown>> = {};
+    for (let i = 0; i < 198; i += 1) {
+      store[`agent:main:bare-${i}`] = {
+        sessionId: `sess-bare-${i}`,
+        updatedAt: i,
+        // No providerOverride/model/agentHarnessId/etc. — must be skipped.
+      };
+    }
+    store["agent:main:codex-1"] = {
+      sessionId: "sess-codex-1",
+      updatedAt: 1,
+      agentHarnessId: "codex-cli",
+    };
+    store["agent:main:codex-2"] = {
+      sessionId: "sess-codex-2",
+      updatedAt: 2,
+      agentHarnessId: "codex-cli",
+    };
+
+    const warnings: string[] = [];
+    const changes: string[] = [];
+    const prompter: Parameters<typeof runPluginSessionStateDoctorRepairs>[0]["prompter"] = {
+      confirmRuntimeRepair: vi.fn(async () => false),
+      note: vi.fn(),
+    };
+
+    const start = Date.now();
+    await runPluginSessionStateDoctorRepairs({
+      cfg,
+      store: store as unknown as Parameters<typeof runPluginSessionStateDoctorRepairs>[0]["store"],
+      absoluteStorePath: "/tmp/nonexistent-store.json",
+      prompter,
+      env: {},
+      warnings,
+      changes,
+    });
+    const elapsedMs = Date.now() - start;
+
+    // Two entries flagged for pinned-runtime repair; warning emitted once.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/Codex/);
+    expect(warnings[0]).toMatch(/2 sessions?/);
+
+    // User declined the repair so no changes applied.
+    expect(changes).toHaveLength(0);
+    expect(prompter.confirmRuntimeRepair).toHaveBeenCalledOnce();
+
+    // Sanity check: even with 200 entries, this should complete near-
+    // instantly because route resolution is bounded by unique agentIds, not
+    // by store size. A 200-entry x 1.6s-per-call pre-fix run would exceed
+    // 5 minutes; the fixed code should run in well under a second.
+    expect(elapsedMs).toBeLessThan(2000);
   });
 });

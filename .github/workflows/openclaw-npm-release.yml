@@ -35,7 +35,7 @@ on:
           - latest
 
 concurrency:
-  group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', inputs.tag, inputs.npm_dist_tag) || github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('openclaw-npm-release-{0}-{1}-preflight', inputs.tag, inputs.npm_dist_tag) || github.event_name == 'workflow_dispatch' && format('openclaw-npm-release-{0}-{1}-publish-{2}', inputs.tag, inputs.npm_dist_tag, github.run_id) || format('openclaw-npm-release-{0}', github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
@@ -390,6 +390,8 @@ jobs:
 
       - name: Require preflight artifact promotion on real publish
         env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
@@ -400,8 +402,12 @@ jobs:
             exit 1
           fi
           if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
-            echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
-            exit 1
+            if [[ "${RELEASE_TAG}" == *"-beta."* && "${RELEASE_NPM_DIST_TAG}" == "beta" ]]; then
+              echo "::warning::Beta publish is proceeding from npm preflight only; full release validation remains required before stable/latest promotion."
+            else
+              echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
+              exit 1
+            fi
           fi
           if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" && "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
             echo "Workflow-dispatched real publish requires release_publish_run_id from the approved OpenClaw Release Publish workflow." >&2
@@ -518,6 +524,7 @@ jobs:
           printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "OpenClaw NPM Release"], ["headBranch", process.env.EXPECTED_PREFLIGHT_BRANCH], ["event", "workflow_dispatch"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced npm preflight run ${process.env.PREFLIGHT_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using npm preflight run ${process.env.PREFLIGHT_RUN_ID}: ${run.url}`);'
 
       - name: Verify full release validation run metadata
+        if: ${{ inputs.full_release_validation_run_id != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -581,6 +588,7 @@ jobs:
           download_preflight_artifact
 
       - name: Download full release validation manifest
+        if: ${{ inputs.full_release_validation_run_id != '' }}
         uses: actions/download-artifact@v8
         with:
           name: full-release-validation-${{ inputs.full_release_validation_run_id }}
@@ -646,6 +654,7 @@ jobs:
           fi
 
       - name: Verify full release validation target
+        if: ${{ inputs.full_release_validation_run_id != '' }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"

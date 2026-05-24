@@ -369,6 +369,11 @@ img.chat-avatar {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
 }
 
+:root[data-theme-mode="light"] .chat-bubble:not(:where(.chat-bubble--tool-shell)):hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
 .chat-bubble--tool-shell:hover {
   background: transparent;
 }

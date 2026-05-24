@@ -1,4 +1,7 @@
-import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -11,7 +14,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
-  resolveAgentDeliveryPlan,
+  resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -416,6 +419,13 @@ export async function deliverAgentCommandResult(
 ): Promise<AgentCommandDeliveryResult> {
   const { cfg, deps, runtime, opts, outboundSession, sessionEntry, payloads, result } = params;
   const effectiveSessionKey = outboundSession?.key ?? opts.sessionKey;
+  const deliveryAgentId =
+    outboundSession?.agentId ??
+    resolveSessionAgentId({
+      sessionKey: effectiveSessionKey,
+      config: cfg,
+    }) ??
+    resolveDefaultAgentId(cfg);
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
   const turnSourceChannel = opts.runContext?.messageChannel ?? opts.messageChannel;
@@ -424,7 +434,10 @@ export async function deliverAgentCommandResult(
   const turnSourceThreadId = opts.runContext?.currentThreadTs ?? opts.threadId;
   const explicitChannelHint = (opts.replyChannel ?? opts.channel)?.trim();
   const resolveDeliveryRouting = async (candidateSessionEntry: SessionEntry | undefined) => {
-    const deliveryPlan = resolveAgentDeliveryPlan({
+    const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
+      cfg,
+      agentId: deliveryAgentId,
+      currentSessionKey: effectiveSessionKey,
       sessionEntry: candidateSessionEntry,
       requestedChannel: opts.replyChannel ?? opts.channel,
       explicitTo: opts.replyTo ?? opts.to,

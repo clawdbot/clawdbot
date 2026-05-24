@@ -84,6 +84,7 @@ export type GatewaySessionRow = {
   model?: string;
   agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
+  contextBudgetStatus?: SessionEntry["contextBudgetStatus"];
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;

@@ -330,6 +330,22 @@ describe("Codex app-server turn input image sanitizing", () => {
     });
   });
 
+  it("attaches turn-scoped developer instructions without changing thread config", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: createAppServerOptions() as never,
+      turnScopedDeveloperInstructions: "SOUL.md turn-only context",
+    });
+
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(request.collaborationMode?.settings.developer_instructions).toContain(
+      "SOUL.md turn-only context",
+    );
+  });
+
   it("replaces malformed inline images before turn/start", () => {
     const request = buildTurnStartParams(
       createAttemptParams({
@@ -421,14 +437,14 @@ describe("Codex app-server model provider selection", () => {
 
 describe("resolveReasoningEffort (#71946)", () => {
   describe("modern Codex models (none/low/medium/high/xhigh enum)", () => {
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"] as const)(
+    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const)(
       "translates 'minimal' -> 'low' for %s so the first request is accepted",
       (modelId) => {
         expect(resolveReasoningEffort("minimal", modelId)).toBe("low");
       },
     );
 
-    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.2"] as const)(
+    it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"] as const)(
       "passes 'low' / 'medium' / 'high' / 'xhigh' through unchanged for %s",
       (modelId) => {
         expect(resolveReasoningEffort("low", modelId)).toBe("low");

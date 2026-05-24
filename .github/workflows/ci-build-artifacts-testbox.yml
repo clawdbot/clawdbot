@@ -41,6 +41,10 @@ jobs:
           set -euo pipefail
 
           workdir="$GITHUB_WORKSPACE"
+          if [[ -z "$CHECKOUT_TOKEN" ]]; then
+            echo "checkout token is missing" >&2
+            exit 1
+          fi
           auth_header="$(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
 
           reset_checkout_dir() {
@@ -59,7 +63,7 @@ jobs:
 
             timeout --signal=TERM 30s git -C "$workdir" \
               -c protocol.version=2 \
-              -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${auth_header}" \
+              -c "http.extraheader=AUTHORIZATION: basic ${auth_header}" \
               fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
               "+${CHECKOUT_SHA}:refs/remotes/origin/ci-target" || return 1
 
@@ -187,12 +191,15 @@ jobs:
           git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"
-          pnpm_bin="$(command -v pnpm)"
           sudo ln -sf "$node_bin/node" /usr/local/bin/node
           sudo ln -sf "$node_bin/npm" /usr/local/bin/npm
           sudo ln -sf "$node_bin/npx" /usr/local/bin/npx
           sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
-          sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
+          sudo tee /usr/local/bin/pnpm >/dev/null <<'PNPM'
+          #!/usr/bin/env bash
+          exec /usr/local/bin/corepack pnpm "$@"
+          PNPM
+          sudo chmod 0755 /usr/local/bin/pnpm
 
       - name: Hydrate Testbox provider env helper
         shell: bash
@@ -222,6 +229,6 @@ jobs:
 
       - name: Run Testbox
         uses: useblacksmith/run-testbox@5ca05834db1d3813554d1dd109e5f2087a8d7cbc
-        if: always()
+        if: success()
         env:
           FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"

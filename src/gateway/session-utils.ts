@@ -1944,6 +1944,7 @@ export function buildGatewaySessionRow(params: {
     model: rowModel,
     agentRuntime,
     contextTokens,
+    contextBudgetStatus: entry?.contextBudgetStatus,
     deliveryContext: deliveryFields.deliveryContext,
     lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
     lastTo: deliveryFields.lastTo ?? entry?.lastTo,

@@ -245,6 +245,25 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
       main: sessionStoreEntry("sess-main", {
         thinkingLevel: "medium",
         reasoningLevel: "stream",
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: Date.now() - 5_000,
+          provider: "anthropic",
+          model: "claude-opus-4-6",
+          route: "fits",
+          shouldCompact: false,
+          estimatedPromptTokens: 120,
+          contextTokenBudget: 200,
+          promptBudgetBeforeReserve: 180,
+          reserveTokens: 20,
+          effectiveReserveTokens: 20,
+          remainingPromptBudgetTokens: 60,
+          overflowTokens: 0,
+          toolResultReducibleChars: 0,
+          messageCount: 2,
+          unwindowedMessageCount: 2,
+        },
       }),
     },
   });
@@ -357,9 +376,15 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
 
   const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
-    { compactionCount?: number; totalTokens?: number; totalTokensFresh?: boolean }
+    {
+      compactionCount?: number;
+      contextBudgetStatus?: unknown;
+      totalTokens?: number;
+      totalTokensFresh?: boolean;
+    }
   >;
   expect(store["agent:main:main"]?.compactionCount).toBe(1);
+  expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
   expect(store["agent:main:main"]?.totalTokens).toBe(80);
   expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
 

@@ -529,7 +529,7 @@ type CodexAppServerRequestResultMap = {
   "turn/steer": JsonValue;
 };
 
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+export function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 

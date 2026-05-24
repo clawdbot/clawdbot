@@ -47,6 +47,10 @@ function createTextContent(text: string) {
   return [{ type: "text", text }];
 }
 
+function getMessageContent(message: AgentMessage): unknown {
+  return "content" in message ? message.content : undefined;
+}
+
 function createReadRewriteSession(options?: { tailAssistantText?: string }) {
   const sessionManager = SessionManager.inMemory();
   const entryIds = appendSessionMessages(sessionManager, [
@@ -294,6 +298,74 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
 });
 
 describe("rewriteTranscriptEntriesInSessionFile", () => {
+  it("aborts under the write lock when the active suffix contains an unexpected entry", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-guard-"));
+    const sessionManager = SessionManager.create(dir, dir);
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({
+        role: "user",
+        content: "start",
+        timestamp: 1,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("source reply media"),
+        timestamp: 2,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("source reply text"),
+        timestamp: 3,
+      }),
+      asAppendMessage({
+        role: "user",
+        content: "concurrent append",
+        timestamp: 4,
+      }),
+    ]);
+    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+    const mediaEntryId = entryIds[1];
+    const textEntryId = entryIds[2];
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+
+    try {
+      const result = await rewriteTranscriptEntriesInSessionFile({
+        sessionFile,
+        sessionKey: "agent:main:test",
+        request: {
+          allowedRewriteSuffixEntryIds: [mediaEntryId, textEntryId],
+          replacements: [
+            {
+              entryId: mediaEntryId,
+              message: asAppendMessage({
+                role: "assistant",
+                content: createTextContent("rewritten source reply media"),
+                timestamp: 2,
+              }) as AgentMessage,
+            },
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        changed: false,
+        reason: "rewrite suffix guard failed",
+      });
+      expect(listener).not.toHaveBeenCalled();
+
+      const unchangedSession = SessionManager.open(sessionFile);
+      expect(getBranchMessages(unchangedSession).map(getMessageContent)).toEqual([
+        "start",
+        createTextContent("source reply media"),
+        createTextContent("source reply text"),
+        "concurrent append",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("emits transcript updates when the active branch changes without opening a manager", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-"));
     const sessionManager = SessionManager.create(dir, dir);

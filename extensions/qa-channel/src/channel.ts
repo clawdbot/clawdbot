@@ -92,14 +92,6 @@ export const qaChannelPlugin: ChannelPlugin<ResolvedQaChannelAccount> = createCh
     },
     messaging: {
       normalizeTarget: normalizeQaTarget,
-      parseExplicitTarget: ({ raw }) => {
-        const parsed = parseQaTarget(raw);
-        return {
-          to: buildQaTarget(parsed),
-          threadId: parsed.threadId,
-          chatType: parsed.chatType,
-        };
-      },
       inferTargetChatType: ({ to }) => parseQaTarget(to).chatType,
       targetResolver: {
         looksLikeId: (raw) =>

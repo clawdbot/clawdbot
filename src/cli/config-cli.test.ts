@@ -56,6 +56,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+    resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
+      mockLoadPluginMetadataSnapshot(params.config),
   };
 });
 

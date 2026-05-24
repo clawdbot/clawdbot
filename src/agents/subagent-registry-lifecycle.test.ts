@@ -573,10 +573,10 @@ describe("subagent registry lifecycle hardening", () => {
       }),
     ).resolves.toBeUndefined();
 
-    await vi.waitFor(() => expect(entry.completionAnnouncedAt).toBe(12_300));
-    expect(entry.completionEnqueuedAt).toBe(4_100);
-    expect(entry.completionDeliveredAt).toBe(12_300);
-    expect(entry.lastAnnounceDropReason).toBeUndefined();
+    await vi.waitFor(() => expect(entry.delivery?.announcedAt).toBe(12_300));
+    expect(entry.delivery?.enqueuedAt).toBe(4_100);
+    expect(entry.delivery?.deliveredAt).toBe(12_300);
+    expect(entry.delivery?.lastDropReason).toBeUndefined();
     expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
       runId: entry.runId,
       deliveryStatus: "delivered",
@@ -611,7 +611,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
     await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
-    expect(entry.completionAnnouncedAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
   });
 
   it("archives delete-mode sessions when completion messages are disabled", async () => {
@@ -655,7 +655,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(false);
     await vi.waitFor(() => expect(runs.has(entry.runId)).toBe(false));
-    expect(entry.completionAnnouncedAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
   });
 
   it("retires bundle MCP runtimes when run-mode cleanup completes", async () => {
@@ -832,7 +832,7 @@ describe("subagent registry lifecycle hardening", () => {
     ).resolves.toBeUndefined();
 
     expect(captureSubagentCompletionReply).not.toHaveBeenCalled();
-    expect(entry.frozenResultText).toBeNull();
+    expect(entry.completion?.resultText).toBeNull();
     expectFields(firstCallArg(taskExecutorMocks.failTaskRunByRunId), {
       status: "failed",
       error: "All models failed (2): timeout",
@@ -843,7 +843,7 @@ describe("subagent registry lifecycle hardening", () => {
 
   it("does not re-run announce flow after completion was already delivered", async () => {
     const entry = createRunEntry({
-      completionAnnouncedAt: 3_500,
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
       endedAt: 4_000,
     });
     const persist = vi.fn();
@@ -880,7 +880,7 @@ describe("subagent registry lifecycle hardening", () => {
 
   it("emits ended hook while retrying cleanup after completion was already delivered", async () => {
     const entry = createRunEntry({
-      completionAnnouncedAt: 3_500,
+      delivery: { status: "delivered", announcedAt: 3_500, deliveredAt: 3_500 },
       endedAt: 4_000,
       expectsCompletionMessage: true,
     });
@@ -924,7 +924,7 @@ describe("subagent registry lifecycle hardening", () => {
       captureSubagentCompletionReply: vi.fn(async () => undefined),
     });
 
-    expect(entry.completionAnnouncedAt).toBeUndefined();
+    expect(entry.delivery?.announcedAt).toBeUndefined();
 
     await controller.finalizeResumedAnnounceGiveUp({
       runId: entry.runId,
@@ -942,8 +942,8 @@ describe("subagent registry lifecycle hardening", () => {
       endedAt: 4_000,
       endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
       expectsCompletionMessage: true,
-      frozenResultText: "final answer",
-      lastAnnounceDeliveryError: "gateway request timeout for agent",
+      completion: { required: true, resultText: "final answer" },
+      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
       outcome: { status: "ok" },
       retainAttachmentsOnKeep: true,
     });
@@ -960,15 +960,15 @@ describe("subagent registry lifecycle hardening", () => {
       reason: "retry-limit",
     });
 
-    expect(entry.pendingFinalDelivery).toBe(true);
-    expect(entry.pendingFinalDeliveryPayload).toMatchObject({
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(entry.delivery?.payload).toMatchObject({
       requesterSessionKey: entry.requesterSessionKey,
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
       frozenResultText: "final answer",
     });
-    expect(entry.deliverySuspendedAt).toBeTypeOf("number");
-    expect(entry.deliverySuspendedReason).toBe("retry-limit");
+    expect(entry.delivery?.suspendedAt).toBeTypeOf("number");
+    expect(entry.delivery?.suspendedReason).toBe("retry-limit");
     expect(entry.cleanupHandled).toBe(false);
     expect(entry.cleanupCompletedAt).toBeUndefined();
     expect(helperMocks.safeRemoveAttachmentsDir).not.toHaveBeenCalled();
@@ -1015,7 +1015,7 @@ describe("subagent registry lifecycle hardening", () => {
         endedAt: 4_000,
         endedReason,
         expectsCompletionMessage: true,
-        lastAnnounceDeliveryError: "gateway request timeout for agent",
+        delivery: { status: "pending", lastError: "gateway request timeout for agent" },
         outcome,
         retainAttachmentsOnKeep: true,
       });
@@ -1032,10 +1032,9 @@ describe("subagent registry lifecycle hardening", () => {
         reason: "retry-limit",
       });
 
-      expect(entry.pendingFinalDelivery).toBeUndefined();
-      expect(entry.pendingFinalDeliveryPayload).toBeUndefined();
-      expect(entry.deliverySuspendedAt).toBeUndefined();
-      expect(entry.deliverySuspendedReason).toBeUndefined();
+      expect(entry.delivery?.payload).toBeUndefined();
+      expect(entry.delivery?.suspendedAt).toBeUndefined();
+      expect(entry.delivery?.suspendedReason).toBeUndefined();
       expect(entry.cleanupCompletedAt).toBeTypeOf("number");
       expect(persist).toHaveBeenCalled();
     },
@@ -1152,17 +1151,17 @@ describe("subagent registry lifecycle hardening", () => {
       error:
         "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
     });
-    expect(entry.lastAnnounceDeliveryError).toBe(
+    expect(entry.delivery?.lastError).toBe(
       "UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed",
     );
-    expect(entry.pendingFinalDelivery).toBe(true);
-    expect(entry.pendingFinalDeliveryPayload).toMatchObject({
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(entry.delivery?.payload).toMatchObject({
       requesterSessionKey: entry.requesterSessionKey,
       childSessionKey: entry.childSessionKey,
       childRunId: entry.runId,
     });
-    expect(entry.deliverySuspendedAt).toBeTypeOf("number");
-    expect(entry.deliverySuspendedReason).toBe("retry-limit");
+    expect(entry.delivery?.suspendedAt).toBeTypeOf("number");
+    expect(entry.delivery?.suspendedReason).toBe("retry-limit");
     expect(entry.cleanupCompletedAt).toBeUndefined();
     expectFields(
       findCallArg(
@@ -1190,11 +1189,11 @@ describe("subagent registry lifecycle hardening", () => {
       params: { sessionKey: entry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
       timeoutMs: 5_000,
     });
-    expect(entry.completionDeliveredAt).toBe(12_345);
-    expect(entry.completionAnnouncedAt).toBe(12_345);
-    expect(entry.lastAnnounceDeliveryError).toBeUndefined();
-    expect(entry.pendingFinalDelivery).toBeUndefined();
-    expect(entry.announceRetryCount).toBeUndefined();
+    expect(entry.delivery?.deliveredAt).toBe(12_345);
+    expect(entry.delivery?.announcedAt).toBe(12_345);
+    expect(entry.delivery?.lastError).toBeUndefined();
+    expect(entry.delivery?.payload).toBeUndefined();
+    expect(entry.delivery?.attemptCount).toBeUndefined();
     expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(true);
     expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
 
@@ -1206,7 +1205,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
 
     await vi.waitFor(() => expect(longMirrorEntry.cleanupCompletedAt).toBeTypeOf("number"));
-    expect(longMirrorEntry.completionDeliveredAt).toBe(12_345);
+    expect(longMirrorEntry.delivery?.deliveredAt).toBe(12_345);
     expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
       method: "chat.history",
       params: { sessionKey: longMirrorEntry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
@@ -1224,7 +1223,7 @@ describe("subagent registry lifecycle hardening", () => {
     await vi.waitFor(() =>
       expect(messageToolAnnounceEntry.cleanupCompletedAt).toBeTypeOf("number"),
     );
-    expect(messageToolAnnounceEntry.completionDeliveredAt).toBe(12_345);
+    expect(messageToolAnnounceEntry.delivery?.deliveredAt).toBe(12_345);
 
     vi.clearAllMocks();
     gatewayMocks.callGateway.mockResolvedValue({});
@@ -1234,19 +1233,17 @@ describe("subagent registry lifecycle hardening", () => {
     });
 
     await vi.waitFor(() => expect(childRunMirrorEntry.cleanupCompletedAt).toBeTypeOf("number"));
-    expect(childRunMirrorEntry.completionDeliveredAt).toBe(12_345);
+    expect(childRunMirrorEntry.delivery?.deliveredAt).toBe(12_345);
 
     vi.clearAllMocks();
     taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
     gatewayMocks.callGateway.mockResolvedValue({});
     const staleEntry = await runNoReplyMirrorScenario({ timestamp: 1_999 });
 
-    await vi.waitFor(() => expect(staleEntry.deliverySuspendedAt).toBeTypeOf("number"));
-    expect(staleEntry.completionDeliveredAt).toBeUndefined();
-    expect(staleEntry.completionAnnouncedAt).toBeUndefined();
-    expect(staleEntry.lastAnnounceDeliveryError).toBe(
-      "completion agent did not produce a visible reply",
-    );
+    await vi.waitFor(() => expect(staleEntry.delivery?.suspendedAt).toBeTypeOf("number"));
+    expect(staleEntry.delivery?.deliveredAt).toBeUndefined();
+    expect(staleEntry.delivery?.announcedAt).toBeUndefined();
+    expect(staleEntry.delivery?.lastError).toBe("completion agent did not produce a visible reply");
     expect(hasDeliveredTaskStatusUpdate(staleEntry.runId)).toBe(false);
     expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
       runId: staleEntry.runId,
@@ -1276,10 +1273,12 @@ describe("subagent registry lifecycle hardening", () => {
       )}:internal-source-reply:0`,
     });
 
-    await vi.waitFor(() => expect(sameWindowSiblingEntry.deliverySuspendedAt).toBeTypeOf("number"));
-    expect(sameWindowSiblingEntry.completionDeliveredAt).toBeUndefined();
-    expect(sameWindowSiblingEntry.completionAnnouncedAt).toBeUndefined();
-    expect(sameWindowSiblingEntry.lastAnnounceDeliveryError).toBe(
+    await vi.waitFor(() =>
+      expect(sameWindowSiblingEntry.delivery?.suspendedAt).toBeTypeOf("number"),
+    );
+    expect(sameWindowSiblingEntry.delivery?.deliveredAt).toBeUndefined();
+    expect(sameWindowSiblingEntry.delivery?.announcedAt).toBeUndefined();
+    expect(sameWindowSiblingEntry.delivery?.lastError).toBe(
       "completion agent did not produce a visible reply",
     );
     expect(hasDeliveredTaskStatusUpdate(sameWindowSiblingEntry.runId)).toBe(false);

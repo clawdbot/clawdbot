@@ -96,6 +96,7 @@ describe("model catalog normalization", () => {
           anthropic: "static",
           bad: "unknown",
         },
+        runtimeAugment: true,
       },
       { ownedProviders: new Set(["OpenAI"]) },
     );
@@ -169,6 +170,7 @@ describe("model catalog normalization", () => {
       discovery: {
         openai: "static",
       },
+      runtimeAugment: true,
     });
   });
 

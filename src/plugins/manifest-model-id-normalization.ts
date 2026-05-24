@@ -1,10 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -43,21 +42,14 @@ function resolveMetadataSnapshotForPolicies(
 } {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    env,
-    workspaceDir,
-  });
-  if (current) {
-    return { snapshot: current, cacheable: true };
-  }
   return {
-    snapshot: loadPluginMetadataSnapshot({
+    snapshot: resolvePluginMetadataSnapshot({
       config: params.config ?? {},
       env,
       workspaceDir,
+      allowWorkspaceScopedCurrent: true,
     }),
-    cacheable: false,
+    cacheable: true,
   };
 }
 

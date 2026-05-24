@@ -1,8 +1,11 @@
 import { spawn } from "node:child_process";
+import os from "node:os";
+import path from "node:path";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
 type SignalDaemonOpts = {
   cliPath: string;
+  configPath?: string;
   account?: string;
   httpHost: string;
   httpPort: number;
@@ -63,8 +66,22 @@ function bindSignalCliOutput(params: {
   });
 }
 
+function resolveSignalCliConfigPath(raw: string): string {
+  const value = raw.trim();
+  if (value === "~") {
+    return os.homedir();
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(os.homedir(), value.slice(2));
+  }
+  return value;
+}
+
 function buildDaemonArgs(opts: SignalDaemonOpts): string[] {
   const args: string[] = [];
+  if (opts.configPath?.trim()) {
+    args.push("--config", resolveSignalCliConfigPath(opts.configPath));
+  }
   if (opts.account) {
     args.push("-a", opts.account);
   }
@@ -145,3 +162,8 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
     },
   };
 }
+
+export const testApi = {
+  buildDaemonArgs,
+  resolveSignalCliConfigPath,
+} as const;

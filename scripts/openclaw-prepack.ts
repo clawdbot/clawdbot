@@ -1,10 +1,11 @@
 #!/usr/bin/env -S node --import tsx
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { writePackageDistInventory } from "../src/infra/package-dist-inventory.ts";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 const requiredPreparedPathGroups = [
   ["dist/index.js", "dist/index.mjs"],
   ["dist/control-ui/index.html"],
@@ -90,15 +91,25 @@ function ensurePreparedArtifacts(): void {
   process.exit(1);
 }
 
-function run(command: string, args: string[]): void {
+function run(command: string, args: string[], options: SpawnSyncOptions = {}): void {
   const result = spawnSync(command, args, {
     stdio: "inherit",
     env: process.env,
+    ...options,
   });
   if (result.status === 0) {
     return;
   }
   process.exit(result.status ?? 1);
+}
+
+function runPnpm(args: string[]): void {
+  const command = createPnpmRunnerSpawnSpec({
+    env: process.env,
+    pnpmArgs: args,
+    stdio: "inherit",
+  });
+  run(command.command, command.args, command.options);
 }
 
 function runBuildSmoke(): void {
@@ -110,9 +121,8 @@ async function writeDistInventory(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
-  run(pnpmCommand, ["build"]);
-  run(pnpmCommand, ["ui:build"]);
+  runPnpm(["build"]);
+  runPnpm(["ui:build"]);
   ensurePreparedArtifacts();
   await writeDistInventory();
   runBuildSmoke();

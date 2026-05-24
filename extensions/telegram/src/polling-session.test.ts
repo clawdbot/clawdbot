@@ -2523,6 +2523,7 @@ describe("TelegramPollingSession", () => {
           spoolDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
+          spooledUpdateHandlerTimeoutMs: 100,
           spooledUpdateHandlerAbortGraceMs: 100,
         },
       });
@@ -2537,7 +2538,7 @@ describe("TelegramPollingSession", () => {
       });
       expect(statusPatches(setStatus).some((patch) => patch.connected === true)).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(25 * 60_000 + 100);
+      await vi.advanceTimersByTimeAsync(250);
 
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(

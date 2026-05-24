@@ -25,6 +25,8 @@ type GatewayLoopStart = (params?: { startupStartedAt?: number }) => Promise<unkn
 const runGatewayLoop = vi.fn(async ({ start }: { start: GatewayLoopStart }) => {
   await start();
 });
+const normalizeStateDirEnv = vi.fn((_env?: NodeJS.ProcessEnv) => undefined);
+const callOrder = vi.hoisted(() => [] as string[]);
 const gatewayLogMessages = vi.hoisted(() => [] as string[]);
 const configState = vi.hoisted(() => ({
   cfg: {} as Record<string, unknown>,
@@ -65,6 +67,7 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/paths.js", () => ({
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
+  normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   resolveStateDir: () => "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
@@ -236,6 +239,8 @@ describe("gateway run option collisions", () => {
     waitForPortBindable.mockClear();
     ensureDevGatewayConfig.mockClear();
     runGatewayLoop.mockClear();
+    normalizeStateDirEnv.mockReset();
+    callOrder.length = 0;
   });
 
   async function runGatewayCli(argv: string[]) {
@@ -265,6 +270,14 @@ describe("gateway run option collisions", () => {
   }
 
   it("forwards parent-captured options to `gateway run` subcommand", async () => {
+    normalizeStateDirEnv.mockImplementation((_env?: NodeJS.ProcessEnv) => {
+      callOrder.push("normalize");
+    });
+    startGatewayServer.mockImplementationOnce(async (_port: number, _opts?: unknown) => {
+      callOrder.push("start");
+      return { close: vi.fn(async () => {}) };
+    });
+
     await runGatewayCli([
       "gateway",
       "run",
@@ -283,6 +296,8 @@ describe("gateway run option collisions", () => {
     ).toEqual({ intervalMs: 150, timeoutMs: 3000 });
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(gatewayStartOptions().auth?.token).toBe("tok_run");
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
+    expect(callOrder).toEqual(["normalize", "start"]);
   });
 
   it("marks service-mode gateway descendants with the live gateway pid", async () => {
@@ -297,6 +312,7 @@ describe("gateway run option collisions", () => {
         expect(process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV]).toBe(String(process.pid));
       },
     );
+    expect(normalizeStateDirEnv).toHaveBeenCalledWith(process.env);
   });
 
   it("blocks --force port cleanup from an older binary with newer config", async () => {

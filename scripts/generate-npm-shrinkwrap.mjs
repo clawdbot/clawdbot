@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mjs";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
@@ -15,10 +16,6 @@ function usage() {
     "Usage: node scripts/generate-npm-shrinkwrap.mjs [--check] [--all|--plugins|--changed|--package-dir <dir>] [--base <ref>] [--head <ref>] [--staged]",
     "  default: root package only",
   ].join("\n");
-}
-
-function npmCommand() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
 function normalizeOverrideValue(value) {
@@ -144,10 +141,25 @@ function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
   return normalized;
 }
 
+export function createNpmShrinkwrapCommand(args, options = {}) {
+  return resolveNpmRunner({
+    comSpec: options.comSpec,
+    env: options.env,
+    execPath: options.execPath,
+    existsSync: options.existsSync,
+    npmArgs: args,
+    platform: options.platform,
+  });
+}
+
 function runNpm(args, cwd) {
-  execFileSync(npmCommand(), args, {
+  const npm = createNpmShrinkwrapCommand(args);
+  execFileSync(npm.command, npm.args, {
     cwd,
+    env: npm.env ?? process.env,
+    shell: npm.shell,
     stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: npm.windowsVerbatimArguments,
   });
 }
 
@@ -230,6 +242,7 @@ function disableShrinkwrappedOverrideConflictSources(lockfile, overrideRules) {
   if (!packages || typeof packages !== "object") {
     return [];
   }
+  /** @type {Set<string>} */
   const disabled = new Set();
   for (const violation of collectOverrideViolations(lockfile, overrideRules)) {
     const ancestors = violation.packagePath.slice(0, -1).toReversed();
@@ -393,7 +406,7 @@ function listPublishablePluginPackageDirs() {
   const extensionsDir = path.join(ROOT_DIR, "extensions");
   return readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join("extensions", entry.name))
+    .map((entry) => path.posix.join("extensions", entry.name))
     .filter((packageDir) => {
       const packageJsonPath = path.join(ROOT_DIR, packageDir, "package.json");
       if (!existsSync(packageJsonPath)) {

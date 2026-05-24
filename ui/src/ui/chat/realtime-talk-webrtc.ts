@@ -1,7 +1,11 @@
 import type { RealtimeTalkWebRtcSdpSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   createRealtimeTalkEventEmitter,
+  steerRealtimeTalkActiveConsult,
+  shouldAutoControlRealtimeVoiceAgentText,
+  submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
   type RealtimeTalkTransport,
   type RealtimeTalkTransportContext,
@@ -34,6 +38,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
   private media: MediaStream | null = null;
   private audio: HTMLAudioElement | null = null;
   private closed = false;
+  private responseActive = false;
+  private responseCreateInFlight = false;
+  private responseCreatePending = false;
   private toolBuffers = new Map<string, ToolBuffer>();
   private readonly consultAbortControllers = new Set<AbortController>();
   private readonly emitTalkEvent: ReturnType<typeof createRealtimeTalkEventEmitter>;
@@ -117,6 +124,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     }
     this.consultAbortControllers.clear();
     this.toolBuffers.clear();
+    this.responseActive = false;
+    this.responseCreateInFlight = false;
+    this.responseCreatePending = false;
   }
 
   private send(event: unknown): void {
@@ -145,6 +155,19 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
             itemId: event.item_id,
             payload: { role: "user", text: event.transcript },
           });
+          if (
+            this.consultAbortControllers.size > 0 &&
+            shouldAutoControlRealtimeVoiceAgentText(event.transcript)
+          ) {
+            void steerRealtimeTalkActiveConsult({
+              ctx: this.ctx,
+              text: event.transcript,
+              emitTalkEvent: this.emitTalkEvent,
+              onControlResult: (result) => this.interruptSuppressedControlResponse(result),
+              speakControlResult: (message) => this.sendControlSpeechMessage(message),
+              suppressSpeechForModes: ["cancel"],
+            });
+          }
         }
         return;
       case "response.audio_transcript.done":
@@ -177,17 +200,28 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         this.emitTalkEvent({ type: "input.audio.committed", final: true });
         return;
       case "response.created":
+        this.responseActive = true;
+        this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("thinking", "Generating response");
         return;
+      case "response.cancelled":
       case "response.done":
+        this.responseActive = false;
+        this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("listening", this.extractResponseStatus(event));
         this.emitTalkEvent({
           type: "turn.ended",
           final: true,
-          payload: { status: event.response?.status ?? "completed" },
+          payload: {
+            status:
+              event.response?.status ??
+              (event.type === "response.cancelled" ? "cancelled" : "completed"),
+          },
         });
+        this.flushPendingResponseCreate();
         return;
       case "error":
+        this.responseCreateInFlight = false;
         this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
         this.emitTalkEvent({
           type: "session.error",
@@ -236,7 +270,20 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     this.toolBuffers.delete(key);
     const name = buffered?.name || event.name || "";
     const callId = buffered?.callId || event.call_id || "";
-    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME || !callId) {
+    if (!callId) {
+      return;
+    }
+    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
+      await submitRealtimeTalkAgentControl({
+        ctx: this.ctx,
+        callId,
+        args: buffered?.args || event.arguments || "{}",
+        emitTalkEvent: this.emitTalkEvent,
+        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
+      });
+      return;
+    }
+    if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       return;
     }
     this.emitTalkEvent({
@@ -253,6 +300,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         callId,
         args: buffered?.args || event.arguments || "{}",
         signal: abortController.signal,
+        emitTalkEvent: this.emitTalkEvent,
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
@@ -269,6 +317,52 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         output: JSON.stringify(result),
       },
     });
+    this.requestResponseCreate();
+  }
+
+  private sendControlSpeechMessage(message: string): void {
+    if (this.responseActive) {
+      this.send({ type: "response.cancel" });
+    }
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: message }],
+      },
+    });
+    this.requestResponseCreate();
+  }
+
+  private interruptSuppressedControlResponse(result: unknown): void {
+    if (!this.responseActive || !result || typeof result !== "object") {
+      return;
+    }
+    const record = result as Record<string, unknown>;
+    if (
+      record.ok === true &&
+      (record.mode === "cancel" || (record.suppress === true && record.mode !== "steer"))
+    ) {
+      this.send({ type: "response.cancel" });
+    }
+  }
+
+  private requestResponseCreate(): void {
+    if (this.responseActive || this.responseCreateInFlight) {
+      this.responseCreatePending = true;
+      return;
+    }
+    this.responseCreatePending = false;
+    this.responseCreateInFlight = true;
     this.send({ type: "response.create" });
+  }
+
+  private flushPendingResponseCreate(): void {
+    if (!this.responseCreatePending) {
+      return;
+    }
+    this.responseCreatePending = false;
+    this.requestResponseCreate();
   }
 }

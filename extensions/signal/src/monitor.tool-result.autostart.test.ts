@@ -114,6 +114,42 @@ describe("monitorSignalProvider autostart", () => {
     expectWaitForTransportReadyTimeout(90_000);
   });
 
+  it("passes channels.signal.configPath to signal-cli daemon startup", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig({ configPath: "~/.openclaw/signal-cli" });
+    const abortController = createAutoAbortController();
+
+    await runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: SIGNAL_BASE_URL,
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    expect(spawnSignalDaemonMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        configPath: "~/.openclaw/signal-cli",
+      }),
+    );
+  });
+
+  it("omits configPath when channels.signal.configPath is blank", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig({ configPath: " " });
+    const abortController = createAutoAbortController();
+
+    await runMonitorWithMocks({
+      autoStart: true,
+      baseUrl: SIGNAL_BASE_URL,
+      abortSignal: abortController.signal,
+      runtime,
+    });
+
+    const [daemonOpts] = spawnSignalDaemonMock.mock.calls[0] ?? [];
+    expect(daemonOpts).toBeDefined();
+    expect(daemonOpts).not.toHaveProperty("configPath");
+  });
+
   it("caps startupTimeoutMs at 2 minutes", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig({ startupTimeoutMs: 180_000 });

@@ -287,6 +287,94 @@ describe("runCapability image skip", () => {
     });
   });
 
+  it("runs providerless configured imageModel fallbacks on the unique configured provider", async () => {
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-image-providerless-fallbacks",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          agents: {
+            defaults: {
+              imageModel: {
+                primary: "moondream",
+                fallbacks: ["qwen2.5vl:7b"],
+              },
+            },
+          },
+          models: {
+            providers: {
+              ollama: {
+                models: [
+                  {
+                    id: "moondream",
+                    input: ["text", "image"],
+                  },
+                  {
+                    id: "qwen2.5vl:7b",
+                    input: ["text", "image"],
+                  },
+                ],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "ollama",
+              {
+                id: "ollama",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  if (req.model === "moondream") {
+                    throw new Error("primary blocked");
+                  }
+                  return { text: `ok ${req.model}`, model: req.model };
+                },
+              } satisfies MediaUnderstandingProvider,
+            ],
+          ]),
+          activeModel: { provider: "openai", model: "gpt-4.1" },
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
+          provider: "ollama",
+          model: "qwen2.5vl:7b",
+          text: "ok qwen2.5vl:7b",
+        });
+        const attachment = requireDecisionAttachment(result, 0);
+        expect(attachment.attempts).toEqual([
+          expect.objectContaining({
+            type: "provider",
+            provider: "ollama",
+            model: "moondream",
+            outcome: "failed",
+          }),
+          expect.objectContaining({
+            type: "provider",
+            provider: "ollama",
+            model: "qwen2.5vl:7b",
+            outcome: "success",
+          }),
+        ]);
+      },
+    );
+  });
+
   it("falls back from a MiniMax chat model to the provider image default", async () => {
     catalog = [
       {

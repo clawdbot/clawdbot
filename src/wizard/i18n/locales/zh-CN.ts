@@ -318,6 +318,7 @@ export const zh_CN = {
       setEnv: "为 {name} 设置 {env}？",
       skipDepsHint: "继续，不安装依赖",
       statusTitle: "技能状态",
+      allReadyTitle: "所有技能已就绪",
     },
     channels: {
       account: "{label} 账号",

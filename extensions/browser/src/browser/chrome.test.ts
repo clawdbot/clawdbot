@@ -865,6 +865,56 @@ describe("browser chrome helpers", () => {
     expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
     expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });
+
+  it("stopOpenClawChrome releases the managed-proxy CDP bypass exactly once on a double stop", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const release = vi.fn();
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await stopOpenClawChrome(running, 10);
+    await stopOpenClawChrome(running, 10);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stopOpenClawChrome still releases the bypass when the SIGKILL fallback fires", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+      } as unknown as Response),
+    );
+    const proc = makeChromeTestProc();
+    const release = vi.fn();
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await stopOpenClawChrome(running, 1);
+    expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("stopOpenClawChrome swallows a throw from the bypass release callback", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const release = vi.fn(() => {
+      throw new Error("release blew up");
+    });
+    const running = {
+      proc,
+      cdpPort: 12345,
+      releaseCdpProxyBypass: release,
+    } as unknown as StopChromeTarget;
+    await expect(stopOpenClawChrome(running, 10)).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+  });
 });
 
 describe("chrome executables", () => {

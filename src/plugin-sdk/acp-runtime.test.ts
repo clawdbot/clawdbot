@@ -114,6 +114,35 @@ describe("tryDispatchAcpReplyHook", () => {
     });
   });
 
+  it("passes a live tool-summary predicate through to ACP runtime", async () => {
+    bypassMock.mockResolvedValue(false);
+    dispatchMock.mockResolvedValue({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+    let shouldSendToolSummaries = true;
+    const eventWithGetter = {
+      ...event,
+      get shouldSendToolSummaries() {
+        return shouldSendToolSummaries;
+      },
+    };
+
+    await tryDispatchAcpReplyHook(eventWithGetter, ctx);
+
+    expectDispatchPayloadFields({
+      shouldSendToolSummaries: true,
+    });
+    const [payload] = dispatchMock.mock.calls[0] ?? [];
+    const livePredicate = (payload as { shouldSendToolSummariesNow?: () => boolean })
+      .shouldSendToolSummariesNow;
+    expect(livePredicate).toBeTypeOf("function");
+    expect(livePredicate?.()).toBe(true);
+
+    shouldSendToolSummaries = false;
+    expect(livePredicate?.()).toBe(false);
+  });
+
   it("returns unhandled when ACP dispatcher declines the turn", async () => {
     bypassMock.mockResolvedValue(false);
     dispatchMock.mockResolvedValue(undefined);

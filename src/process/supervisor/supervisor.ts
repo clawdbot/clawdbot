@@ -20,6 +20,8 @@ type ActiveRun = {
   scopeKey?: string;
 };
 
+const GRACEFUL_CANCEL_TIMEOUT_MS = 5000;
+
 let supervisorLogRuntimePromise: Promise<SupervisorLogRuntime> | undefined;
 
 function loadSupervisorLogRuntime(): Promise<SupervisorLogRuntime> {
@@ -91,6 +93,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
     let stderr = "";
     let timeoutTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
+    let forceKillTimer: NodeJS.Timeout | null = null;
     const captureOutput = input.captureOutput !== false;
 
     const overallTimeoutMs = clampTimeout(input.timeoutMs);
@@ -163,13 +166,23 @@ export function createProcessSupervisor(): ProcessSupervisor {
           clearTimeout(noOutputTimer);
           noOutputTimer = null;
         }
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = null;
+        }
       };
 
       cancelAdapter = (_reason: TerminationReason) => {
-        if (settled) {
+        if (settled || forceKillTimer) {
           return;
         }
-        adapter.kill("SIGKILL");
+        adapter.kill("SIGTERM");
+        forceKillTimer = setTimeout(() => {
+          if (!settled) {
+            adapter.kill("SIGKILL");
+          }
+        }, GRACEFUL_CANCEL_TIMEOUT_MS);
+        forceKillTimer.unref?.();
       };
 
       if (overallTimeoutMs) {

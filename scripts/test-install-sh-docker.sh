@@ -176,6 +176,10 @@ NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
 NPM_CACHE_OWNED=0
 NPM_CACHE_PREPARED=0
 NPM_CACHE_DOCKER_ARGS=()
+INSTALL_SCRIPT_DOCKER_ARGS=(
+  -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro"
+  -v "$ROOT_DIR/scripts/install-cli.sh:/tmp/openclaw-install-cli.sh:ro"
+)
 
 remove_owned_npm_cache() {
   if [[ "$NPM_CACHE_OWNED" != "1" || -z "$NPM_CACHE_DIR" || ! -d "$NPM_CACHE_DIR" ]]; then
@@ -403,6 +407,7 @@ else
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
     "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
     -v "${LATEST_DIR}:/out" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
@@ -465,7 +470,7 @@ else
   docker run --rm -t \
     --platform "$SMOKE_PLATFORM" \
     "${NPM_CACHE_DOCKER_ARGS[@]}" \
-    -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro" \
+    "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
     -e OPENCLAW_INSTALL_URL="$FRESHNESS_INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=freshness \
@@ -497,6 +502,7 @@ else
   echo "==> Run installer non-root test: $INSTALL_URL"
   docker run --rm -t \
     --platform "$NONROOT_PLATFORM" \
+    "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_METHOD=npm \
@@ -521,6 +527,7 @@ echo "==> Run CLI installer non-root test (same image)"
 docker run --rm -t \
   --platform "$NONROOT_PLATFORM" \
   --entrypoint /bin/bash \
+  "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_CLI_URL="$CLI_INSTALL_URL" \
   -e OPENCLAW_NO_ONBOARD=1 \

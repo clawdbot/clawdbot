@@ -144,6 +144,7 @@ export function createPluginApprovalHandlers(
         requestEventName: "plugin.approval.requested",
         requestEvent,
         twoPhase,
+        approvalKind: "plugin",
         deliverRequest: () => {
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
             return false;

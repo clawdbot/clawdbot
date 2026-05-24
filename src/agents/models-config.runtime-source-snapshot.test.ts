@@ -100,6 +100,40 @@ function createOpenAiApiKeyRuntimeConfig(): OpenClawConfig {
   };
 }
 
+function createCustomProviderApiKeySourceConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_MODEL_LITELLM_API_KEY", // pragma: allowlist secret
+          },
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createCustomProviderApiKeyRuntimeConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: "sk-litellm-runtime-secret", // pragma: allowlist secret
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
 function createOpenAiHeaderSourceConfig(): OpenClawConfig {
   return {
     models: {
@@ -273,6 +307,24 @@ describe("models-config runtime source snapshot", () => {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         await ensureOpenClawModelsJson(clonedRuntimeConfig, agentDir);
         await expectGeneratedProviderApiKey(agentDir, "openai", "OPENAI_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
+  it("preserves source markers for custom-provider api keys after models status secret resolution", async () => {
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
+      unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+      const sourceConfig = createCustomProviderApiKeySourceConfig();
+      const runtimeConfig = createCustomProviderApiKeyRuntimeConfig();
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(runtimeConfig, agentDir);
+        await expectGeneratedProviderApiKey(agentDir, "litellm", "OPENCLAW_MODEL_LITELLM_API_KEY"); // pragma: allowlist secret
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();

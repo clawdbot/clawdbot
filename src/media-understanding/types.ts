@@ -212,12 +212,18 @@ export type StructuredExtractionResult = {
   contentType?: "json" | "text";
 };
 
+export type MediaUnderstandingDocumentModelDefaults = {
+  textExtraction?: string;
+  image?: string | false;
+};
+
 export type MediaUnderstandingProvider = {
   id: string;
   capabilities?: MediaUnderstandingCapability[];
   defaultModels?: Partial<Record<MediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<MediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+  documentModels?: Partial<Record<"pdf", MediaUnderstandingDocumentModelDefaults>>;
   transcribeAudio?: (req: AudioTranscriptionRequest) => Promise<AudioTranscriptionResult>;
   describeVideo?: (req: VideoDescriptionRequest) => Promise<VideoDescriptionResult>;
   describeImage?: (req: ImageDescriptionRequest) => Promise<ImageDescriptionResult>;

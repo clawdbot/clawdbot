@@ -5,6 +5,7 @@ import { estimateToolResultReductionPotential } from "../tool-result-truncation.
 
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
+let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
 let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
@@ -15,6 +16,7 @@ beforeAll(async () => {
   ({
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     estimateLlmBoundaryTokenPressure,
+    buildPrePromptContextBudgetStatus,
     estimatePrePromptTokens,
     estimateRenderedLlmBoundaryTokenPressure,
     formatPrePromptPrecheckLog,
@@ -159,6 +161,49 @@ describe("preemptive-compaction", () => {
     expect(line).toContain("contextTokenBudget=10000");
     expect(line).toContain("messages=1");
     expect(line).toContain("unwindowedMessages=3");
+  });
+
+  it("builds a durable estimated context budget status snapshot", () => {
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [makeAssistantHistory("short history")],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 10_000,
+      reserveTokens: 1_000,
+    });
+
+    const status = buildPrePromptContextBudgetStatus({
+      result,
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      messageCount: 1,
+      unwindowedMessageCount: 3,
+      contextTokenBudget: 10_000,
+      reserveTokens: 1_000,
+      sessionId: "session-1",
+      now: 123,
+    });
+
+    expect(status).toMatchObject({
+      schemaVersion: 1,
+      source: "pre-prompt-estimate",
+      updatedAt: 123,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      route: "fits",
+      shouldCompact: false,
+      contextTokenBudget: 10_000,
+      promptBudgetBeforeReserve: result.promptBudgetBeforeReserve,
+      reserveTokens: 1_000,
+      effectiveReserveTokens: result.effectiveReserveTokens,
+      overflowTokens: 0,
+      messageCount: 1,
+      unwindowedMessageCount: 3,
+      sessionId: "session-1",
+    });
+    expect(status.remainingPromptBudgetTokens).toBe(
+      result.promptBudgetBeforeReserve - result.estimatedPromptTokens,
+    );
   });
 
   it("uses the larger unwindowed message estimate when explicitly provided", () => {

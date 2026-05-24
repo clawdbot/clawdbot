@@ -71,6 +71,7 @@ export type PluginCandidate = {
   packageManifest?: OpenClawPackageManifest;
   packageDependencies?: PluginDependencySpecMap;
   packageOptionalDependencies?: PluginDependencySpecMap;
+  bundledManifestId?: string;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
   rawPackageManifest?: PackageManifest;
@@ -628,6 +629,7 @@ function addCandidate(params: {
   workspaceDir?: string;
   manifest?: PackageManifest | null;
   packageDir?: string;
+  bundledManifestId?: string;
   bundledManifest?: PluginManifest;
   bundledManifestPath?: string;
   realpathCache: Map<string, string>;
@@ -675,6 +677,7 @@ function addCandidate(params: {
     packageDependencies: packageDependencies.dependencies,
     packageOptionalDependencies: packageDependencies.optionalDependencies,
     rawPackageManifest: manifest ?? undefined,
+    bundledManifestId: params.bundledManifestId,
     bundledManifest: params.bundledManifest,
     bundledManifestPath: params.bundledManifestPath,
   });
@@ -731,6 +734,8 @@ function discoverBundleInRoot(params: {
     workspaceDir: params.workspaceDir,
     manifest: params.manifest,
     packageDir: params.rootDir,
+    bundledManifestId: bundleManifest.manifest.id,
+    bundledManifestPath: bundleManifest.manifestPath,
     realpathCache: params.realpathCache,
   });
   return "added";

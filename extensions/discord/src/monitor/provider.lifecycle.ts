@@ -555,6 +555,12 @@ export async function runDiscordGatewayLifecycle(params: {
     );
     if (params.voiceManager) {
       await params.voiceManager.destroy();
+      const { setDiscordMeetingNotesVoiceManager } =
+        await import("../voice/meeting-notes-source.js");
+      setDiscordMeetingNotesVoiceManager({
+        accountId: params.accountId,
+        manager: null,
+      });
       params.voiceManagerRef.current = null;
     }
     params.threadBindings.stop();

@@ -102,6 +102,7 @@ function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined 
     model: undefined,
     modelProvider: undefined,
     contextTokens: undefined,
+    contextBudgetStatus: undefined,
     systemPromptReport: undefined,
   };
 }

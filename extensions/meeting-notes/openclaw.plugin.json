@@ -1,0 +1,80 @@
+{
+  "id": "meeting-notes",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": ["plugins.entries.meeting-notes.config.autoStart"],
+    "onCommands": ["meeting-notes"]
+  },
+  "name": "Meeting Notes",
+  "description": "Capture meeting transcripts from channel-owned sources and write summaries.",
+  "contracts": {
+    "meetingNotesSourceProviders": ["manual-transcript"],
+    "tools": ["meeting_notes"]
+  },
+  "commandAliases": [
+    {
+      "name": "meeting-notes",
+      "kind": "cli"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      },
+      "maxUtterances": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 10000,
+        "default": 2000
+      },
+      "autoStart": {
+        "type": "array",
+        "default": [],
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["providerId"],
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "providerId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sessionId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "title": {
+              "type": "string",
+              "minLength": 1
+            },
+            "accountId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "guildId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "channelId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "meetingUrl": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    }
+  }
+}

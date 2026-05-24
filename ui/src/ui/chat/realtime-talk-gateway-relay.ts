@@ -2,6 +2,8 @@ import { bytesToBase64, floatToPcm16 } from "./realtime-talk-audio.ts";
 import { RealtimeTalkPcmOutputQueue } from "./realtime-talk-pcm-output.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  submitRealtimeTalkAgentControl,
   submitRealtimeTalkConsult,
   type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkEvent,
@@ -30,6 +32,7 @@ type GatewayRelayEvent = {
       args?: unknown;
       forced?: boolean;
     }
+  | { type?: "toolResult"; callId?: string }
   | { type?: "error"; message?: string }
   | { type?: "close"; reason?: string }
 );
@@ -47,7 +50,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private unsubscribe: (() => void) | null = null;
   private closed = false;
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
-  private readonly consultAbortControllers = new Set<AbortController>();
+  private readonly consultAbortControllers = new Map<string, AbortController>();
+  private readonly completedToolCalls = new Set<string>();
   private cancelRequestedForPlayback = false;
   private speechFramesDuringPlayback = 0;
   private lastRelayError: string | undefined;
@@ -187,6 +191,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       case "toolCall":
         void this.handleToolCall(event);
         return;
+      case "toolResult":
+        if (this.isFinalToolResult(event)) {
+          this.completeToolCall(event.callId);
+        }
+        return;
       case "error":
         this.lastRelayError = event.message ?? "Realtime relay failed";
         this.ctx.callbacks.onStatus?.("error", this.lastRelayError);
@@ -237,12 +246,22 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (!callId || !name) {
       return;
     }
+    if (name === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME) {
+      await submitRealtimeTalkAgentControl({
+        ctx: this.ctx,
+        callId,
+        args: event.args ?? {},
+        sessionId: this.session.relaySessionId,
+        submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
+      });
+      return;
+    }
     if (name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       this.submitToolResult(callId, { error: `Tool "${name}" not available in browser Talk` });
       return;
     }
     const abortController = new AbortController();
-    this.consultAbortControllers.add(abortController);
+    this.consultAbortControllers.set(callId, abortController);
     try {
       if (event.forced) {
         this.submitToolResult(
@@ -265,7 +284,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
         submit: (toolCallId, result) => this.submitToolResult(toolCallId, result),
       });
     } finally {
-      this.consultAbortControllers.delete(abortController);
+      this.consultAbortControllers.delete(callId);
     }
   }
 
@@ -274,12 +293,36 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     result: unknown,
     options?: { suppressResponse?: boolean; willContinue?: boolean },
   ): void {
+    if (this.completedToolCalls.has(callId)) {
+      return;
+    }
     void this.ctx.client.request("talk.session.submitToolResult", {
       sessionId: this.session.relaySessionId,
       callId,
       result,
       ...(options ? { options } : {}),
     });
+  }
+
+  private completeToolCall(callIdRaw: string | undefined): void {
+    const callId = callIdRaw?.trim();
+    if (!callId) {
+      return;
+    }
+    this.completedToolCalls.add(callId);
+    this.consultAbortControllers.get(callId)?.abort();
+    this.consultAbortControllers.delete(callId);
+  }
+
+  private isFinalToolResult(event: GatewayRelayEvent): boolean {
+    const talkEvent = event.talkEvent;
+    if (talkEvent?.type === "tool.progress") {
+      return false;
+    }
+    if (talkEvent?.type === "tool.result" && talkEvent.final === false) {
+      return false;
+    }
+    return true;
   }
 
   private cancelOutputForBargeIn(): void {
@@ -295,7 +338,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private abortConsults(): void {
-    for (const controller of this.consultAbortControllers) {
+    for (const controller of this.consultAbortControllers.values()) {
       controller.abort();
     }
     this.consultAbortControllers.clear();

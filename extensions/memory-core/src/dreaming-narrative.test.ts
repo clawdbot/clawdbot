@@ -823,7 +823,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(exists).toBe(false);
   });
 
-  it("handles subagent timeout gracefully", async () => {
+  it("writes a fallback diary entry when the subagent times out", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
     const subagent = createMockSubagent("");
     subagent.waitForRun.mockResolvedValue({ status: "timeout" });
@@ -838,11 +838,9 @@ describe("generateAndAppendDreamNarrative", () => {
 
     // Should not throw, should warn.
     expect(logger.warn).toHaveBeenCalled();
-    const exists = await fs
-      .access(path.join(workspaceDir, "DREAMS.md"))
-      .then(() => true)
-      .catch(() => false);
-    expect(exists).toBe(false);
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("some memory");
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("status=timeout"));
   });
 
   it("skips extra settle waits after timeout and still attempts cleanup", async () => {

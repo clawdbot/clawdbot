@@ -171,15 +171,16 @@ openclaw config get agents.defaults.models
 
 Look for:
 
-- Selected Anthropic Opus/Sonnet model has `params.context1m: true`.
+- Selected Anthropic model is a GA-capable 1M Claude 4.x model, or the model has legacy `params.context1m: true`.
 - Current Anthropic credential is not eligible for long-context usage.
-- Requests fail only on long sessions/model runs that need the 1M beta path.
+- Requests fail only on long sessions/model runs that need the 1M context path.
 
 Fix options:
 
 <Steps>
-  <Step title="Disable context1m">
-    Disable `context1m` for that model to fall back to the normal context window.
+  <Step title="Use a standard context window">
+    Switch to a standard-window model, or remove legacy `context1m` from older
+    model config that is not GA-capable for 1M context.
   </Step>
   <Step title="Use an eligible credential">
     Use an Anthropic credential that is eligible for long-context requests, or switch to an Anthropic API key.

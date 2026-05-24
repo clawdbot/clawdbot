@@ -1,12 +1,7 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
-import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
-import {
-  loadPluginManifest,
-  type PluginPackageChannel,
-  type PluginPackageInstall,
-} from "./manifest.js";
+import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type PluginChannelCatalogEntry = {
@@ -50,20 +45,13 @@ export function listChannelCatalogEntries(
     if (!channel?.id) {
       return [];
     }
-    const manifest = loadPluginManifest(
-      candidate.rootDir,
-      shouldRejectHardlinkedPluginFiles({
-        origin: candidate.origin,
-        rootDir: candidate.rootDir,
-        env: params.env,
-      }),
-    );
-    if (!manifest.ok) {
+    const pluginId = resolveChannelCatalogPluginId(candidate);
+    if (!pluginId) {
       return [];
     }
     return [
       {
-        pluginId: manifest.manifest.id,
+        pluginId,
         origin: candidate.origin,
         packageName: candidate.packageName,
         workspaceDir: candidate.workspaceDir,
@@ -75,6 +63,21 @@ export function listChannelCatalogEntries(
       },
     ];
   });
+}
+
+function resolveOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveChannelCatalogPluginId(
+  candidate: PluginDiscoveryResult["candidates"][number],
+): string | undefined {
+  return (
+    resolveOptionalString(candidate.bundledManifest?.id) ??
+    resolveOptionalString(candidate.bundledManifestId) ??
+    resolveOptionalString(candidate.packageManifest?.plugin?.id) ??
+    resolveOptionalString(candidate.idHint)
+  );
 }
 
 function resolveInstallRecords(params: {

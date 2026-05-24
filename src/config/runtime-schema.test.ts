@@ -38,6 +38,10 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => ({
     manifestRegistry: mockLoadPluginManifestRegistry(...args),
   }),
+  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+    mockGetCurrentPluginMetadataSnapshot(...args) ?? {
+      manifestRegistry: mockLoadPluginManifestRegistry(...args),
+    },
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({

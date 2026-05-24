@@ -44,6 +44,7 @@ describe("listGatewayMethods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
     expect(methods).toContain("talk.client.toolCall");
+    expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
     expect(methods).toContain("talk.session.join");
     expect(methods).toContain("talk.session.appendAudio");
@@ -52,6 +53,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
     expect(methods).toContain("talk.session.submitToolResult");
+    expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
   });
 });

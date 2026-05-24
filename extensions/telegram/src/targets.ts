@@ -44,6 +44,15 @@ export function isNumericTelegramChatId(raw: string): boolean {
   return TELEGRAM_NUMERIC_CHAT_ID_REGEX.test(raw.trim());
 }
 
+export function normalizeTelegramOutboundTarget(raw: string): string {
+  const trimmed = raw.trim();
+  const legacyGroupMatch = /^group:(-?\d+(?::topic:\d+|:\d+)?)$/i.exec(trimmed);
+  if (legacyGroupMatch?.[1]) {
+    return legacyGroupMatch[1];
+  }
+  return raw;
+}
+
 export function normalizeTelegramLookupTarget(raw: string): string | undefined {
   const stripped = stripTelegramInternalPrefixes(raw);
   if (!stripped) {

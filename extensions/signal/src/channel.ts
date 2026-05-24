@@ -150,17 +150,6 @@ function inferSignalTargetChatType(rawTo: string) {
   return "direct" as const;
 }
 
-function parseSignalExplicitTarget(raw: string) {
-  const normalized = normalizeSignalMessagingTarget(raw);
-  if (!normalized) {
-    return null;
-  }
-  return {
-    to: normalized,
-    chatType: inferSignalTargetChatType(normalized),
-  };
-}
-
 function buildSignalBaseSessionKey(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];
   agentId: string;
@@ -308,7 +297,6 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
       messaging: {
         targetPrefixes: ["signal"],
         normalizeTarget: normalizeSignalMessagingTarget,
-        parseExplicitTarget: ({ raw }) => parseSignalExplicitTarget(raw),
         inferTargetChatType: ({ to }) => inferSignalTargetChatType(to),
         resolveOutboundSessionRoute: (params) => resolveSignalOutboundSessionRoute(params),
         targetResolver: {

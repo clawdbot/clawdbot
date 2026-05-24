@@ -44,8 +44,7 @@ async function runHelperWithExistingSentinel(params: {
 }) {
   const { execFile } =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  const { startManagedServiceUpdateHandoff } =
-    await import("./update-managed-service-handoff.js");
+  const { startManagedServiceUpdateHandoff } = await import("./update-managed-service-handoff.js");
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-handoff-helper-test-"));
   tempDirs.add(tmpDir);
 
@@ -182,6 +181,77 @@ describe("managed service update handoff", () => {
     }
     expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
     expect(options.env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]).toMatch(/sentinel-meta\.json$/u);
+  });
+
+  it("launches systemd handoffs through a transient user scope", async () => {
+    const { startManagedServiceUpdateHandoff } =
+      await import("./update-managed-service-handoff.js");
+    const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-systemd-run-bin-"));
+    tempDirs.add(binDir);
+    const systemdRunPath = path.join(binDir, "systemd-run");
+    await fs.writeFile(systemdRunPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    const result = await startManagedServiceUpdateHandoff({
+      root: "/tmp/openclaw",
+      timeoutMs: 1_800_000,
+      restartDelayMs: 500,
+      parentPid: 12345,
+      execPath: "/usr/local/bin/node",
+      argv1: "/opt/openclaw/openclaw.mjs",
+      handoffId: "handoff-123",
+      supervisor: "systemd",
+      env: {
+        PATH: binDir,
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+        INVOCATION_ID: "gateway-invocation",
+        KEEP_ME: "1",
+      },
+      meta: {
+        handoffId: "handoff-123",
+        sessionKey: "agent:test:webchat:dm:user-123",
+        continuationMessage: "continue after restart",
+      },
+    });
+
+    expect(result.status).toBe("started");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    const [command, args, options] = spawnMock.mock.calls[0] as unknown as [
+      string,
+      string[],
+      { env: NodeJS.ProcessEnv; detached?: boolean; cwd?: string },
+    ];
+    expect(command).toBe(systemdRunPath);
+    expect(args.slice(0, 4)).toEqual([
+      "--user",
+      "--scope",
+      "--collect",
+      "--unit=openclaw-update-handoff-123.scope",
+    ]);
+    expect(args.slice(4, 7)).toEqual([
+      "/usr/local/bin/node",
+      expect.stringMatching(/handoff\.cjs$/u),
+      expect.stringMatching(/handoff\.json$/u),
+    ]);
+    tempDirs.add(path.dirname(args[5] ?? result.logPath));
+    const helperParams = JSON.parse(await fs.readFile(args[6] ?? "", "utf-8")) as {
+      commandArgv?: string[];
+      handoffId?: string;
+    };
+    expect(helperParams.commandArgv).toEqual([
+      "/usr/local/bin/node",
+      "/opt/openclaw/openclaw.mjs",
+      "update",
+      "--yes",
+      "--json",
+      "--timeout",
+      "1800",
+    ]);
+    expect(helperParams.handoffId).toBe("handoff-123");
+    expect(options.detached).toBe(true);
+    expect(options.env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
+    expect(options.env.INVOCATION_ID).toBeUndefined();
+    expect(options.env.KEEP_ME).toBe("1");
+    expect(options.env.OPENCLAW_UPDATE_RUN_HANDOFF).toBe("1");
   });
 
   it("does not overwrite a restart sentinel owned by another startup task", async () => {

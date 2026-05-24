@@ -191,16 +191,33 @@ type ChannelManagerOptions = {
   resolveStartupChannelRuntime?: () => ChannelRuntimeSurface | Promise<ChannelRuntimeSurface>;
   getPluginHttpRouteRegistry?: () => PluginRegistry;
   startupTrace?: GatewayStartupTrace;
+  deferStartupAccountStartsUntil?: Promise<void>;
 };
 
 type StartChannelOptions = {
   preserveRestartAttempts?: boolean;
   preserveManualStop?: boolean;
+  deferAccountStartUntil?: Promise<void>;
 };
 
 type StopChannelOptions = {
   manual?: boolean;
 };
+
+async function waitForDeferredAccountStart(
+  deferred: Promise<void>,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  if (abortSignal.aborted) {
+    return;
+  }
+  await Promise.race([
+    deferred,
+    new Promise<void>((resolve) => {
+      abortSignal.addEventListener("abort", () => resolve(), { once: true });
+    }),
+  ]);
+}
 
 export type ChannelManager = {
   getRuntimeSnapshot: () => ChannelRuntimeSnapshot;
@@ -524,7 +541,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restartAttempts.get(rKey) ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (startupTrace) {
+            if (opts.deferAccountStartUntil) {
+              await waitForDeferredAccountStart(opts.deferAccountStartUntil, abort.signal);
+            } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
             if (abort.signal.aborted || manuallyStopped.has(rKey)) {
@@ -759,18 +778,39 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const startChannels = async () => {
-    await runTasksWithConcurrency({
-      limit: CHANNEL_STARTUP_CONCURRENCY,
-      tasks: [...listChannelPlugins()].map((plugin) => async () => {
-        try {
-          await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
-        } catch (err) {
-          ensureChannelLog(plugin.id).error?.(
-            `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
-          );
-        }
-      }),
-    });
+    let releaseAccountStarts: (() => void) | undefined;
+    const deferAccountStartUntil =
+      opts.deferStartupAccountStartsUntil ??
+      (startupTrace
+        ? new Promise<void>((resolve) => {
+            releaseAccountStarts = () => {
+              const handle = setImmediate(resolve);
+              handle.unref?.();
+            };
+          })
+        : undefined);
+    try {
+      await runTasksWithConcurrency({
+        limit: CHANNEL_STARTUP_CONCURRENCY,
+        tasks: [...listChannelPlugins()].map((plugin) => async () => {
+          try {
+            await measureStartup(`channels.${plugin.id}.start`, () =>
+              startChannelInternal(
+                plugin.id,
+                undefined,
+                deferAccountStartUntil ? { deferAccountStartUntil } : {},
+              ),
+            );
+          } catch (err) {
+            ensureChannelLog(plugin.id).error?.(
+              `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
+            );
+          }
+        }),
+      });
+    } finally {
+      releaseAccountStarts?.();
+    }
   };
 
   const markChannelLoggedOut = (channelId: ChannelId, cleared: boolean, accountId?: string) => {

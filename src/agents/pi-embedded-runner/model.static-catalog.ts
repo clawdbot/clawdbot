@@ -39,6 +39,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): Model<Api> {
     maxTokens: row.maxTokens,
     headers: row.headers,
     compat: row.compat,
+    mediaInput: row.mediaInput,
   } as Model<Api>;
 }
 

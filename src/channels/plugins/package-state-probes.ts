@@ -238,7 +238,8 @@ export function listBundledChannelIdsForPackageState(
 ): string[] {
   return listChannelPackageStateCatalog(metadataKey)
     .map((entry) => resolvePackageStateChannelId(entry))
-    .filter((channelId): channelId is string => Boolean(channelId));
+    .filter((channelId): channelId is string => Boolean(channelId))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 export function hasBundledChannelPackageState(params: {

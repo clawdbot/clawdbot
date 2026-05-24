@@ -188,6 +188,7 @@ export function createProviderAuthChecker(params: {
           cfg: params.cfg,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
         })),
     });
     authCache.set(key, value);
@@ -205,7 +206,7 @@ export async function warmCurrentProviderAuthState(
   const ownGeneration = currentProviderAuthStateGeneration;
   const isWarmStale = () =>
     options.isCancelled?.() === true || ownGeneration !== currentProviderAuthStateGeneration;
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalog({ config: cfg, readOnly: true });
   if (isWarmStale()) {
     return;
   }

@@ -655,6 +655,7 @@ describe("createLaneTextDeliverer", () => {
 
     const delivery = expectPreviewFinalized(result);
     expect(delivery.content).toBe("Hello world again");
+    expect(delivery.promptContextContent).toBe("Hello");
     expect(delivery.messageId).toBe(999);
     expect(harness.answer?.update).toHaveBeenCalledWith("Hello");
     expect(harness.sendPayload).toHaveBeenCalledTimes(2);

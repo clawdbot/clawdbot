@@ -79,6 +79,9 @@ internal data class RealtimeToolRun(
   val relaySessionId: String,
 )
 
+private const val REALTIME_AGENT_CONSULT_TOOL = "openclaw_agent_consult"
+private const val REALTIME_AGENT_CONTROL_TOOL = "openclaw_agent_control"
+
 private data class RealtimeToolCompletion(
   val state: String,
   val messageEl: JsonElement?,
@@ -1052,6 +1055,10 @@ class TalkModeManager internal constructor(
     pendingRealtimeToolCalls.add(callId)
     scope.launch {
       try {
+        if (name == REALTIME_AGENT_CONTROL_TOOL) {
+          submitRealtimeAgentControl(callId = callId, relaySessionId = relaySessionId, args = args)
+          return@launch
+        }
         if (forced) {
           submitRealtimeToolWorking(callId, relaySessionId)
         }
@@ -1183,7 +1190,7 @@ class TalkModeManager internal constructor(
       result =
         buildJsonObject {
           put("status", JsonPrimitive("working"))
-          put("tool", JsonPrimitive("openclaw_agent_consult"))
+          put("tool", JsonPrimitive(REALTIME_AGENT_CONSULT_TOOL))
           put(
             "message",
             JsonPrimitive(
@@ -1193,6 +1200,30 @@ class TalkModeManager internal constructor(
         },
       options = buildJsonObject { put("willContinue", JsonPrimitive(true)) },
     )
+  }
+
+  private suspend fun submitRealtimeAgentControl(
+    callId: String,
+    relaySessionId: String,
+    args: JsonElement?,
+  ) {
+    val argsObject = args.asObjectOrNull()
+    val text = argsObject?.get("text").asStringOrNull()?.trim().orEmpty()
+    val mode = argsObject?.get("mode").asStringOrNull()?.trim()
+    val params =
+      buildJsonObject {
+        put("sessionId", JsonPrimitive(relaySessionId))
+        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
+        put("text", JsonPrimitive(text.ifEmpty { "status" }))
+        if (!mode.isNullOrEmpty()) put("mode", JsonPrimitive(mode))
+      }
+    val response = session.request("talk.session.steer", params.toString(), timeoutMs = 15_000)
+    val result = json.parseToJsonElement(response).asObjectOrNull()
+    if (result != null) {
+      submitRealtimeToolResult(callId = callId, result = result, sessionId = relaySessionId)
+    } else {
+      submitRealtimeToolError(callId, "control call returned no result", relaySessionId)
+    }
   }
 
   private fun upsertRealtimeConversation(

@@ -9,7 +9,16 @@
  */
 
 import { Buffer } from "node:buffer";
-import { describe, test, expect, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import {
+  clearMemoryPluginState,
+  getMemoryCapabilityRegistration,
+  listActiveMemoryPublicArtifacts,
+  registerMemoryCapability,
+  type MemoryPluginCapability,
+} from "openclaw/plugin-sdk/memory-host-core";
+import { afterEach, describe, test, expect, vi } from "vitest";
 import memoryPlugin, {
   detectCategory,
   formatRelevantMemoriesContext,
@@ -164,7 +173,11 @@ async function withMockedOpenAiMemoryPlugin<T>(params: {
 }
 
 describe("memory plugin e2e", () => {
-  const { getDbPath } = installTmpDirHarness({ prefix: "openclaw-memory-test-" });
+  const { getDbPath, getTmpDir } = installTmpDirHarness({ prefix: "openclaw-memory-test-" });
+
+  afterEach(() => {
+    clearMemoryPluginState();
+  });
 
   function parseConfig(overrides: Record<string, unknown> = {}) {
     return memoryPlugin.configSchema?.parse?.({
@@ -338,6 +351,165 @@ describe("memory plugin e2e", () => {
 
     expectHookRegistered(on, "before_prompt_build");
     expectHookNotRegistered(on, "before_agent_start");
+  });
+
+  test("registers memory public artifact provider for memory-wiki bridge parity", async () => {
+    const workspaceDir = path.join(getTmpDir(), "workspace-public-artifacts");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-18.md"), "# Daily\n", "utf8");
+    const registerMemoryCapability = vi.fn();
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath: getDbPath(),
+        autoCapture: false,
+        autoRecall: false,
+      },
+      runtime: {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      registerMemoryCapability,
+      registerTool: vi.fn(),
+      registerCli: vi.fn(),
+      registerService: vi.fn(),
+      on: vi.fn(),
+      resolvePath: (filePath: string) => filePath,
+    };
+
+    memoryPlugin.register(mockApi as any);
+    const capability = firstObjectArg(
+      registerMemoryCapability as unknown as MockCallSource,
+      "memory capability",
+    );
+    const publicArtifacts = capability.publicArtifacts as
+      | { listArtifacts?: (params: { cfg: unknown }) => Promise<unknown> }
+      | undefined;
+    expect(publicArtifacts?.listArtifacts).toBeTypeOf("function");
+
+    await expect(
+      publicArtifacts?.listArtifacts?.({
+        cfg: {
+          agents: {
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
+          },
+        },
+      }),
+    ).resolves.toEqual([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+        absolutePath: path.join(workspaceDir, "MEMORY.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath: "memory/2026-05-18.md",
+        absolutePath: path.join(workspaceDir, "memory", "2026-05-18.md"),
+        agentIds: ["main"],
+        contentType: "markdown",
+      },
+    ]);
+  });
+
+  test("preserves memory-core sidecar capability when registering public artifacts", async () => {
+    const workspaceDir = path.join(getTmpDir(), "workspace-sidecar-public-artifacts");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "memory", "2026-05-18.md"), "# Daily\n", "utf8");
+    const runtime = {
+      async getMemorySearchManager() {
+        return { manager: null, error: "test" };
+      },
+      resolveMemoryBackendConfig() {
+        return { backend: "builtin" as const };
+      },
+    };
+    const flushPlanResolver = vi.fn(() => ({
+      softThresholdTokens: 1,
+      forceFlushTranscriptBytes: 2,
+      reserveTokensFloor: 3,
+      prompt: "flush",
+      systemPrompt: "flush",
+      relativePath: "memory/sidecar.md",
+    }));
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver,
+      runtime,
+    });
+    const registerMemoryCapabilityForPlugin = vi.fn((capability: MemoryPluginCapability) => {
+      registerMemoryCapability("memory-lancedb", capability);
+    });
+    const mockApi = {
+      id: "memory-lancedb",
+      name: "Memory (LanceDB)",
+      source: "test",
+      config: {},
+      pluginConfig: {
+        embedding: {
+          apiKey: OPENAI_API_KEY,
+          model: "text-embedding-3-small",
+        },
+        dbPath: getDbPath(),
+        autoCapture: false,
+        autoRecall: false,
+      },
+      runtime: {},
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+        debug: vi.fn(),
+      },
+      registerMemoryCapability: registerMemoryCapabilityForPlugin,
+      registerTool: vi.fn(),
+      registerCli: vi.fn(),
+      registerService: vi.fn(),
+      on: vi.fn(),
+      resolvePath: (filePath: string) => filePath,
+    };
+
+    memoryPlugin.register(mockApi as any);
+
+    expect(registerMemoryCapabilityForPlugin).toHaveBeenCalledOnce();
+    expect(
+      getMemoryCapabilityRegistration()?.capability.flushPlanResolver?.({})?.relativePath,
+    ).toBe("memory/sidecar.md");
+    expect(getMemoryCapabilityRegistration()?.capability.runtime).toBe(runtime);
+    await expect(
+      listActiveMemoryPublicArtifacts({
+        cfg: {
+          agents: {
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
+          },
+        },
+      }),
+    ).resolves.toMatchObject([
+      {
+        kind: "memory-root",
+        workspaceDir,
+        relativePath: "MEMORY.md",
+      },
+      {
+        kind: "daily-note",
+        workspaceDir,
+        relativePath: "memory/2026-05-18.md",
+      },
+    ]);
   });
 
   test("uses provider adapter auth when embedding apiKey is omitted", async () => {

@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearMemoryPluginState,
@@ -7,8 +10,10 @@ import {
 import * as memoryCoreAlias from "./memory-core.js";
 import {
   buildActiveMemoryPromptSection,
+  listMemoryHostPublicArtifacts,
   listActiveMemoryPublicArtifacts,
 } from "./memory-host-core.js";
+import { appendMemoryHostEvent, resolveMemoryHostEventLogPath } from "./memory-host-events.js";
 
 describe("memory-host-core helpers", () => {
   afterEach(() => {
@@ -58,6 +63,77 @@ describe("memory-host-core helpers", () => {
         contentType: "markdown",
       },
     ]);
+  });
+
+  it("lists shared public artifacts from memory workspaces", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-host-public-artifacts-"));
+    try {
+      const workspaceDir = path.join(fixtureRoot, "workspace");
+      await fs.mkdir(path.join(workspaceDir, "memory", "dreaming"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "# Durable Memory\n", "utf8");
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "2026-05-18.md"),
+        "# Daily Note\n",
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", "dreaming", "2026-05-18.md"),
+        "# Dream Report\n",
+        "utf8",
+      );
+      await appendMemoryHostEvent(workspaceDir, {
+        type: "memory.recall.recorded",
+        timestamp: "2026-05-18T12:00:00.000Z",
+        query: "bridge",
+        resultCount: 0,
+        results: [],
+      });
+
+      await expect(
+        listMemoryHostPublicArtifacts({
+          cfg: {
+            agents: {
+              list: [{ id: "main", default: true, workspace: workspaceDir }],
+            },
+          },
+        }),
+      ).resolves.toEqual([
+        {
+          kind: "memory-root",
+          workspaceDir,
+          relativePath: "MEMORY.md",
+          absolutePath: path.join(workspaceDir, "MEMORY.md"),
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "daily-note",
+          workspaceDir,
+          relativePath: "memory/2026-05-18.md",
+          absolutePath: path.join(workspaceDir, "memory", "2026-05-18.md"),
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "dream-report",
+          workspaceDir,
+          relativePath: "memory/dreaming/2026-05-18.md",
+          absolutePath: path.join(workspaceDir, "memory", "dreaming", "2026-05-18.md"),
+          agentIds: ["main"],
+          contentType: "markdown",
+        },
+        {
+          kind: "event-log",
+          workspaceDir,
+          relativePath: "memory/.dreams/events.jsonl",
+          absolutePath: resolveMemoryHostEventLogPath(workspaceDir),
+          agentIds: ["main"],
+          contentType: "json",
+        },
+      ]);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   it("keeps the deprecated memory-core alias wired to memory-host-core", () => {

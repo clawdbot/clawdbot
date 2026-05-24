@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  buildVitestProfileSpawnSpec,
   buildVitestProfileCommand,
   parseArgs,
   resolveVitestProfileDir,
@@ -56,6 +57,26 @@ describe("scripts/run-vitest-profile", () => {
         ],
       },
     );
+  });
+
+  it("uses the Windows-safe pnpm fallback for runner profiling", () => {
+    const spawnSpec = buildVitestProfileSpawnSpec(
+      {
+        command: "pnpm",
+        args: ["vitest", "run"],
+      },
+      {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        npmExecPath: "",
+        platform: "win32",
+      },
+    );
+
+    expect(spawnSpec.options.shell).toBe(false);
+    expect(spawnSpec.command).toBe("C:\\Windows\\System32\\cmd.exe");
+    expect(spawnSpec.options.windowsVerbatimArguments).toBe(true);
+    expect(spawnSpec.args).toEqual(["/d", "/s", "/c", "pnpm.cmd vitest run"]);
   });
 
   it("parses mode and explicit output dir", () => {

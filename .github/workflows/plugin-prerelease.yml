@@ -52,7 +52,7 @@ jobs:
           ref: ${{ inputs.target_ref }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Build plugin prerelease manifest
@@ -221,7 +221,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -257,7 +257,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -330,7 +330,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment
@@ -362,7 +362,7 @@ jobs:
           ref: ${{ needs.preflight.outputs.checkout_revision }}
           fetch-depth: 1
           fetch-tags: false
-          persist-credentials: false
+          persist-credentials: true
           submodules: false
 
       - name: Setup Node environment

@@ -7,9 +7,11 @@ import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/ag
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
+import { ensureCompletionState, normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -74,9 +76,10 @@ export function markSubagentRunPausedAfterYield(params: {
     entry.cleanupHandled = false;
     mutated = true;
   }
-  if (entry.frozenResultText !== undefined) {
-    entry.frozenResultText = undefined;
-    entry.frozenResultCapturedAt = undefined;
+  const completion = ensureCompletionState(entry);
+  if (completion.resultText !== undefined) {
+    completion.resultText = undefined;
+    completion.capturedAt = undefined;
     mutated = true;
   }
   return mutated;
@@ -368,6 +371,7 @@ export function createSubagentRunManager(params: {
     fallback?: SubagentRunRecord;
     runTimeoutSeconds?: number;
     preserveFrozenResultFallback?: boolean;
+    transcriptFile?: string;
   }) => {
     const previousRunId = replaceParams.previousRunId.trim();
     const nextRunId = replaceParams.nextRunId.trim();
@@ -385,6 +389,12 @@ export function createSubagentRunManager(params: {
       params.clearPendingLifecycleError(previousRunId);
       if (shouldDeleteAttachments(source)) {
         void safeRemoveAttachmentsDir(source);
+      }
+      if (
+        source.execution?.transcriptFile &&
+        source.execution.transcriptFile !== replaceParams.transcriptFile
+      ) {
+        void removeInternalSessionEffectsTranscript(source.execution.transcriptFile);
       }
       params.runs.delete(previousRunId);
       params.resumedRuns.delete(previousRunId);
@@ -410,7 +420,8 @@ export function createSubagentRunManager(params: {
         typeof source.endedAt === "number" ? source.endedAt : now,
       ) ?? 0;
 
-    const next: SubagentRunRecord = {
+    const sourceCompletion = ensureCompletionState(source);
+    const next: SubagentRunRecord = normalizeSubagentRunState({
       ...source,
       runId: nextRunId,
       createdAt: now,
@@ -423,37 +434,26 @@ export function createSubagentRunManager(params: {
       endedHookEmittedAt: undefined,
       wakeOnDescendantSettle: undefined,
       outcome: undefined,
-      frozenResultText: undefined,
-      frozenResultCapturedAt: undefined,
-      fallbackFrozenResultText: preserveFrozenResultFallback ? source.frozenResultText : undefined,
-      fallbackFrozenResultCapturedAt: preserveFrozenResultFallback
-        ? source.frozenResultCapturedAt
-        : undefined,
+      execution: {
+        status: "running",
+        startedAt: now,
+        transcriptFile: replaceParams.transcriptFile,
+      },
+      completion: {
+        required: source.expectsCompletionMessage === true,
+        fallbackResultText: preserveFrozenResultFallback ? sourceCompletion.resultText : undefined,
+        fallbackCapturedAt: preserveFrozenResultFallback ? sourceCompletion.capturedAt : undefined,
+      },
       cleanupCompletedAt: undefined,
       cleanupHandled: false,
-      completionEnqueuedAt: undefined,
-      completionDeliveredAt: undefined,
-      completionAnnouncedAt: undefined,
-      lastAnnounceDropReason: undefined,
       suppressAnnounceReason: undefined,
-      announceRetryCount: undefined,
-      lastAnnounceRetryAt: undefined,
-      lastAnnounceDeliveryError: undefined,
-      pendingFinalDelivery: undefined,
-      pendingFinalDeliveryCreatedAt: undefined,
-      pendingFinalDeliveryLastAttemptAt: undefined,
-      pendingFinalDeliveryAttemptCount: undefined,
-      pendingFinalDeliveryLastError: undefined,
-      pendingFinalDeliveryPayload: undefined,
-      deliverySuspendedAt: undefined,
-      deliverySuspendedReason: undefined,
-      deliveryDiscardedAt: undefined,
-      deliveryDiscardReason: undefined,
-      deliveryDiscardedPayloadSummary: undefined,
+      delivery: {
+        status: source.expectsCompletionMessage === false ? "not_required" : "pending",
+      },
       spawnMode,
       archiveAtMs,
       runTimeoutSeconds,
-    };
+    });
 
     params.runs.set(nextRunId, next);
     params.ensureListener();
@@ -485,7 +485,7 @@ export function createSubagentRunManager(params: {
     const runTimeoutSeconds = registerParams.runTimeoutSeconds ?? 0;
     const waitTimeoutMs = params.resolveSubagentWaitTimeoutMs(cfg, runTimeoutSeconds);
     const requesterOrigin = normalizeDeliveryContext(registerParams.requesterOrigin);
-    const entry: SubagentRunRecord = {
+    const entry: SubagentRunRecord = normalizeSubagentRunState({
       runId,
       childSessionKey,
       controllerSessionKey,
@@ -504,16 +504,25 @@ export function createSubagentRunManager(params: {
       runTimeoutSeconds,
       createdAt: now,
       startedAt: now,
+      execution: {
+        status: "running",
+        startedAt: now,
+      },
+      completion: {
+        required: registerParams.expectsCompletionMessage === true,
+      },
+      delivery: {
+        status: registerParams.expectsCompletionMessage === false ? "not_required" : "pending",
+      },
       sessionStartedAt: now,
       accumulatedRuntimeMs: 0,
       archiveAtMs,
       cleanupHandled: false,
-      completionAnnouncedAt: undefined,
       wakeOnDescendantSettle: undefined,
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
-    };
+    });
     params.runs.set(runId, entry);
     try {
       params.persistOrThrow();

@@ -398,6 +398,18 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "channel",
       },
     },
+    {
+      name: "Legacy parser-only plugin chat type fallback",
+      cfg: baseConfig,
+      channel: "legacyparser",
+      target: "team-ops",
+      expected: {
+        sessionKey: "agent:main:legacyparser:group:team-ops",
+        from: "legacyparser:group:team-ops",
+        to: "channel:team-ops",
+        chatType: "group",
+      },
+    },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
     await expectResolvedRoute(params);
   });

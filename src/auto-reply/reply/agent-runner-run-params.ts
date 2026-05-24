@@ -31,16 +31,14 @@ export function resolveModelFallbackOptions(
   configOverride: FollowupRun["run"]["config"] = run.config,
 ) {
   const config = configOverride;
-  const fallbacksOverride =
-    run.imageModelFallbacksOverride ??
-    resolveEffectiveModelFallbacks({
-      cfg: config,
-      agentId: run.agentId,
-      sessionKey: run.sessionKey,
-      hasSessionModelOverride: run.hasSessionModelOverride === true,
-      modelOverrideSource: run.modelOverrideSource,
-      hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
-    });
+  const fallbacksOverride = resolveEffectiveModelFallbacks({
+    cfg: config,
+    agentId: run.agentId,
+    sessionKey: run.sessionKey,
+    hasSessionModelOverride: run.hasSessionModelOverride === true,
+    modelOverrideSource: run.modelOverrideSource,
+    hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
+  });
   return {
     cfg: config,
     provider: run.provider,
@@ -62,16 +60,14 @@ export function buildEmbeddedRunBaseParams(params: {
   isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbacksOverride =
-    params.run.imageModelFallbacksOverride ??
-    resolveEffectiveModelFallbacks({
-      cfg: config,
-      agentId: params.run.agentId,
-      sessionKey: params.run.sessionKey,
-      hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-      modelOverrideSource: params.run.modelOverrideSource,
-      hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-    });
+  const modelFallbacksOverride = resolveEffectiveModelFallbacks({
+    cfg: config,
+    agentId: params.run.agentId,
+    sessionKey: params.run.sessionKey,
+    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
+    modelOverrideSource: params.run.modelOverrideSource,
+    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
+  });
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,

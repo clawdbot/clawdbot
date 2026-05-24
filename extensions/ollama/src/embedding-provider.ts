@@ -11,11 +11,11 @@ import {
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import {
-  fetchWithSsrFGuard,
   formatErrorMessage,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
@@ -92,14 +92,16 @@ async function withRemoteHttpResponse<T>(params: {
   init?: RequestInit;
   signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
+  configuredLocalOriginBaseUrl: string;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
-  const { response, release } = await fetchWithSsrFGuard({
+  const { response, release } = await fetchConfiguredLocalOriginWithSsrFGuard({
     url: params.url,
     init: params.init,
     signal: params.signal,
     policy: params.ssrfPolicy,
-    auditContext: "memory-remote",
+    configuredLocalOriginBaseUrl: params.configuredLocalOriginBaseUrl,
+    auditContext: "ollama-memory-embedding",
   });
   try {
     return await params.onResponse(response);
@@ -313,7 +315,7 @@ function resolveOllamaEmbeddingClient(
   return {
     baseUrl,
     headers,
-    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    ssrfPolicy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl),
     model,
   };
 }
@@ -328,6 +330,7 @@ export async function createOllamaEmbeddingProvider(
     const json = await withRemoteHttpResponse({
       url: embedUrl,
       ssrfPolicy: client.ssrfPolicy,
+      configuredLocalOriginBaseUrl: client.baseUrl,
       signal,
       init: {
         method: "POST",

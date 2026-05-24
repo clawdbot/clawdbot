@@ -56,6 +56,7 @@ export type MonitorSignalOpts = {
   autoStart?: boolean;
   startupTimeoutMs?: number;
   cliPath?: string;
+  configPath?: string;
   httpHost?: string;
   httpPort?: number;
   receiveMode?: "on-start" | "manual";
@@ -85,7 +86,7 @@ function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
     },
     async waitForIdle(): Promise<void> {
       while (inFlight.size > 0) {
-        await Promise.allSettled(Array.from(inFlight));
+        await Promise.allSettled(inFlight);
       }
     },
   };
@@ -460,10 +461,14 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
+    const configPath =
+      normalizeOptionalString(opts.configPath) ??
+      normalizeOptionalString(accountInfo.config.configPath);
     const httpHost = opts.httpHost ?? accountInfo.config.httpHost ?? "127.0.0.1";
     const httpPort = opts.httpPort ?? accountInfo.config.httpPort ?? 8080;
     daemonHandle = spawnSignalDaemon({
       cliPath,
+      ...(configPath ? { configPath } : {}),
       account,
       httpHost,
       httpPort,

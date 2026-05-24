@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveRestartSentinelPath } from "../../infra/restart-sentinel.js";
-import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
+import {
+  SUPERVISOR_HINT_ENV_VARS,
+  type RespawnSupervisor,
+} from "../../infra/supervisor-markers.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   type ControlPlaneUpdateSentinelMetaFile,
@@ -12,6 +15,7 @@ import { MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX } from "../../infra/update-m
 import type { UpdateRestartSentinelMeta } from "../../infra/update-restart-sentinel-payload.js";
 
 const PARENT_EXIT_GRACE_MS = 60_000;
+const SYSTEMD_RUN_CANDIDATE_PATHS = ["/usr/bin/systemd-run", "/bin/systemd-run"] as const;
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
   "OPENCLAW_LAUNCHD_LABEL",
   "OPENCLAW_SYSTEMD_UNIT",
@@ -319,12 +323,95 @@ async function resolveManagedServiceHandoffCwd(root: string): Promise<string> {
   return root;
 }
 
+async function resolveExecutableOnPath(
+  name: string,
+  env: NodeJS.ProcessEnv,
+  fallbackPaths: readonly string[],
+): Promise<string | null> {
+  const candidates = new Set<string>();
+  const pathValue = env.PATH?.trim();
+  if (pathValue) {
+    for (const dir of pathValue.split(path.delimiter)) {
+      if (dir.trim()) {
+        candidates.add(path.join(dir, name));
+      }
+    }
+  }
+  for (const candidate of fallbackPaths) {
+    candidates.add(candidate);
+  }
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function sanitizeSystemdUnitFragment(value: string | undefined): string {
+  const normalized = value?.trim().replace(/[^A-Za-z0-9_.:@-]+/gu, "-") ?? "";
+  return normalized.replace(/^-+|-+$/gu, "").slice(0, 80);
+}
+
+function buildSystemdHandoffUnitName(handoffId: string | undefined): string {
+  const suffix =
+    sanitizeSystemdUnitFragment(handoffId) ||
+    sanitizeSystemdUnitFragment(`${process.pid}-${Date.now()}`) ||
+    "handoff";
+  return `openclaw-update-${suffix}.scope`;
+}
+
+async function resolveHandoffSpawn(params: {
+  supervisor?: RespawnSupervisor | null;
+  env: NodeJS.ProcessEnv;
+  execPath: string;
+  scriptPath: string;
+  paramsPath: string;
+  handoffId?: string;
+}): Promise<{ command: string; args: string[] }> {
+  if (params.supervisor !== "systemd") {
+    return {
+      command: params.execPath,
+      args: [params.scriptPath, params.paramsPath],
+    };
+  }
+
+  const systemdRunPath = await resolveExecutableOnPath(
+    "systemd-run",
+    params.env,
+    SYSTEMD_RUN_CANDIDATE_PATHS,
+  );
+  if (!systemdRunPath) {
+    throw new Error(
+      "systemd-run is required to start the managed update handoff outside openclaw-gateway.service",
+    );
+  }
+
+  return {
+    command: systemdRunPath,
+    args: [
+      "--user",
+      "--scope",
+      "--collect",
+      `--unit=${buildSystemdHandoffUnitName(params.handoffId)}`,
+      params.execPath,
+      params.scriptPath,
+      params.paramsPath,
+    ],
+  };
+}
+
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
   restartDelayMs?: number;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
+  supervisor?: RespawnSupervisor | null;
   env?: NodeJS.ProcessEnv;
   execPath?: string;
   argv1?: string;
@@ -368,7 +455,15 @@ export async function startManagedServiceUpdateHandoff(params: {
     [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
     OPENCLAW_UPDATE_RUN_HANDOFF: "1",
   };
-  const child = spawn(params.execPath ?? process.execPath, [scriptPath, paramsPath], {
+  const spawnTarget = await resolveHandoffSpawn({
+    supervisor: params.supervisor,
+    env,
+    execPath: params.execPath ?? process.execPath,
+    scriptPath,
+    paramsPath,
+    handoffId: params.handoffId,
+  });
+  const child = spawn(spawnTarget.command, spawnTarget.args, {
     cwd: handoffCwd,
     env,
     detached: true,

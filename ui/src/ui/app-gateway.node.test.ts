@@ -1131,6 +1131,55 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("keeps source-reply finals live even when message tool events were seen", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-with-message-tool";
+    host.chatMessages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+    ];
+    emitToolResultEvent(client);
+    expect(host.toolStreamOrder).toHaveLength(1);
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-with-message-tool",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Hey there" }],
+        timestamp: 100,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(host.toolStreamOrder).toHaveLength(1);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("replays deferred session.message reloads after legacy silent final payload", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "main-run-silent";

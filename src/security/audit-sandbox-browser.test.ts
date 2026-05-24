@@ -76,6 +76,62 @@ describe("security audit sandbox browser findings", () => {
     expect(hasFinding("sandbox.browser_container.hash_epoch_stale", "warn", findings)).toBe(false);
   });
 
+  it("bounds sandbox browser Docker probes that do not return", async () => {
+    let probeSignal: AbortSignal | undefined;
+    const startedAt = Date.now();
+
+    const findings = await collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 1,
+      execDockerRawFn: async (_args, opts) => {
+        probeSignal = opts?.signal;
+        return await new Promise((_, reject) =>
+          opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          }),
+        );
+      },
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(probeSignal?.aborted).toBe(true);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "sandbox.browser_container.docker_probe_timeout",
+        severity: "warn",
+      }),
+    ]);
+  });
+
+  it("stops probing remaining sandbox browser containers after a Docker timeout", async () => {
+    const calls: string[] = [];
+
+    const findings = await collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 1,
+      execDockerRawFn: async (args, opts) => {
+        calls.push(`${args[0] ?? ""}:${args.at(-1) ?? ""}`);
+        if (args[0] === "ps") {
+          return {
+            stdout: Buffer.from("openclaw-sbx-browser-hung\nopenclaw-sbx-browser-next\n"),
+            stderr: Buffer.alloc(0),
+            code: 0,
+          };
+        }
+        return await new Promise((_, reject) =>
+          opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+            once: true,
+          }),
+        );
+      },
+    });
+
+    expect(calls).toEqual(["ps:{{.Names}}", "inspect:openclaw-sbx-browser-hung"]);
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "sandbox.browser_container.docker_probe_timeout",
+      }),
+    ]);
+  });
+
   it("flags sandbox browser containers with non-loopback published ports", async () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {

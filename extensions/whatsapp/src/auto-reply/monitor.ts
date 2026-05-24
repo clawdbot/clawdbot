@@ -1,5 +1,7 @@
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
@@ -494,6 +496,14 @@ export async function monitorWebChannel(
       }
 
       statusController.noteConnected();
+      const approvalContextLease = registerChannelRuntimeContext({
+        channelRuntime: tuning.channelRuntime,
+        channelId: "whatsapp",
+        accountId: account.accountId,
+        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+        context: { accountId: account.accountId },
+        abortSignal,
+      });
       controller.setUnhandledRejectionCleanup(
         registerUnhandledRejectionHandler((reason) => {
           if (!isLikelyWhatsAppCryptoError(reason)) {
@@ -580,13 +590,15 @@ export async function monitorWebChannel(
 
       if (!keepAlive) {
         clearInterval(periodicDrainInterval);
+        approvalContextLease?.dispose();
         await controller.shutdown();
         return;
       }
 
-      const reason = await controller
-        .waitForClose()
-        .finally(() => clearInterval(periodicDrainInterval));
+      const reason = await controller.waitForClose().finally(() => {
+        clearInterval(periodicDrainInterval);
+        approvalContextLease?.dispose();
+      });
       if (stopRequested() || sigintStop || reason === "aborted") {
         await controller.shutdown();
         break;

@@ -522,6 +522,7 @@ async function extractFileBlocks(params: {
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
@@ -556,6 +557,7 @@ export async function applyMediaUnderstanding(params: {
         ctx,
         attachments: cache,
         media: attachments,
+        agentId: params.agentId,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         providerRegistry,

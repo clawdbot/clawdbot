@@ -141,6 +141,20 @@ export function isCliRuntimeAlias(runtime: string | undefined): boolean {
   return normalized ? CLI_RUNTIME_ALIASES.has(normalizeProviderId(normalized)) : false;
 }
 
+export function isCliRuntimeAliasForProvider(params: {
+  runtime: string | undefined;
+  provider: string | undefined;
+}): boolean {
+  const runtime = params.runtime?.trim();
+  const provider = params.provider?.trim();
+  if (!runtime || !provider) {
+    return false;
+  }
+  return CLI_RUNTIME_BY_PROVIDER.has(
+    `${normalizeProviderId(provider)}:${normalizeProviderId(runtime)}`,
+  );
+}
+
 function canonicalizeRuntimeAliasProvider(provider: string): string {
   const normalized = normalizeProviderId(provider);
   return (

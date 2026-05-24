@@ -114,41 +114,109 @@ function loadContextEngineMessagesFromEntries(entries: unknown[]): AgentMessage[
   });
 }
 
+function renderHistoryMessage(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const entry = message as HistoryMessage;
+  const role =
+    entry.role === "assistant"
+      ? "Assistant"
+      : entry.role === "user"
+        ? "User"
+        : entry.role === "compactionSummary"
+          ? "Compaction summary"
+          : undefined;
+  if (!role) {
+    return undefined;
+  }
+  const text =
+    entry.role === "compactionSummary" && typeof entry.summary === "string"
+      ? entry.summary.trim()
+      : coerceHistoryText(entry.content);
+  return text ? `${role}: ${text}` : undefined;
+}
+
 export function buildCliSessionHistoryPrompt(params: {
   messages: unknown[];
   prompt: string;
   maxHistoryChars?: number;
 }): string | undefined {
   const maxHistoryChars = params.maxHistoryChars ?? MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
-  const renderedHistoryRaw = params.messages
+
+  // loadCliSessionReseedMessages deliberately places a `compactionSummary`
+  // entry first when the session was compacted, so the compacted prior
+  // context survives reseed. Pin that summary as a prefix and only
+  // tail-truncate the post-summary transcript — a blind tail-slice of the
+  // joined history would drop the summary whenever the post-summary tail
+  // alone exceeds the cap.
+  const firstEntry = params.messages[0];
+  const firstIsCompaction =
+    !!firstEntry &&
+    typeof firstEntry === "object" &&
+    (firstEntry as HistoryMessage).role === "compactionSummary";
+  const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;
+  const tailMessages = firstIsCompaction ? params.messages.slice(1) : params.messages;
+
+  const tailRaw = tailMessages
     .flatMap((message) => {
-      if (!message || typeof message !== "object") {
-        return [];
-      }
-      const entry = message as HistoryMessage;
-      const role =
-        entry.role === "assistant"
-          ? "Assistant"
-          : entry.role === "user"
-            ? "User"
-            : entry.role === "compactionSummary"
-              ? "Compaction summary"
-              : undefined;
-      if (!role) {
-        return [];
-      }
-      const text =
-        entry.role === "compactionSummary" && typeof entry.summary === "string"
-          ? entry.summary.trim()
-          : coerceHistoryText(entry.content);
-      return text ? [`${role}: ${text}`] : [];
+      const rendered = renderHistoryMessage(message);
+      return rendered ? [rendered] : [];
     })
     .join("\n\n")
     .trim();
-  const renderedHistory =
-    renderedHistoryRaw.length > maxHistoryChars
-      ? `${renderedHistoryRaw.slice(0, maxHistoryChars).trimEnd()}\n[OpenClaw reseed history truncated]`
-      : renderedHistoryRaw;
+
+  const truncationMarker = "[OpenClaw reseed history truncated; older turns dropped]";
+  const renderTruncatedSummaryWithTail = (renderedSummary: string): string => {
+    const tailBudget =
+      tailRaw.length > 0 ? Math.min(tailRaw.length, Math.floor(maxHistoryChars / 2)) : 0;
+    const separatorBudget = tailBudget > 0 ? 2 : 1;
+    const summaryBudget = Math.max(
+      0,
+      maxHistoryChars - truncationMarker.length - separatorBudget - tailBudget,
+    );
+    const summaryTruncated = renderedSummary.slice(0, summaryBudget).trimEnd();
+    const tailTruncated = tailBudget > 0 ? tailRaw.slice(-tailBudget).trimStart() : "";
+    return [truncationMarker, summaryTruncated, tailTruncated].filter(Boolean).join("\n");
+  };
+
+  let renderedHistory: string;
+  if (summaryRendered) {
+    // Reserve the summary from the budget so the post-summary tail cap is
+    // the remaining headroom. If the summary alone meets or exceeds the
+    // cap, the summary itself must be truncated — pinning a summary that
+    // blows past `maxHistoryChars` would defeat the cap that prevents
+    // reseeding fresh CLI sessions with unexpectedly huge prompts.
+    if (summaryRendered.length >= maxHistoryChars) {
+      // Truncate the summary to fit the budget (less the marker line),
+      // keeping the head. Still reserve budget for the post-summary tail so
+      // recent exact turns survive even when the summary itself is oversize.
+      renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
+    } else if (tailRaw.length === 0) {
+      renderedHistory = summaryRendered;
+    } else {
+      const summaryBlock = `${summaryRendered}\n\n`;
+      const remainingBudget = maxHistoryChars - summaryBlock.length;
+      if (remainingBudget <= 0) {
+        // The summary plus separator already consumes the cap. Reuse the
+        // oversize-summary path so recent post-summary turns still get
+        // reserved tail budget instead of being dropped wholesale.
+        renderedHistory = renderTruncatedSummaryWithTail(summaryRendered);
+      } else if (tailRaw.length > remainingBudget) {
+        renderedHistory = `${summaryBlock}${truncationMarker}\n${tailRaw.slice(-remainingBudget).trimStart()}`;
+      } else {
+        renderedHistory = `${summaryBlock}${tailRaw}`;
+      }
+    }
+  } else {
+    // No compaction summary to pin: tail-slice the full rendered history
+    // and lead with the marker so it correctly describes what follows
+    // (older turns dropped, recent tail retained).
+    renderedHistory =
+      tailRaw.length > maxHistoryChars
+        ? `${truncationMarker}\n${tailRaw.slice(-maxHistoryChars).trimStart()}`
+        : tailRaw;
+  }
 
   if (!renderedHistory) {
     return undefined;

@@ -61,6 +61,7 @@ export function createPluginRecord(params: {
     realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
     realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
     mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
+    meetingNotesSourceProviderIds: [...(params.contracts?.meetingNotesSourceProviders ?? [])],
     imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
     videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
     musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],

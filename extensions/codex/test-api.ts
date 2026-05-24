@@ -43,6 +43,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
   config?: JsonObject;
   promptText?: string;
   developerInstructionAdditions?: string;
+  turnScopedDeveloperInstructions?: string;
   heartbeatCollaborationInstructions?: string;
 }): CodexHarnessPromptSnapshot {
   const developerInstructions = joinPresentSections(
@@ -71,6 +72,7 @@ export function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       appServer: params.appServer,
       promptText: params.promptText,
+      turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
       heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
     }),
   };

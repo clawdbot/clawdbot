@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/anthropic-vertex-provider",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "description": "OpenClaw Anthropic Vertex provider plugin",
   "repository": {
     "type": "git",
@@ -25,10 +25,10 @@
       "minHostVersion": ">=2026.5.12-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.5.22"
+      "pluginApi": ">=2026.5.24"
     },
     "build": {
-      "openclawVersion": "2026.5.22",
+      "openclawVersion": "2026.5.24",
       "bundledDist": false
     },
     "release": {

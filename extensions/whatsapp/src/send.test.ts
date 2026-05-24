@@ -145,6 +145,31 @@ describe("web outbound", () => {
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
+  it("returns the actual outbound key remote JID when Baileys resolves a LID target", async () => {
+    sendMessage.mockResolvedValueOnce({
+      kind: "text",
+      messageId: "msg-lid",
+      keys: [
+        {
+          id: "msg-lid",
+          remoteJid: "123456789@lid",
+          fromMe: true,
+        },
+      ],
+      providerAccepted: true,
+    });
+
+    const result = await sendMessageWhatsApp("+1555", "hi", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+    });
+
+    expect(result).toEqual({
+      messageId: "msg-lid",
+      toJid: "123456789@lid",
+    });
+  });
+
   it("sends newsletter messages via the active listener without composing presence", async () => {
     const result = await sendMessageWhatsApp("120363401234567890@newsletter", "hi", {
       verbose: false,

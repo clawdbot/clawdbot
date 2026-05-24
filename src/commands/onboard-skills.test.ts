@@ -169,6 +169,9 @@ describe("setupSkills", () => {
       expect(mocks.installSkill).not.toHaveBeenCalled();
       expect(notes.find((n) => n.title === "Container skill installs")).toBeDefined();
       expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+      expect(
+        notes.find((n) => n.message.includes("No missing skill dependencies to install")),
+      ).toBeUndefined();
     } finally {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
@@ -261,5 +264,18 @@ describe("setupSkills", () => {
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
     expect(brewNote?.title).toBe("Homebrew recommended");
+  });
+
+  it("displays a clear empty state note when all skill dependencies are ready", async () => {
+    mockMissingBrewStatus([]);
+
+    const { prompter, notes } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    const emptyStateNote = notes.find((n) => n.title === "All skills ready");
+    expect(emptyStateNote?.message).toContain("No missing skill dependencies to install");
+    expect(emptyStateNote?.message).toContain("openclaw skills list --verbose");
+    expect(emptyStateNote?.message).toContain("openclaw skills check");
   });
 });

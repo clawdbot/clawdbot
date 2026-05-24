@@ -121,6 +121,7 @@ export function usesFoundryResponsesByDefault(value?: string | null): boolean {
     normalized.startsWith("o1") ||
     normalized.startsWith("o3") ||
     normalized.startsWith("o4") ||
+    normalized.startsWith("deepseek-v4") ||
     normalized === "computer-use-preview"
   );
 }

@@ -45,6 +45,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
 
 vi.mock("../plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+  resolvePluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
 }));
 
 vi.mock("../current-plugin-metadata-snapshot.js", () => ({
@@ -121,6 +122,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       installRecords: {},
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
       config: rawConfig,
       env,
       workspaceDir: "/resolved-workspace",

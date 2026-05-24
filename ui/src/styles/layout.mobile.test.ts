@@ -146,4 +146,15 @@ describe("grouped chat width styles", () => {
 
     expect(css).toContain("max-width: var(--chat-message-max-width, min(900px, 68%));");
   });
+
+  it("excludes tool shells from light hover without overriding user bubble hover", () => {
+    const css = readGroupedChatCss();
+
+    expect(css).toContain(
+      ':root[data-theme-mode="light"] .chat-bubble:not(:where(.chat-bubble--tool-shell)):hover',
+    );
+    expect(css).not.toContain(
+      ':root[data-theme-mode="light"] .chat-bubble:not(.chat-bubble--tool-shell):hover',
+    );
+  });
 });

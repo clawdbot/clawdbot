@@ -487,7 +487,6 @@ describe("gateway hot reload", () => {
       hoisted.providerManager.startChannel.mockClear();
       hoisted.activeEmbeddedRunCount.value = 1;
       embeddedRunMock.activeIds.add("reload-stuck");
-      vi.useFakeTimers();
       const reloadPromise = onHotReload?.(
         {
           changedPaths: ["channels.discord.token"],
@@ -502,23 +501,19 @@ describe("gateway hot reload", () => {
           noopPaths: [],
         },
         {
-          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+          gateway: { reload: { deferralTimeoutMs: 1 } },
           channels: { discord: { token: "token" } },
         },
       );
       try {
         await Promise.resolve();
-        await vi.advanceTimersByTimeAsync(500);
         expect(hoisted.providerManager.stopChannel).not.toHaveBeenCalled();
         expect(hoisted.providerManager.startChannel).not.toHaveBeenCalled();
 
-        await vi.advanceTimersByTimeAsync(500);
         await reloadPromise;
       } finally {
         hoisted.activeEmbeddedRunCount.value = 0;
         embeddedRunMock.activeIds.clear();
-        await vi.advanceTimersByTimeAsync(500).catch(() => {});
-        vi.useRealTimers();
         await reloadPromise?.catch(() => {});
       }
 

@@ -16,11 +16,13 @@ Return exactly five PR URLs, each with:
 - bug summary
 - why the fix is low-risk
 - proof: rebased-head local/Testbox/live commands or run IDs
+- autoreview: clean result on the exact head being shown
 - CI green on the exact pushed PR head
 - issue/duplicate cleanup done or still pending
 
 The five URLs may be existing PRs that were reviewed/fixed, or new PRs created from issues/clusters.
-Do not present a PR as one of the five until it has been refreshed on current `main`, left-tested, pushed, and verified green in live GitHub CI.
+Do not present a PR URL to the maintainer until it has been refreshed on current `main`, left-tested, autoreviewed clean, pushed, and verified green in live GitHub CI.
+If code, tests, changelog, PR body, or branch base changes after autoreview, rerun autoreview before showing the URL.
 
 ## Companion Skills
 
@@ -59,6 +61,7 @@ Reject:
 - bugs needing live credentials that are unavailable
 - PRs with red CI unless you fix, rebase, push, and recheck them green
 - PRs you only reviewed locally but did not refresh/push/check live
+- PRs whose final head has not passed `$autoreview`
 - fixes whose clean shape is a larger architecture move
 - speculative reports without reproducible/provable cause
 - UI/UX changes requiring product judgment
@@ -90,8 +93,9 @@ Reject:
 6. Review, refresh, and publish:
    - rebase or otherwise refresh the PR branch on current `origin/main`
    - resolve drift, including newly exposed CI failures, rather than counting the PR as ready
+   - changelog-only conflicts are routine on busy `main`; resolve them mechanically when already refreshing, but do not treat them as a real code conflict, a reason to reject the PR, or evidence that the branch needs extra fixup beyond the changelog entry order
    - left-test the rebased head with the smallest meaningful local/Testbox/live command that proves the bug
-   - run `$autoreview` until no accepted/actionable findings remain
+   - run `$autoreview` until no accepted/actionable findings remain before creating, updating, or presenting the PR URL
    - create/update PR with real body and proof fields
    - push the exact reviewed head
    - verify live GitHub CI is green for that pushed head; do not count pending, red, dirty, conflicting, or externally blocked PRs in the five
@@ -117,7 +121,7 @@ What was not tested:
 ## Existing PR Rules
 
 - Review code path beyond the diff before trusting it.
-- If PR is good: rebase/refresh on current `main`, fix small issues, left-test, autoreview, push, and get CI green before counting it.
+- If PR is good: rebase/refresh on current `main`, fix small issues, left-test, autoreview clean, push, and get CI green before showing or counting it.
 - If PR is not good but has a useful idea: recreate locally, co-author when warranted, close original with thanks and explanation.
 - If PR is duplicate or fixed on `main`: comment proof, close.
 - If maintainer cannot push to contributor branch: create own branch/PR, preserve useful commits or credit.

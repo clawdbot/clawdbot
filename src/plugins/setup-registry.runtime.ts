@@ -1,10 +1,9 @@
 import { createRequire } from "node:module";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -57,21 +56,19 @@ function resolveMetadataSnapshotForSetupCliBackends(
 } {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const current = getCurrentPluginMetadataSnapshot({
-    config: params.config,
+  const snapshot = resolvePluginMetadataSnapshot({
+    config: params.config ?? {},
     env,
-    workspaceDir,
+    ...(workspaceDir !== undefined
+      ? {
+          workspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        }
+      : {}),
   });
-  if (current) {
-    return { snapshot: current, cacheable: true };
-  }
   return {
-    snapshot: loadPluginMetadataSnapshot({
-      config: params.config ?? {},
-      env,
-      workspaceDir,
-    }),
-    cacheable: false,
+    snapshot,
+    cacheable: true,
   };
 }
 

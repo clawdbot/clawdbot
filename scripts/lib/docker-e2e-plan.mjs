@@ -325,6 +325,7 @@ export function findLaneByName(name) {
 }
 
 function laneCredentialRequirements(poolLane) {
+  const resources = laneResources(poolLane);
   const credentials = [];
   if (poolLane.name === "install-e2e-openai") {
     credentials.push("openai");
@@ -332,14 +333,23 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (
-    poolLane.name === "openwebui" ||
-    poolLane.name === "openai-chat-tools" ||
-    poolLane.name === "openai-web-search-minimal" ||
-    poolLane.name === "live-codex-npm-plugin" ||
-    poolLane.name === "live-plugin-tool"
-  ) {
+  if (resources.includes("live:openai")) {
     credentials.push("openai");
+  }
+  if (resources.includes("live:codex")) {
+    credentials.push("codex");
+  }
+  if (resources.includes("live:claude")) {
+    credentials.push("anthropic");
+  }
+  if (resources.includes("live:droid")) {
+    credentials.push("factory");
+  }
+  if (resources.includes("live:gemini")) {
+    credentials.push("gemini");
+  }
+  if (resources.includes("live:opencode")) {
+    credentials.push("opencode");
   }
   return credentials;
 }

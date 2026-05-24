@@ -142,18 +142,3 @@ export function resolveDiscordInboundConversation(params: {
   });
   return conversationId ? { conversationId } : null;
 }
-
-export function parseDiscordExplicitTarget(raw: string) {
-  try {
-    const target = parseDiscordTarget(raw, { defaultKind: "channel" });
-    if (!target) {
-      return null;
-    }
-    return {
-      to: target.normalized,
-      chatType: target.kind === "user" ? ("direct" as const) : ("channel" as const),
-    };
-  } catch {
-    return null;
-  }
-}

@@ -11,6 +11,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
+import { assertManagedProxyAllowsCdpUrl } from "./cdp-proxy-bypass.js";
 import {
   CHROME_BOOTSTRAP_EXIT_POLL_MS,
   CHROME_BOOTSTRAP_EXIT_TIMEOUT_MS,
@@ -235,6 +236,12 @@ export type RunningChrome = {
   proc: ChildProcess;
   headless?: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
+  /**
+   * @deprecated CDP managed-proxy bypasses are scoped at exact request URLs.
+   * Kept so older in-memory callers can pass stale RunningChrome objects
+   * through stopOpenClawChrome without type churn.
+   */
+  releaseCdpProxyBypass?: () => void;
 };
 
 function resolveBrowserExecutable(
@@ -432,6 +439,20 @@ export async function launchOpenClawChrome(
   if (missingDisplayError) {
     throw new BrowserProfileUnavailableError(missingDisplayError);
   }
+
+  // Surface `loopbackMode=block` before spawning Chrome. The CDP fetch and
+  // WebSocket helpers install exact-URL bypasses for `/json/version` and
+  // `ws://.../devtools/...`.
+  try {
+    assertManagedProxyAllowsCdpUrl(profile.cdpUrl);
+  } catch (err) {
+    throw new BrowserProfileUnavailableError(
+      `Browser profile "${profile.name}" cannot launch: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+
   await ensurePortAvailable(profile.cdpPort);
 
   const exe = resolveBrowserExecutable(resolved, profile);
@@ -640,30 +661,47 @@ export async function stopOpenClawChrome(
   timeoutMs = CHROME_STOP_TIMEOUT_MS,
 ) {
   const proc = running.proc;
-  if (proc.killed) {
-    return;
-  }
   try {
-    proc.kill("SIGTERM");
-  } catch {
-    // ignore
-  }
-
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (!proc.exitCode && proc.killed) {
-      break;
-    }
-    if (!(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))) {
+    if (proc.killed) {
       return;
     }
-    const remainingMs = timeoutMs - (Date.now() - start);
-    await new Promise((r) => setTimeout(r, Math.max(1, Math.min(100, remainingMs))));
-  }
+    try {
+      proc.kill("SIGTERM");
+    } catch {
+      // ignore
+    }
 
-  try {
-    proc.kill("SIGKILL");
-  } catch {
-    // ignore
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (!proc.exitCode && proc.killed) {
+        break;
+      }
+      if (
+        !(await isChromeReachable(cdpUrlForPort(running.cdpPort), CHROME_STOP_PROBE_TIMEOUT_MS))
+      ) {
+        return;
+      }
+      const remainingMs = timeoutMs - (Date.now() - start);
+      await new Promise((r) => setTimeout(r, Math.max(1, Math.min(100, remainingMs))));
+    }
+
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+  } finally {
+    // Release the managed-proxy bypass we registered at launch time. Wrapped
+    // in try/catch + nulled out so a double-stop is a no-op and a failing
+    // release does not mask a teardown error.
+    const release = running.releaseCdpProxyBypass;
+    if (release) {
+      running.releaseCdpProxyBypass = undefined;
+      try {
+        release();
+      } catch {
+        // best-effort; the bypass survives until process exit at worst
+      }
+    }
   }
 }

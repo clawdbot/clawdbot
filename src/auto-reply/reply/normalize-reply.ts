@@ -2,6 +2,7 @@ import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitiz
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
+import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import {
   HEARTBEAT_TOKEN,
   isSilentReplyPayloadText,
@@ -103,13 +104,15 @@ export function normalizeReplyPayload(
     return null;
   }
 
-  let enrichedPayload: ReplyPayload = { ...payload, text };
+  let enrichedPayload: ReplyPayload = copyReplyPayloadMetadata(payload, { ...payload, text });
   if (applyChannelTransforms && opts.transformReplyPayload) {
     const transformedPayload = opts.transformReplyPayload(enrichedPayload);
     if (transformedPayload === null) {
       return null;
     }
-    enrichedPayload = transformedPayload ?? enrichedPayload;
+    enrichedPayload = transformedPayload
+      ? copyReplyPayloadMetadata(enrichedPayload, transformedPayload)
+      : enrichedPayload;
     text = enrichedPayload.text;
   }
 
@@ -127,6 +130,6 @@ export function normalizeReplyPayload(
     text = `${effectivePrefix} ${text}`;
   }
 
-  enrichedPayload = { ...enrichedPayload, text };
+  enrichedPayload = copyReplyPayloadMetadata(enrichedPayload, { ...enrichedPayload, text });
   return enrichedPayload;
 }

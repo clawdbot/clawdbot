@@ -1,15 +1,30 @@
 import http from "node:http";
 import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
+  registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
+    () => undefined,
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
+
 import {
+  assertManagedProxyAllowsCdpUrl,
   getDirectAgentForCdp,
   hasProxyEnv,
+  withManagedProxyForCdpUrl,
   withNoProxyForCdpUrl,
   withNoProxyForLocalhost,
 } from "./cdp-proxy-bypass.js";
 
 beforeEach(() => {
   vi.useRealTimers();
+  registerManagedProxyBrowserCdpBypassMock.mockReset();
+  registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
 });
 
 function createDeferred<T = void>() {
@@ -456,5 +471,62 @@ describe("withNoProxyForCdpUrl", () => {
       delete process.env.NO_PROXY;
       delete process.env.no_proxy;
     }
+  });
+});
+
+describe("withManagedProxyForCdpUrl", () => {
+  it("registers the exact CDP URL and releases after the operation", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    const result = withManagedProxyForCdpUrl("http://127.0.0.1:9222/json/version", () => "ok");
+
+    expect(result).toBe("ok");
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/version",
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("releases the exact CDP URL when the operation throws", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    expect(() =>
+      withManagedProxyForCdpUrl("ws://127.0.0.1:9222/devtools/browser/abc", () => {
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the exact CDP URL registered until an async operation settles", async () => {
+    const release = vi.fn();
+    const deferred = createDeferred<string>();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    const result = withManagedProxyForCdpUrl(
+      "http://127.0.0.1:9222/json/version",
+      () => deferred.promise,
+    );
+
+    expect(release).not.toHaveBeenCalled();
+    deferred.resolve("ok");
+    await expect(result).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("uses the same scoped registration for launch policy preflight", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    assertManagedProxyAllowsCdpUrl("http://127.0.0.1:9222");
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith("http://127.0.0.1:9222");
+    expect(release).toHaveBeenCalledOnce();
   });
 });

@@ -156,4 +156,86 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     const requireFromPlugin = createRequire(externalPluginEntry);
     expect(() => requireFromPlugin.resolve("openclaw/plugin-sdk/source-only")).toThrow();
   });
+
+  it("scopes private SSRF SDK aliases to bundled local IPC native parents", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-ssrf-"));
+    const { loaderModulePath } = writeFakeOpenClawPackage(root);
+    const internalPath = path.join(root, "dist", "plugin-sdk", "ssrf-runtime-internal.js");
+    fs.writeFileSync(internalPath, "export const ssrfInternal = true;\n", "utf8");
+    const ollamaEntry = path.join(root, "dist", "extensions", "ollama", "index.js");
+    const runtimeOllamaEntry = path.join(root, "dist-runtime", "extensions", "ollama", "index.js");
+    const browserEntry = path.join(root, "dist", "extensions", "browser", "index.js");
+    const runtimeBrowserEntry = path.join(
+      root,
+      "dist-runtime",
+      "extensions",
+      "browser",
+      "index.js",
+    );
+    const otherEntry = path.join(root, "dist", "extensions", "demo", "index.js");
+    fs.mkdirSync(path.dirname(ollamaEntry), { recursive: true });
+    fs.mkdirSync(path.dirname(runtimeOllamaEntry), { recursive: true });
+    fs.mkdirSync(path.dirname(browserEntry), { recursive: true });
+    fs.mkdirSync(path.dirname(runtimeBrowserEntry), { recursive: true });
+    fs.mkdirSync(path.dirname(otherEntry), { recursive: true });
+    fs.writeFileSync(ollamaEntry, "export default {};\n", "utf8");
+    fs.writeFileSync(runtimeOllamaEntry, "export default {};\n", "utf8");
+    fs.writeFileSync(browserEntry, "export default {};\n", "utf8");
+    fs.writeFileSync(runtimeBrowserEntry, "export default {};\n", "utf8");
+    fs.writeFileSync(otherEntry, "export default {};\n", "utf8");
+
+    const installedAliases = installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: ollamaEntry,
+      pluginSdkResolution: "dist",
+    });
+    installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: runtimeOllamaEntry,
+      pluginSdkResolution: "dist",
+    });
+    installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: browserEntry,
+      pluginSdkResolution: "dist",
+    });
+    installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: runtimeBrowserEntry,
+      pluginSdkResolution: "dist",
+    });
+    installOpenClawPluginSdkNativeResolver({
+      modulePath: loaderModulePath,
+      pluginModulePath: otherEntry,
+      pluginSdkResolution: "dist",
+    });
+
+    expect(installedAliases).toContain("openclaw/plugin-sdk/ssrf-runtime-internal");
+    const requireFromOllama = createRequire(ollamaEntry);
+    expect(
+      fs.realpathSync(requireFromOllama.resolve("openclaw/plugin-sdk/ssrf-runtime-internal")),
+    ).toBe(fs.realpathSync(internalPath));
+
+    const requireFromRuntimeOllama = createRequire(runtimeOllamaEntry);
+    expect(
+      fs.realpathSync(
+        requireFromRuntimeOllama.resolve("openclaw/plugin-sdk/ssrf-runtime-internal"),
+      ),
+    ).toBe(fs.realpathSync(internalPath));
+
+    const requireFromBrowser = createRequire(browserEntry);
+    expect(
+      fs.realpathSync(requireFromBrowser.resolve("openclaw/plugin-sdk/ssrf-runtime-internal")),
+    ).toBe(fs.realpathSync(internalPath));
+
+    const requireFromRuntimeBrowser = createRequire(runtimeBrowserEntry);
+    expect(
+      fs.realpathSync(
+        requireFromRuntimeBrowser.resolve("openclaw/plugin-sdk/ssrf-runtime-internal"),
+      ),
+    ).toBe(fs.realpathSync(internalPath));
+
+    const requireFromOther = createRequire(otherEntry);
+    expect(() => requireFromOther.resolve("openclaw/plugin-sdk/ssrf-runtime-internal")).toThrow();
+  });
 });

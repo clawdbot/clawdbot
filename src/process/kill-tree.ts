@@ -32,7 +32,34 @@ export function killProcessTree(
     return;
   }
 
-  killProcessTreeUnix(pid, graceMs, opts?.detached !== false);
+  const useGroupKill = opts?.detached !== false;
+  signalProcessTreeUnix(pid, "SIGTERM", useGroupKill);
+  setTimeout(() => {
+    const stillAlive = useGroupKill
+      ? isProcessAlive(-pid) || isProcessAlive(pid)
+      : isProcessAlive(pid);
+    if (!stillAlive) {
+      return;
+    }
+    signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
+  }, graceMs).unref(); // Don't block event loop exit
+}
+
+export function signalProcessTree(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+  opts?: { detached?: boolean },
+): void {
+  if (!Number.isFinite(pid) || pid <= 0) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    signalProcessTreeWindows(pid, signal);
+    return;
+  }
+
+  signalProcessTreeUnix(pid, signal, opts?.detached !== false);
 }
 
 function normalizeGraceMs(value?: number): number {
@@ -51,50 +78,28 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function killProcessTreeUnix(pid: number, graceMs: number, useGroupKill: boolean): void {
-  // Step 1: Try graceful SIGTERM. Prefer process-group kill (`-pid`) when the
-  // child was spawned detached so it has its own group; otherwise stick to the
-  // direct pid to avoid SIGTERMing our own process group (the gateway). (#71662)
+function signalProcessTreeUnix(
+  pid: number,
+  signal: "SIGTERM" | "SIGKILL",
+  useGroupKill: boolean,
+): void {
+  // Prefer process-group signals (`-pid`) when the child was spawned detached
+  // so it has its own group; otherwise stick to the direct pid to avoid
+  // signaling our own process group (the gateway). (#71662)
   if (useGroupKill) {
     try {
-      process.kill(-pid, "SIGTERM");
-    } catch {
-      // Process group doesn't exist or we lack permission - try direct
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        // Already gone
-        return;
-      }
-    }
-  } else {
-    try {
-      process.kill(pid, "SIGTERM");
-    } catch {
-      // Already gone
+      process.kill(-pid, signal);
       return;
+    } catch {
+      // Process group doesn't exist or we lack permission - try direct.
     }
   }
 
-  // Step 2: Wait grace period, then SIGKILL if still alive
-  setTimeout(() => {
-    if (useGroupKill && isProcessAlive(-pid)) {
-      try {
-        process.kill(-pid, "SIGKILL");
-        return;
-      } catch {
-        // Fall through to direct pid kill
-      }
-    }
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Process exited between liveness check and kill
-    }
-  }, graceMs).unref(); // Don't block event loop exit
+  try {
+    process.kill(pid, signal);
+  } catch {
+    // Already gone
+  }
 }
 
 function runTaskkill(args: string[]): void {
@@ -111,7 +116,7 @@ function runTaskkill(args: string[]): void {
 
 function killProcessTreeWindows(pid: number, graceMs: number): void {
   // Step 1: Try graceful termination (taskkill without /F)
-  runTaskkill(["/T", "/PID", String(pid)]);
+  signalProcessTreeWindows(pid, "SIGTERM");
 
   // Step 2: Wait grace period, then force kill only if pid still exists.
   // This avoids unconditional delayed /F kills after graceful shutdown.
@@ -119,6 +124,12 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
     if (!isProcessAlive(pid)) {
       return;
     }
-    runTaskkill(["/F", "/T", "/PID", String(pid)]);
+    signalProcessTreeWindows(pid, "SIGKILL");
   }, graceMs).unref(); // Don't block event loop exit
+}
+
+function signalProcessTreeWindows(pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+  const args =
+    signal === "SIGKILL" ? ["/F", "/T", "/PID", String(pid)] : ["/T", "/PID", String(pid)];
+  runTaskkill(args);
 }

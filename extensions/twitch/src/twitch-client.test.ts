@@ -228,6 +228,41 @@ describe("TwitchClientManager", () => {
       );
     });
 
+    it("rejects and does not cache a client when addUserForToken fails (83853)", async () => {
+      const refreshingAccount: TwitchAccountConfig = {
+        ...testAccount,
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+        expiresIn: 3600,
+        obtainmentTimestamp: 1_700_000_000_000,
+      };
+      mockAddUserForToken.mockRejectedValueOnce(new Error("token bind failed"));
+
+      await expect(manager.getClient(refreshingAccount)).rejects.toThrow("token bind failed");
+
+      // The broken auth provider must not be cached as a usable client;
+      // otherwise later sends fail with an opaque error instead of failing fast.
+      const key = manager.getAccountKey(refreshingAccount);
+      expect((manager as any).clients.has(key)).toBe(false);
+    });
+
+    it("retries client creation after an earlier addUserForToken failure (83853)", async () => {
+      const refreshingAccount: TwitchAccountConfig = {
+        ...testAccount,
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+        expiresIn: 3600,
+        obtainmentTimestamp: 1_700_000_000_000,
+      };
+      mockAddUserForToken.mockRejectedValueOnce(new Error("token bind failed"));
+
+      await expect(manager.getClient(refreshingAccount)).rejects.toThrow("token bind failed");
+      // No broken client was cached, so a second call re-attempts the bind.
+      await manager.getClient(refreshingAccount);
+
+      expect(mockAddUserForToken).toHaveBeenCalledTimes(2);
+    });
+
     it("should throw error when clientId is missing", async () => {
       const accountWithoutClientId: TwitchAccountConfig = {
         ...testAccount,
@@ -293,6 +328,41 @@ describe("TwitchClientManager", () => {
       // Check the stored handler is handler2
       const key = manager.getAccountKey(testAccount);
       expect((manager as any).messageHandlers.get(key)).toBe(handler2);
+    });
+
+    it("cleanup of an earlier handler does not remove a newer registered handler (#83888)", () => {
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
+      const key = manager.getAccountKey(testAccount);
+
+      const cleanup1 = manager.onMessage(testAccount, handler1);
+      manager.onMessage(testAccount, handler2);
+
+      // Running the first handler's cleanup must not drop handler2.
+      cleanup1();
+
+      expect((manager as any).messageHandlers.get(key)).toBe(handler2);
+    });
+
+    it("cleanup of an earlier registration does not remove a newer registration using the same handler", () => {
+      const handler = vi.fn();
+      const key = manager.getAccountKey(testAccount);
+
+      const cleanup1 = manager.onMessage(testAccount, handler);
+      manager.onMessage(testAccount, handler);
+      cleanup1();
+
+      expect((manager as any).messageHandlers.get(key)).toBe(handler);
+    });
+
+    it("cleanup of the current handler removes it", () => {
+      const handler = vi.fn();
+      const key = manager.getAccountKey(testAccount);
+
+      const cleanup = manager.onMessage(testAccount, handler);
+      cleanup();
+
+      expect((manager as any).messageHandlers.has(key)).toBe(false);
     });
   });
 

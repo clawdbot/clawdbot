@@ -146,14 +146,26 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
 }): ToolErrorWarningPolicy {
   const normalizedToolName = normalizeOptionalLowercaseString(params.lastToolError.toolName) ?? "";
-  const includeDetails = shouldIncludeToolErrorDetails(params);
-  if (params.suppressToolErrorWarnings) {
+  let toolErrorWarningOverride: boolean | undefined;
+  let dynamicToolErrorWarningsDisabled = false;
+  if (typeof params.suppressToolErrorWarnings === "function") {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings();
+    dynamicToolErrorWarningsDisabled = toolErrorWarningOverride === false;
+  } else {
+    toolErrorWarningOverride = params.suppressToolErrorWarnings;
+  }
+  const includeDetails = shouldIncludeToolErrorDetails({
+    ...params,
+    verboseLevel: dynamicToolErrorWarningsDisabled ? "off" : params.verboseLevel,
+  });
+  const suppressToolErrorWarnings = toolErrorWarningOverride === true;
+  if (suppressToolErrorWarnings) {
     return { showWarning: false, includeDetails };
   }
   // sessions_send timeouts and errors are transient inter-session communication
@@ -197,7 +209,7 @@ export function buildEmbeddedRunPayloads(params: {
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
-  suppressToolErrorWarnings?: boolean;
+  suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   inlineToolResultsAllowed: boolean;
   didSendViaMessagingTool?: boolean;
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];

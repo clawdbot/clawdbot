@@ -151,8 +151,8 @@ export function resolveBootstrapPromptTruncationWarningMode(
   return DEFAULT_BOOTSTRAP_PROMPT_TRUNCATION_WARNING_MODE;
 }
 
-function isAgentsBootstrapFile(fileName: string): boolean {
-  return fileName.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
+function isAgentsBootstrapFile(fileName: string | undefined): boolean {
+  return fileName?.toLowerCase() === AGENTS_BOOTSTRAP_FILENAME.toLowerCase();
 }
 
 function isPolicyDigestCandidate(line: string): boolean {

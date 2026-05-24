@@ -85,6 +85,7 @@ export async function startTalkRealtimeAgentConsult(params: {
       connId: params.connId,
       sessionKey: params.sessionKey,
       runId,
+      callId: params.callId,
     });
   }
   return { ok: true, runId, idempotencyKey };

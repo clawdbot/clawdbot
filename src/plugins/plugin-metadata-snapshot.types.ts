@@ -62,3 +62,8 @@ export type LoadPluginMetadataSnapshotParams = {
   index?: InstalledPluginIndex;
   preferPersisted?: boolean;
 };
+
+export type ResolvePluginMetadataSnapshotParams = LoadPluginMetadataSnapshotParams & {
+  allowCurrent?: boolean;
+  allowWorkspaceScopedCurrent?: boolean;
+};

@@ -63,6 +63,11 @@ describe("plugin contract registry", () => {
         pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
     },
     {
+      name: "does not duplicate bundled meeting-notes source provider ids",
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.meetingNotesSourceProviderIds),
+    },
+    {
       name: "does not duplicate bundled realtime transcription provider ids",
       ids: () =>
         pluginRegistrationContractRegistry.flatMap(
@@ -176,6 +181,17 @@ describe("plugin contract registry", () => {
       predicate: (plugin) =>
         plugin.origin === "bundled" &&
         (plugin.contracts?.realtimeTranscriptionProviders?.length ?? 0) > 0,
+    });
+  });
+
+  it("covers every bundled meeting-notes source plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.meetingNotesSourceProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.contracts?.meetingNotesSourceProviders?.length ?? 0) > 0,
     });
   });
 

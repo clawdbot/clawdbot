@@ -68,7 +68,10 @@ describe("resolveDeferredCleanupDecision", () => {
 
   it("uses retry backoff for completion-message flows once descendants are settled", () => {
     const decision = resolveDecision({
-      entry: makeEntry({ expectsCompletionMessage: true, announceRetryCount: 1 }),
+      entry: makeEntry({
+        expectsCompletionMessage: true,
+        delivery: { status: "pending", attemptCount: 1 },
+      }),
       activeDescendantRuns: 0,
       resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
     });
@@ -78,7 +81,10 @@ describe("resolveDeferredCleanupDecision", () => {
 
   it("uses retry backoff for non-completion flows so cleanup can settle after announce failures", () => {
     const decision = resolveDecision({
-      entry: makeEntry({ expectsCompletionMessage: false, announceRetryCount: 1 }),
+      entry: makeEntry({
+        expectsCompletionMessage: false,
+        delivery: { status: "not_required", attemptCount: 1 },
+      }),
       activeDescendantRuns: 0,
       resolveAnnounceRetryDelayMs: (retryCount) => retryCount * 1_000,
     });

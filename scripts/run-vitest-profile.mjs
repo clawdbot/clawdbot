@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "./lib/error-format.mjs";
+import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 export function parseArgs(argv) {
   const args = {
@@ -74,6 +75,25 @@ export function buildVitestProfileCommand({ mode, outputDir }) {
   };
 }
 
+export function buildVitestProfileSpawnSpec(plan, runnerOptions = {}) {
+  if (plan.command === "pnpm") {
+    return createPnpmRunnerSpawnSpec({
+      ...runnerOptions,
+      env: runnerOptions.env ?? process.env,
+      pnpmArgs: plan.args,
+      stdio: "inherit",
+    });
+  }
+  return {
+    args: plan.args,
+    command: plan.command,
+    options: {
+      env: process.env,
+      stdio: "inherit",
+    },
+  };
+}
+
 function main() {
   const parsed = parseArgs(process.argv.slice(2));
   const outputDir = resolveVitestProfileDir(parsed);
@@ -86,11 +106,8 @@ function main() {
 
   console.log(`[run-vitest-profile] writing ${parsed.mode} profiles to ${outputDir}`);
 
-  const result = spawnSync(plan.command, plan.args, {
-    stdio: "inherit",
-    shell: process.platform === "win32" && plan.command === "pnpm",
-    env: process.env,
-  });
+  const spawnSpec = buildVitestProfileSpawnSpec(plan);
+  const result = spawnSync(spawnSpec.command, spawnSpec.args, spawnSpec.options);
 
   if (result.error) {
     throw result.error;

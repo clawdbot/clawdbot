@@ -126,6 +126,7 @@ vi.mock("../plugins/provider-runtime.js", async () => {
 
 let applyAuthHeaderOverride: typeof import("./model-auth.js").applyAuthHeaderOverride;
 let applyLocalNoAuthHeaderOverride: typeof import("./model-auth.js").applyLocalNoAuthHeaderOverride;
+let createRuntimeProviderAuthLookup: typeof import("./model-auth.js").createRuntimeProviderAuthLookup;
 let formatMissingAuthError: typeof import("./model-auth.js").formatMissingAuthError;
 let hasUsableCustomProviderApiKey: typeof import("./model-auth.js").hasUsableCustomProviderApiKey;
 let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyntheticLocalProviderAuthConfig;
@@ -146,6 +147,7 @@ beforeAll(async () => {
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
+    createRuntimeProviderAuthLookup,
     formatMissingAuthError,
     hasSyntheticLocalProviderAuthConfig,
     getApiKeyForModel,
@@ -164,6 +166,17 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+});
+
+describe("createRuntimeProviderAuthLookup", () => {
+  it("omits synthetic auth refs when plugin synthetic auth is disabled", () => {
+    expect(
+      createRuntimeProviderAuthLookup({
+        includePluginSyntheticAuth: false,
+        env: {},
+      }).syntheticAuthProviderRefs,
+    ).toBeUndefined();
+  });
 });
 
 async function withoutEnv<T>(key: string, fn: () => Promise<T>): Promise<T> {

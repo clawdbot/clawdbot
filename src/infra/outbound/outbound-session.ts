@@ -69,9 +69,22 @@ function inferPeerKindFromPlugin(params: {
 }): ChatType | undefined {
   for (const target of params.targets) {
     const inferred = normalizeInferredPeerKind(
-      params.plugin?.messaging?.parseExplicitTarget?.({ raw: target })?.chatType ??
-        params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
+      params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
     );
+    if (inferred) {
+      return inferred;
+    }
+  }
+  return undefined;
+}
+
+function inferPeerKindFromLegacyParser(params: {
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
+  targets: readonly string[];
+}): ChatType | undefined {
+  for (const target of params.targets) {
+    const parsed = params.plugin?.messaging?.parseExplicitTarget?.({ raw: target });
+    const inferred = normalizeInferredPeerKind(parsed?.chatType);
     if (inferred) {
       return inferred;
     }
@@ -120,6 +133,7 @@ function inferPeerKind(params: {
   );
   return (
     inferPeerKindFromPlugin({ plugin, targets }) ??
+    inferPeerKindFromLegacyParser({ plugin, targets }) ??
     inferPeerKindFromFallbackPrefixes(targets) ??
     "direct"
   );

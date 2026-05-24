@@ -17,6 +17,7 @@ import {
   shouldRunShrinkwrapGuard,
   createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
+import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -72,6 +73,23 @@ afterEach(() => {
 });
 
 describe("scripts/changed-lanes", () => {
+  it("detects direct script execution from Windows argv paths", () => {
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "c:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      isDirectRunPath(
+        "C:\\repo\\scripts\\changed-lanes.mjs",
+        "C:\\repo\\scripts\\check-changed.mjs",
+        "win32",
+      ),
+    ).toBe(false);
+  });
+
   it("includes untracked worktree files in the default local diff", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-lanes-");
     git(dir, ["init", "-q", "--initial-branch=main"]);
@@ -864,7 +882,9 @@ describe("scripts/changed-lanes", () => {
     const plan = createChangedCheckPlan(result);
     const shrinkwrapGuard = createShrinkwrapGuardCommand(["extensions/slack/package.json"]);
 
-    expect(shrinkwrapGuard?.args.some((arg) => arg.endsWith("extensions/slack"))).toBe(true);
+    expect(
+      shrinkwrapGuard?.args.some((arg) => arg.replaceAll("\\", "/").endsWith("extensions/slack")),
+    ).toBe(true);
     expect(plan.commands.map((command) => command.name)).toContain("npm shrinkwrap guard");
     expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
   });

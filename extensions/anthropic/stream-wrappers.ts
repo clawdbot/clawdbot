@@ -18,8 +18,15 @@ import {
 
 const log = createSubsystemLogger("anthropic-stream");
 
-const ANTHROPIC_CONTEXT_1M_BETA = "context-1m-2025-08-07";
-const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as const;
+const ANTHROPIC_CONTEXT_1M_BETA_LEGACY = "context-1m-2025-08-07";
+const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  "claude-opus-4-6",
+  "claude-opus-4.6",
+  "claude-opus-4-7",
+  "claude-opus-4.7",
+  "claude-sonnet-4-6",
+  "claude-sonnet-4.6",
+] as const;
 const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
   "interleaved-thinking-2025-05-14",
@@ -34,7 +41,7 @@ type AnthropicServiceTier = "auto" | "standard_only";
 
 function isAnthropic1MModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
-  return ANTHROPIC_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
 }
 
 function parseHeaderList(value: unknown): string[] {
@@ -81,29 +88,40 @@ function normalizeAnthropicServiceTier(value: unknown): AnthropicServiceTier | u
   return undefined;
 }
 
+function hasConfiguredAnthropicBeta(extraParams: Record<string, unknown> | undefined): boolean {
+  const configured = extraParams?.anthropicBeta;
+  if (typeof configured === "string") {
+    return configured.trim().length > 0;
+  }
+  if (!Array.isArray(configured)) {
+    return false;
+  }
+  return configured.some((beta) => typeof beta === "string" && beta.trim().length > 0);
+}
+
 export function resolveAnthropicBetas(
   extraParams: Record<string, unknown> | undefined,
-  modelId: string,
+  _modelId: string,
 ): string[] | undefined {
   const betas = new Set<string>();
   const configured = extraParams?.anthropicBeta;
   if (typeof configured === "string" && configured.trim()) {
-    betas.add(configured.trim());
+    for (const beta of parseHeaderList(configured)) {
+      betas.add(beta);
+    }
   } else if (Array.isArray(configured)) {
     for (const beta of configured) {
       if (typeof beta === "string" && beta.trim()) {
-        betas.add(beta.trim());
+        for (const betaValue of parseHeaderList(beta)) {
+          betas.add(betaValue);
+        }
       }
     }
   }
 
-  if (extraParams?.context1m === true) {
-    if (isAnthropic1MModel(modelId)) {
-      betas.add(ANTHROPIC_CONTEXT_1M_BETA);
-    } else {
-      log.warn(`ignoring context1m for non-opus/sonnet model: anthropic/${modelId}`);
-    }
-  }
+  // Newer Claude 4.x 1M context is GA. Keep context1m as a context-sizing
+  // opt-in, but do not send the retired beta even if it remains in older config.
+  betas.delete(ANTHROPIC_CONTEXT_1M_BETA_LEGACY);
 
   return betas.size > 0 ? [...betas] : undefined;
 }
@@ -115,16 +133,7 @@ export function createAnthropicBetaHeadersWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
-    const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
-    const effectiveBetas =
-      isOauth && requestedContext1m
-        ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
-        : betas;
-    if (isOauth && requestedContext1m) {
-      log.warn(
-        `ignoring context1m for Anthropic Claude CLI or legacy token auth on ${model.provider}/${model.id}; falling back to the standard context window because Anthropic rejects context-1m beta with non-API-key auth`,
-      );
-    }
+    const effectiveBetas = betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA_LEGACY);
 
     const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
@@ -204,12 +213,16 @@ export function wrapAnthropicProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
+  const needsAnthropicBetaWrapper =
+    anthropicBetas !== undefined ||
+    hasConfiguredAnthropicBeta(ctx.extraParams) ||
+    (ctx.extraParams?.context1m === true && isAnthropic1MModel(ctx.modelId));
   const serviceTier = resolveAnthropicServiceTier(ctx.extraParams);
   const fastMode = resolveAnthropicFastMode(ctx.extraParams);
   return composeProviderStreamWrappers(
     ctx.streamFn,
-    anthropicBetas?.length
-      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas)
+    needsAnthropicBetaWrapper
+      ? (streamFn) => createAnthropicBetaHeadersWrapper(streamFn, anthropicBetas ?? [])
       : undefined,
     serviceTier
       ? (streamFn) => createAnthropicServiceTierWrapper(streamFn, serviceTier)

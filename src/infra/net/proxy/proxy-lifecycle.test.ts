@@ -52,6 +52,7 @@ import {
 import {
   ensureInheritedManagedProxyRoutingActive,
   resetProxyLifecycleForTests,
+  registerManagedProxyBrowserCdpBypass,
   registerManagedProxyGatewayLoopbackBypass,
   startProxy,
   stopProxy,
@@ -687,5 +688,95 @@ describe("startProxy", () => {
 
   it("stopProxy is a no-op when handle is null", async () => {
     await expect(stopProxy(null)).resolves.toBeUndefined();
+  });
+
+  it("registers loopback CDP URLs with Proxyline for the Browser plugin", async () => {
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+
+    const unregister = expectBypassUnregister(
+      registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800"),
+    );
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({
+      url: "http://127.0.0.1:18800",
+    });
+
+    unregister();
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
+    await stopProxy(handle);
+  });
+
+  it("accepts loopback IPv6 and localhost authorities for Browser CDP bypass", async () => {
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+    });
+
+    const unregisterIpv6 = expectBypassUnregister(
+      registerManagedProxyBrowserCdpBypass("http://[::1]:18800"),
+    );
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "http://[::1]:18800" });
+    unregisterIpv6();
+
+    const unregisterLocalhost = expectBypassUnregister(
+      registerManagedProxyBrowserCdpBypass("http://localhost:18800"),
+    );
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "http://localhost:18800" });
+    unregisterLocalhost();
+
+    await stopProxy(handle);
+  });
+
+  it("does not register Browser CDP bypass for non-loopback URLs (attachOnly remote)", () => {
+    expect(
+      registerManagedProxyBrowserCdpBypass("https://browserless.example.com:443"),
+    ).toBeUndefined();
+    expect(
+      registerManagedProxyBrowserCdpBypass("ws://cdp.browserbase.com/devtools/browser/x"),
+    ).toBeUndefined();
+    expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
+  });
+
+  it("throws when active proxy loopbackMode is block for Browser CDP bypass", async () => {
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "block",
+    });
+
+    try {
+      expect(() => registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800")).toThrow(
+        "Browser loopback CDP connections are blocked by proxy.loopbackMode",
+      );
+      expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
+    } finally {
+      await stopProxy(handle);
+    }
+  });
+
+  it("does not register Browser CDP bypass when active proxy loopbackMode is proxy", async () => {
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "proxy",
+    });
+
+    try {
+      const unregister = registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800");
+      expect(unregister).toBeUndefined();
+      expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
+    } finally {
+      await stopProxy(handle);
+    }
+  });
+
+  it("returns undefined when no managed proxy is active (bypass is a no-op)", () => {
+    // No startProxy() in this test → proxylineHandle is null, so even a
+    // loopback URL produces undefined rather than attempting to register
+    // against a non-existent handle.
+    expect(registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800")).toBeUndefined();
+    expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
   });
 });

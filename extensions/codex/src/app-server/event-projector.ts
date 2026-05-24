@@ -1528,6 +1528,32 @@ function readString(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return value.trim() || undefined;
+}
+
+function readNonEmptyString(record: JsonObject, key: string): string | undefined {
+  return normalizeNonEmptyString(record[key]);
+}
+
+function readNonEmptyStringArray(record: JsonObject, key: string): string[] {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: string[] = [];
+  for (const entry of value) {
+    const normalized = normalizeNonEmptyString(entry);
+    if (normalized) {
+      entries.push(normalized);
+    }
+  }
+  return entries;
+}
+
 function readNullableString(record: JsonObject, key: string): string | null | undefined {
   const value = record[key];
   if (value === null) {
@@ -1818,13 +1844,46 @@ function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefine
       changes: itemFileChanges(item),
     });
   }
-  if (item.type === "webSearch" && typeof item.query === "string") {
-    return sanitizeCodexAgentEventRecord({ query: item.query });
+  if (item.type === "webSearch") {
+    return webSearchToolArgs(item);
   }
   if (item.type === "dynamicToolCall" || item.type === "mcpToolCall") {
     return sanitizeCodexToolArguments(item.arguments);
   }
   return undefined;
+}
+
+function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
+  const action = isJsonObject(item.action) ? item.action : undefined;
+  const actionType = action ? readNonEmptyString(action, "type") : undefined;
+  const queries =
+    action && actionType === "search" ? readNonEmptyStringArray(action, "queries") : [];
+  const query =
+    normalizeNonEmptyString(item.query) ??
+    (action && actionType === "search" ? readNonEmptyString(action, "query") : undefined) ??
+    queries[0];
+  const url = action ? readNonEmptyString(action, "url") : undefined;
+  const pattern = action ? readNonEmptyString(action, "pattern") : undefined;
+  const args: Record<string, unknown> = {};
+  if (query) {
+    args.query = query;
+  }
+  if (queries.length > 0) {
+    args.queries = queries;
+  }
+  if (actionType && actionType !== "search") {
+    args.action = actionType;
+  }
+  if (url) {
+    args.url = url;
+  }
+  if (pattern) {
+    args.pattern = pattern;
+  }
+  if (!query && !url && !pattern) {
+    args.queryUnavailable = true;
+  }
+  return sanitizeCodexAgentEventRecord(args);
 }
 
 function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknown> } {
@@ -1856,9 +1915,17 @@ function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknow
     };
   }
   if (item.type === "webSearch") {
-    return { result: sanitizeCodexAgentEventRecord({ status: "completed" }) };
+    return { result: webSearchToolResult(item) };
   }
   return {};
+}
+
+function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
+  return sanitizeCodexAgentEventRecord({
+    status: itemStatus(item),
+    ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+    ...webSearchToolArgs(item),
+  });
 }
 
 function itemFileChanges(item: CodexThreadItem): Array<{ path: string; kind: string }> {
@@ -1895,8 +1962,8 @@ function itemMeta(
       { detailMode },
     );
   }
-  if (item.type === "webSearch" && typeof item.query === "string") {
-    return item.query;
+  if (item.type === "webSearch") {
+    return inferToolMetaFromArgs("web_search", webSearchToolArgs(item), { detailMode });
   }
   const toolName = itemName(item);
   if ((item.type === "dynamicToolCall" || item.type === "mcpToolCall") && toolName) {

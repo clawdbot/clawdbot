@@ -41,7 +41,18 @@ export * from "../infra/json-files.js";
 export * from "../infra/local-file-access.js";
 export * from "../infra/map-size.js";
 export * from "../infra/net/hostname.ts";
-export * from "../infra/net/fetch-guard.js";
+export {
+  fetchWithRuntimeDispatcher,
+  fetchWithSsrFGuard,
+  GUARDED_FETCH_MODE,
+  retainSafeHeadersForCrossOriginRedirectHeaders,
+  withStrictGuardedFetchMode,
+  withTrustedEnvProxyGuardedFetchMode,
+  withTrustedExplicitProxyGuardedFetchMode,
+  type GuardedFetchMode,
+  type GuardedFetchOptions,
+  type GuardedFetchResult,
+} from "../infra/net/fetch-guard.js";
 export * from "../infra/net/proxy-env.js";
 export * from "../infra/net/proxy-fetch.js";
 export * from "../infra/net/undici-global-dispatcher.js";

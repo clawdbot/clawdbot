@@ -24,4 +24,15 @@ describe("config styles", () => {
     expect(css).not.toContain("margin: 0 -16px -32px");
     expect(css).not.toContain("margin: 0 -8px -16px");
   });
+
+  it("keeps light-mode config select arrows visible", () => {
+    const css = readConfigCss();
+
+    expect(css).toMatch(
+      /\.cfg-select \{[\s\S]*background-image: url\("data:image\/svg\+xml,[^"]*stroke='%23888'[^"]*"\);[\s\S]*background-repeat: no-repeat;[\s\S]*background-position: right 10px center;/,
+    );
+    expect(css).toMatch(
+      /:root\[data-theme-mode="light"\] \.cfg-select \{[\s\S]*background-color: white;[\s\S]*border-color: var\(--border\);[\s\S]*background-image: url\("data:image\/svg\+xml,[^"]*stroke='%23444'[^"]*"\);/,
+    );
+  });
 });

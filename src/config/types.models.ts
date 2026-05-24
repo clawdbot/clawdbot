@@ -89,6 +89,23 @@ export type ModelCompatConfig = SupportedOpenAICompatFields &
     requiresOpenAiAnthropicToolPayload?: boolean;
   };
 
+export type ModelImageInputConfig = {
+  /** Provider-documented maximum encoded image payload size. */
+  maxBytes?: number;
+  /** Provider-documented maximum accepted input pixels. */
+  maxPixels?: number;
+  /** Provider-documented maximum accepted width/height in pixels. */
+  maxSidePx?: number;
+  /** Preferred resize side for the default balanced compression policy. */
+  preferredSidePx?: number;
+  /** Token accounting style, used as documentation for provider-owned policy. */
+  tokenMode?: "tile" | "detail" | "provider";
+};
+
+export type ModelMediaInputConfig = {
+  image?: ModelImageInputConfig;
+};
+
 export type ModelProviderAuthMode = "api-key" | "aws-sdk" | "oauth" | "token";
 
 export type ModelProviderLocalServiceConfig = {
@@ -140,6 +157,7 @@ export type ModelDefinitionConfig = {
   agentRuntime?: AgentRuntimePolicyConfig;
   headers?: Record<string, string>;
   compat?: ModelCompatConfig;
+  mediaInput?: ModelMediaInputConfig;
   metadataSource?: "models-add";
 };
 

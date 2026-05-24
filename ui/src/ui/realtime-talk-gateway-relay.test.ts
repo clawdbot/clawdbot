@@ -405,11 +405,14 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     });
 
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
-    expect(
-      vi
-        .mocked(client.request)
-        .mock.calls.some(([method]) => method === "talk.session.submitToolResult"),
-    ).toBe(false);
+    expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+      sessionId: "relay-1",
+      callId: "call-1",
+      result: {
+        status: "cancelled",
+        message: "Cancelled the active OpenClaw run.",
+      },
+    });
     transport.stop();
   });
 
@@ -451,6 +454,129 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
             "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
         },
         options: { willContinue: true },
+      }),
+    );
+    transport.stop();
+  });
+
+  it("treats server relay tool results as terminal for active consult calls", async () => {
+    const client = createClient();
+    vi.mocked(client.request).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      },
+    });
+    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolResult",
+        callId: "call-1",
+        talkEvent: {
+          id: "relay-1:1",
+          type: "tool.progress",
+          sessionId: "relay-1",
+          seq: 1,
+          timestamp: "2026-05-05T00:00:00.000Z",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+          callId: "call-1",
+          payload: { name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, status: "working" },
+        } satisfies RealtimeTalkEvent,
+      },
+    });
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolResult",
+        callId: "call-1",
+      },
+    });
+    emitGatewayFrame({
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        state: "aborted",
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("chat.abort", {
+        sessionKey: "main",
+        runId: "run-1",
+      }),
+    );
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(0);
+    transport.stop();
+  });
+
+  it("submits a provider cancel result when a relay consult aborts without a server result", async () => {
+    const client = createClient();
+    vi.mocked(client.request).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        args: { question: "status?" },
+      },
+    });
+    await vi.waitFor(() => expect(requestCallsFor(client, "talk.client.toolCall")).toHaveLength(1));
+
+    emitGatewayFrame({
+      event: "chat",
+      payload: {
+        runId: "run-1",
+        state: "aborted",
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+        sessionId: "relay-1",
+        callId: "call-1",
+        result: {
+          status: "cancelled",
+          message: "Cancelled the active OpenClaw run.",
+        },
       }),
     );
     transport.stop();
@@ -514,10 +640,13 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "late answer" } },
     });
-    expect(
-      vi
-        .mocked(client.request)
-        .mock.calls.some(([method]) => method === "talk.session.submitToolResult"),
-    ).toBe(false);
+    expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+      sessionId: "relay-1",
+      callId: "call-1",
+      result: {
+        status: "cancelled",
+        message: "Cancelled the active OpenClaw run.",
+      },
+    });
   });
 });

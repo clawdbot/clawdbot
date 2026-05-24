@@ -13,7 +13,8 @@ import {
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
   resolveExternalAuthProfilesWithPlugins: () => [],
 }));
 

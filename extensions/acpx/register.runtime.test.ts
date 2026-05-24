@@ -6,7 +6,20 @@ const { runtimeRegistry } = vi.hoisted(() => ({
 
 const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServiceMock } =
   vi.hoisted(() => {
-    const runtime = { isHealthy: vi.fn(() => true), probeAvailability: vi.fn(async () => {}) };
+    const runtime = {
+      async ensureSession(input: { sessionKey: string }) {
+        return {
+          backend: "acpx",
+          runtimeSessionName: input.sessionKey,
+          sessionKey: input.sessionKey,
+        };
+      },
+      async *runTurn() {},
+      async cancel() {},
+      async close() {},
+      isHealthy: vi.fn(() => true),
+      probeAvailability: vi.fn(async () => {}),
+    };
     const start = vi.fn(async () => {
       runtimeRegistry.set("acpx", { runtime });
     });
@@ -23,6 +36,9 @@ const { realRuntime, realServiceStartMock, realServiceStopMock, createRealServic
 
 vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
   getAcpRuntimeBackend: (id: string) => runtimeRegistry.get(id),
+  registerAcpRuntimeBackend: (entry: { id: string; runtime: unknown }) => {
+    runtimeRegistry.set(entry.id, entry);
+  },
   unregisterAcpRuntimeBackend: (id: string) => {
     runtimeRegistry.delete(id);
   },
@@ -67,7 +83,7 @@ describe("acpx register runtime service", () => {
     restoreEnv();
   });
 
-  it("starts the real service by default while leaving probe policy to the inner service", async () => {
+  it("registers the acpx backend at startup and starts the real service on first use", async () => {
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME;
     const ctx = createServiceContext();
     const service = createAcpxRuntimeService({
@@ -76,11 +92,58 @@ describe("acpx register runtime service", () => {
 
     await service.start(ctx as never);
 
+    const deferredRuntime = runtimeRegistry.get("acpx")?.runtime as {
+      ensureSession(input: { sessionKey: string; agent: string; mode: string }): Promise<unknown>;
+      startTurn(input: {
+        handle: { sessionKey: string; backend: string; runtimeSessionName: string };
+        text: string;
+        mode: string;
+        requestId: string;
+      }): {
+        events: AsyncIterable<unknown>;
+        result: Promise<unknown>;
+      };
+    };
+    expect(deferredRuntime).toBeTruthy();
+    expect(createRealServiceMock).not.toHaveBeenCalled();
+    expect(realServiceStartMock).not.toHaveBeenCalled();
+
+    await expect(
+      deferredRuntime.ensureSession({
+        sessionKey: "agent:codex:acp:test",
+        agent: "codex",
+        mode: "oneshot",
+      }),
+    ).resolves.toEqual({
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      sessionKey: "agent:codex:acp:test",
+    });
+
     expect(createRealServiceMock).toHaveBeenCalledWith({
       pluginConfig: { timeoutSeconds: 10 },
     });
     expect(realServiceStartMock).toHaveBeenCalledWith(ctx);
     expect(runtimeRegistry.get("acpx")?.runtime).toBe(realRuntime);
+    expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend registered lazily");
+
+    const turn = deferredRuntime.startTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+      },
+      text: "hello",
+      mode: "prompt",
+      requestId: "turn-1",
+    });
+    await expect(turn.result).resolves.toEqual({
+      status: "failed",
+      error: {
+        code: "ACP_TURN_FAILED",
+        message: "ACP turn ended without a terminal done event.",
+      },
+    });
 
     await service.stop?.(ctx as never);
 

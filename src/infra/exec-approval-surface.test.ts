@@ -34,12 +34,16 @@ vi.mock("../utils/message-channel.js", () => ({
 type ExecApprovalSurfaceModule = typeof import("./exec-approval-surface.js");
 
 let resolveExecApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveExecApprovalInitiatingSurfaceState"];
+let resolveApprovalInitiatingSurfaceState: ExecApprovalSurfaceModule["resolveApprovalInitiatingSurfaceState"];
 let supportsNativeExecApprovalClient: ExecApprovalSurfaceModule["supportsNativeExecApprovalClient"];
 
 describe("resolveExecApprovalInitiatingSurfaceState", () => {
   beforeAll(async () => {
-    ({ resolveExecApprovalInitiatingSurfaceState, supportsNativeExecApprovalClient } =
-      await import("./exec-approval-surface.js"));
+    ({
+      resolveApprovalInitiatingSurfaceState,
+      resolveExecApprovalInitiatingSurfaceState,
+      supportsNativeExecApprovalClient,
+    } = await import("./exec-approval-surface.js"));
   });
 
   beforeEach(() => {
@@ -218,6 +222,43 @@ describe("resolveExecApprovalInitiatingSurfaceState", () => {
       channel: "matrix",
       channelLabel: "Matrix",
       accountId: "default",
+    });
+  });
+
+  it("uses generic approval availability for plugin initiating surfaces", () => {
+    const getExecInitiatingSurfaceState = vi.fn(() => ({ kind: "enabled" as const }));
+    const getActionAvailabilityState = vi.fn(
+      ({ approvalKind }: { approvalKind?: "exec" | "plugin" }) =>
+        approvalKind === "plugin" ? { kind: "disabled" as const } : { kind: "enabled" as const },
+    );
+    getChannelPluginMock.mockReturnValue({
+      meta: { label: "WhatsApp" },
+      approvalCapability: {
+        native: {},
+        getExecInitiatingSurfaceState,
+        getActionAvailabilityState,
+      },
+    });
+
+    expect(
+      resolveApprovalInitiatingSurfaceState({
+        channel: "whatsapp",
+        accountId: "default",
+        cfg: {} as never,
+        approvalKind: "plugin",
+      }),
+    ).toEqual({
+      kind: "disabled",
+      channel: "whatsapp",
+      channelLabel: "WhatsApp",
+      accountId: "default",
+    });
+    expect(getExecInitiatingSurfaceState).not.toHaveBeenCalled();
+    expect(getActionAvailabilityState).toHaveBeenCalledWith({
+      cfg: {} as never,
+      accountId: "default",
+      action: "approve",
+      approvalKind: "plugin",
     });
   });
 

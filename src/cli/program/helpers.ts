@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 
 export function collectOption(value: string, previous: string[] = []): string[] {
   return [...previous, value];
@@ -23,6 +24,10 @@ export function parsePositiveIntOrUndefined(value: unknown): number | undefined 
     return parsed;
   }
   return undefined;
+}
+
+export function parseStrictPositiveIntOrUndefined(value: unknown): number | undefined {
+  return parseStrictPositiveInteger(value);
 }
 
 export function resolveActionArgs(actionCommand?: Command): string[] {

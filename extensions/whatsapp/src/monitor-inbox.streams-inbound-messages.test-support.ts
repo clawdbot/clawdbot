@@ -8,9 +8,12 @@ import {
   type InboxMonitorOptions,
   InboxOnMessage,
   buildNotifyMessageUpsert,
+  failNextWhatsAppPluginStateRegisterIfAbsent,
   getAuthDir,
   getSock,
   installWebMonitorInboxUnitTestHooks,
+  resetWebInboundDedupeForTests,
+  settleInboundWork,
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
@@ -183,6 +186,111 @@ describe("web monitor inbox", () => {
       text: "pong",
     });
 
+    await listener.close();
+  });
+
+  it("delays read receipts until inbound handlers complete", async () => {
+    let finishMessage: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      finishMessage = resolve;
+    });
+    const onMessage = vi.fn(async () => {
+      await handlerGate;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("delayed-read");
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: messageId,
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(sock.readMessages).not.toHaveBeenCalled();
+    finishMessage?.();
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "999@s.whatsapp.net",
+          id: messageId,
+          participant: undefined,
+          fromMe: false,
+        },
+      ]);
+    });
+
+    await listener.close();
+  });
+
+  it("continues live delivery when durable persistence rejects a message", async () => {
+    failNextWhatsAppPluginStateRegisterIfAbsent(new Error("PLUGIN_STATE_LIMIT_EXCEEDED"));
+    const onMessage = vi.fn(async () => undefined);
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("durable-fallback");
+
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: messageId,
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    expect(inboundMessage(onMessage).body).toBe("ping");
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledWith([
+        {
+          remoteJid: "999@s.whatsapp.net",
+          id: messageId,
+          participant: undefined,
+          fromMe: false,
+        },
+      ]);
+    });
+
+    await listener.close();
+  });
+
+  it("does not dispatch live duplicates that already have pending durable delivery", async () => {
+    let finishMessage: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      finishMessage = resolve;
+    });
+    const onMessage = vi.fn(async () => {
+      await handlerGate;
+    });
+
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const messageId = nextMessageId("durable-pending");
+    const upsert = buildNotifyMessageUpsert({
+      id: messageId,
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: 1_700_000_000,
+      pushName: "Tester",
+    });
+
+    sock.ev.emit("messages.upsert", upsert);
+    await waitForMessageCalls(onMessage, 1);
+
+    resetWebInboundDedupeForTests();
+    sock.ev.emit("messages.upsert", upsert);
+    await settleInboundWork();
+    expect(onMessage).toHaveBeenCalledTimes(1);
+
+    finishMessage?.();
     await listener.close();
   });
 
@@ -504,59 +612,52 @@ describe("web monitor inbox", () => {
   });
 
   it("waits for in-flight inbound handlers before draining on close", async () => {
-    vi.useFakeTimers();
-    try {
-      const onMessage = vi.fn(async (msg) => {
-        await msg.reply("pong");
-      });
-      const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
-        debounceMs: 50,
-      });
-      let releaseRead: (() => void) | undefined;
-      const readGate = new Promise<void>((resolve) => {
-        releaseRead = resolve;
-      });
-      const readStarted = new Promise<void>((resolve) => {
-        sock.readMessages.mockImplementationOnce(async () => {
-          resolve();
-          await readGate;
-        });
-      });
+    let releaseHandler: (() => void) | undefined;
+    const handlerGate = new Promise<void>((resolve) => {
+      releaseHandler = resolve;
+    });
+    let markHandlerStarted: (() => void) | undefined;
+    const handlerStarted = new Promise<void>((resolve) => {
+      markHandlerStarted = resolve;
+    });
+    const onMessage = vi.fn(async (msg) => {
+      await msg.reply("pong");
+      markHandlerStarted?.();
+      await handlerGate;
+    });
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
 
-      sock.ev.emit(
-        "messages.upsert",
-        buildNotifyMessageUpsert({
-          id: nextMessageId("debounce-close-inflight"),
-          remoteJid: "999@s.whatsapp.net",
-          text: "first",
-          timestamp: 1_700_000_000,
-          pushName: "Tester",
-        }),
-      );
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("close-inflight"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "first",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
 
-      await readStarted;
-      const closePromise = listener.close();
-      await Promise.resolve();
+    await handlerStarted;
+    const closePromise = listener.close();
+    await Promise.resolve();
 
-      expect(sock.end).not.toHaveBeenCalled();
+    expect(sock.end).not.toHaveBeenCalled();
 
-      if (!releaseRead) {
-        throw new Error("Expected read receipt release callback to be initialized");
-      }
-      releaseRead();
-      await closePromise;
-
-      expect(onMessage).toHaveBeenCalledTimes(1);
-      expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-        text: "pong",
-      });
-      expect(sock.end).toHaveBeenCalledTimes(1);
-      expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
-        sock.end.mock.invocationCallOrder.at(0),
-      );
-    } finally {
-      vi.useRealTimers();
+    if (!releaseHandler) {
+      throw new Error("Expected handler release callback to be initialized");
     }
+    releaseHandler();
+    await closePromise;
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: "pong",
+    });
+    expect(sock.end).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage.mock.invocationCallOrder.at(0)).toBeLessThan(
+      sock.end.mock.invocationCallOrder.at(0),
+    );
   });
 
   it("retries timed-out sends on the same socket without clearing the socket ref", async () => {
@@ -663,9 +764,13 @@ describe("web monitor inbox", () => {
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    expect(sock.readMessages).not.toHaveBeenCalled();
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 2);
+    await vi.waitFor(() => {
+      expect(sock.readMessages).toHaveBeenCalledTimes(1);
+    });
 
     await listener.close();
   });

@@ -907,6 +907,7 @@ describe("applySessionsChangedEvent", () => {
       chatRunId: string | null;
       chatStream: string | null;
       chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
       requestUpdate: () => void;
     } = {
       ...createState(async () => undefined, {
@@ -943,10 +944,20 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
     expect(requestUpdate).toHaveBeenCalled();
   });
 
@@ -957,6 +968,7 @@ describe("applySessionsChangedEvent", () => {
       chatRunId: string | null;
       chatStream: string | null;
       chatStreamStartedAt: number | null;
+      chatRunStatus?: unknown;
       requestUpdate: () => void;
     } = {
       ...createState(async () => undefined, {
@@ -994,10 +1006,20 @@ describe("applySessionsChangedEvent", () => {
       ts: 2,
     });
 
-    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(applied).toEqual({
+      applied: true,
+      change: "updated",
+      clearedChatRun: true,
+      clearedChatRunStatus: {
+        phase: "done",
+        runId: "client-run-1",
+        sessionKey: "agent:super:main",
+      },
+    });
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
+    expect(state.chatRunStatus).toBeUndefined();
     expect(requestUpdate).toHaveBeenCalled();
   });
 

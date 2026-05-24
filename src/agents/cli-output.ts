@@ -39,6 +39,14 @@ function usesClaudeStreamJsonDialect(params: {
   );
 }
 
+function isClaudeStreamJsonResult(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+}): boolean {
+  return usesClaudeStreamJsonDialect(params) && params.parsed.type === "result";
+}
+
 function extractJsonObjectCandidates(raw: string): string[] {
   return extractBalancedJsonFragments(raw, { openers: ["{"] }).map((fragment) => fragment.json);
 }
@@ -147,6 +155,12 @@ function toCliUsage(raw: Record<string, unknown>): CliUsage | undefined {
 }
 
 function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {
+  if (isRecord(parsed.message) && isRecord(parsed.message.usage)) {
+    const usage = toCliUsage(parsed.message.usage);
+    if (usage) {
+      return usage;
+    }
+  }
   if (isRecord(parsed.usage)) {
     const usage = toCliUsage(parsed.usage);
     if (usage) {
@@ -396,7 +410,16 @@ export function createCliJsonlStreamingParser(params: {
     if (!sessionId && typeof parsed.thread_id === "string") {
       sessionId = parsed.thread_id.trim();
     }
-    usage = readCliUsage(parsed) ?? usage;
+    const nextUsage = readCliUsage(parsed);
+    const shouldUseUsage =
+      !isClaudeStreamJsonResult({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+      }) || !usage;
+    if (shouldUseUsage) {
+      usage = nextUsage ?? usage;
+    }
 
     const result = parseClaudeCliJsonlResult({
       backend: params.backend,
@@ -505,7 +528,11 @@ export function parseCliJsonl(
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }
-      usage = readCliUsage(parsed) ?? usage;
+      const nextUsage = readCliUsage(parsed);
+      const shouldUseUsage = !isClaudeStreamJsonResult({ backend, providerId, parsed }) || !usage;
+      if (shouldUseUsage) {
+        usage = nextUsage ?? usage;
+      }
 
       const claudeResult = parseClaudeCliJsonlResult({
         backend,

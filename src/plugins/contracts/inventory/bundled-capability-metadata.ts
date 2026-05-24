@@ -28,6 +28,7 @@ export type BundledPluginContractSnapshot = {
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
   mediaUnderstandingProviderIds: string[];
+  meetingNotesSourceProviderIds: string[];
   documentExtractorIds: string[];
   imageGenerationProviderIds: string[];
   videoGenerationProviderIds: string[];
@@ -144,6 +145,10 @@ export function buildBundledPluginContractSnapshot(
       manifest.contracts?.mediaUnderstandingProviders,
       (value) => value.trim(),
     ),
+    meetingNotesSourceProviderIds: uniqueStrings(
+      manifest.contracts?.meetingNotesSourceProviders,
+      (value) => value.trim(),
+    ),
     documentExtractorIds: uniqueStrings(manifest.contracts?.documentExtractors, (value) =>
       value.trim(),
     ),
@@ -186,6 +191,7 @@ export function hasBundledPluginContractSnapshotCapabilities(
     entry.realtimeTranscriptionProviderIds.length > 0 ||
     entry.realtimeVoiceProviderIds.length > 0 ||
     entry.mediaUnderstandingProviderIds.length > 0 ||
+    entry.meetingNotesSourceProviderIds.length > 0 ||
     entry.documentExtractorIds.length > 0 ||
     entry.imageGenerationProviderIds.length > 0 ||
     entry.videoGenerationProviderIds.length > 0 ||

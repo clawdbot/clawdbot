@@ -367,6 +367,7 @@ export function createExecApprovalHandlers(
         requestEventName: "exec.approval.requested",
         requestEvent,
         twoPhase,
+        approvalKind: "exec",
         deliverRequest: () => {
           const deliveryTasks: Array<Promise<boolean>> = [];
           if (opts?.forwarder) {

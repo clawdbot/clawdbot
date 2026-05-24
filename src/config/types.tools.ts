@@ -298,9 +298,9 @@ export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig
 export type ExecToolConfig = {
   /** Exec host routing (default: auto). */
   host?: "auto" | "sandbox" | "gateway" | "node";
-  /** Exec security mode (default: deny). */
+  /** Exec security mode (default: full; sandbox host defaults to deny). */
   security?: "deny" | "allowlist" | "full";
-  /** Exec ask mode (default: on-miss). */
+  /** Exec ask mode (default: off). */
   ask?: "off" | "on-miss" | "always";
   /** Default node binding for exec.host=node (node id/name). */
   node?: string;

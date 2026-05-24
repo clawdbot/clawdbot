@@ -882,19 +882,27 @@ describe("optional media tool factory planning", () => {
 
   it("does not register the image tool without cheap vision availability evidence", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, [
-      createPlugin({
-        id: "media-owner",
-        contracts: { mediaUnderstandingProviders: ["media-owner"] },
-        setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
-      }),
-    ]);
+    const workspaceDir = "/tmp/openclaw-workspace";
+    vi.stubEnv("MEDIA_OWNER_API_KEY", "");
+    installSnapshot(
+      config,
+      [
+        createPlugin({
+          id: "media-owner",
+          contracts: { mediaUnderstandingProviders: ["media-owner"] },
+          setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
+        }),
+      ],
+      undefined,
+      workspaceDir,
+    );
 
     expect(
       (
         await createOpenClawToolsForTest({
           config,
           agentDir: "/tmp/openclaw-agent",
+          workspaceDir,
           authProfileStore: createAuthStore(),
           disablePluginTools: true,
         })

@@ -16,15 +16,26 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import { loadWebMedia } from "../../media/web-media.js";
+import {
+  loadWebMedia,
+  optimizeImageBufferForWebMedia,
+  type ImageCompressionModelPolicy,
+  type ImageCompressionPolicy,
+} from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
+import {
+  resolveImageFallbackCandidates,
+  resolveImageFallbackDefaultProvider,
+} from "../model-fallback.js";
+import { resolveModelAsync } from "../pi-embedded-runner/model.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -117,6 +128,7 @@ export const testing = {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
   resolveImageToolMaxTokens,
+  resolveImageCompressionPolicy,
   setProviderDepsForTest(overrides?: {
     buildProviderRegistry?: typeof buildProviderRegistry;
     getMediaUnderstandingProvider?: typeof getMediaUnderstandingProvider;
@@ -270,6 +282,68 @@ function pickMaxBytes(cfg?: OpenClawConfig, maxBytesMb?: number): number | undef
     return Math.floor(configured * 1024 * 1024);
   }
   return undefined;
+}
+
+function resolveCompressionModelCandidates(params: {
+  cfg?: OpenClawConfig;
+  imageModelConfig?: ImageModelConfig | null;
+  modelOverride?: string;
+}): Array<{ provider: string; model: string }> {
+  const overrideConfig = resolveImageModelConfigForOverride({
+    cfg: params.cfg,
+    modelOverride: params.modelOverride,
+  });
+  const configuredImageModelConfig = params.imageModelConfig
+    ? resolveConfiguredImageModelRefs({
+        cfg: params.cfg,
+        imageModelConfig: params.imageModelConfig,
+      })
+    : null;
+  const effectiveImageModelConfig = overrideConfig ?? configuredImageModelConfig;
+  const effectiveCfg = effectiveImageModelConfig
+    ? applyImageModelConfigDefaults(params.cfg, effectiveImageModelConfig)
+    : params.cfg;
+  return resolveImageFallbackCandidates({
+    cfg: effectiveCfg,
+    defaultProvider: resolveImageFallbackDefaultProvider(effectiveCfg),
+  });
+}
+
+async function resolveImageCompressionPolicy(params: {
+  cfg?: OpenClawConfig;
+  imageModelConfig?: ImageModelConfig | null;
+  modelOverride?: string;
+  imageCount: number;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<ImageCompressionPolicy> {
+  const modelCandidates = resolveCompressionModelCandidates(params);
+  const quality = params.cfg?.agents?.defaults?.imageQuality;
+  const models: ImageCompressionModelPolicy[] = await Promise.all(
+    modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
+      try {
+        const resolved = await resolveModelAsync(
+          candidate.provider,
+          candidate.model,
+          params.agentDir,
+          params.cfg,
+          {
+            allowBundledStaticCatalogFallback: true,
+            skipPiDiscovery: true,
+            workspaceDir: params.workspaceDir,
+          },
+        );
+        return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
+      } catch {
+        return {};
+      }
+    }),
+  );
+  return {
+    imageCount: params.imageCount,
+    ...(models.length > 0 ? { models } : {}),
+    ...(quality ? { quality } : {}),
+  };
 }
 
 function matchesImageTimeoutEntry(params: {
@@ -574,6 +648,31 @@ export function createImageTool(options?: {
       );
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
+      const imageModelConfig =
+        resolvedImageModelConfig ??
+        resolveImageModelConfigForOverride({
+          cfg: options?.config,
+          modelOverride,
+        }) ??
+        resolveImageModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+          workspaceDir: options?.workspaceDir,
+          authStore: options?.authProfileStore,
+        });
+      if (!imageModelConfig) {
+        throw new Error(
+          "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
+        );
+      }
+      const imageCompression = await resolveImageCompressionPolicy({
+        cfg: options?.config,
+        imageModelConfig,
+        modelOverride,
+        imageCount: imageInputs.length,
+        agentDir,
+        workspaceDir: options?.workspaceDir,
+      });
 
       const sandboxConfig: SandboxedBridgeMediaPathConfig | null =
         options?.sandbox && options?.sandbox.root.trim()
@@ -672,26 +771,39 @@ export function createImageTool(options?: {
         );
 
         const media = isDataUrl
-          ? decodeDataUrl(resolvedImage, { maxBytes })
+          ? await (async () => {
+              const decoded = decodeDataUrl(resolvedImage, { maxBytes });
+              return await optimizeImageBufferForWebMedia({
+                buffer: decoded.buffer,
+                contentType: decoded.mimeType,
+                maxBytes,
+                imageCompression,
+              });
+            })()
           : sandboxConfig
             ? await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 sandboxValidated: true,
                 readFile: createSandboxBridgeReadFile({ sandbox: sandboxConfig }),
+                imageCompression,
               })
             : await loadWebMedia(resolvedPath ?? resolvedImage, {
                 maxBytes,
                 localRoots: mediaLocalRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
+                imageCompression,
               });
         if (media.kind !== "image") {
           throw new Error(`Unsupported media type: ${media.kind}`);
         }
 
-        const mimeType =
-          ("contentType" in media && media.contentType) ||
-          ("mimeType" in media && media.mimeType) ||
-          "image/png";
+        const contentType =
+          "contentType" in media && typeof media.contentType === "string"
+            ? media.contentType
+            : undefined;
+        const legacyMimeType =
+          "mimeType" in media && typeof media.mimeType === "string" ? media.mimeType : undefined;
+        const mimeType = contentType ?? legacyMimeType ?? "image/png";
         loadedImages.push({
           buffer: media.buffer,
           mimeType,
@@ -703,23 +815,6 @@ export function createImageTool(options?: {
       }
 
       // MARK: - Run image prompt with all loaded images
-      const imageModelConfig =
-        resolvedImageModelConfig ??
-        resolveImageModelConfigForOverride({
-          cfg: options?.config,
-          modelOverride,
-        }) ??
-        resolveImageModelConfigForTool({
-          cfg: options?.config,
-          agentDir,
-          workspaceDir: options?.workspaceDir,
-          authStore: options?.authProfileStore,
-        });
-      if (!imageModelConfig) {
-        throw new Error(
-          "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
-        );
-      }
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,

@@ -2,13 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import type { ConfigWriteOptions } from "./io.js";
 import {
   ConfigMutationConflictError,
   mutateConfigFile,
   replaceConfigFile,
   transformConfigFileWithRetry,
 } from "./mutate.js";
-import { registerRuntimeConfigWriteListener, resetConfigRuntimeState } from "./runtime-snapshot.js";
+import {
+  registerRuntimeConfigWriteListener,
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshotRefreshHandler,
+} from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 type MockValidationIssue = { path: string; message: string };
@@ -31,7 +36,10 @@ const validationMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("./io.js", () => ioMocks);
+vi.mock("./io.js", async () => ({
+  ...(await vi.importActual<typeof import("./io.js")>("./io.js")),
+  ...ioMocks,
+}));
 vi.mock("./validation.js", () => validationMocks);
 
 function createSnapshot(params: {
@@ -181,7 +189,12 @@ describe("config mutate helpers", () => {
           list: [{ id: "other-agent" }, { id: "work" }],
         },
       },
-      { baseSnapshot: fresh, expectedConfigPath: fresh.path, afterWrite: { mode: "auto" } },
+      {
+        baseSnapshot: fresh,
+        expectedConfigPath: fresh.path,
+        afterWrite: { mode: "auto" },
+        preCommitRuntimePreflight: expect.any(Function),
+      },
     );
   });
 
@@ -607,6 +620,184 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.entries?.["strict-plugin"]).toEqual({ enabled: true });
   });
 
+  it("preflights single-file top-level include writes before persisting", async () => {
+    const home = await suiteRootTracker.make("include-runtime-preflight");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-preflight",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+
+    try {
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => {
+          throw new Error("missing include secret");
+        },
+        refresh: () => true,
+      });
+
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          writeOptions: { expectedConfigPath: snapshot.path },
+          nextConfig: {
+            plugins: {
+              entries: {
+                demo: { enabled: true },
+              },
+            },
+          },
+        }),
+      ).rejects.toThrow(/active SecretRef resolution failed: missing include secret/);
+
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+    }
+  });
+
+  it("rolls back single-file top-level include writes when runtime refresh fails", async () => {
+    const home = await suiteRootTracker.make("include-runtime-refresh-rollback");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    const env = {} as NodeJS.ProcessEnv;
+    const envKey = "OPENCLAW_TEST_INCLUDE_ROLLBACK_ENV";
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-refresh-rollback",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    const nextConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+        },
+      },
+    };
+    ioMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+      env[envKey] = "written-env-value";
+      return {
+        snapshot: createSnapshot({
+          hash: "hash-include-refresh-written",
+          path: configPath,
+          parsed: { plugins: { $include: "./config/plugins.json5" } },
+          sourceConfig: nextConfig,
+        }),
+        writeOptions: { expectedConfigPath: configPath },
+      };
+    });
+
+    try {
+      delete env[envKey];
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => true,
+        refresh: () => {
+          throw new Error("lost include secret");
+        },
+      });
+
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          io: { ...ioMocks, env },
+          writeOptions: { expectedConfigPath: snapshot.path },
+          nextConfig,
+        }),
+      ).rejects.toThrow(/runtime snapshot refresh failed: lost include secret/);
+
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      expect(env[envKey]).toBeUndefined();
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+      delete env[envKey];
+    }
+  });
+
+  it("does not overwrite concurrent include edits during failed refresh rollback", async () => {
+    const home = await suiteRootTracker.make("include-runtime-refresh-concurrent");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
+    const concurrentPluginsRaw = `${JSON.stringify(
+      { entries: { concurrent: { enabled: true } } },
+      null,
+      2,
+    )}\n`;
+    const snapshot = createSnapshot({
+      hash: "hash-include-refresh-concurrent",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    const nextConfig = {
+      plugins: {
+        entries: {
+          demo: { enabled: true },
+        },
+      },
+    };
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: createSnapshot({
+        hash: "hash-include-refresh-concurrent-written",
+        path: configPath,
+        parsed: { plugins: { $include: "./config/plugins.json5" } },
+        sourceConfig: nextConfig,
+      }),
+      writeOptions: { expectedConfigPath: configPath },
+    });
+
+    try {
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => true,
+        refresh: async () => {
+          await fs.writeFile(pluginsPath, concurrentPluginsRaw, "utf-8");
+          throw new Error("lost include secret");
+        },
+      });
+
+      await expect(
+        replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          writeOptions: { expectedConfigPath: snapshot.path },
+          nextConfig,
+        }),
+      ).rejects.toThrow(/runtime snapshot refresh failed: lost include secret/);
+
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(concurrentPluginsRaw);
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+    }
+  });
+
   it("rejects invalid base config before skipped-plugin include writes", async () => {
     const home = await suiteRootTracker.make("include-skip-invalid-base");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -697,5 +888,63 @@ describe("config mutate helpers", () => {
         afterWrite: { mode: "auto" },
       },
     );
+  });
+
+  it("preflights injected root writers before persisting", async () => {
+    const home = await suiteRootTracker.make("injected-root-runtime-preflight");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    const initialConfig = { gateway: { mode: "local" } } satisfies OpenClawConfig;
+    const initialRaw = `${JSON.stringify(initialConfig, null, 2)}\n`;
+    await fs.writeFile(configPath, initialRaw, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-injected-root",
+      path: configPath,
+      sourceConfig: initialConfig,
+    });
+    const nextConfig = {
+      gateway: {
+        mode: "local",
+        auth: {
+          mode: "token",
+          token: { source: "exec", provider: "execmain", id: "gateway/token" },
+        },
+      },
+    } as OpenClawConfig;
+    const injectedWrite = vi.fn(async (config: OpenClawConfig, options?: ConfigWriteOptions) => {
+      await options?.preCommitRuntimePreflight?.(config);
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+      return { persistedHash: "hash-written", persistedConfig: config };
+    });
+
+    try {
+      setRuntimeConfigSnapshotRefreshHandler({
+        preflight: () => {
+          throw new Error("missing root secret");
+        },
+        refresh: () => true,
+      });
+
+      await expect(
+        replaceConfigFile({
+          snapshot,
+          baseHash: snapshot.hash,
+          writeOptions: { expectedConfigPath: snapshot.path },
+          nextConfig,
+          io: {
+            readConfigFileSnapshotForWrite: vi.fn(),
+            writeConfigFile: injectedWrite,
+          },
+        }),
+      ).rejects.toThrow(/active SecretRef resolution failed: missing root secret/);
+
+      expect(injectedWrite).toHaveBeenCalledTimes(1);
+      expect(injectedWrite.mock.calls[0]?.[1]?.preCommitRuntimePreflight).toEqual(
+        expect.any(Function),
+      );
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(initialRaw);
+    } finally {
+      setRuntimeConfigSnapshotRefreshHandler(null);
+    }
   });
 });

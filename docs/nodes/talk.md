@@ -21,6 +21,11 @@ Native Talk is a continuous voice conversation loop:
 4. Speak it via the configured Talk provider (`talk.speak`)
 
 Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults.
+While a realtime consult is active, Talk clients can use `talk.client.steer` or
+`talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or
+`followup`. Accepted steering is queued into the active embedded run; rejected
+steering returns a structured reason such as `no_active_run`, `not_streaming`,
+or `compacting`.
 
 Transcription-only Talk emits the same common Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. It is for captions, dictation, and observe-only speech capture; one-shot uploaded voice notes still use the media/audio path.
 

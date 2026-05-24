@@ -4,6 +4,7 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_MODEL_ALIASES } from "./cli-constants
 const DEFAULT_CLAUDE_MODEL_BY_FAMILY: Record<string, string> = {
   opus: "claude-opus-4-7",
   sonnet: "claude-sonnet-4-6",
+  haiku: "claude-sonnet-4-6",
 };
 
 export type ClaudeCliAnthropicModelRefs = {
@@ -11,6 +12,47 @@ export type ClaudeCliAnthropicModelRefs = {
   runtimeRefs: string[];
   rewriteRef?: string;
 };
+
+function splitTrailingModelAuthProfile(raw: string): { model: string; profile?: string } {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return { model: "" };
+  }
+  const lastSlash = trimmed.lastIndexOf("/");
+  let delimiter = trimmed.indexOf("@", lastSlash + 1);
+  if (delimiter <= 0) {
+    return { model: trimmed };
+  }
+  if (/^\d{8}(?:@|$)/.test(trimmed.slice(delimiter + 1))) {
+    const nextDelimiter = trimmed.indexOf("@", delimiter + 9);
+    if (nextDelimiter < 0) {
+      return { model: trimmed };
+    }
+    delimiter = nextDelimiter;
+  }
+  const model = trimmed.slice(0, delimiter).trim();
+  const profile = trimmed.slice(delimiter + 1).trim();
+  return model && profile ? { model, profile } : { model: trimmed };
+}
+
+function attachModelAuthProfile(model: string, profile?: string): string {
+  return profile ? `${model}@${profile}` : model;
+}
+
+function hasRetiredVersionPrefix(normalized: string, prefix: string): boolean {
+  if (normalized === prefix) {
+    return true;
+  }
+  if (!normalized.startsWith(prefix)) {
+    return false;
+  }
+  const next = normalized[prefix.length];
+  return next === "-" || next === "." || next === ":" || next === "@";
+}
+
+function hasAnyRetiredVersionPrefix(normalized: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => hasRetiredVersionPrefix(normalized, prefix));
+}
 
 function parseProviderModelRef(
   raw: string,
@@ -37,17 +79,22 @@ function parseProviderModelRef(
 }
 
 function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
-  const trimmed = modelId.trim();
+  const split = splitTrailingModelAuthProfile(modelId);
+  const trimmed = split.model.trim();
   const normalized = normalizeLowercaseStringOrEmpty(trimmed);
   if (!normalized) {
     return null;
   }
+  const upgraded = upgradeOldClaudeModelId(normalized);
+  if (upgraded) {
+    return attachModelAuthProfile(upgraded, split.profile);
+  }
   if (normalized.startsWith("claude-")) {
-    return trimmed;
+    return attachModelAuthProfile(trimmed, split.profile);
   }
   const defaultModel = DEFAULT_CLAUDE_MODEL_BY_FAMILY[normalized];
   if (defaultModel) {
-    return defaultModel;
+    return attachModelAuthProfile(defaultModel, split.profile);
   }
   const family = CLAUDE_CLI_MODEL_ALIASES[normalized];
   if (!family) {
@@ -57,7 +104,81 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
   if (!version || version === normalized) {
     return null;
   }
-  return `claude-${family}-${version.replaceAll(".", "-")}`;
+  return attachModelAuthProfile(`claude-${family}-${version.replaceAll(".", "-")}`, split.profile);
+}
+
+function upgradeOldClaudeModelId(normalized: string): string | null {
+  if (normalized.startsWith("claude-opus-4-7") || normalized.startsWith("claude-opus-4.7")) {
+    return null;
+  }
+  if (normalized.startsWith("claude-opus-4-6") || normalized.startsWith("claude-opus-4.6")) {
+    return null;
+  }
+  if (normalized.startsWith("claude-sonnet-4-6") || normalized.startsWith("claude-sonnet-4.6")) {
+    return null;
+  }
+  if (
+    normalized === "claude-opus-4" ||
+    hasAnyRetiredVersionPrefix(normalized, [
+      "claude-opus-4-5",
+      "claude-opus-4.5",
+      "claude-opus-4-1",
+      "claude-opus-4.1",
+      "claude-opus-4-0",
+      "claude-opus-4.0",
+    ]) ||
+    /^claude-opus-4-20\d{6}/.test(normalized)
+  ) {
+    return "claude-opus-4-7";
+  }
+  if (
+    normalized === "claude-sonnet-4" ||
+    hasAnyRetiredVersionPrefix(normalized, [
+      "claude-sonnet-4-5",
+      "claude-sonnet-4.5",
+      "claude-sonnet-4-1",
+      "claude-sonnet-4.1",
+      "claude-sonnet-4-0",
+      "claude-sonnet-4.0",
+      "claude-haiku-4-5",
+      "claude-haiku-4.5",
+    ]) ||
+    /^claude-sonnet-4-20\d{6}/.test(normalized)
+  ) {
+    return "claude-sonnet-4-6";
+  }
+  if (normalized.startsWith("claude-3") && normalized.includes("opus")) {
+    return "claude-opus-4-7";
+  }
+  if (
+    normalized.startsWith("claude-3") &&
+    (normalized.includes("sonnet") || normalized.includes("haiku"))
+  ) {
+    return "claude-sonnet-4-6";
+  }
+  if (
+    normalized === "opus-4.5" ||
+    normalized === "opus-4.1" ||
+    normalized === "opus-4" ||
+    normalized === "opus-3"
+  ) {
+    return "claude-opus-4-7";
+  }
+  if (
+    normalized === "sonnet-4.5" ||
+    normalized === "sonnet-4.1" ||
+    normalized === "sonnet-4.0" ||
+    normalized === "sonnet-4" ||
+    normalized === "sonnet-3.7" ||
+    normalized === "sonnet-3.5" ||
+    normalized === "sonnet-3" ||
+    normalized === "haiku-4.5" ||
+    normalized === "haiku-3.5" ||
+    normalized === "haiku-3"
+  ) {
+    return "claude-sonnet-4-6";
+  }
+  return null;
 }
 
 export function resolveClaudeCliAnthropicModelRefs(

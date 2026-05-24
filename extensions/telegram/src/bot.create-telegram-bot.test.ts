@@ -2622,6 +2622,72 @@ describe("createTelegramBot", () => {
     expect(topicConfig).toEqual({});
   });
 
+  it("uses topics.* as the default config for unmatched forum topics", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "allowlist",
+        groups: {
+          "-1001234567890": {
+            allowFrom: ["999999999"],
+            topics: {
+              "*": { allowFrom: ["123456789"], agentId: "zu" },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      77,
+    );
+
+    const group = groupConfig as TelegramGroupConfig | undefined;
+    expect(group?.allowFrom).toEqual(["999999999"]);
+    expect(topicConfig).toEqual({ allowFrom: ["123456789"], agentId: "zu" });
+  });
+
+  it("prefers exact topic config over topics.* fallback", () => {
+    const { topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "allowlist",
+        groups: {
+          "-1001234567890": {
+            topics: {
+              "*": { allowFrom: ["123456789"], agentId: "zu" },
+              "77": { allowFrom: ["555555555"], agentId: "main" },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      77,
+    );
+
+    expect(topicConfig).toEqual({ allowFrom: ["555555555"], agentId: "main" });
+  });
+
+  it("inherits topics.* fields that exact topic config does not override", () => {
+    const { topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "allowlist",
+        groups: {
+          "-1001234567890": {
+            topics: {
+              "*": { allowFrom: ["123456789"], requireMention: false },
+              "77": { agentId: "main" },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      77,
+    );
+
+    expect(topicConfig).toEqual({
+      allowFrom: ["123456789"],
+      requireMention: false,
+      agentId: "main",
+    });
+  });
+
   it.each([
     {
       label: "parent binding",

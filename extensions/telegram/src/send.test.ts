@@ -3,6 +3,12 @@ import type { Bot } from "grammy";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramConversationContext,
+  createTelegramMessageCache,
+  resolveTelegramMessageCachePath,
+  resetTelegramMessageCacheBucketsForTest,
+} from "./message-cache.js";
+import {
   getTelegramSendTestMocks,
   importTelegramSendModule,
   installTelegramSendTestHooks,
@@ -182,6 +188,7 @@ function capturedLogText(logFile: string): string {
 afterEach(() => {
   setLoggerOverride(null);
   resetLogger();
+  resetTelegramMessageCacheBucketsForTest();
   vi.restoreAllMocks();
 });
 
@@ -626,6 +633,70 @@ describe("sendMessageTelegram", () => {
 
     const [middleware] = firstMockCall(botConfigUseSpy, "bot config use call");
     expect(middleware).toBeTypeOf("function");
+  });
+
+  it("records sent text messages into the Telegram prompt context cache", async () => {
+    const storePath = `/tmp/openclaw-telegram-send-context-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    const cfg = { session: { store: storePath } };
+    try {
+      botApi.sendMessage.mockResolvedValueOnce({
+        message_id: 1497,
+        date: 1_779_394_740,
+        chat: {
+          id: "-1003966283270",
+          type: "supergroup",
+          title: "Keshav and Kelaw - Keshav's Bot",
+        },
+        from: { id: 42, is_bot: true, first_name: "Kelaw", username: "keshavbotagent" },
+        text: "Done already: timeoutSeconds is now 7200s.",
+        message_thread_id: 1154,
+      });
+
+      await sendMessageTelegram("-1003966283270", "Done already: timeoutSeconds is now 7200s.", {
+        cfg,
+        token: "tok",
+        messageThreadId: 1154,
+      });
+
+      const cache = createTelegramMessageCache({ persistedPath });
+      await cache.record({
+        accountId: "default",
+        chatId: "-1003966283270",
+        threadId: 1154,
+        msg: {
+          chat: {
+            id: -1003966283270,
+            type: "supergroup",
+            title: "Keshav and Kelaw - Keshav's Bot",
+          },
+          message_thread_id: 1154,
+          message_id: 1521,
+          date: 1_779_425_460,
+          text: "Did all Amazon crons run fine",
+          from: { id: 5185575566, is_bot: false, first_name: "Keshav" },
+        },
+      });
+
+      const context = await buildTelegramConversationContext({
+        cache,
+        accountId: "default",
+        chatId: "-1003966283270",
+        threadId: 1154,
+        messageId: "1521",
+        replyChainNodes: [],
+        recentLimit: 10,
+        replyTargetWindowSize: 2,
+      });
+
+      expect(context.map((entry) => entry.node.messageId)).toContain("1497");
+      expect(context.map((entry) => entry.node.body)).toContain(
+        "Done already: timeoutSeconds is now 7200s.",
+      );
+    } finally {
+      fs.rmSync(persistedPath, { force: true });
+      fs.rmSync(`${storePath}.telegram-sent-messages.json`, { force: true });
+    }
   });
 
   it("falls back to plain text when Telegram rejects HTML and preserves send params", async () => {

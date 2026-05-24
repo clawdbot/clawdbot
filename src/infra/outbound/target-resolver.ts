@@ -49,6 +49,8 @@ export async function resolveChannelTarget(params: {
   accountId?: string | null;
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
+  resolveAmbiguous?: ResolveAmbiguousMode;
+  unknownTargetMode?: "error" | "normalized";
 }): Promise<ResolveMessagingTargetResult> {
   return resolveMessagingTarget(params);
 }
@@ -343,6 +345,7 @@ export async function resolveMessagingTarget(params: {
   preferredKind?: TargetResolveKind;
   runtime?: RuntimeEnv;
   resolveAmbiguous?: ResolveAmbiguousMode;
+  unknownTargetMode?: "error" | "normalized";
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
@@ -439,6 +442,13 @@ export async function resolveMessagingTarget(params: {
       ok: true,
       target: resolvedFallbackTarget,
     };
+  }
+
+  if (params.unknownTargetMode === "normalized") {
+    return buildNormalizedResolveResult({
+      normalized,
+      kind,
+    });
   }
 
   return {

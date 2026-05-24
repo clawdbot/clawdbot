@@ -1,5 +1,6 @@
 export { deriveDurableFinalDeliveryRequirements } from "./capabilities.js";
 export { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
+export { createDurableInboundReceiveJournal } from "./durable-receive.js";
 export {
   listDeclaredChannelMessageLiveCapabilities,
   listDeclaredDurableFinalCapabilities,
@@ -38,6 +39,16 @@ export {
   resolveChannelSourceReplyDeliveryMode,
 } from "./reply-pipeline.js";
 export { classifyDurableSendRecoveryState, createDurableMessageStateRecord } from "./state.js";
+export type {
+  DurableInboundReceiveAcceptOptions,
+  DurableInboundReceiveAcceptResult,
+  DurableInboundReceiveCompletedRecord,
+  DurableInboundReceiveCompleteOptions,
+  DurableInboundReceiveJournal,
+  DurableInboundReceiveJournalOptions,
+  DurableInboundReceivePendingRecord,
+  DurableInboundReceiveReleaseOptions,
+} from "./durable-receive.js";
 export type {
   ChannelMessageOutboundBridgeAdapter,
   ChannelMessageOutboundBridgeResult,

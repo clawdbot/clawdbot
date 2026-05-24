@@ -44,12 +44,14 @@ export type ChannelRouteTargetInput = Pick<
 
 export type ChannelRouteKeyInput = ChannelRouteRef | ChannelRouteTargetInput;
 
+/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
 export type ChannelRouteExplicitTarget = {
   to: string;
   threadId?: string | number;
   chatType?: ChannelRouteChatType;
 };
 
+/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
 export type ChannelRouteExplicitTargetParser = (
   channel: string,
   rawTarget: string,
@@ -125,6 +127,7 @@ export type ChannelRouteParsedTarget = ChannelRouteTargetInput & {
   chatType?: ChannelRouteChatType;
 };
 
+/** @deprecated Use `messaging.resolveOutboundSessionRoute` for provider-specific target grammar. */
 export function resolveChannelRouteTargetWithParser(params: {
   channel: string;
   rawTarget?: string | null;

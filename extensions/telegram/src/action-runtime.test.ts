@@ -561,6 +561,60 @@ describe("handleTelegramAction", () => {
     expect(options.mediaUrl).toBe("https://example.com/image.jpg");
   });
 
+  it.each(["path", "filePath"] as const)("uses top-level %s as sendMessage media", async (key) => {
+    const mediaPath = `/tmp/customer_support_${key}.png`;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "telegram:-100123:topic:879",
+        message: "Productivity",
+        [key]: mediaPath,
+      },
+      telegramConfig(),
+    );
+    const call = mockCall(sendMessageTelegram, 0, `${key} media`);
+    expect(call[0]).toBe("telegram:-100123:topic:879");
+    expect(call[1]).toBe("Productivity");
+    const options = requireRecord(call[2], `${key} media options`);
+    expect(options.token).toBe("tok");
+    expect(options.mediaUrl).toBe(mediaPath);
+  });
+
+  it("sends all attachment paths as sendMessage media", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "telegram:-100123:topic:879",
+        message: "1/2 Productivity",
+        attachments: [
+          {
+            type: "image",
+            path: "/tmp/customer_support_productivity.png",
+            name: "customer_support_productivity.png",
+          },
+          {
+            type: "image",
+            filePath: "/tmp/customer_support_resolution.png",
+            name: "customer_support_resolution.png",
+          },
+        ],
+      },
+      telegramConfig(),
+    );
+    const call = mockCall(sendMessageTelegram, 0, "attachment media");
+    expect(call[0]).toBe("telegram:-100123:topic:879");
+    expect(call[1]).toBe("1/2 Productivity");
+    const options = requireRecord(call[2], "attachment media options");
+    expect(options.token).toBe("tok");
+    expect(options.mediaUrl).toBe("/tmp/customer_support_productivity.png");
+    const followUpCall = mockCall(sendMessageTelegram, 1, "second attachment media");
+    expect(followUpCall[0]).toBe("telegram:-100123:topic:879");
+    expect(followUpCall[1]).toBe("");
+    const followUpOptions = requireRecord(followUpCall[2], "second attachment media options");
+    expect(followUpOptions.token).toBe("tok");
+    expect(followUpOptions.mediaUrl).toBe("/tmp/customer_support_resolution.png");
+  });
+
   it("sends a poll", async () => {
     const result = await handleTelegramAction(
       {

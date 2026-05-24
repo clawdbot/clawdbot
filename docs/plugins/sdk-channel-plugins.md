@@ -119,9 +119,9 @@ route-like fields, compare a child thread with its parent route, or build a
 stable dedupe key from `{ channel, to, accountId, threadId }`. The helper
 normalizes numeric thread ids the same way core does, so plugins should prefer
 it over ad hoc `String(threadId)` comparisons.
-Plugins with provider-specific target grammar can inject their parser into
-`resolveChannelRouteTargetWithParser(...)` and still get the same route target
-shape and thread fallback semantics core uses.
+Plugins with provider-specific target grammar should expose
+`messaging.resolveOutboundSessionRoute(...)` so core gets provider-native
+session and thread identity without using parser shims.
 
 Bundled plugins that need the same parsing before the channel registry boots
 can also expose a top-level `session-key-api.ts` file with a matching
@@ -253,7 +253,7 @@ surfaces:
 - `openclaw/plugin-sdk/inbound-envelope` and
   `openclaw/plugin-sdk/inbound-reply-dispatch` for inbound route/envelope and
   record-and-dispatch wiring
-- `openclaw/plugin-sdk/messaging-targets` for target parsing/matching
+- `openclaw/plugin-sdk/channel-targets` for target parsing helpers
 - `openclaw/plugin-sdk/outbound-media` and
   `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
   identity/send delegates and payload planning

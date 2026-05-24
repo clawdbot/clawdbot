@@ -166,7 +166,21 @@ export function registerMemoryCapability(
   pluginId: string,
   capability: MemoryPluginCapability,
 ): void {
-  memoryPluginState.capability = { pluginId, capability: { ...capability } };
+  const existingCapability = memoryPluginState.capability?.capability;
+  // A selected memory plugin can add bridge artifacts while memory-core owns sidecar runtime hooks.
+  const shouldPreserveExisting =
+    existingCapability &&
+    Boolean(capability.publicArtifacts) &&
+    !capability.promptBuilder &&
+    !capability.flushPlanResolver &&
+    !capability.runtime;
+  memoryPluginState.capability = {
+    pluginId,
+    capability: {
+      ...(shouldPreserveExisting ? existingCapability : {}),
+      ...capability,
+    },
+  };
 }
 
 function patchMemoryCapability(pluginId: string, patch: MemoryPluginCapability): void {

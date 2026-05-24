@@ -30,7 +30,7 @@ function isAcpCommandCandidate(text: string): boolean {
 }
 
 function isLocalCommandCandidate(text: string): boolean {
-  return /^\/(?:status|unfocus)(?:\s|$)/i.test(text);
+  return /^\/(?:status|unfocus)(?:\s|$)/i.test(text) || /^\/(?:verbose|v)(?:[\s:]|$)/i.test(text);
 }
 
 export function shouldBypassAcpDispatchForCommand(

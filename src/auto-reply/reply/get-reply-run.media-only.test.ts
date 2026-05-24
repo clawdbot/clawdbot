@@ -217,7 +217,6 @@ function baseParams(
       onReplyStart: vi.fn().mockResolvedValue(undefined),
       cleanup: vi.fn(),
     } as never,
-    defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-1",
     timeoutMs: 30_000,
     isNewSession: true,
@@ -932,6 +931,142 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
   });
 
+  it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(
+      secondImagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "a tiny dot image",
+            },
+            {
+              kind: "image.description",
+              attachmentIndex: 1,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "another tiny dot image",
+            },
+          ],
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toBeUndefined();
+    expect(call.followupRun.imageOrder).toBeUndefined();
+    expect(call.followupRun.prompt).toContain("a tiny dot image");
+  });
+
+  it("rehydrates only current MediaPaths missing image understanding", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "inbound.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    const secondImageData = Buffer.from("second image bytes");
+    const secondImagePath = path.join(tmpDir, "second.png");
+    await writeFile(secondImagePath, secondImageData);
+
+    const result = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          RawBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          CommandBody: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+          MediaUnderstanding: [
+            {
+              kind: "image.description",
+              attachmentIndex: 0,
+              provider: "openai",
+              model: "gpt-4o",
+              text: "a tiny dot image",
+            },
+          ],
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          BodyStripped: "describe this\n\n[Image]\nDescription:\na tiny dot image",
+          Provider: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          MediaPaths: [imagePath, secondImagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        },
+      }),
+    );
+
+    expect(result).toEqual({ text: "ok" });
+    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.images).toEqual([
+      {
+        type: "image",
+        data: secondImageData.toString("base64"),
+        mimeType: "image/png",
+      },
+    ]);
+    expect(call.followupRun.imageOrder).toEqual(["inline"]);
+    expect(call.followupRun.prompt).toContain("a tiny dot image");
+  });
+
   it("does not send a standalone reset notice for reply-producing /new turns", async () => {
     await runPreparedReply(
       baseParams({
@@ -1272,153 +1407,6 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
-  });
-
-  it("resolves image override auth profile without mutating stored session profile", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-auth",
-      sessionFile: "/tmp/session-image-auth.jsonl",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "anthropic",
-        defaultModel: "claude-opus-4-1",
-        hasAppliedImageModelOverride: true,
-        isNewSession: false,
-        sessionId: "session-image-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionEntry.authProfileOverrideSource).toBe("user");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
-  });
-
-  it("isolates image override auth profile when the override provider matches the default provider", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-default-provider-auth",
-      sessionFile: "/tmp/session-image-default-provider-auth.jsonl",
-      providerOverride: "anthropic",
-      modelOverride: "claude-opus-4-1",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        hasAppliedImageModelOverride: true,
-        isNewSession: false,
-        sessionId: "session-image-default-provider-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
-  });
-
-  it("isolates image override auth profile from the pre-override runtime provider", async () => {
-    const { resolveSessionAuthProfileOverride } =
-      await import("../../agents/auth-profiles/session-override.js");
-    const sessionEntry: SessionEntry = {
-      sessionId: "session-image-runtime-provider-auth",
-      sessionFile: "/tmp/session-image-runtime-provider-auth.jsonl",
-      modelProvider: "anthropic",
-      model: "claude-opus-4-1",
-      authProfileOverride: "anthropic:work",
-      authProfileOverrideSource: "user",
-      updatedAt: 1,
-    };
-    const sessionStore: Record<string, SessionEntry> = {
-      "session-key": sessionEntry,
-    };
-    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
-      expect(params.provider).toBe("openai");
-      expect(params.storePath).toBeUndefined();
-      expect(params.sessionEntry).not.toBe(sessionEntry);
-      expect(params.sessionStore).not.toBe(sessionStore);
-      if (params.sessionEntry) {
-        params.sessionEntry.authProfileOverride = "openai:vision";
-        params.sessionEntry.authProfileOverrideSource = "auto";
-      }
-      return "openai:vision";
-    });
-
-    await runPreparedReply(
-      baseParams({
-        provider: "openai",
-        model: "gpt-4o",
-        defaultProvider: "openai",
-        defaultModel: "gpt-4o-mini",
-        hasAppliedImageModelOverride: true,
-        imageModelOverrideBaseProvider: "anthropic",
-        isNewSession: false,
-        sessionId: "session-image-runtime-provider-auth",
-        sessionEntry,
-        sessionStore,
-        storePath: "/tmp/sessions.json",
-      }),
-    );
-
-    const call = requireLastRunReplyAgentCall();
-    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
-    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
-    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
-    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
   });
 
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {

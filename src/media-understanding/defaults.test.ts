@@ -36,11 +36,16 @@ const mediaMetadataPlugins = vi.hoisted(() => [
         autoPriority: { image: 30, audio: 40, video: 10 },
         nativeDocumentInputs: ["pdf"],
       },
-      minimax: { capabilities: ["image"], autoPriority: { image: 40 } },
+      minimax: {
+        capabilities: ["image"],
+        autoPriority: { image: 40 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      },
       "minimax-portal": {
         capabilities: ["image"],
         defaultModels: { image: "MiniMax-VL-01" },
         autoPriority: { image: 50 },
+        documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
       },
       mistral: {
         capabilities: ["audio"],
@@ -105,6 +110,7 @@ import {
   providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
   resolveDefaultMediaModel,
+  resolveDocumentMediaModel,
 } from "./defaults.js";
 
 describe("resolveDefaultMediaModel", () => {
@@ -245,5 +251,31 @@ describe("providerSupportsNativePdfDocument", () => {
     expect(providerSupportsNativePdfDocument({ providerId: "openai", providerRegistry })).toBe(
       false,
     );
+  });
+});
+
+describe("resolveDocumentMediaModel", () => {
+  it("reads document model hints from provider metadata", () => {
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "minimax-portal-cn",
+        document: "pdf",
+        mode: "textExtraction",
+      }),
+    ).toBe("MiniMax-M2.7");
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "minimax",
+        document: "pdf",
+        mode: "image",
+      }),
+    ).toBe(false);
+    expect(
+      resolveDocumentMediaModel({
+        providerId: "openai",
+        document: "pdf",
+        mode: "textExtraction",
+      }),
+    ).toBeUndefined();
   });
 });

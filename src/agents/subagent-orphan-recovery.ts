@@ -1,10 +1,11 @@
 /**
- * Post-restart orphan recovery for subagent sessions.
+ * Post-restart interrupted-run resume for subagent sessions.
  *
  * After a SIGUSR1 gateway reload aborts in-flight subagent LLM calls,
- * this module scans for orphaned sessions (those with `abortedLastRun: true`
+ * this module scans for interrupted sessions (those with `abortedLastRun: true`
  * that are still tracked as active in the subagent registry) and sends a
- * synthetic resume message to restart their work.
+ * synthetic resume message to restart their work. Parent notification is handled
+ * separately by completion delivery after the child reaches a terminal result.
  *
  * @see https://github.com/openclaw/openclaw/issues/47711
  */
@@ -22,13 +23,7 @@ import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
-import {
-  deliverSubagentAnnouncement,
-  isInternalAnnounceRequesterSession,
-  loadRequesterSessionEntry,
-} from "./subagent-announce-delivery.js";
-import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
+import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import {
   evaluateSubagentRecoveryGate,
   markSubagentRecoveryAttempt,
@@ -40,12 +35,12 @@ import {
 } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-const log = createSubsystemLogger("subagent-orphan-recovery");
+const log = createSubsystemLogger("subagent-interrupted-resume");
 
 /** Delay before attempting recovery to let the gateway finish bootstrapping. */
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 
-function isRestartAbortedTimeoutRun(
+function isLegacyRestartInterruptedTimeout(
   runRecord: SubagentRunRecord,
   entry: SessionEntry | undefined,
 ): boolean {
@@ -55,6 +50,21 @@ function isRestartAbortedTimeoutRun(
     typeof runRecord.endedAt === "number" &&
     runRecord.endedAt > 0
   );
+}
+
+function reclassifyLegacyRestartInterruptedRun(runRecord: SubagentRunRecord): void {
+  const interruptedAt = runRecord.endedAt;
+  runRecord.execution = {
+    ...runRecord.execution,
+    status: "interrupted",
+    interruptedAt,
+    interruptionReason: "gateway-restart",
+    endedAt: undefined,
+    outcome: undefined,
+  };
+  runRecord.endedAt = undefined;
+  runRecord.endedReason = undefined;
+  runRecord.outcome = undefined;
 }
 
 /**
@@ -74,75 +84,6 @@ function buildResumeMessage(task: string, lastHumanMessage?: string): string {
 
   message += `Please continue where you left off.`;
   return message;
-}
-
-function buildRecoveryProgressPrompt(params: {
-  task: string;
-  attemptNumber: number;
-  maxAttempts: number;
-}): string {
-  const maxTaskLen = 160;
-  const taskLabel =
-    params.task.length > maxTaskLen ? `${params.task.slice(0, maxTaskLen)}...` : params.task;
-  return (
-    `A spawned subagent task was interrupted by a gateway restart or connection loss. ` +
-    `Automatic recovery is already in progress for "${taskLabel}" ` +
-    `(retry ${params.attemptNumber}/${params.maxAttempts}). ` +
-    `Send one brief update now in your normal voice: say the task was interrupted, ` +
-    `you are automatically resuming/retrying it, and you will report back when it either continues or truly fails. ` +
-    `Do not say the task has failed.`
-  );
-}
-
-async function announceRecoveryInProgress(params: {
-  runRecord: SubagentRunRecord;
-  attemptNumber: number;
-  maxAttempts: number;
-}): Promise<boolean> {
-  const requesterSessionKey = params.runRecord.requesterSessionKey?.trim();
-  if (!requesterSessionKey) {
-    return false;
-  }
-
-  const requesterOrigin = params.runRecord.requesterOrigin;
-  const requesterIsSubagent = isInternalAnnounceRequesterSession(requesterSessionKey);
-  let directOrigin = requesterOrigin;
-  if (!requesterIsSubagent) {
-    const { entry } = loadRequesterSessionEntry(requesterSessionKey);
-    directOrigin = resolveAnnounceOrigin(entry, requesterOrigin);
-  }
-
-  const prompt = buildRecoveryProgressPrompt({
-    task: params.runRecord.label || params.runRecord.task,
-    attemptNumber: params.attemptNumber,
-    maxAttempts: params.maxAttempts,
-  });
-
-  try {
-    const delivery = await deliverSubagentAnnouncement({
-      requesterSessionKey,
-      announceId: `${params.runRecord.runId}:recovery-progress`,
-      triggerMessage: prompt,
-      steerMessage: prompt,
-      summaryLine: params.runRecord.label || params.runRecord.task,
-      requesterSessionOrigin: requesterOrigin,
-      requesterOrigin,
-      completionDirectOrigin: requesterOrigin,
-      directOrigin,
-      sourceSessionKey: params.runRecord.childSessionKey,
-      sourceTool: "subagent_orphan_recovery",
-      targetRequesterSessionKey: requesterSessionKey,
-      requesterIsSubagent,
-      expectsCompletionMessage: false,
-      bestEffortDeliver: true,
-      directIdempotencyKey: buildAnnounceIdempotencyKey(
-        `${params.runRecord.runId}:recovery-progress`,
-      ),
-    });
-    return delivery.delivered;
-  } catch {
-    return false;
-  }
 }
 
 function extractMessageText(msg: unknown): string | undefined {
@@ -187,14 +128,23 @@ async function resumeOrphanedSession(params: {
   }
 
   try {
+    const idempotencyKey = crypto.randomUUID();
     const result = await callGateway<{ runId: string }>({
       method: "agent",
       params: {
         message: resumeMessage,
         sessionKey: params.sessionKey,
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey,
         deliver: false,
         lane: "subagent",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: params.originalRun.requesterSessionKey,
+          sourceChannel: "internal",
+          sourceTool: "subagent_interrupted_resume",
+        },
+        sessionEffects: "internal",
+        suppressPromptPersistence: true,
       },
       timeoutMs: 10_000,
     });
@@ -202,6 +152,7 @@ async function resumeOrphanedSession(params: {
       previousRunId: params.originalRunId,
       nextRunId: result.runId,
       fallback: params.originalRun,
+      transcriptFile: resolveInternalSessionEffectsTranscriptPath(result.runId),
     });
     if (!remapped) {
       log.warn(
@@ -233,12 +184,6 @@ export async function recoverOrphanedSubagentSessions(params: {
   getActiveRuns: () => Map<string, SubagentRunRecord>;
   /** Persisted across retries so already-resumed sessions are not resumed again. */
   resumedSessionKeys?: Set<string>;
-  /** Human-visible attempt number for this recovery pass. */
-  attemptNumber?: number;
-  /** Total recovery attempts before giving up. */
-  maxAttempts?: number;
-  /** Persisted across retries so recovery-in-progress notices stay deduped. */
-  notifiedRecoverySessionKeys?: Set<string>;
 }): Promise<{
   recovered: number;
   failed: number;
@@ -252,9 +197,6 @@ export async function recoverOrphanedSubagentSessions(params: {
     failedRuns: [] as Array<{ runId: string; childSessionKey: string; error?: string }>,
   };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
-  const attemptNumber = Math.max(1, params.attemptNumber ?? 1);
-  const maxAttempts = Math.max(attemptNumber, params.maxAttempts ?? attemptNumber);
-  const notifiedRecoverySessionKeys = params.notifiedRecoverySessionKeys ?? new Set<string>();
   const configChangePattern = /openclaw\.json|openclaw gateway restart|config\.patch/i;
 
   try {
@@ -293,13 +235,14 @@ export async function recoverOrphanedSubagentSessions(params: {
           continue;
         }
 
-        // Restart-aborted subagents can be marked ended with a timeout outcome
-        // before the gateway comes back up to resume them.
-        if (
-          typeof runRecord.endedAt === "number" &&
-          runRecord.endedAt > 0 &&
-          !isRestartAbortedTimeoutRun(runRecord, entry)
-        ) {
+        if (isLegacyRestartInterruptedTimeout(runRecord, entry)) {
+          reclassifyLegacyRestartInterruptedRun(runRecord);
+        }
+
+        // Terminal child outcomes are immutable. Restart resume only applies to
+        // non-terminal interrupted execution; delivery retry handles terminal
+        // child results separately.
+        if (typeof runRecord.endedAt === "number" && runRecord.endedAt > 0) {
           result.skipped++;
           continue;
         }
@@ -370,17 +313,6 @@ export async function recoverOrphanedSubagentSessions(params: {
           const text = extractMessageText(msg);
           return typeof text === "string" && configChangePattern.test(text);
         });
-
-        if (attemptNumber > 1 && !notifiedRecoverySessionKeys.has(childSessionKey)) {
-          const notified = await announceRecoveryInProgress({
-            runRecord,
-            attemptNumber,
-            maxAttempts,
-          });
-          if (notified) {
-            notifiedRecoverySessionKeys.add(childSessionKey);
-          }
-        }
 
         // Resume the session with the original task context.
         // We intentionally do NOT clear abortedLastRun before attempting
@@ -492,16 +424,11 @@ export function scheduleOrphanRecovery(params: {
   const maxRetries = params.maxRetries ?? MAX_RECOVERY_RETRIES;
 
   const resumedSessionKeys = new Set<string>();
-  const notifiedRecoverySessionKeys = new Set<string>();
-
   const attemptRecovery = (attempt: number, delay: number) => {
     setTimeout(() => {
       void recoverOrphanedSubagentSessions({
         ...params,
         resumedSessionKeys,
-        attemptNumber: attempt + 1,
-        maxAttempts: maxRetries + 1,
-        notifiedRecoverySessionKeys,
       })
         .then((result) => {
           if (result.failed > 0 && attempt < maxRetries) {

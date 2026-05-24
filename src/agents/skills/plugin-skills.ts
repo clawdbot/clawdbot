@@ -9,8 +9,7 @@ import {
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-policy.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../../security/scan-paths.js";
 import { CONFIG_DIR } from "../../utils.js";
@@ -33,17 +32,12 @@ export function resolvePluginSkillDirs(params: {
     return [];
   }
   const config = params.config ?? {};
-  const metadataSnapshot =
-    getCurrentPluginMetadataSnapshot({
-      config,
-      env: process.env,
-      workspaceDir,
-    }) ??
-    loadPluginMetadataSnapshot({
-      workspaceDir,
-      config,
-      env: process.env,
-    });
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
+    workspaceDir,
+    config,
+    env: process.env,
+    allowWorkspaceScopedCurrent: true,
+  });
   const registry = metadataSnapshot.manifestRegistry;
   if (registry.plugins.length === 0) {
     publishPluginSkills([], {

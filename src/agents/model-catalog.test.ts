@@ -13,8 +13,8 @@ let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
 let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
-let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn>;
-let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn>;
+let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
+let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let readFileMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
@@ -184,13 +184,15 @@ describe("loadModelCatalog", () => {
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
     }));
-    currentPluginMetadataSnapshotMock = vi.fn();
-    loadPluginMetadataSnapshotMock = vi.fn();
+    currentPluginMetadataSnapshotMock = vi.fn<(...args: unknown[]) => unknown>();
+    loadPluginMetadataSnapshotMock = vi.fn<(...args: unknown[]) => unknown>();
     vi.doMock("../plugins/current-plugin-metadata-snapshot.js", () => ({
       getCurrentPluginMetadataSnapshot: currentPluginMetadataSnapshotMock,
     }));
     vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
       loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+      resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+        currentPluginMetadataSnapshotMock(...args) ?? loadPluginMetadataSnapshotMock(...args),
     }));
 
     ({
@@ -215,7 +217,7 @@ describe("loadModelCatalog", () => {
     ensureOpenClawModelsJsonMock.mockClear();
     augmentCatalogMock.mockClear();
     currentPluginMetadataSnapshotMock.mockReset();
-    currentPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot());
+    currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockReset();
     loadPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot());
   });
@@ -511,7 +513,7 @@ describe("loadModelCatalog", () => {
   });
 
   it("normalizes persisted read-only catalog rows with manifest model id policies", async () => {
-    currentPluginMetadataSnapshotMock.mockReturnValueOnce(modelIdNormalizationSnapshot());
+    currentPluginMetadataSnapshotMock.mockReturnValue(modelIdNormalizationSnapshot());
     readFileMock.mockResolvedValueOnce(
       JSON.stringify({
         providers: {
@@ -1028,6 +1030,75 @@ describe("loadModelCatalog", () => {
     expect(entry.name).toBe("Qwen3.5 35B");
     expect(entry.input).toEqual(["text", "image"]);
     expect(entry.reasoning).toBe(true);
+    expect(entry.contextWindow).toBe(128_000);
+  });
+
+  it("merges manifest model catalog rows on the normal catalog path", async () => {
+    mockSingleOpenAiCatalogModel();
+    currentPluginMetadataSnapshotMock.mockReturnValue({
+      ...emptyPluginMetadataSnapshot(),
+      plugins: [
+        {
+          id: "byteplus",
+          origin: "bundled",
+          providers: ["byteplus"],
+          modelCatalog: {
+            providers: {
+              byteplus: {
+                baseUrl: "https://ark.ap-southeast.bytepluses.com/api/v3",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "seed-1-8-251228",
+                    name: "Doubao Seed 1.8",
+                    input: ["text", "image"],
+                    contextWindow: 256_000,
+                  },
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    const entry = requireCatalogEntry(result, "byteplus", "seed-1-8-251228");
+    expect(entry.name).toBe("Doubao Seed 1.8");
+    expect(entry.input).toEqual(["text", "image"]);
+    expect(entry.contextWindow).toBe(256_000);
+  });
+
+  it("keeps configured LM Studio models visible without runtime catalog augmentation", async () => {
+    mockSingleOpenAiCatalogModel();
+    augmentCatalogMock.mockResolvedValueOnce([]);
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://127.0.0.1:1234/v1",
+              models: [
+                {
+                  id: "qwen3.6-27b@iq3_xxs",
+                  name: "Qwen 3.6 27B",
+                  input: ["text"],
+                  reasoning: false,
+                  contextWindow: 128_000,
+                  maxTokens: 8192,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const entry = requireCatalogEntry(result, "lmstudio", "qwen3.6-27b@iq3_xxs");
+    expect(entry.name).toBe("Qwen 3.6 27B");
     expect(entry.contextWindow).toBe(128_000);
   });
 

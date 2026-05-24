@@ -1070,6 +1070,26 @@ describe("chat attachment picker", () => {
     expect(getChatAttachmentDataUrl(attachments[0])).toBe(`data:image/png;base64,${base64}`);
   });
 
+  it("opens the scoped file input from the visible attach button", () => {
+    const container = renderChatView();
+    const input = requireElement(
+      container,
+      ".agent-chat__file-input",
+      "attachment file input",
+    ) as HTMLInputElement;
+    const attachButton = requireElement(
+      container,
+      `[aria-label="${t("chat.composer.attachFile")}"]`,
+      "attach button",
+    ) as HTMLButtonElement;
+    const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
+
+    attachButton.click();
+
+    expect(attachButton.type).toBe("button");
+    expect(clickInput).toHaveBeenCalledTimes(1);
+  });
+
   it("accepts and previews non-video file attachments", async () => {
     const onAttachmentsChange = vi.fn();
     const container = renderChatView({ onAttachmentsChange });

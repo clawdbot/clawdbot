@@ -63,17 +63,21 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("gpt-5.4")).toBe(272_000);
   });
 
-  it("upgrades claude opus 4.7 variants to 1M when discovery still reports 200k", () => {
+  it("upgrades claude-cli GA 1M variants when discovery still reports 200k", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
-      models: [{ id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 }],
+      models: [
+        { id: "claude-cli/claude-opus-4.7-20260219", contextWindow: 200_000 },
+        { id: "claude-cli/claude-sonnet-4-6", contextWindow: 200_000 },
+      ],
     });
 
     expect(cache.get("claude-cli/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+    expect(cache.get("claude-cli/claude-sonnet-4-6")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not upgrade non-Anthropic opus 4.7 variants from discovery", () => {
+  it("does not upgrade non-Anthropic GA 1M model ids from discovery", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -83,7 +87,7 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("github-copilot/claude-opus-4.7")).toBe(128_000);
   });
 
-  it("does not upgrade provider-qualified anthropic opus 4.7 discovery ids without verified ownership", () => {
+  it("does not upgrade provider-qualified anthropic GA 1M discovery ids without verified ownership", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -93,7 +97,7 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(200_000);
   });
 
-  it("upgrades provider-owned anthropic opus 4.7 discovery ids", () => {
+  it("upgrades provider-owned anthropic GA 1M discovery ids", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -109,7 +113,7 @@ describe("applyDiscoveredContextWindows", () => {
     expect(cache.get("anthropic/claude-opus-4.7-20260219")).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("does not upgrade bare opus 4.7 discovery ids without verified ownership", () => {
+  it("does not upgrade bare GA 1M discovery ids without verified ownership", () => {
     const cache = new Map<string, number>();
     applyDiscoveredContextWindows({
       cache,
@@ -287,7 +291,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(16_000);
   });
 
-  it("returns 1M context when anthropic context1m is enabled for opus/sonnet", () => {
+  it("returns 1M context when anthropic context1m is enabled for a GA 1M model", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -317,7 +321,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("returns 1M context when claude-cli context1m is enabled for opus/sonnet", () => {
+  it("returns 1M context when claude-cli context1m is enabled for a GA 1M model", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -347,7 +351,7 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
-  it("returns 1M context for Anthropic opus/sonnet 4 even without context1m", () => {
+  it("returns 1M context for GA-capable Anthropic 4.x models even without context1m", () => {
     const result = resolveContextTokensForModel({
       cfg: {
         models: {
@@ -396,6 +400,36 @@ describe("resolveContextTokensForModel", () => {
     });
 
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
+  });
+
+  it("keeps older Anthropic Sonnet 4.x models at the configured window when context1m is set", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com",
+              models: [testModelContextWindow("claude-sonnet-4-5", 200_000)],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-5": {
+                params: { context1m: true },
+              },
+            },
+          },
+        },
+      },
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
   });
 
   it("does not force 1M context for non-opus/sonnet Anthropic models", () => {

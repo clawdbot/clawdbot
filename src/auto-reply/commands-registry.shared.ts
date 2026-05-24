@@ -400,16 +400,16 @@ export function buildBuiltinChatCommands(
     defineChatCommand({
       key: "subagents",
       nativeName: "subagents",
-      description: "List, kill, log, spawn, or steer subagent runs for this session.",
+      description: "Inspect subagent runs for this session.",
       textAlias: "/subagents",
       category: "management",
       tier: "standard",
       args: [
         {
           name: "action",
-          description: "list | kill | log | info | send | steer | spawn",
+          description: "list | log | info",
           type: "string",
-          choices: ["list", "kill", "log", "info", "send", "steer", "spawn"],
+          choices: ["list", "log", "info"],
         },
         {
           name: "target",
@@ -498,22 +498,6 @@ export function buildBuiltinChatCommands(
       textAlias: "/agents",
       category: "management",
       tier: "standard",
-    }),
-    defineChatCommand({
-      key: "kill",
-      nativeName: "kill",
-      description: "Kill a running subagent (or all).",
-      textAlias: "/kill",
-      category: "management",
-      tier: "standard",
-      args: [
-        {
-          name: "target",
-          description: "Label, run id, index, or all",
-          type: "string",
-        },
-      ],
-      argsMenu: "auto",
     }),
     defineChatCommand({
       key: "steer",

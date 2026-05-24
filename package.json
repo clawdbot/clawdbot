@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -50,6 +50,7 @@
     "!dist/extensions/line/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
+    "!dist/extensions/meeting-notes/**",
     "!dist/extensions/matrix/**",
     "!dist/extensions/msteams/**",
     "!dist/extensions/nextcloud-talk/**",
@@ -1008,6 +1009,10 @@
     "./plugin-sdk/realtime-voice": {
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
+    },
+    "./plugin-sdk/meeting-notes": {
+      "types": "./dist/plugin-sdk/meeting-notes.d.ts",
+      "default": "./dist/plugin-sdk/meeting-notes.js"
     },
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",

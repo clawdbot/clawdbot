@@ -83,6 +83,8 @@ private actor RealtimeAudioSender {
 
 @MainActor
 final class RealtimeTalkRelaySession {
+    private static let agentControlToolName = "openclaw_agent_control"
+
     struct Options {
         let sessionKey: String
         let provider: String?
@@ -330,6 +332,13 @@ final class RealtimeTalkRelaySession {
         else { return }
         self.onStatus("Thinking…")
         do {
+            if name == Self.agentControlToolName {
+                try await self.handleAgentControlToolCall(
+                    callId: callId,
+                    relaySessionId: relaySessionId,
+                    args: payload["args"])
+                return
+            }
             let completionStream = await self.gateway.subscribeServerEvents(bufferingNewest: 200)
             let args = payload["args"]?.foundationValue ?? [:]
             let startPayload: [String: Any] = [
@@ -364,6 +373,34 @@ final class RealtimeTalkRelaySession {
             ])
             self.onStatus("Listening (Realtime)")
         }
+    }
+
+    private func handleAgentControlToolCall(
+        callId: String,
+        relaySessionId: String,
+        args: AnyCodable?) async throws
+    {
+        let controlArgs = args?.dictionaryValue ?? [:]
+        var payload: [String: Any] = [
+            "sessionId": relaySessionId,
+            "sessionKey": self.options.sessionKey,
+            "text": controlArgs["text"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "status",
+        ]
+        if let mode = controlArgs["mode"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !mode.isEmpty
+        {
+            payload["mode"] = mode
+        }
+        let response = try await self.requestJSON(
+            method: "talk.session.steer",
+            payload: payload,
+            decodeAs: AnyCodable.self,
+            timeoutSeconds: 30)
+        let result = response.dictionaryValue?.mapValues(\.foundationValue) ?? [
+            "result": response.foundationValue,
+        ]
+        try await self.submitToolResult(callId: callId, result: result)
+        self.onStatus("Listening (Realtime)")
     }
 
     private func submitToolResult(callId: String, result: [String: Any]) async throws {

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
 
 const args = new Set(process.argv.slice(2));
 const fix = args.has("--fix");
@@ -8,8 +8,6 @@ if (fix && args.has("--check")) {
   console.error("Use either --fix or --check, not both.");
   process.exit(1);
 }
-
-const pnpm = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 const fixCommands = [
   { name: "plugin versions", args: ["plugins:sync"] },
@@ -77,19 +75,15 @@ async function runAll(commands) {
 
 async function runCommand(command) {
   console.log(`\n[release-preflight] ${command.name}: pnpm ${command.args.join(" ")}`);
-  const child = spawn(pnpm, command.args, {
-    stdio: "inherit",
-    shell: false,
-  });
-  return await new Promise((resolve) => {
-    child.once("error", (error) => {
-      console.error(error);
-      resolve(1);
+  try {
+    return await runManagedCommand({
+      args: command.args,
+      bin: "pnpm",
     });
-    child.once("close", (status) => {
-      resolve(status ?? 1);
-    });
-  });
+  } catch (error) {
+    console.error(error);
+    return 1;
+  }
 }
 
 function printFailures(title, failures) {

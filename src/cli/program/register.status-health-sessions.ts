@@ -5,7 +5,7 @@ import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
-import { parsePositiveIntOrUndefined } from "./helpers.js";
+import { parsePositiveIntOrUndefined, parseStrictPositiveIntOrUndefined } from "./helpers.js";
 
 function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
@@ -67,6 +67,16 @@ function parseTimeoutMs(timeout: unknown): number | null | undefined {
   const parsed = parsePositiveIntOrUndefined(timeout);
   if (timeout !== undefined && parsed === undefined) {
     defaultRuntime.error("--timeout must be a positive integer (milliseconds)");
+    defaultRuntime.exit(1);
+    return null;
+  }
+  return parsed;
+}
+
+function parseTasksAuditLimit(limit: unknown): number | null | undefined {
+  const parsed = parseStrictPositiveIntOrUndefined(limit);
+  if (limit !== undefined && parsed === undefined) {
+    defaultRuntime.error("--limit must be a positive integer, for example --limit 25.");
     defaultRuntime.exit(1);
     return null;
   }
@@ -444,6 +454,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--limit <n>", "Limit displayed findings")
     .action(async (opts, command) => {
       const parentOpts = command.parent?.opts() as { json?: boolean } | undefined;
+      const limit = parseTasksAuditLimit(opts.limit);
+      if (limit === null) {
+        return;
+      }
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { tasksAuditCommand } = await import("../../commands/tasks.js");
         await tasksAuditCommand(
@@ -464,7 +478,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
               | "missing_linked_tasks"
               | "blocked_task_missing"
               | undefined,
-            limit: parsePositiveIntOrUndefined(opts.limit),
+            limit,
           },
           defaultRuntime,
         );

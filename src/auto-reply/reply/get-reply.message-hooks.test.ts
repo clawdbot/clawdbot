@@ -4,6 +4,7 @@ import type { MsgContext } from "../templating.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.js";
 import {
   buildGetReplyGroupCtx,
+  createGetReplyContinueDirectivesResult,
   createGetReplySessionState,
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
@@ -16,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(),
   triggerInternalHook: vi.fn(async (..._args: unknown[]) => undefined),
   resolveReplyDirectives: vi.fn(),
+  handleInlineActions: vi.fn(),
   initSessionState: vi.fn(),
 }));
 
@@ -46,9 +48,18 @@ vi.mock("./commands-core.js", () => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
+let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ resolveDefaultModel: resolveDefaultModelMock } =
+    await import("./directive-handling.defaults.js"));
+  ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
+}
+
+function emptyAliasIndex() {
+  return { byAlias: new Map(), byKey: new Map() };
 }
 
 function buildCtx(overrides: Partial<MsgContext> = {}): MsgContext {
@@ -86,7 +97,10 @@ describe("getReplyFromConfig message hooks", () => {
     mocks.createInternalHookEvent.mockReset();
     mocks.triggerInternalHook.mockReset();
     mocks.resolveReplyDirectives.mockReset();
+    mocks.handleInlineActions.mockReset();
     mocks.initSessionState.mockReset();
+    vi.mocked(resolveDefaultModelMock).mockReset();
+    vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(logVerbose).mockReset();
 
     mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
@@ -107,7 +121,26 @@ describe("getReplyFromConfig message hooks", () => {
       }),
     );
     mocks.triggerInternalHook.mockResolvedValue(undefined);
+    mocks.handleInlineActions.mockImplementation(async (...args: unknown[]) => {
+      const params = args[0] as {
+        directives?: unknown;
+        cleanedBody?: string;
+        abortedLastRun?: boolean;
+      };
+      return {
+        kind: "continue",
+        directives: params.directives ?? {},
+        cleanedBody: params.cleanedBody ?? "",
+        abortedLastRun: params.abortedLastRun,
+      };
+    });
     mocks.resolveReplyDirectives.mockResolvedValue({ kind: "reply", reply: { text: "ok" } });
+    vi.mocked(resolveDefaultModelMock).mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: emptyAliasIndex(),
+    });
+    vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
         sessionKey: "agent:main:telegram:-100123",
@@ -139,6 +172,115 @@ describe("getReplyFromConfig message hooks", () => {
     expect(preprocessed[3].isGroup).toBe(true);
     expect(preprocessed[3].groupId).toBe("telegram:-100123");
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(2);
+  });
+
+  it("enriches staged text-only images before reply without switching the reply model", async () => {
+    const enrichedBody = "describe image\n\n[Image 1]\na tiny dot image";
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-6",
+      aliasIndex: emptyAliasIndex(),
+    });
+    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      const params = args[0] as {
+        ctx: MsgContext;
+        activeModel?: { provider: string; model: string };
+        agentId?: string;
+      };
+      expect(params.activeModel).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      expect(params.agentId).toBe("main");
+      params.ctx.MediaUnderstanding = [
+        {
+          kind: "image.description",
+          attachmentIndex: 0,
+          provider: "openai",
+          model: "gpt-4o",
+          text: "a tiny dot image",
+        },
+      ];
+      params.ctx.Body = enrichedBody;
+      params.ctx.BodyForAgent = enrichedBody;
+      params.ctx.BodyForCommands = enrichedBody;
+      params.ctx.CommandBody = enrichedBody;
+      params.ctx.RawBody = enrichedBody;
+    });
+    mocks.resolveReplyDirectives.mockResolvedValueOnce(
+      createGetReplyContinueDirectivesResult({
+        body: enrichedBody,
+        abortKey: "agent:main:webchat:direct:user",
+        from: "webchat:user",
+        to: "webchat:local",
+        senderId: "webchat:user",
+        commandSource: "native",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    );
+
+    await expect(
+      getReplyFromConfig(
+        buildCtx({
+          Provider: "webchat",
+          Surface: "webchat",
+          OriginatingChannel: "webchat",
+          OriginatingTo: "webchat:local",
+          ChatType: "direct",
+          Body: "describe image",
+          BodyForAgent: "describe image",
+          RawBody: "describe image",
+          CommandBody: "describe image",
+          BodyForCommands: "describe image",
+          SessionKey: "agent:main:webchat:direct:user",
+          From: "webchat:user",
+          To: "webchat:local",
+          MediaPath: "/tmp/1.png",
+          MediaPaths: ["/tmp/1.png"],
+          MediaType: "image/png",
+          MediaTypes: ["image/png"],
+          MediaStaged: true,
+          MediaUrl: undefined,
+        }),
+        undefined,
+        withFastReplyConfig({
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-6",
+              imageModel: { primary: "openai/gpt-4o" },
+            },
+          },
+        }),
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.applyMediaUnderstanding).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledTimes(1);
+    expect(mocks.resolveReplyDirectives.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    );
+    expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+    const runParams = vi.mocked(runPreparedReplyMock).mock.calls[0]?.[0];
+    expect(runParams).toEqual(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    );
+    expect(runParams?.ctx.BodyForAgent).toContain("a tiny dot image");
+    expect(runParams?.ctx.MediaUnderstanding).toEqual([
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-4o",
+        text: "a tiny dot image",
+      }),
+    ]);
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {

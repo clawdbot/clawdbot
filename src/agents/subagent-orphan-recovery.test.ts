@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as sessions from "../config/sessions.js";
 import * as gateway from "../gateway/call.js";
 import * as sessionUtils from "../gateway/session-utils.fs.js";
+import { resolveInternalSessionEffectsTranscriptPath } from "./internal-session-effects.js";
 import * as announceDelivery from "./subagent-announce-delivery.js";
 import {
   recoverOrphanedSubagentSessions,
@@ -178,6 +179,12 @@ describe("subagent-orphan-recovery", () => {
     expect(replaceParams.previousRunId).toBe("run-1");
     expect(replaceParams.nextRunId).toBe("test-run-id");
     expect(replaceParams.fallback).toBe(run);
+    expect(replaceParams.transcriptFile).toBe(
+      resolveInternalSessionEffectsTranscriptPath("test-run-id"),
+    );
+    expect(replaceParams.transcriptFile).not.toBe(
+      resolveInternalSessionEffectsTranscriptPath(params.idempotencyKey as string),
+    );
   });
 
   it("skips sessions that are not aborted", async () => {
@@ -532,39 +539,22 @@ describe("subagent-orphan-recovery", () => {
     expect(message).toContain("config changes from your previous run were already applied");
   });
 
-  it("announces recovery-in-progress once when a later retry is attempting resume", async () => {
+  it("does not send parent-visible recovery-progress announcements on retry", async () => {
     mockSingleAbortedSession();
 
     const activeRuns = createActiveRuns(createTestRunRecord());
-    const notifiedRecoverySessionKeys = new Set<string>();
 
     await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
-      attemptNumber: 2,
-      maxAttempts: 4,
-      notifiedRecoverySessionKeys,
     });
 
-    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-    const announcement = requireRecord(
-      firstCallParam(
-        vi.mocked(announceDelivery.deliverSubagentAnnouncement).mock.calls,
-        "recovery announcement",
-      ),
-      "recovery announcement params",
-    );
-    expect(announcement.requesterSessionKey).toBe("agent:main:quietchat:direct:+1234567890");
-    expect(announcement.triggerMessage).toContain("Automatic recovery is already in progress");
-    expect(notifiedRecoverySessionKeys).toEqual(new Set(["agent:main:subagent:test-session-1"]));
+    expect(announceDelivery.deliverSubagentAnnouncement).not.toHaveBeenCalled();
 
     await recoverOrphanedSubagentSessions({
       getActiveRuns: () => activeRuns,
-      attemptNumber: 3,
-      maxAttempts: 4,
-      notifiedRecoverySessionKeys,
     });
 
-    expect(announceDelivery.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+    expect(announceDelivery.deliverSubagentAnnouncement).not.toHaveBeenCalled();
   });
 
   it("prevents duplicate resume when updateSessionStore fails", async () => {

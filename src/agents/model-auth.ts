@@ -106,6 +106,7 @@ export function createRuntimeProviderAuthLookup(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  includePluginSyntheticAuth?: boolean;
 }): RuntimeProviderAuthLookup {
   const env = params.env ?? process.env;
   const lookupParams = {
@@ -113,14 +114,17 @@ export function createRuntimeProviderAuthLookup(params: {
     workspaceDir: params.workspaceDir,
     env,
   };
-  const syntheticAuthProviderRefs = resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
+  const syntheticAuthProviderRefs =
+    params.includePluginSyntheticAuth === false
+      ? undefined
+      : resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
   return {
     envApiKey: {
       aliasMap: resolveProviderAuthAliasMap(lookupParams),
       candidateMap: resolveProviderEnvApiKeyCandidates(lookupParams),
       authEvidenceMap: resolveProviderEnvAuthEvidence(lookupParams),
     },
-    syntheticAuthProviderRefs: syntheticAuthProviderRefs.complete
+    syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs
       : undefined,
   };
@@ -406,9 +410,6 @@ function shouldResolvePluginSyntheticAuth(params: {
 }): boolean {
   const syntheticAuthProviderRefs = params.runtimeLookup?.syntheticAuthProviderRefs;
   if (!syntheticAuthProviderRefs) {
-    return true;
-  }
-  if (resolveProviderConfig(params.cfg, params.provider)) {
     return true;
   }
   const eligibleRefs = new Set(

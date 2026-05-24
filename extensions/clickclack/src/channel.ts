@@ -93,14 +93,6 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     messaging: {
       targetPrefixes: ["clickclack", "cc"],
       normalizeTarget: normalizeClickClackTarget,
-      parseExplicitTarget: ({ raw }) => {
-        const parsed = parseClickClackTarget(raw);
-        return {
-          to: buildClickClackTarget(parsed),
-          threadId: parsed.kind === "thread" ? parsed.id : undefined,
-          chatType: parsed.chatType,
-        };
-      },
       inferTargetChatType: ({ to }) => parseClickClackTarget(to).chatType,
       targetResolver: {
         looksLikeId: looksLikeClickClackTarget,

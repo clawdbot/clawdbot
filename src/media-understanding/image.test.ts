@@ -811,7 +811,7 @@ describe("describeImageWithModel", () => {
     expect(context.messages).toHaveLength(1);
     expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);
     expect(options.apiKey).toBe("oauth-test");
-    expect(options.maxTokens).toBe(512);
+    expect(options.maxTokens).toBe(4096);
     expect(options.signal).toBeInstanceOf(AbortSignal);
     expect(options.timeoutMs).toBeGreaterThan(0);
     expect(options.timeoutMs).toBeLessThanOrEqual(1000);
@@ -1289,5 +1289,78 @@ describe("describeImageWithModel", () => {
     const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
     expect(contentTypes).not.toContain("text");
     expect(contentTypes).toContain("image");
+  });
+
+  it("defaults image-describe maxTokens to 4096 for reasoning-capable VLMs", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-completions",
+        provider: "agent-plan",
+        id: "doubao-seed-2.0-pro",
+        input: ["text", "image"],
+        baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "agent-plan",
+      model: "doubao-seed-2.0-pro",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "agent-plan",
+      model: "doubao-seed-2.0-pro",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    expect(options.maxTokens).toBe(4096);
+  });
+
+  it("caps image-describe maxTokens by the resolved model's own maxTokens", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-completions",
+        provider: "fake",
+        id: "small-vlm",
+        input: ["text", "image"],
+        baseUrl: "https://example.test",
+        maxTokens: 1024,
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-completions",
+      provider: "fake",
+      model: "small-vlm",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "ok" }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "fake",
+      model: "small-vlm",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    const [, , options] = requireFirstMockCall(completeMock, "image completion");
+    expect(options.maxTokens).toBe(1024);
   });
 });

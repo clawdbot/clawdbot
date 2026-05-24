@@ -11,7 +11,10 @@ import type {
 type ManifestModelCatalogPlugin = {
   id: string;
   providers?: readonly string[];
-  modelCatalog?: Pick<ModelCatalog, "providers" | "aliases" | "suppressions" | "discovery">;
+  modelCatalog?: Pick<
+    ModelCatalog,
+    "providers" | "aliases" | "suppressions" | "discovery" | "runtimeAugment"
+  >;
 };
 
 type ManifestModelCatalogRegistry = {

@@ -241,6 +241,21 @@ describe("buildBootstrapContextFiles", () => {
       warnings.filter((warning) => !warning.includes('missing or invalid "path" field')),
     ).toStrictEqual([]);
   });
+
+  it("handles undefined file names without crashing", () => {
+    const fileWithUndefinedName = {
+      name: undefined,
+      path: "/tmp/test.md",
+      content: "content",
+      missing: false,
+    } as unknown as WorkspaceBootstrapFile;
+    const warnings: string[] = [];
+    const result = buildBootstrapContextFiles([fileWithUndefinedName], {
+      warn: (msg) => warnings.push(msg),
+    });
+    expect(result).toBeDefined();
+    expect(Array.isArray(result)).toBe(true);
+  });
 });
 
 type BootstrapLimitResolverCase = {

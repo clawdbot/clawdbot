@@ -5,6 +5,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type PersistedSubagentRegistryV1 = {
@@ -148,16 +149,19 @@ export function loadSubagentRegistryFromDisk(): Map<string, SubagentRunRecord> {
       requesterAccountId: _accountId,
       ...rest
     } = typed;
-    out.set(runId, {
-      ...rest,
-      childSessionKey,
-      requesterSessionKey,
-      controllerSessionKey,
-      requesterOrigin,
-      cleanupCompletedAt,
-      cleanupHandled,
-      spawnMode: typed.spawnMode === "session" ? "session" : "run",
-    });
+    out.set(
+      runId,
+      normalizeSubagentRunState({
+        ...rest,
+        childSessionKey,
+        requesterSessionKey,
+        controllerSessionKey,
+        requesterOrigin,
+        cleanupCompletedAt,
+        cleanupHandled,
+        spawnMode: typed.spawnMode === "session" ? "session" : "run",
+      }),
+    );
     if (isLegacy) {
       migrated = true;
     }
@@ -178,7 +182,7 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
   const pathname = resolveSubagentRegistryPath();
   const serialized: Record<string, PersistedSubagentRunRecord> = {};
   for (const [runId, entry] of runs.entries()) {
-    serialized[runId] = entry;
+    serialized[runId] = normalizeSubagentRunState(cloneSubagentRunRecord(entry));
   }
   const out: PersistedSubagentRegistry = {
     version: REGISTRY_VERSION,

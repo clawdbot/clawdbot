@@ -3403,6 +3403,14 @@ export function buildOpenAICompletionsParams(
     } else if (hasToolHistory(context.messages)) {
       params.tools = [];
     }
+    if (
+      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      Array.isArray(params.tools) &&
+      params.tools.length === 0
+    ) {
+      delete params.tools;
+      delete params.tool_choice;
+    }
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort

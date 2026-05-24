@@ -80,6 +80,23 @@ export {
   type RealtimeVoiceAgentTalkbackResult,
 } from "../talk/agent-talkback-runtime.js";
 export {
+  buildRealtimeVoiceAgentCancelProviderResult,
+  buildRealtimeVoiceAgentControlSpeechMessage,
+  classifyRealtimeVoiceAgentControlText,
+  controlRealtimeVoiceAgentRun,
+  normalizeRealtimeVoiceAgentControlMode,
+  parseRealtimeVoiceAgentControlToolArgs,
+  REALTIME_VOICE_AGENT_CONTROL_MODES,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL,
+  REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
+  resolveRealtimeVoiceAgentControlIntent,
+  shouldAutoControlRealtimeVoiceAgentText,
+  type RealtimeVoiceAgentControlMode,
+  type RealtimeVoiceAgentControlIntent,
+  type RealtimeVoiceAgentControlProviderResult,
+  type RealtimeVoiceAgentControlResult,
+} from "../talk/agent-run-control.js";
+export {
   resolveRealtimeVoiceFastContextConsult,
   type RealtimeVoiceFastContextConfig,
   type RealtimeVoiceFastContextConsultResult,

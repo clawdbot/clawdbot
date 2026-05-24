@@ -4,5 +4,6 @@
   "qa-channel-protocol",
   "qa-lab",
   "qa-runtime",
+  "ssrf-runtime-internal",
   "test-utils"
 ]

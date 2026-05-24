@@ -152,6 +152,7 @@ export async function planOpenClawModelsJsonWithDeps(
 
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
+  const manifestPlugins = params.pluginMetadataSnapshot?.manifestRegistry.plugins;
   const normalizedProviders =
     normalizeProviders({
       providers,
@@ -161,6 +162,7 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceProviders: params.sourceConfigForSecrets?.models?.providers,
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
+      manifestPlugins,
     }) ?? providers;
   const mergedProviders = resolveProvidersForMode({
     mode,
@@ -169,7 +171,9 @@ export async function planOpenClawModelsJsonWithDeps(
     secretRefManagedProviders,
   });
   const normalizedMergedProviders =
-    normalizeProviderCatalogModelsForConfig(mergedProviders) ?? mergedProviders;
+    normalizeProviderCatalogModelsForConfig(mergedProviders, {
+      manifestPlugins,
+    }) ?? mergedProviders;
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: normalizedMergedProviders,

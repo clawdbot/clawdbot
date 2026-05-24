@@ -17,8 +17,24 @@ function normalizeSafe(homedir: () => string): string | undefined {
   }
 }
 
+function resolveTermuxHome(env: NodeJS.ProcessEnv): string | undefined {
+  const prefix = normalize(env.PREFIX);
+  if (!prefix || !normalize(env.ANDROID_DATA)) {
+    return undefined;
+  }
+  if (!/(?:^|\/)com\.termux\/files\/usr\/?$/u.test(prefix.replace(/\\/gu, "/"))) {
+    return undefined;
+  }
+  return path.resolve(prefix, "..", "home");
+}
+
 function resolveRawOsHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
-  return normalize(env.HOME) ?? normalize(env.USERPROFILE) ?? normalizeSafe(homedir);
+  return (
+    normalize(env.HOME) ??
+    normalize(env.USERPROFILE) ??
+    resolveTermuxHome(env) ??
+    normalizeSafe(homedir)
+  );
 }
 
 function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): string | undefined {
@@ -48,7 +64,6 @@ export function resolveOsHomeDir(
   const raw = resolveRawOsHomeDir(env, homedir);
   return raw ? path.resolve(raw) : undefined;
 }
-
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,

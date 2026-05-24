@@ -433,6 +433,16 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("rejects partially numeric tasks audit limits", async () => {
+    await runCli(["tasks", "--json", "audit", "--limit", "5abc"]);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--limit must be a positive integer, for example --limit 25.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(tasksAuditCommand).not.toHaveBeenCalled();
+  });
+
   it("routes tasks flow commands through the TaskFlow handlers", async () => {
     await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
     expectCommandOptions(flowsListCommand, {});

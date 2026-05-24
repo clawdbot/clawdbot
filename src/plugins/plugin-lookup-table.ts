@@ -6,7 +6,7 @@ import {
 import { hashJson } from "./installed-plugin-index-hash.js";
 import {
   isPluginMetadataSnapshotCompatible,
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
   type PluginMetadataSnapshotOwnerMaps,
 } from "./plugin-metadata-snapshot.js";
@@ -59,10 +59,11 @@ export function loadPluginLookUpTable(params: LoadPluginLookUpTableParams): Plug
       index: params.index,
     })
       ? params.metadataSnapshot
-      : loadPluginMetadataSnapshot({
+      : resolvePluginMetadataSnapshot({
           config: requestedSnapshotConfig,
           workspaceDir: params.workspaceDir,
           env: params.env,
+          allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
           ...(params.index ? { index: params.index } : {}),
         });
   const { index, manifestRegistry } = metadataSnapshot;

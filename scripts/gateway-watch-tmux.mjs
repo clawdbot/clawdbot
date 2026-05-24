@@ -8,7 +8,9 @@ const TMUX_ATTACH_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 const TMUX_ATTACH_FORCE_VALUES = new Set(["1", "true", "yes", "on"]);
 const DEFAULT_PROFILE_NAME = "main";
 const DEFAULT_BENCHMARK_PROFILE_DIR = ".artifacts/gateway-watch-profiles";
+const DEFAULT_BENCHMARK_PROFILE_MAX_FILES = "40";
 const RUN_NODE_CPU_PROF_DIR_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_DIR";
+const RUN_NODE_CPU_PROF_MAX_FILES_ENV = "OPENCLAW_RUN_NODE_CPU_PROF_MAX_FILES";
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STDERR";
 const RAW_WATCH_SCRIPT = "scripts/watch-node.mjs";
@@ -21,6 +23,7 @@ const TMUX_CHILD_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_PROFILE",
   RUN_NODE_CPU_PROF_DIR_ENV,
+  RUN_NODE_CPU_PROF_MAX_FILES_ENV,
   RUN_NODE_FILTER_SYNC_IO_STDERR_ENV,
   RUN_NODE_OUTPUT_LOG_ENV,
   "OPENCLAW_SKIP_CHANNELS",
@@ -106,6 +109,7 @@ const resolveGatewayWatchBenchmarkArgs = ({ args = [], env = process.env } = {})
   if (benchmarkFlagSeen) {
     nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] =
       benchmarkDir || nextEnv[RUN_NODE_CPU_PROF_DIR_ENV] || DEFAULT_BENCHMARK_PROFILE_DIR;
+    nextEnv[RUN_NODE_CPU_PROF_MAX_FILES_ENV] ??= DEFAULT_BENCHMARK_PROFILE_MAX_FILES;
     nextEnv.OPENCLAW_TRACE_SYNC_IO ??= "0";
     if (nextEnv.OPENCLAW_TRACE_SYNC_IO === "1") {
       nextEnv[RUN_NODE_OUTPUT_LOG_ENV] ??= joinArtifactPath(

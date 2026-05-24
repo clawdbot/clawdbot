@@ -12,6 +12,7 @@ import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debo
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
@@ -22,13 +23,22 @@ import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { resolveJidToE164 } from "../text-runtime.js";
 import { checkInboundAccessControl } from "./access-control.js";
 import {
-  claimRecentInboundMessage,
+  claimRecentInboundMessageDelivery,
   commitRecentInboundMessage,
   isRecentOutboundMessage,
   releaseRecentInboundMessage,
   rememberRecentOutboundMessage,
   WhatsAppRetryableInboundError,
 } from "./dedupe.js";
+import {
+  createWhatsAppDurableInboundMessageId,
+  createWhatsAppDurableInboundReceiveJournal,
+  deserializeWhatsAppDurableInboundMessage,
+  serializeWhatsAppDurableInboundMessage,
+  type WhatsAppDurableInboundMetadata,
+  type WhatsAppDurableInboundPayload,
+  type WhatsAppReadReceiptTarget,
+} from "./durable-receive.js";
 import {
   describeReplyContext,
   extractLocationData,
@@ -225,7 +235,10 @@ export async function attachWebInboxToSocket(
   type QueuedInboundMessage = WebInboundMessage & {
     dedupeKey?: string;
     debounceKey?: string;
+    durableId?: string;
+    readReceipt?: WhatsAppReadReceiptTarget;
   };
+  const durableInboundJournal = createWhatsAppDurableInboundReceiveJournal(options.accountId);
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
@@ -248,21 +261,42 @@ export async function attachWebInboxToSocket(
   const shouldDebounceInboundMessage = (msg: WebInboundMessage): boolean =>
     options.shouldDebounce?.(msg) ?? true;
 
-  const finalizeInboundDedupe = async (
+  const finalizeInboundDelivery = async (
     entries: QueuedInboundMessage[],
     error?: unknown,
   ): Promise<void> => {
     const dedupeKeys = [
       ...new Set(entries.map((entry) => entry.dedupeKey).filter(isNonEmptyString)),
     ];
-    if (dedupeKeys.length === 0) {
-      return;
-    }
+    const durableEntries = entries.filter(
+      (entry): entry is QueuedInboundMessage & { durableId: string } =>
+        isNonEmptyString(entry.durableId),
+    );
+    const readReceiptEntries = entries.filter(
+      (entry): entry is QueuedInboundMessage & { readReceipt: WhatsAppReadReceiptTarget } =>
+        Boolean(entry.readReceipt),
+    );
     if (error instanceof WhatsAppRetryableInboundError) {
       dedupeKeys.forEach((dedupeKey) => releaseRecentInboundMessage(dedupeKey, error));
+      await Promise.all(
+        durableEntries.map((entry) =>
+          durableInboundJournal.release(entry.durableId, {
+            lastError: formatError(error),
+          }),
+        ),
+      );
       return;
     }
-    await Promise.all(dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)));
+    await Promise.all([
+      ...dedupeKeys.map((dedupeKey) => commitRecentInboundMessage(dedupeKey)),
+      ...durableEntries.map((entry) =>
+        durableInboundJournal.complete(
+          entry.durableId,
+          entry.readReceipt ? { metadata: { readReceipt: entry.readReceipt } } : undefined,
+        ),
+      ),
+    ]);
+    await Promise.all(readReceiptEntries.map((entry) => maybeMarkInboundAsRead(entry.readReceipt)));
   };
 
   const debouncer = createInboundDebouncer<QueuedInboundMessage>({
@@ -283,7 +317,7 @@ export async function attachWebInboxToSocket(
         try {
           if (entries.length === 1) {
             await options.onMessage(last);
-            await finalizeInboundDedupe(entries);
+            await finalizeInboundDelivery(entries);
             return;
           }
           const mentioned = new Set<string>();
@@ -304,9 +338,9 @@ export async function attachWebInboxToSocket(
             isBatched: true,
           };
           await options.onMessage(combinedMessage);
-          await finalizeInboundDedupe(entries);
+          await finalizeInboundDelivery(entries);
         } catch (error) {
-          await finalizeInboundDedupe(entries, error);
+          await finalizeInboundDelivery(entries, error);
           throw error;
         }
       } finally {
@@ -608,22 +642,204 @@ export async function attachWebInboxToSocket(
     };
   };
 
-  const maybeMarkInboundAsRead = async (inbound: NormalizedInboundMessage) => {
-    const { id, remoteJid, participantJid, access } = inbound;
-    if (id && !access.isSelfChat && options.sendReadReceipts !== false) {
-      try {
-        await sock.readMessages([{ remoteJid, id, participant: participantJid, fromMe: false }]);
-        const suffix = participantJid ? ` (participant ${participantJid})` : "";
-        logWhatsAppVerbose(
-          options.verbose,
-          `Marked message ${id} as read for ${remoteJid}${suffix}`,
-        );
-      } catch (err) {
-        logWhatsAppVerbose(options.verbose, `Failed to mark message ${id} read: ${String(err)}`);
-      }
-    } else if (id && access.isSelfChat && options.verbose) {
+  const buildReadReceiptTarget = (
+    inbound: NormalizedInboundMessage,
+  ): WhatsAppReadReceiptTarget | undefined =>
+    inbound.id
+      ? {
+          remoteJid: inbound.remoteJid,
+          id: inbound.id,
+          ...(inbound.participantJid ? { participant: inbound.participantJid } : {}),
+        }
+      : undefined;
+
+  const maybeMarkInboundAsRead = async (target: WhatsAppReadReceiptTarget | undefined) => {
+    if (!target || options.sendReadReceipts === false) {
+      return;
+    }
+    const { id, remoteJid, participant } = target;
+    try {
+      await (getCurrentSock() ?? sock).readMessages([
+        { remoteJid, id, participant, fromMe: false },
+      ]);
+      const suffix = participant ? ` (participant ${participant})` : "";
+      logWhatsAppVerbose(options.verbose, `Marked message ${id} as read for ${remoteJid}${suffix}`);
+    } catch (err) {
+      logWhatsAppVerbose(options.verbose, `Failed to mark message ${id} read: ${String(err)}`);
+    }
+  };
+
+  const maybeLogSkippedSelfChatReadReceipt = (
+    inbound: NormalizedInboundMessage,
+    target: WhatsAppReadReceiptTarget | undefined,
+  ) => {
+    if (target?.id && inbound.access.isSelfChat && options.verbose) {
       // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
-      logWhatsAppVerbose(options.verbose, `Self-chat mode: skipping read receipt for ${id}`);
+      logWhatsAppVerbose(options.verbose, `Self-chat mode: skipping read receipt for ${target.id}`);
+    }
+  };
+
+  const maybeMarkReadReceiptAfterCompletedDelivery = async (
+    inbound: NormalizedInboundMessage,
+    target: WhatsAppReadReceiptTarget | undefined,
+  ) => {
+    if (inbound.access.isSelfChat) {
+      maybeLogSkippedSelfChatReadReceipt(inbound, target);
+      return;
+    }
+    await maybeMarkInboundAsRead(target);
+  };
+
+  const maybeMarkReadReceiptForSkippedAppend = async (
+    inbound: NormalizedInboundMessage,
+    target: WhatsAppReadReceiptTarget | undefined,
+  ) => {
+    if (inbound.access.isSelfChat) {
+      maybeLogSkippedSelfChatReadReceipt(inbound, target);
+      return;
+    }
+    await maybeMarkInboundAsRead(target);
+  };
+
+  const completeUndeliverableDurableInbound = async (
+    durableId: string | undefined,
+    metadata: WhatsAppDurableInboundMetadata | undefined,
+  ) => {
+    if (!durableId) {
+      return;
+    }
+    await durableInboundJournal.complete(
+      durableId,
+      metadata?.readReceipt ? { metadata: { readReceipt: metadata.readReceipt } } : undefined,
+    );
+  };
+
+  const buildDurableInboundPayload = (
+    msg: WAMessage,
+    upsertType: string | undefined,
+  ): WhatsAppDurableInboundPayload => ({
+    message: serializeWhatsAppDurableInboundMessage(msg),
+    ...(upsertType ? { upsertType } : {}),
+    receivedAt: Date.now(),
+  });
+
+  const shouldSkipStaleAppend = (msg: WAMessage, upsertType: string | undefined): boolean => {
+    if (upsertType !== "append") {
+      return false;
+    }
+    const APPEND_RECENT_GRACE_MS = 60_000;
+    const msgTsRaw = msg.messageTimestamp;
+    const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
+    const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+    return msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS;
+  };
+
+  const processDurableInboundMessage = async (
+    msg: WAMessage,
+    upsertType: string | undefined,
+    stored?: {
+      id: string;
+      payload: WhatsAppDurableInboundPayload;
+      metadata?: WhatsAppDurableInboundMetadata;
+    },
+  ) => {
+    const inbound = await normalizeInboundMessage(msg);
+    if (!inbound) {
+      if (stored) {
+        await completeUndeliverableDurableInbound(stored.id, stored.metadata);
+      }
+      return;
+    }
+
+    const readReceipt = stored?.metadata?.readReceipt ?? buildReadReceiptTarget(inbound);
+    const deliveryReadReceipt = inbound.access.isSelfChat ? undefined : readReceipt;
+
+    if (!stored && shouldSkipStaleAppend(msg, upsertType)) {
+      await maybeMarkReadReceiptForSkippedAppend(inbound, readReceipt);
+      return;
+    }
+
+    let durableId =
+      stored?.id ??
+      (inbound.id
+        ? createWhatsAppDurableInboundMessageId({
+            remoteJid: inbound.remoteJid,
+            id: inbound.id,
+          })
+        : undefined);
+    const durableMetadata: WhatsAppDurableInboundMetadata | undefined = deliveryReadReceipt
+      ? { readReceipt: deliveryReadReceipt }
+      : undefined;
+
+    if (durableId && !stored) {
+      try {
+        const accepted = await durableInboundJournal.accept(
+          durableId,
+          buildDurableInboundPayload(msg, upsertType),
+          {
+            metadata: durableMetadata,
+            receivedAt: inbound.messageTimestampMs,
+          },
+        );
+        if (accepted.kind === "completed") {
+          await maybeMarkReadReceiptAfterCompletedDelivery(
+            inbound,
+            accepted.record.metadata?.readReceipt ?? deliveryReadReceipt,
+          );
+          return;
+        }
+        if (accepted.kind === "pending" && accepted.record.attempts === 0) {
+          return;
+        }
+      } catch (err) {
+        durableId = undefined;
+        const error = formatError(err);
+        inboundLogger.warn(
+          { error },
+          "failed persisting durable WhatsApp inbound; delivering live",
+        );
+        inboundConsoleLog.warn(
+          `Failed persisting durable WhatsApp inbound; delivering live: ${error}`,
+        );
+      }
+    }
+
+    const enriched = await enrichInboundMessage(msg);
+    if (!enriched) {
+      await completeUndeliverableDurableInbound(durableId, durableMetadata);
+      await maybeMarkReadReceiptAfterCompletedDelivery(inbound, deliveryReadReceipt);
+      return;
+    }
+
+    const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
+    const dedupeClaim = dedupeKey ? await claimRecentInboundMessageDelivery(dedupeKey) : "claimed";
+    if (dedupeClaim !== "claimed") {
+      if (dedupeClaim === "duplicate") {
+        await completeUndeliverableDurableInbound(durableId, durableMetadata);
+        await maybeMarkReadReceiptAfterCompletedDelivery(inbound, deliveryReadReceipt);
+      }
+      return;
+    }
+
+    recordAcceptedInboundActivity(options.accountId);
+    await enqueueInboundMessage(msg, inbound, enriched, {
+      durableId,
+      readReceipt: deliveryReadReceipt,
+    });
+  };
+
+  const replayPendingDurableInboundMessages = async () => {
+    const pending = await durableInboundJournal.pending();
+    for (const record of pending) {
+      await processDurableInboundMessage(
+        deserializeWhatsAppDurableInboundMessage(record.payload.message),
+        record.payload.upsertType,
+        {
+          id: record.id,
+          payload: record.payload,
+          metadata: record.metadata,
+        },
+      );
     }
   };
 
@@ -696,6 +912,10 @@ export async function attachWebInboxToSocket(
     msg: WAMessage,
     inbound: NormalizedInboundMessage,
     enriched: EnrichedInboundMessage,
+    durable: {
+      durableId?: string;
+      readReceipt?: WhatsAppReadReceiptTarget;
+    },
   ) => {
     const chatJid = inbound.remoteJid;
     const sendComposing = async () => {
@@ -798,6 +1018,8 @@ export async function attachWebInboxToSocket(
       mediaType: enriched.mediaType,
       mediaFileName: enriched.mediaFileName,
       dedupeKey: inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : undefined,
+      durableId: durable.durableId,
+      readReceipt: durable.readReceipt,
     };
     const debounceKey = buildInboundDebounceKey(inboundMessage);
     if (debounceKey) {
@@ -833,36 +1055,21 @@ export async function attachWebInboxToSocket(
       return;
     }
     for (const msg of upsert.messages ?? []) {
-      const inbound = await normalizeInboundMessage(msg);
-      if (!inbound) {
+      if (
+        await maybeResolveWhatsAppApprovalReaction({
+          cfg: options.loadConfig?.() ?? options.cfg,
+          accountId: options.accountId,
+          msg,
+          selfJid: self.jid,
+          selfLid: self.lid,
+          resolveInboundJid,
+          logVerboseMessage: (message) => logWhatsAppVerbose(options.verbose, message),
+        })
+      ) {
         continue;
       }
 
-      await maybeMarkInboundAsRead(inbound);
-
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
-      if (upsert.type === "append") {
-        const APPEND_RECENT_GRACE_MS = 60_000;
-        const msgTsRaw = msg.messageTimestamp;
-        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
-        const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
-        if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
-          continue;
-        }
-      }
-
-      const enriched = await enrichInboundMessage(msg);
-      if (!enriched) {
-        continue;
-      }
-
-      const dedupeKey = inbound.id ? `${options.accountId}:${inbound.remoteJid}:${inbound.id}` : "";
-      if (dedupeKey && !(await claimRecentInboundMessage(dedupeKey))) {
-        continue;
-      }
-
-      recordAcceptedInboundActivity(options.accountId);
-      await enqueueInboundMessage(msg, inbound, enriched);
+      await processDurableInboundMessage(msg, upsert.type);
     }
   };
   const handleMessagesUpsertEvent = (upsert: { type?: string; messages?: Array<WAMessage> }) => {
@@ -957,6 +1164,15 @@ export async function attachWebInboxToSocket(
     "connection.update",
     handleConnectionUpdate as unknown as (...args: unknown[]) => void,
   );
+
+  const replayTask = replayPendingDurableInboundMessages().catch((err) => {
+    inboundLogger.error({ error: String(err) }, "failed replaying durable WhatsApp inbound");
+    inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
+  });
+  pendingMessageHandlers.add(replayTask);
+  void replayTask.finally(() => {
+    pendingMessageHandlers.delete(replayTask);
+  });
 
   void (async () => {
     try {

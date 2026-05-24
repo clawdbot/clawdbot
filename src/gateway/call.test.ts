@@ -666,6 +666,28 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
   });
 
+  it("sends internal agent handoffs as backend gateway calls", async () => {
+    setLocalLoopbackGatewayConfig();
+    helloMethods = ["agent"];
+
+    await callGateway({
+      method: "agent",
+      params: {
+        message: "resume",
+        sessionEffects: "internal",
+        suppressPromptPersistence: true,
+      },
+    });
+
+    expect(lastClientOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
+    expect(lastClientOptions?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
+    expect(lastRequestOptions?.method).toBe("agent");
+    expect(lastRequestOptions?.params).toMatchObject({
+      sessionEffects: "internal",
+      suppressPromptPersistence: true,
+    });
+  });
+
   it("passes approval runtime tokens to backend gateway clients", async () => {
     setLocalLoopbackGatewayConfig();
 

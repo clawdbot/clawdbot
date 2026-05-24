@@ -2,9 +2,37 @@ import { spawn, spawnSync, type SpawnOptions } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveNpmRunner } from "../../npm-runner.mjs";
+import { resolvePnpmRunner } from "../../pnpm-runner.mjs";
+import { buildCmdExeCommandLine } from "../../windows-cmd-helpers.mjs";
 import type { CommandResult, RunOptions } from "./types.ts";
 
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+type HostCommandInvocation = {
+  args: string[];
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  shell?: boolean;
+  windowsVerbatimArguments?: boolean;
+};
+
+type ResolveHostCommandOptions = {
+  comSpec?: string;
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+  existsSync?: (path: string) => boolean;
+  platform?: NodeJS.Platform;
+};
+
+function hostInvocationFromRunner(runner: HostCommandInvocation): HostCommandInvocation {
+  if (runner.env === undefined) {
+    const invocation = { ...runner };
+    delete invocation.env;
+    return invocation;
+  }
+  return runner;
+}
 
 export function say(message: string): void {
   process.stdout.write(`==> ${message}\n`);
@@ -23,15 +51,81 @@ export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'"'"'`)}'`;
 }
 
+function portableBasename(value: string): string {
+  return value.split(/[/\\]/u).at(-1) ?? value;
+}
+
+function portableExtension(value: string): string {
+  return path.posix.extname(portableBasename(value)).toLowerCase();
+}
+
+function isBareCommand(command: string, name: "npm" | "pnpm"): boolean {
+  return portableBasename(command) === command && command.toLowerCase() === name;
+}
+
+function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
+}
+
+export function resolveHostCommandInvocation(
+  command: string,
+  args: string[],
+  options: ResolveHostCommandOptions = {},
+): HostCommandInvocation {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const comSpec = options.comSpec ?? resolveEnvValue(env, "ComSpec") ?? "cmd.exe";
+
+  if (isBareCommand(command, "pnpm")) {
+    const runner = resolvePnpmRunner({
+      comSpec,
+      npmExecPath: env.npm_execpath,
+      nodeExecPath: options.execPath ?? process.execPath,
+      platform,
+      pnpmArgs: args,
+    });
+    return hostInvocationFromRunner(runner);
+  }
+
+  if (isBareCommand(command, "npm")) {
+    const runner = resolveNpmRunner({
+      comSpec,
+      env,
+      execPath: options.execPath ?? process.execPath,
+      existsSync: options.existsSync,
+      npmArgs: args,
+      platform,
+    });
+    return hostInvocationFromRunner(runner);
+  }
+
+  const extension = portableExtension(command);
+  if (platform === "win32" && (extension === ".cmd" || extension === ".bat")) {
+    return {
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
+      command: comSpec,
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return { args, command, shell: false };
+}
+
 export function run(command: string, args: string[], options: RunOptions = {}): CommandResult {
-  const result = spawnSync(command, args, {
+  const env = { ...process.env, ...options.env };
+  const invocation = resolveHostCommandInvocation(command, args, { env });
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
-    env: { ...process.env, ...options.env },
+    env: invocation.env ?? env,
     input: options.input,
     maxBuffer: 50 * 1024 * 1024,
     stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+    shell: invocation.shell,
     timeout: options.timeoutMs,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 
   const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
@@ -67,10 +161,14 @@ export async function runStreaming(
   options: RunOptions & { logPath?: string } = {},
 ): Promise<number> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const env = { ...process.env, ...options.env };
+    const invocation = resolveHostCommandInvocation(command, args, { env });
+    const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd ?? repoRoot,
-      env: { ...process.env, ...options.env },
+      env: invocation.env ?? env,
+      shell: invocation.shell,
       stdio: ["pipe", "pipe", "pipe"],
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     } satisfies SpawnOptions);
 
     let log = "";

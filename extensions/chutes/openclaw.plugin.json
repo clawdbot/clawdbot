@@ -567,6 +567,9 @@
             "name": "Qwen/Qwen2.5-VL-32B-Instruct",
             "reasoning": false,
             "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxPixels": 12845056, "preferredSidePx": 2048, "tokenMode": "provider" }
+            },
             "contextWindow": 16384,
             "maxTokens": 16384,
             "cost": {
@@ -581,6 +584,9 @@
             "name": "Qwen/Qwen3-VL-235B-A22B-Instruct",
             "reasoning": false,
             "input": ["text", "image"],
+            "mediaInput": {
+              "image": { "maxPixels": 12845056, "preferredSidePx": 2048, "tokenMode": "provider" }
+            },
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {

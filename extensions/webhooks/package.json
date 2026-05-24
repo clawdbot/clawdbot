@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/webhooks",
-  "version": "2026.5.22",
+  "version": "2026.5.24",
   "private": true,
   "description": "OpenClaw webhook bridge plugin",
   "type": "module",

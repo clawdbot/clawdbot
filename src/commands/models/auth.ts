@@ -379,6 +379,7 @@ async function pickProviderTokenMethod(params: {
 
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
+  profiles?: ProviderAuthResult["profiles"];
   agentDir: string;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
@@ -387,7 +388,9 @@ async function persistProviderAuthResult(params: {
   const defaultModel = params.result.defaultModel
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
-  for (const profile of params.result.profiles) {
+  const profiles = params.profiles ?? params.result.profiles;
+
+  for (const profile of profiles) {
     await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
@@ -408,7 +411,7 @@ async function persistProviderAuthResult(params: {
         replaceDefaultModels: params.result.replaceDefaultModels,
       });
     }
-    for (const profile of params.result.profiles) {
+    for (const profile of profiles) {
       next = applyAuthProfileConfig(next, {
         profileId: profile.profileId,
         provider: profile.credential.provider,
@@ -436,7 +439,7 @@ async function persistProviderAuthResult(params: {
   }
 
   logConfigUpdated(params.runtime);
-  for (const profile of params.result.profiles) {
+  for (const profile of profiles) {
     params.runtime.log(
       `Auth profile: ${profile.profileId} (${profile.credential.provider}/${credentialMode(profile.credential)})`,
     );
@@ -461,6 +464,7 @@ async function runProviderAuthMethod(params: {
   method: ProviderAuthMethod;
   runtime: RuntimeEnv;
   prompter: ReturnType<typeof createClackPrompter>;
+  profileId?: string;
   setDefault?: boolean;
 }) {
   const selectedProviderId = normalizeProviderId(params.provider.id);
@@ -492,8 +496,14 @@ async function runProviderAuthMethod(params: {
     }
   }
 
+  const profiles = resolveLoginProfiles({
+    result,
+    requestedProfileId: params.profileId,
+  });
+
   await persistProviderAuthResult({
     result,
+    profiles,
     agentDir: params.agentDir,
     runtime: params.runtime,
     prompter: params.prompter,
@@ -795,6 +805,7 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
 type LoginOptions = {
   provider?: string;
   method?: string;
+  profileId?: string;
   setDefault?: boolean;
   yes?: boolean;
   agent?: string;
@@ -837,6 +848,25 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
+export function resolveLoginProfiles(params: {
+  result: ProviderAuthResult;
+  requestedProfileId?: string;
+}): ProviderAuthResult["profiles"] {
+  const requestedProfileId = params.requestedProfileId?.trim();
+  if (!requestedProfileId) {
+    return params.result.profiles;
+  }
+
+  if (params.result.profiles.length !== 1) {
+    throw new Error(
+      "--profile-id requires exactly one returned auth profile from the selected auth method.",
+    );
+  }
+
+  const [profile] = params.result.profiles;
+  return [{ ...profile, profileId: requestedProfileId }];
+}
+
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
   if (providerId !== "openai-codex") {
     return;
@@ -845,6 +875,7 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
     "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
   );
 }
+
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error(
@@ -903,6 +934,7 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
     method: chosenMethod,
     runtime,
     prompter,
+    profileId: opts.profileId,
     setDefault: opts.setDefault,
   });
   maybeLogOpenAICodexNativeSearchTip(runtime, selectedProvider.id);

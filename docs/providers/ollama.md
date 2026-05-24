@@ -916,6 +916,19 @@ For the full setup and behavior details, see [Ollama Web Search](/tools/ollama-s
     and API key, calls Ollama's current `/api/embed` endpoint, and batches
     multiple memory chunks into one `input` request when possible.
 
+    When `proxy.enabled=true`, Ollama memory embedding requests to the exact
+    host-local loopback origin derived from the configured `baseUrl` use
+    OpenClaw's guarded direct path instead of the managed forward proxy. The
+    configured hostname must itself be `localhost` or a loopback IP literal;
+    DNS names that merely resolve to loopback still use the managed proxy path.
+    LAN, tailnet, private-network, and public Ollama hosts also stay on the
+    managed proxy path. Redirects to another host or port do not inherit trust.
+    Operators can still set the global `proxy.loopbackMode: "proxy"` setting to
+    send loopback traffic through the proxy, or `proxy.loopbackMode: "block"`
+    to deny loopback connections before opening a connection; see
+    [Managed proxy](/security/network-proxy#gateway-loopback-mode) for the
+    process-wide effect of this setting.
+
     | Property      | Value               |
     | ------------- | ------------------- |
     | Default model | `nomic-embed-text`  |

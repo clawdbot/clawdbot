@@ -1086,7 +1086,7 @@ describe("whatsapp inbound dispatch", () => {
 
     expect(replyLogger.error).toHaveBeenCalledWith(
       {
-        err: error,
+        err: { type: "Error", message: "send failed", stack: error.stack },
         replyKind: "final",
         correlationId: "msg-1",
         connectionId: "conn-1",
@@ -1095,6 +1095,125 @@ describe("whatsapp inbound dispatch", () => {
         to: "+15550001000",
         from: "+15550002000",
       },
+      "auto-reply delivery failed",
+    );
+  });
+
+  it("preserves Error subclass own-enumerable fields (e.g. Boom output) in the logged err", async () => {
+    const replyLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+
+    class BoomLikeError extends Error {
+      output: { statusCode: number; payload: { error: string } };
+      data: { reason: string };
+      constructor(message: string) {
+        super(message);
+        this.name = "BoomLikeError";
+        this.output = { statusCode: 408, payload: { error: "Request Time-out" } };
+        this.data = { reason: "transport-stale" };
+      }
+    }
+    const error = new BoomLikeError("send timed out");
+
+    await dispatchBufferedReply({
+      connectionId: "conn-boom",
+      conversationId: "+15550020000",
+      msg: makeMsg({
+        id: "msg-boom",
+        from: "+15550020000",
+        to: "+15550021000",
+        chatId: "15550020000@s.whatsapp.net",
+      }),
+      replyLogger,
+    });
+
+    getCapturedOnError()?.(error, { kind: "final" });
+
+    expect(replyLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: expect.objectContaining({
+          type: "BoomLikeError",
+          message: "send timed out",
+          stack: error.stack,
+          output: { statusCode: 408, payload: { error: "Request Time-out" } },
+          data: { reason: "transport-stale" },
+        }),
+        replyKind: "final",
+        correlationId: "msg-boom",
+      }),
+      "auto-reply delivery failed",
+    );
+  });
+
+  it("logs delivery failures with non-Error rejection values via pass-through", async () => {
+    const replyLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+
+    await dispatchBufferedReply({
+      connectionId: "conn-2",
+      conversationId: "+15550003000",
+      msg: makeMsg({
+        id: "msg-2",
+        from: "+15550003000",
+        to: "+15550004000",
+        chatId: "15550003000@s.whatsapp.net",
+      }),
+      replyLogger,
+    });
+
+    getCapturedOnError()?.("plain string rejection", { kind: "block" });
+
+    expect(replyLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: "plain string rejection",
+        replyKind: "block",
+        correlationId: "msg-2",
+      }),
+      "auto-reply delivery failed",
+    );
+  });
+
+  it("preserves structured object rejections so diagnostic fields stay queryable", async () => {
+    const replyLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as BufferedReplyParams["replyLogger"];
+
+    await dispatchBufferedReply({
+      connectionId: "conn-3",
+      conversationId: "+15550005000",
+      msg: makeMsg({
+        id: "msg-3",
+        from: "+15550005000",
+        to: "+15550006000",
+        chatId: "15550005000@s.whatsapp.net",
+      }),
+      replyLogger,
+    });
+
+    const objectRejection = {
+      error: { message: "wrapped failure", code: "BAILEYS_NACK" },
+      attempt: 2,
+    };
+
+    getCapturedOnError()?.(objectRejection, { kind: "tool" });
+
+    expect(replyLogger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        err: objectRejection,
+        replyKind: "tool",
+        correlationId: "msg-3",
+      }),
       "auto-reply delivery failed",
     );
   });

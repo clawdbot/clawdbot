@@ -16,11 +16,7 @@ afterEach(() => {
 function expectStaticFallbackCatalog(
   result: Awaited<ReturnType<typeof buildCodexProviderCatalog>>,
 ) {
-  expect(result.provider.models.map((model) => model.id)).toEqual([
-    "gpt-5.5",
-    "gpt-5.4-mini",
-    "gpt-5.2",
-  ]);
+  expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
 }
 
 function createFakeCodexClient(): CodexAppServerClient {
@@ -170,8 +166,8 @@ describe("codex provider", () => {
       .mockResolvedValueOnce({
         models: [
           {
-            id: "gpt-5.2",
-            model: "gpt-5.2",
+            id: "gpt-5.5",
+            model: "gpt-5.5",
             hidden: false,
             inputModalities: ["text"],
             supportedReasoningEfforts: [],
@@ -194,7 +190,7 @@ describe("codex provider", () => {
       limit: 100,
       sharedClient: false,
     });
-    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.2"]);
+    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.5"]);
   });
 
   it("reports discovery failures before using the fallback catalog", async () => {
@@ -353,7 +349,7 @@ describe("codex provider", () => {
 
     expect(
       result && "provider" in result ? result.provider.models.map((model) => model.id) : [],
-    ).toEqual(["gpt-5.5", "gpt-5.4-mini", "gpt-5.2"]);
+    ).toEqual(["gpt-5.5", "gpt-5.4-mini"]);
   });
 
   it("adds the GPT-5 prompt overlay to Codex provider runs", () => {

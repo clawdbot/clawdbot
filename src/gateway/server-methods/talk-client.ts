@@ -6,12 +6,15 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
 } from "../../talk/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
+import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateTalkClientCreateParams,
+  validateTalkClientSteerParams,
   validateTalkClientToolCallParams,
 } from "../protocol/index.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
@@ -120,7 +123,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           cfg: runtimeConfig,
           providerConfig: resolution.providerConfig,
           instructions: buildRealtimeInstructions(realtimeConfig.instructions),
-          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
+          tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL, REALTIME_VOICE_AGENT_CONTROL_TOOL],
           ...launchOptions,
         });
         if (
@@ -200,4 +203,62 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       undefined,
     );
   },
+  "talk.client.steer": async ({ params, respond, client, context }) => {
+    if (!validateTalkClientSteerParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid talk.client.steer params: ${formatValidationErrors(validateTalkClientSteerParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    if (
+      !hasOwnedActiveTalkClientRun({
+        context,
+        clientConnId: client?.connId,
+        sessionKey: params.sessionKey,
+      })
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "talk.client.steer requires an active browser-owned Talk run",
+        ),
+      );
+      return;
+    }
+    try {
+      const result = await controlRealtimeVoiceAgentRun({
+        sessionKey: params.sessionKey,
+        text: params.text,
+        mode: params.mode,
+      });
+      respond(true, result, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
 };
+
+function hasOwnedActiveTalkClientRun(params: {
+  context: Parameters<GatewayRequestHandlers[string]>[0]["context"];
+  clientConnId?: string;
+  sessionKey: string;
+}): boolean {
+  const connId = normalizeOptionalString(params.clientConnId);
+  const sessionKey = params.sessionKey.trim();
+  if (!connId || !sessionKey) {
+    return false;
+  }
+  for (const entry of params.context.chatAbortControllers.values()) {
+    if (entry.sessionKey === sessionKey && entry.ownerConnId === connId && entry.kind !== "agent") {
+      return true;
+    }
+  }
+  return false;
+}

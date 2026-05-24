@@ -19,11 +19,13 @@ import {
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { readSessionEntry } from "../../config/sessions/store-load.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -65,6 +67,36 @@ function filterStringArray(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string")
     : undefined;
+}
+
+function hasFailedFollowupProgressEvent(evt: FollowupAgentEvent): boolean {
+  if (evt.stream !== "item" && evt.stream !== "command_output") {
+    return false;
+  }
+  const phase = readStringValue(evt.data.phase);
+  const status = readStringValue(evt.data.status);
+  return (
+    phase === "error" ||
+    status === "failed" ||
+    status === "error" ||
+    (typeof evt.data.exitCode === "number" && evt.data.exitCode !== 0)
+  );
+}
+
+function canForwardFailedFollowupProgressEvent(
+  evt: FollowupAgentEvent,
+  opts?: GetReplyOptions,
+): boolean {
+  if (evt.stream === "command_output") {
+    return typeof opts?.onCommandOutput === "function";
+  }
+  if (evt.stream !== "item") {
+    return false;
+  }
+  if (evt.data.suppressChannelProgress === true && Boolean(opts?.onToolStart)) {
+    return false;
+  }
+  return typeof opts?.onItemEvent === "function";
 }
 
 async function forwardFollowupProgressEvent(params: {
@@ -178,12 +210,14 @@ async function forwardFollowupProgressEvent(params: {
 
   if (evt.stream === "compaction") {
     const phase = readStringValue(evt.data.phase) ?? "";
-    if (phase === "start") {
+    if (phase === "start" && emitChannelProgress) {
       await opts?.onCompactionStart?.();
     }
     if (phase === "end" && evt.data?.completed === true) {
       params.onCompactionComplete?.();
-      await opts?.onCompactionEnd?.();
+      if (emitChannelProgress) {
+        await opts?.onCompactionEnd?.();
+      }
     }
   }
 }
@@ -391,13 +425,46 @@ export function createFollowupRunner(params: {
       if (run !== effectiveQueued.run) {
         effectiveQueued = { ...effectiveQueued, run };
       }
-      const shouldEmitVerboseProgress = () => run.verboseLevel !== "off";
-      const shouldSuppressDefaultToolProgressMessages = () =>
-        opts?.suppressDefaultToolProgressMessages === true && !shouldEmitVerboseProgress();
+      const resolveCurrentVerboseLevel = () => {
+        if (replySessionKey && storePath) {
+          try {
+            const level = readSessionEntry(storePath, replySessionKey)?.verboseLevel;
+            if (typeof level === "string" && level.trim()) {
+              return level;
+            }
+          } catch {
+            // Keep queued delivery resilient to transient session-store reads.
+          }
+        }
+        const liveEntryLevel = replySessionKey
+          ? sessionStore?.[replySessionKey]?.verboseLevel
+          : undefined;
+        return liveEntryLevel ?? activeSessionEntry?.verboseLevel ?? run.verboseLevel;
+      };
+      const shouldEmitVerboseProgress = () => {
+        const verboseLevel = resolveCurrentVerboseLevel();
+        return verboseLevel === "on" || verboseLevel === "full";
+      };
+      const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
       const shouldEmitToolResultProgress = () =>
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
-        run.verboseLevel === "full" && !shouldSuppressDefaultToolProgressMessages();
+        resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
+      let observedVisibleToolErrorProgress = false;
+      const markVisibleToolErrorProgress = () => {
+        if (resolveCurrentVerboseLevel() === "on" && shouldEmitToolResultProgress()) {
+          observedVisibleToolErrorProgress = true;
+        }
+      };
+      const shouldSuppressToolErrorWarnings = () => {
+        if (opts?.suppressToolErrorWarnings !== undefined) {
+          return opts.suppressToolErrorWarnings;
+        }
+        if (!shouldEmitVerboseProgress()) {
+          return false;
+        }
+        return observedVisibleToolErrorProgress ? true : undefined;
+      };
       let progressDeliveryChain: Promise<void> = Promise.resolve();
       const pendingProgressDeliveries = new Set<Promise<void>>();
       const enqueueProgressDelivery = (deliver: () => Promise<void>) => {
@@ -455,6 +522,9 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
+        queued.run.inputProvenance,
+      );
       const resolveRunForFallbackCandidate = (
         provider: string,
         model: string,
@@ -487,6 +557,9 @@ export function createFollowupRunner(params: {
         provider: string;
         model: string;
       }): Promise<void> => {
+        if (preserveUserFacingSessionState) {
+          return;
+        }
         const probe = run.autoFallbackPrimaryProbe;
         if (!probe) {
           return;
@@ -736,7 +809,7 @@ export function createFollowupRunner(params: {
                 thinkLevel: run.thinkLevel,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,
-                suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
+                suppressToolErrorWarnings: shouldSuppressToolErrorWarnings,
                 execOverrides: run.execOverrides,
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
@@ -758,7 +831,7 @@ export function createFollowupRunner(params: {
                   enqueueProgressDelivery(async () => {
                     if (
                       run.sourceReplyDeliveryMode === "message_tool_only" &&
-                      run.verboseLevel === "off"
+                      !shouldEmitToolResultProgress()
                     ) {
                       return;
                     }
@@ -771,6 +844,9 @@ export function createFollowupRunner(params: {
                       },
                       { mirror: false },
                     );
+                    if (payload.isError === true) {
+                      markVisibleToolErrorProgress();
+                    }
                   }),
                 onAgentEvent: (evt) =>
                   enqueueProgressDelivery(async () => {
@@ -783,6 +859,12 @@ export function createFollowupRunner(params: {
                         attemptCompactionCount += 1;
                       },
                     });
+                    if (
+                      hasFailedFollowupProgressEvent(evt) &&
+                      canForwardFailedFollowupProgressEvent(evt, opts)
+                    ) {
+                      markVisibleToolErrorProgress();
+                    }
                   }),
               });
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
@@ -869,6 +951,7 @@ export function createFollowupRunner(params: {
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
           isHeartbeat: opts?.isHeartbeat === true,
+          preserveUserFacingSessionModelState: preserveUserFacingSessionState,
           modelUsed,
           providerUsed,
           contextTokensUsed,
@@ -928,7 +1011,7 @@ export function createFollowupRunner(params: {
             });
           }
         }
-        if (run.verboseLevel && run.verboseLevel !== "off") {
+        if (shouldEmitVerboseProgress()) {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
           deliveryPayloads = [
             {

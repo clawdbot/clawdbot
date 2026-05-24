@@ -22,7 +22,7 @@ import {
   writePersistedInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
 import {
-  loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
@@ -92,6 +92,7 @@ import {
   getRuntimeConfigSourceSnapshot as getRuntimeConfigSourceSnapshotState,
   loadPinnedRuntimeConfig,
   notifyRuntimeConfigWriteListeners,
+  preflightRuntimeSnapshotWrite,
   registerRuntimeConfigWriteListener,
   resetConfigRuntimeState as resetConfigRuntimeStateState,
   resolveRuntimeConfigCacheKey,
@@ -135,6 +136,7 @@ type ShippedPluginInstallConfigWriteMigration =
   | {
       migrated: true;
       filePath: string;
+      writtenHash: string;
       previousFile:
         | {
             existed: false;
@@ -184,6 +186,10 @@ type ConfigHealthState = {
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 export type ConfigWriteResult = { persistedHash: string; persistedConfig: OpenClawConfig };
+const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
+type InternalConfigWriteResult = ConfigWriteResult & {
+  [configWritePostCommitRollback]?: () => void;
+};
 export type ConfigWriteOptions = {
   /**
    * Read-time env snapshot used to validate `${VAR}` restoration decisions.
@@ -261,6 +267,11 @@ export type ConfigWriteOptions = {
    * readable by the parent process after a candidate doctor repair.
    */
   lastTouchedVersionOverride?: string;
+  /**
+   * Internal hook used by the exported runtime-aware writer after validation
+   * has produced the exact source config that will be committed.
+   */
+  preCommitRuntimePreflight?: (sourceConfig: OpenClawConfig) => Promise<unknown>;
 };
 
 export type ReadConfigFileSnapshotForWriteResult = {
@@ -325,6 +336,46 @@ export function resolveConfigSnapshotHash(snapshot: {
     return null;
   }
   return hashConfigRaw(snapshot.raw);
+}
+
+async function rollbackConfigFileWriteIfUnchanged(params: {
+  configPath: string;
+  previousSnapshot: ConfigFileSnapshot;
+  committedHash: string;
+}): Promise<boolean> {
+  let currentRaw: string | null = null;
+  try {
+    currentRaw = await fs.promises.readFile(params.configPath, "utf-8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  if (hashConfigRaw(currentRaw) !== params.committedHash) {
+    return false;
+  }
+  if (params.previousSnapshot.exists && typeof params.previousSnapshot.raw === "string") {
+    await replaceFileAtomic({
+      filePath: params.configPath,
+      content: params.previousSnapshot.raw,
+      dirMode: 0o700,
+      mode: 0o600,
+      tempPrefix: path.basename(params.configPath),
+      copyFallbackOnPermissionError: true,
+    });
+    return true;
+  }
+  if (params.previousSnapshot.exists) {
+    return false;
+  }
+  try {
+    await fs.promises.unlink(params.configPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+  return true;
 }
 
 function coerceConfig(value: unknown): OpenClawConfig {
@@ -1190,6 +1241,29 @@ function resolveConfigForRead(
   };
 }
 
+function snapshotEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  return { ...env };
+}
+
+export function restoreEnvChangesIfUnchanged(params: {
+  env: NodeJS.ProcessEnv;
+  before: Record<string, string | undefined>;
+  after: Record<string, string | undefined>;
+}): void {
+  const keys = new Set([...Object.keys(params.before), ...Object.keys(params.after)]);
+  for (const key of keys) {
+    if (params.before[key] === params.after[key] || params.env[key] !== params.after[key]) {
+      continue;
+    }
+    const previous = params.before[key];
+    if (previous === undefined) {
+      delete params.env[key];
+    } else {
+      params.env[key] = previous;
+    }
+  }
+}
+
 type ReadConfigFileSnapshotInternalResult = {
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
@@ -1444,6 +1518,21 @@ export function createConfigIO(
     };
   }
 
+  function resolveRuntimePreflightSourceConfig(candidate: OpenClawConfig): OpenClawConfig {
+    const env = { ...deps.env } as NodeJS.ProcessEnv;
+    const resolvedIncludes = resolveConfigIncludesForRead(candidate, configPath, {
+      ...deps,
+      env,
+    });
+    const readResolution = resolveConfigForRead(resolvedIncludes, env);
+    return coerceConfig(
+      migrateAndStripShippedPluginInstallConfigRecords(readResolution.resolvedConfigRaw, {
+        persist: false,
+        rootConfigRaw: candidate,
+      }).config,
+    );
+  }
+
   function ensureShippedPluginInstallConfigRecordsMigratedForWrite(
     snapshot: ConfigFileSnapshot,
   ): ShippedPluginInstallConfigWriteMigration {
@@ -1475,7 +1564,7 @@ export function createConfigIO(
         } as const)
       : ({ existed: false } as const);
     try {
-      writePersistedInstalledPluginIndexInstallRecordsSync(
+      const writtenPath = writePersistedInstalledPluginIndexInstallRecordsSync(
         {
           ...installRecords,
           ...existingRecords,
@@ -1486,9 +1575,13 @@ export function createConfigIO(
           stateDir,
         },
       );
+      const writtenRaw = deps.fs.existsSync(writtenPath)
+        ? deps.fs.readFileSync(writtenPath, "utf-8")
+        : null;
       return {
         migrated: true,
-        filePath,
+        filePath: writtenPath,
+        writtenHash: hashConfigRaw(writtenRaw),
         previousFile,
       };
     } catch (err) {
@@ -1503,16 +1596,22 @@ export function createConfigIO(
 
   function rollbackShippedPluginInstallConfigWriteMigration(
     migration: ShippedPluginInstallConfigWriteMigration,
-  ): void {
+  ): boolean {
     if (!migration.migrated) {
-      return;
+      return false;
+    }
+    const currentRaw = deps.fs.existsSync(migration.filePath)
+      ? deps.fs.readFileSync(migration.filePath, "utf-8")
+      : null;
+    if (hashConfigRaw(currentRaw) !== migration.writtenHash) {
+      return false;
     }
     if (migration.previousFile.existed) {
       deps.fs.writeFileSync(migration.filePath, migration.previousFile.raw, {
         encoding: "utf-8",
         mode: 0o600,
       });
-      return;
+      return true;
     }
     try {
       deps.fs.unlinkSync(migration.filePath);
@@ -1521,6 +1620,7 @@ export function createConfigIO(
         throw err;
       }
     }
+    return true;
   }
 
   function loadConfig(): OpenClawConfig {
@@ -1598,10 +1698,11 @@ export function createConfigIO(
           effectiveConfigRaw,
         );
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
-        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+        pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
+          allowWorkspaceScopedCurrent: true,
         });
         return pluginMetadataSnapshot;
       };
@@ -1817,10 +1918,11 @@ export function createConfigIO(
           effectiveConfigRaw,
         );
         const defaultAgentId = resolveDefaultAgentId(metadataConfig);
-        pluginMetadataSnapshot = loadPluginMetadataSnapshot({
+        pluginMetadataSnapshot = resolvePluginMetadataSnapshot({
           config: metadataConfig,
           workspaceDir: resolveAgentWorkspaceDir(metadataConfig, defaultAgentId),
           env: deps.env,
+          allowWorkspaceScopedCurrent: true,
         });
         return pluginMetadataSnapshot;
       };
@@ -2023,7 +2125,7 @@ export function createConfigIO(
   async function writeConfigFile(
     cfg: OpenClawConfig,
     options: ConfigWriteOptions = {},
-  ): Promise<{ persistedHash: string; persistedConfig: OpenClawConfig }> {
+  ): Promise<InternalConfigWriteResult> {
     assertConfigWriteAllowedInCurrentMode({ configPath, env: deps.env });
     clearConfigCache();
     const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
@@ -2265,6 +2367,22 @@ export function createConfigIO(
       throw err;
     }
 
+    const preCommitRuntimePreflight =
+      options.preCommitRuntimePreflight ??
+      (async (sourceConfig: OpenClawConfig) => {
+        await preflightRuntimeSnapshotWrite({
+          nextSourceConfig: sourceConfig,
+          refreshOptions: options.runtimeRefresh,
+          formatRefreshError: (error) => formatErrorMessage(error),
+          createRefreshError: (detail, cause) =>
+            new ConfigRuntimeRefreshError(
+              `Config write blocked before committing ${configPath}: active SecretRef resolution failed: ${detail}`,
+              { cause },
+            ),
+        });
+      });
+    await preCommitRuntimePreflight(resolveRuntimePreflightSourceConfig(stampedOutputConfig));
+
     const pluginInstallConfigMigration =
       ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
     let configCommitted = false;
@@ -2291,7 +2409,17 @@ export function createConfigIO(
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
-      return { persistedHash: nextHash, persistedConfig: stampedOutputConfig };
+      return {
+        persistedHash: nextHash,
+        persistedConfig: stampedOutputConfig,
+        ...(pluginInstallConfigMigration.migrated
+          ? {
+              [configWritePostCommitRollback]: () => {
+                rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
+              },
+            }
+          : {}),
+      };
     } catch (err) {
       if (!configCommitted) {
         rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
@@ -2303,6 +2431,7 @@ export function createConfigIO(
 
   return {
     configPath,
+    env: deps.env,
     loadConfig,
     readBestEffortConfig,
     readSourceConfigBestEffort,
@@ -2484,8 +2613,10 @@ export async function writeConfigFile(
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
+  const baseSnapshot = options.baseSnapshot ?? (await io.readConfigFileSnapshot());
+  let runtimePreflightResult: unknown;
   const writeResult = await io.writeConfigFile(nextCfg, {
-    baseSnapshot: options.baseSnapshot,
+    baseSnapshot,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,
@@ -2504,6 +2635,18 @@ export async function writeConfigFile(
     skipPluginValidation: options.skipPluginValidation,
     preservedLegacyRootKeys: options.preservedLegacyRootKeys,
     lastTouchedVersionOverride: options.lastTouchedVersionOverride,
+    preCommitRuntimePreflight: async (sourceConfig) => {
+      runtimePreflightResult = await preflightRuntimeSnapshotWrite({
+        nextSourceConfig: sourceConfig,
+        refreshOptions: options.runtimeRefresh,
+        formatRefreshError: (error) => formatErrorMessage(error),
+        createRefreshError: (detail, cause) =>
+          new ConfigRuntimeRefreshError(
+            `Config write blocked before committing ${io.configPath}: active SecretRef resolution failed: ${detail}`,
+            { cause },
+          ),
+      });
+    },
   });
   if (
     options.skipRuntimeSnapshotRefresh &&
@@ -2525,6 +2668,8 @@ export async function writeConfigFile(
   // triggering a `plugins`-scoped restart of the gateway for changes that
   // never touched any plugin entry.
   let canonicalSourceConfig: OpenClawConfig = nextCfg;
+  const envBeforeCanonicalRead = snapshotEnv(process.env);
+  let envAfterCanonicalRead = envBeforeCanonicalRead;
   try {
     const freshSnapshot = await io.readConfigFileSnapshot();
     if (freshSnapshot.exists && freshSnapshot.valid) {
@@ -2533,6 +2678,8 @@ export async function writeConfigFile(
   } catch {
     // Best-effort; fall back to nextCfg so a transient read failure does not
     // block the write notification.
+  } finally {
+    envAfterCanonicalRead = snapshotEnv(process.env);
   }
   const notifyCommittedWrite = () => {
     const currentRuntimeConfig = getRuntimeConfigSnapshotState();
@@ -2551,19 +2698,44 @@ export async function writeConfigFile(
   };
   // Keep the last-known-good runtime snapshot active until the specialized refresh path
   // succeeds, so concurrent readers do not observe unresolved SecretRefs mid-refresh.
-  await finalizeRuntimeSnapshotWrite({
-    nextSourceConfig: canonicalSourceConfig,
-    refreshOptions: options.runtimeRefresh,
-    hadRuntimeSnapshot,
-    hadBothSnapshots,
-    loadFreshConfig: () => io.loadConfig(),
-    notifyCommittedWrite,
-    formatRefreshError: (error) => formatErrorMessage(error),
-    createRefreshError: (detail, cause) =>
-      new ConfigRuntimeRefreshError(
-        `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
-        { cause },
-      ),
-  });
+  try {
+    await finalizeRuntimeSnapshotWrite({
+      nextSourceConfig: canonicalSourceConfig,
+      refreshOptions: options.runtimeRefresh,
+      hadRuntimeSnapshot,
+      hadBothSnapshots,
+      loadFreshConfig: () => io.loadConfig(),
+      notifyCommittedWrite,
+      formatRefreshError: (error) => formatErrorMessage(error),
+      preflightResult: runtimePreflightResult,
+      createRefreshError: (detail, cause) =>
+        new ConfigRuntimeRefreshError(
+          `Config was written to ${io.configPath}, but runtime snapshot refresh failed: ${detail}`,
+          { cause },
+        ),
+    });
+  } catch (error) {
+    try {
+      const rolledBackConfig = await rollbackConfigFileWriteIfUnchanged({
+        configPath: io.configPath,
+        previousSnapshot: baseSnapshot,
+        committedHash: writeResult.persistedHash,
+      });
+      if (rolledBackConfig) {
+        restoreEnvChangesIfUnchanged({
+          env: process.env,
+          before: envBeforeCanonicalRead,
+          after: envAfterCanonicalRead,
+        });
+        writeResult[configWritePostCommitRollback]?.();
+      }
+    } catch (rollbackError) {
+      throw new ConfigRuntimeRefreshError(
+        `${formatErrorMessage(error)} Rollback failed: ${formatErrorMessage(rollbackError)}`,
+        { cause: error },
+      );
+    }
+    throw error;
+  }
   return { ...writeResult, persistedConfig: canonicalSourceConfig };
 }

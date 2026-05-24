@@ -3,7 +3,7 @@ summary: "Agent tools for cross-session status, recall, messaging, and sub-agent
 read_when:
   - You want to understand what session tools the agent has
   - You want to configure cross-session access or sub-agent spawning
-  - You want to inspect status or control spawned sub-agents
+  - You want to inspect spawned sub-agent status
 title: "Session tools"
 ---
 
@@ -19,7 +19,7 @@ orchestrate sub-agents.
 | `sessions_send`    | Send a message to another session and optionally wait                       |
 | `sessions_spawn`   | Spawn an isolated sub-agent session for background work                     |
 | `sessions_yield`   | End the current turn and wait for follow-up sub-agent results               |
-| `subagents`        | List, steer, or kill spawned sub-agents for this session                    |
+| `subagents`        | List spawned sub-agent status for this session                              |
 | `session_status`   | Show a `/status`-style card and optionally set a per-session model override |
 
 These tools are still subject to the active tool profile and allow/deny
@@ -123,12 +123,8 @@ the follow-up event you are waiting for. Use it after spawning sub-agents when
 you want completion results to arrive as the next message instead of building
 poll loops.
 
-`subagents` is the control-plane helper for already spawned OpenClaw
-sub-agents. It supports:
-
-- `action: "list"` to inspect active/recent runs
-- `action: "steer"` to send follow-up guidance to a running child
-- `action: "kill"` to stop one child or `all`
+`subagents` is the visibility helper for already spawned OpenClaw
+sub-agents. It supports `action: "list"` to inspect active/recent runs.
 
 ## Spawning sub-agents
 

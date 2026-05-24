@@ -1024,19 +1024,19 @@ export const registerTelegramHandlers = ({
     is_reply_target: flags?.replyTarget === true ? true : undefined,
   });
 
-  const buildPromptContextForMessage = (
+  const buildPromptContextForMessage = async (
     msg: Message,
     replyChainNodes: TelegramCachedMessageNode[],
     options?: TelegramMessageContextOptions,
-  ): TelegramPromptContextEntry[] => {
+  ): Promise<TelegramPromptContextEntry[]> => {
     const messageId = typeof msg.message_id === "number" ? String(msg.message_id) : undefined;
-    const currentNode = messageCache.get({
+    const currentNode = await messageCache.get({
       accountId,
       chatId: msg.chat.id,
       messageId,
     });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
-    const conversationContext = buildTelegramConversationContext({
+    const conversationContext = await buildTelegramConversationContext({
       cache: messageCache,
       messageId,
       accountId,
@@ -1119,12 +1119,12 @@ export const registerTelegramHandlers = ({
   }) => {
     let dispatchDedupeCommitted = false;
     try {
-      const replyChainNodes = buildReplyChainForMessage(params.msg);
+      const replyChainNodes = await buildReplyChainForMessage(params.msg);
       const { replyMedia, replyChain } = await resolveReplyMediaForChain(
         params.ctx,
         replyChainNodes,
       );
-      const promptContext = buildPromptContextForMessage(
+      const promptContext = await buildPromptContextForMessage(
         params.msg,
         replyChainNodes,
         params.options,
@@ -2754,7 +2754,7 @@ export const registerTelegramHandlers = ({
       messageThreadId: normalizedMsg.message_thread_id,
     });
     const dmThreadId = !isGroup ? normalizedMsg.message_thread_id : undefined;
-    recordMessageForReplyChain(normalizedMsg, resolvedThreadId ?? dmThreadId);
+    await recordMessageForReplyChain(normalizedMsg, resolvedThreadId ?? dmThreadId);
   };
 
   const handleInboundMessageLike = async (event: InboundTelegramEvent) => {
@@ -2851,7 +2851,7 @@ export const registerTelegramHandlers = ({
         return;
       }
       dispatchDedupeKeys = dispatchDedupe.keys;
-      recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
+      await recordMessageForReplyChain(event.msg, resolvedThreadId ?? dmThreadId);
       await processInboundMessage({
         ctx: event.ctx,
         msg: event.msg,

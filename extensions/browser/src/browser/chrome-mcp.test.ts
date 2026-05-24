@@ -13,6 +13,7 @@ import {
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
   takeChromeMcpScreenshot,
+  takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -164,6 +165,7 @@ describe("chrome MCP page parsing", () => {
       "-y",
       "chrome-devtools-mcp@latest",
       "--autoConnect",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
       "--userDataDir",
@@ -182,6 +184,7 @@ describe("chrome MCP page parsing", () => {
       "chrome-devtools-mcp@latest",
       "--browserUrl",
       "http://127.0.0.1:9222",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
@@ -197,6 +200,7 @@ describe("chrome MCP page parsing", () => {
       "chrome-devtools-mcp@latest",
       "--wsEndpoint",
       "ws://127.0.0.1:9222/devtools/browser/abc",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
@@ -219,6 +223,36 @@ describe("chrome MCP page parsing", () => {
     ]);
   });
 
+  it("lets explicit Chrome MCP usage-statistics args override the default opt-out", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpArgs: ["--usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--usage-statistics",
+    ]);
+  });
+
+  it("does not duplicate an explicit Chrome MCP usage-statistics opt-out", () => {
+    expect(
+      buildChromeMcpArgs({
+        mcpArgs: ["--no-usage-statistics"],
+      }),
+    ).toEqual([
+      "-y",
+      "chrome-devtools-mcp@latest",
+      "--autoConnect",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      "--no-usage-statistics",
+    ]);
+  });
+
   it("omits the npx package prefix for a custom Chrome MCP command", () => {
     expect(
       buildChromeMcpArgs({
@@ -228,6 +262,7 @@ describe("chrome MCP page parsing", () => {
     ).toEqual([
       "--browserUrl",
       "http://127.0.0.1:9222",
+      "--no-usage-statistics",
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
@@ -338,7 +373,9 @@ describe("chrome MCP page parsing", () => {
 
     expect(message).toContain("Chrome MCP existing-session attach failed");
     expect(message).toContain("~/Library/Application Support/Google/Chrome/Profile 1");
-    expect(message).toContain("attach failed for ~/Library/Application Support/Google/Chrome/Profile 1");
+    expect(message).toContain(
+      "attach failed for ~/Library/Application Support/Google/Chrome/Profile 1",
+    );
     expect(message).not.toContain(homeDir);
     expect(message).not.toContain(userDataDir);
   });
@@ -818,6 +855,27 @@ describe("chrome MCP page parsing", () => {
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
+  });
+
+  it("forwards an explicit timeoutMs to take_snapshot via the callTool race", async () => {
+    vi.useFakeTimers();
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(
+      async () => new Promise<never>(() => {}),
+    ) as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const snapshotPromise = takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: "1",
+      timeoutMs: 75,
+    });
+    void snapshotPromise.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(75);
+
+    await expect(snapshotPromise).rejects.toThrow(/Chrome MCP "take_snapshot".*timed out/);
+    vi.useRealTimers();
   });
 
   it("honors timeoutMs for ephemeral availability probes", async () => {

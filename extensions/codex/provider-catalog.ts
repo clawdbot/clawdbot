@@ -29,13 +29,6 @@ export const FALLBACK_CODEX_MODELS = [
     inputModalities: ["text", "image"],
     supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
   },
-  {
-    id: "gpt-5.2",
-    model: "gpt-5.2",
-    displayName: "gpt-5.2",
-    inputModalities: ["text", "image"],
-    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
-  },
 ] satisfies CodexAppServerModel[];
 
 export function buildCodexModelDefinition(model: {

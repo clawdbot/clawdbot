@@ -252,6 +252,7 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
 export function rewriteTranscriptEntriesInState(params: {
   state: TranscriptFileState;
   replacements: TranscriptRewriteReplacement[];
+  allowedRewriteSuffixEntryIds?: string[];
 }): TranscriptRewriteResult & { appendedEntries: SessionBranchEntry[] } {
   const replacementsById = new Map(
     params.replacements
@@ -320,6 +321,22 @@ export function rewriteTranscriptEntriesInState(params: {
     };
   }
 
+  if (params.allowedRewriteSuffixEntryIds) {
+    const allowedIds = new Set(params.allowedRewriteSuffixEntryIds);
+    const hasUnexpectedSuffixEntry = branch
+      .slice(matchedIndices[0])
+      .some((entry) => typeof entry.id === "string" && !allowedIds.has(entry.id));
+    if (hasUnexpectedSuffixEntry) {
+      return {
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+        reason: "rewrite suffix guard failed",
+        appendedEntries: [],
+      };
+    }
+  }
+
   if (!firstMatchedEntry.parentId) {
     params.state.resetLeaf();
   } else {
@@ -372,6 +389,9 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
     const result = rewriteTranscriptEntriesInState({
       state,
       replacements: params.request.replacements,
+      ...(params.request.allowedRewriteSuffixEntryIds
+        ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
+        : {}),
     });
     if (result.changed) {
       await persistTranscriptStateMutation({

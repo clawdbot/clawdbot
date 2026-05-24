@@ -75,26 +75,17 @@ export GROQ_API_KEY=gsk_...
 
 OpenClaw ships a manifest-backed Groq catalog with both reasoning and non-reasoning entries. Run `openclaw models list --provider groq` to see the bundled rows for your installed version, or check [console.groq.com/docs/models](https://console.groq.com/docs/models) for Groq's authoritative list.
 
-| Model ref                                            | Name                          | Reasoning | Input        | Context |
-| ---------------------------------------------------- | ----------------------------- | --------- | ------------ | ------- |
-| `groq/llama-3.3-70b-versatile`                       | Llama 3.3 70B Versatile       | no        | text         | 131,072 |
-| `groq/llama-3.1-8b-instant`                          | Llama 3.1 8B Instant          | no        | text         | 131,072 |
-| `groq/meta-llama/llama-4-maverick-17b-128e-instruct` | Llama 4 Maverick 17B          | no        | text + image | 131,072 |
-| `groq/meta-llama/llama-4-scout-17b-16e-instruct`     | Llama 4 Scout 17B             | no        | text + image | 131,072 |
-| `groq/llama3-70b-8192`                               | Llama 3 70B                   | no        | text         | 8,192   |
-| `groq/llama3-8b-8192`                                | Llama 3 8B                    | no        | text         | 8,192   |
-| `groq/gemma2-9b-it`                                  | Gemma 2 9B                    | no        | text         | 8,192   |
-| `groq/mistral-saba-24b`                              | Mistral Saba 24B              | no        | text         | 32,768  |
-| `groq/moonshotai/kimi-k2-instruct`                   | Kimi K2 Instruct              | no        | text         | 131,072 |
-| `groq/moonshotai/kimi-k2-instruct-0905`              | Kimi K2 Instruct 0905         | no        | text         | 262,144 |
-| `groq/openai/gpt-oss-120b`                           | GPT OSS 120B                  | yes       | text         | 131,072 |
-| `groq/openai/gpt-oss-20b`                            | GPT OSS 20B                   | yes       | text         | 131,072 |
-| `groq/openai/gpt-oss-safeguard-20b`                  | Safety GPT OSS 20B            | yes       | text         | 131,072 |
-| `groq/qwen-qwq-32b`                                  | Qwen QwQ 32B                  | yes       | text         | 131,072 |
-| `groq/qwen/qwen3-32b`                                | Qwen3 32B                     | yes       | text         | 131,072 |
-| `groq/deepseek-r1-distill-llama-70b`                 | DeepSeek R1 Distill Llama 70B | yes       | text         | 131,072 |
-| `groq/groq/compound`                                 | Compound                      | yes       | text         | 131,072 |
-| `groq/groq/compound-mini`                            | Compound Mini                 | yes       | text         | 131,072 |
+| Model ref                                        | Name                    | Reasoning | Input        | Context |
+| ------------------------------------------------ | ----------------------- | --------- | ------------ | ------- |
+| `groq/llama-3.3-70b-versatile`                   | Llama 3.3 70B Versatile | no        | text         | 131,072 |
+| `groq/llama-3.1-8b-instant`                      | Llama 3.1 8B Instant    | no        | text         | 131,072 |
+| `groq/meta-llama/llama-4-scout-17b-16e-instruct` | Llama 4 Scout 17B       | no        | text + image | 131,072 |
+| `groq/openai/gpt-oss-120b`                       | GPT OSS 120B            | yes       | text         | 131,072 |
+| `groq/openai/gpt-oss-20b`                        | GPT OSS 20B             | yes       | text         | 131,072 |
+| `groq/openai/gpt-oss-safeguard-20b`              | Safety GPT OSS 20B      | yes       | text         | 131,072 |
+| `groq/qwen/qwen3-32b`                            | Qwen3 32B               | yes       | text         | 131,072 |
+| `groq/groq/compound`                             | Compound                | yes       | text         | 131,072 |
+| `groq/groq/compound-mini`                        | Compound Mini           | yes       | text         | 131,072 |
 
 <Tip>
   The catalog evolves with each OpenClaw release. `openclaw models list --provider groq` shows the rows known to your installed version; cross-check with [console.groq.com/docs/models](https://console.groq.com/docs/models) for newly-added or deprecated models.

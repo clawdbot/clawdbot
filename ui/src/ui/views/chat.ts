@@ -427,6 +427,17 @@ function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
     ?.focus({ preventScroll: true });
 }
 
+function clickComposerFileInput(event: MouseEvent) {
+  const target = event.currentTarget;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+  target
+    .closest(".agent-chat__input")
+    ?.querySelector<HTMLInputElement>(".agent-chat__file-input")
+    ?.click();
+}
+
 function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
   requestAnimationFrame(() => {
     if (document.activeElement !== target) {
@@ -1562,10 +1573,9 @@ export function renderChat(props: ChatProps) {
         <div class="agent-chat__toolbar">
           <div class="agent-chat__toolbar-left">
             <button
+              type="button"
               class="agent-chat__input-btn"
-              @click=${() => {
-                document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-              }}
+              @click=${clickComposerFileInput}
               title=${t("chat.composer.attachFile")}
               aria-label=${t("chat.composer.attachFile")}
               ?disabled=${!props.connected}
