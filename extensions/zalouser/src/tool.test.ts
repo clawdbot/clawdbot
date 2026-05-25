@@ -62,6 +62,7 @@ describe("executeZalouserTool", () => {
     mockGetGroupLink.mockResolvedValueOnce({
       link: "https://zalo.me/g/abc123",
       expiresAt: 1799999999,
+      enabled: true,
     } as never);
     const result = await executeZalouserTool("tool-1", {
       action: "groupLink",
@@ -72,7 +73,19 @@ describe("executeZalouserTool", () => {
     expect(extractDetails(result)).toEqual({
       link: "https://zalo.me/g/abc123",
       expiresAt: 1799999999,
+      enabled: true,
     });
+  });
+
+  it("reports disabled state when the group link is not enabled", async () => {
+    mockGetGroupLink.mockResolvedValueOnce({ enabled: false } as never);
+    const result = await executeZalouserTool("tool-1", {
+      action: "groupLink",
+      threadId: "g-1",
+      profile: "work",
+    });
+    expect(mockGetGroupLink).toHaveBeenCalledWith("work", "g-1");
+    expect(extractDetails(result)).toEqual({ enabled: false });
   });
 
   it("returns error when groupLink action is missing the group id", async () => {

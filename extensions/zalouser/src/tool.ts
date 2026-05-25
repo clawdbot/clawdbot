@@ -202,7 +202,8 @@ export function createZalouserTool(context?: ZalouserToolContext): AnyAgentTool 
     description:
       "Send messages and access data via Zalo personal account. " +
       "Actions: send (text message), image (send image URL), link (send link), " +
-      "friends (list/search friends), groups (list groups), me (profile info), status (auth check).",
+      "friends (list/search friends), groups (list groups), " +
+      "groupLink (read a group's invite link), me (profile info), status (auth check).",
     parameters: ZalouserToolSchema,
     execute: async (toolCallId, params, signal, onUpdate) =>
       await executeZalouserTool(toolCallId, params as ToolParams, signal, onUpdate, context),
