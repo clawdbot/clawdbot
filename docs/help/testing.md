@@ -154,6 +154,12 @@ inside every shard.
     `aimock` starts a local AIMock-backed provider server for experimental
     fixture and protocol-mock coverage without replacing the scenario-aware
     `mock-openai` lane.
+- `pnpm openclaw qa coverage --match <query>`
+  - Searches scenario IDs, titles, surfaces, coverage IDs, docs refs, code refs,
+    plugins, and provider requirements, then prints matching suite targets.
+  - Use this before a QA Lab run when you know the touched behavior or file path
+    but not the smallest scenario. It is advisory only; still choose mock,
+    live, Multipass, Matrix, or transport proof from the behavior being changed.
 - `pnpm test:plugins:kitchen-sink-live`
   - Runs the live OpenAI Kitchen Sink plugin gauntlet through QA Lab. It
     installs the external Kitchen Sink package, verifies the plugin SDK surface

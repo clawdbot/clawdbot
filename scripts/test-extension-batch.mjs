@@ -14,8 +14,10 @@ function printUsage() {
   );
 }
 
-function parseExtensionIds(rawArgs) {
-  const args = [...rawArgs];
+export function parseExtensionIds(rawArgs) {
+  const separatorIndex = rawArgs.indexOf("--");
+  const args = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : [...rawArgs];
+  const separatorPassthroughArgs = separatorIndex >= 0 ? rawArgs.slice(separatorIndex + 1) : [];
   const extensionIds = [];
 
   while (args[0] && !args[0].startsWith("-")) {
@@ -28,7 +30,10 @@ function parseExtensionIds(rawArgs) {
     );
   }
 
-  return { extensionIds, passthroughArgs: args };
+  return {
+    extensionIds,
+    passthroughArgs: separatorIndex >= 0 ? [...args, ...separatorPassthroughArgs] : args,
+  };
 }
 
 function parsePositiveInt(value) {
@@ -146,8 +151,7 @@ async function run() {
     return;
   }
 
-  const passthroughArgs = rawArgs.filter((arg) => arg !== "--");
-  const { extensionIds, passthroughArgs: vitestArgs } = parseExtensionIds(passthroughArgs);
+  const { extensionIds, passthroughArgs: vitestArgs } = parseExtensionIds(rawArgs);
   if (extensionIds.length === 0) {
     printUsage();
     process.exit(1);

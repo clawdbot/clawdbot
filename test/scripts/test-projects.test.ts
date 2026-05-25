@@ -10,6 +10,7 @@ import {
   buildFullSuiteVitestRunPlans,
   buildVitestArgs,
   buildVitestRunPlans,
+  findUnmatchedExplicitTestTargets,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
@@ -270,6 +271,20 @@ describe("scripts/test-projects changed-target routing", () => {
         watchMode: false,
       },
     ]);
+  });
+
+  it("allows explicit split Vitest config targets without treating them as unmatched tests", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(
+        [
+          "test/vitest/vitest.agents-core.config.ts",
+          "test/vitest/vitest.agents-pi-embedded.config.ts",
+          "test/vitest/vitest.agents-support.config.ts",
+          "test/vitest/vitest.agents-tools.config.ts",
+        ],
+        process.cwd(),
+      ),
+    ).toEqual([]);
   });
 
   it("routes contract roots to separate contract shards", () => {

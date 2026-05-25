@@ -31,6 +31,8 @@ let sessionRunAccounting: typeof import("./session-run-accounting.js");
 let setRuntimeConfigSnapshot: typeof import("../../config/config.js").setRuntimeConfigSnapshot;
 let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowupRun;
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
+let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
+let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -436,6 +438,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ clearFollowupQueue, enqueueFollowupRun } = await import("./queue.js"));
   sessionRunAccounting = await import("./session-run-accounting.js");
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
+  ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
+    await import("./reply-run-registry.js"));
 }
 
 const ROUTABLE_TEST_CHANNELS = new Set([
@@ -453,6 +457,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   runEmbeddedPiAgentMock.mockReset();
   runCliAgentMock.mockReset();
@@ -507,6 +512,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");
   FOLLOWUP_TEST_QUEUES.clear();
@@ -539,6 +545,60 @@ function createQueuedRun(
 ): FollowupRun {
   return createMockFollowupRun(overrides);
 }
+
+describe("createFollowupRunner reply-lane admission", () => {
+  it("runs queued followups with the session id returned by admission", async () => {
+    const active = createReplyOperationForTest({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: { agentMeta: { provider: "anthropic", model: "claude" } },
+    });
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry: sessionStore.main,
+      sessionStore,
+      sessionKey: "main",
+      defaultModel: "anthropic/claude",
+    });
+
+    const pending = runner(
+      createQueuedRun({
+        run: {
+          sessionId: "queued-stale-session",
+          sessionKey: "main",
+          provider: "anthropic",
+          model: "claude",
+        },
+      }),
+    );
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    sessionStore.main = {
+      sessionId: "post-compact-session",
+      sessionFile: "/tmp/post-compact.jsonl",
+      updatedAt: Date.now(),
+    };
+    active.complete();
+    await pending;
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.sessionId).toBe("post-compact-session");
+    expect(call.sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+});
 
 async function normalizeComparablePath(filePath: string): Promise<string> {
   const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));

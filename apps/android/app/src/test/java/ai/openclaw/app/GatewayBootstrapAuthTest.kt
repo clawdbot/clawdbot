@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -118,6 +119,31 @@ class GatewayBootstrapAuthTest {
       NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
       resolved,
     )
+  }
+
+  @Test
+  fun nodeConnectStartsOperatorAfterBootstrapHandoffWhenOperatorWasConnecting() {
+    val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    val runtime = NodeRuntime(app, prefs)
+    val deviceId = DeviceIdentityStore(app).loadOrCreate().deviceId
+    DeviceAuthStore(prefs).saveToken(deviceId, "operator", "bootstrap-operator-token")
+
+    writeField(runtime, "operatorStatusText", "Connecting…")
+    invokeMaybeStartOperatorSessionAfterNodeConnect(
+      runtime = runtime,
+      endpoint = GatewayEndpoint.manual(host = "127.0.0.1", port = 18789),
+      auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "setup-bootstrap-token", password = null),
+    )
+
+    val desired = desiredConnection(runtime, "operatorSession")
+    assertNotNull(desired)
+    assertNull(readField<String?>(desired!!, "bootstrapToken"))
   }
 
   @Test
@@ -358,9 +384,50 @@ class GatewayBootstrapAuthTest {
     runtime: NodeRuntime,
     sessionFieldName: String,
   ): String? {
-    val session = readField<GatewaySession>(runtime, sessionFieldName)
-    val desired = readField<Any?>(session, "desired") ?: return null
+    val desired = desiredConnection(runtime, sessionFieldName) ?: return null
     return readField(desired, "bootstrapToken")
+  }
+
+  private fun desiredConnection(
+    runtime: NodeRuntime,
+    sessionFieldName: String,
+  ): Any? {
+    val session = readField<GatewaySession>(runtime, sessionFieldName)
+    return readField(session, "desired")
+  }
+
+  private fun invokeMaybeStartOperatorSessionAfterNodeConnect(
+    runtime: NodeRuntime,
+    endpoint: GatewayEndpoint,
+    auth: NodeRuntime.GatewayConnectAuth,
+  ) {
+    val method =
+      runtime.javaClass.getDeclaredMethod(
+        "maybeStartOperatorSessionAfterNodeConnect",
+        GatewayEndpoint::class.java,
+        NodeRuntime.GatewayConnectAuth::class.java,
+      )
+    method.isAccessible = true
+    method.invoke(runtime, endpoint, auth)
+  }
+
+  private fun writeField(
+    target: Any,
+    name: String,
+    value: Any?,
+  ) {
+    var type: Class<*>? = target.javaClass
+    while (type != null) {
+      try {
+        val field: Field = type.getDeclaredField(name)
+        field.isAccessible = true
+        field.set(target, value)
+        return
+      } catch (_: NoSuchFieldException) {
+        type = type.superclass
+      }
+    }
+    error("Field $name not found on ${target.javaClass.name}")
   }
 
   private fun waitForDesiredBootstrapToken(

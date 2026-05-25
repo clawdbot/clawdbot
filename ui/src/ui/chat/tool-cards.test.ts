@@ -2,7 +2,11 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import { renderToolCard } from "./tool-cards.ts";
+import {
+  formatCollapsedToolPreviewText,
+  formatCollapsedToolSummaryText,
+  renderToolCard,
+} from "./tool-cards.ts";
 
 vi.mock("../icons.ts", () => ({
   icons: {},
@@ -10,13 +14,17 @@ vi.mock("../icons.ts", () => ({
 
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name }: { name: string }) => ({
+  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
     name,
     label: name
       .split(/[._-]/g)
       .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
       .join(" "),
     icon: "zap",
+    detail:
+      args && typeof args === "object" && "detail" in args
+        ? String((args as { detail: unknown }).detail)
+        : undefined,
   }),
 }));
 
@@ -109,6 +117,80 @@ describe("tool-cards", () => {
     );
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+  });
+
+  it("cleans connector copy from collapsed summaries without changing raw details", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:5b:call-5b",
+          name: "presentation_create",
+          args: "with Example Deck",
+          inputText: "with Example Deck",
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+      "Example Deck",
+    );
+
+    render(
+      renderToolCard(
+        {
+          id: "msg:5b:call-5b",
+          name: "presentation_create",
+          args: "with Example Deck",
+          inputText: "with Example Deck",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      "with Example Deck",
+    );
+  });
+
+  it("normalizes collapsed summary text for display only", () => {
+    expect(formatCollapsedToolSummaryText("  with   Example Deck  ")).toBe("Example Deck");
+    expect(formatCollapsedToolSummaryText("Example Deck")).toBe("Example Deck");
+    expect(formatCollapsedToolSummaryText("   ")).toBeUndefined();
+  });
+
+  it("keeps collapsed markdown previews bounded after display cleanup", () => {
+    const preview = formatCollapsedToolPreviewText(`with ${"A".repeat(200)}`);
+
+    expect(preview).toHaveLength(120);
+    expect(preview?.startsWith("A")).toBe(true);
+    expect(preview).not.toContain("with ");
+  });
+
+  it("bounds raw string argument fallbacks in collapsed summaries", () => {
+    const container = document.createElement("div");
+    const rawInput = `with ${"A".repeat(200)}`;
+    render(
+      renderToolCard(
+        {
+          id: "msg:5c:call-5c",
+          name: "presentation_create",
+          args: rawInput,
+          inputText: rawInput,
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const labelText = container.querySelector(".chat-tool-msg-summary__label")?.textContent?.trim();
+    expect(labelText).toHaveLength(120);
+    expect(labelText?.startsWith("A")).toBe(true);
+    expect(labelText).not.toContain("with ");
   });
 
   it("keeps raw details for legacy canvas tool output without rendering tool-row previews", () => {

@@ -31,7 +31,7 @@ import {
   renderSessionsCard,
   renderUsageInsights,
 } from "./usage-render-overview.ts";
-import {
+import type {
   SessionLogEntry,
   SessionLogRole,
   UsageColumnId,

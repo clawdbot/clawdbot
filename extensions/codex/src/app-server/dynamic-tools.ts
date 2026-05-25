@@ -206,6 +206,10 @@ export function createCodexDynamicToolBridge(params: {
             isToolResultYield(rawResult) ||
             isToolResultYield(result),
         );
+        withDynamicToolAsyncStarted(
+          response,
+          isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result),
+        );
         return withSideEffectEvidence(response, terminalType !== "blocked");
       } catch (error) {
         collectToolTelemetry({
@@ -483,6 +487,11 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
   return details.status.trim().toLowerCase() === "yielded";
 }
 
+function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  return isRecord(details) && details.async === true && details.status === "started";
+}
+
 function inferToolResultDiagnosticTerminalType(
   result: AgentToolResult<unknown>,
   isError: boolean,
@@ -532,6 +541,21 @@ function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
     return response;
   }
   Object.defineProperty(response, "terminate", {
+    configurable: true,
+    enumerable: false,
+    value: true,
+  });
+  return response;
+}
+
+function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  asyncStarted: boolean,
+): T {
+  if (!asyncStarted) {
+    return response;
+  }
+  Object.defineProperty(response, "asyncStarted", {
     configurable: true,
     enumerable: false,
     value: true,

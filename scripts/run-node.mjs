@@ -647,6 +647,28 @@ const createRunNodeOutputTee = (deps) => {
   if (!outputLogPath) {
     return null;
   }
+  try {
+    const existing = deps.fs.statSync(outputLogPath);
+    if (existing.isDirectory()) {
+      return {
+        outputLogPath,
+        write() {},
+        async close() {
+          throw new Error(`output log path is a directory: ${outputLogPath}`);
+        },
+      };
+    }
+  } catch (error) {
+    if (error?.code && error.code !== "ENOENT") {
+      return {
+        outputLogPath,
+        write() {},
+        async close() {
+          throw error;
+        },
+      };
+    }
+  }
   deps.fs.mkdirSync(path.dirname(outputLogPath), { recursive: true });
   const stream = deps.fs.createWriteStream(outputLogPath, {
     flags: "a",
@@ -936,8 +958,9 @@ const runOpenClaw = async (deps) => {
   return res.exitCode ?? 1;
 };
 
-const pipeSpawnedOutput = (childProcess, deps) => {
-  if (!shouldPipeSpawnedOutput(deps)) {
+const pipeSpawnedOutput = (childProcess, deps, options = {}) => {
+  const stdoutTarget = options.stdoutTarget ?? "stdout";
+  if (!shouldPipeSpawnedOutput(deps) && stdoutTarget !== "stderr") {
     return;
   }
   const stderrFilter =
@@ -945,7 +968,8 @@ const pipeSpawnedOutput = (childProcess, deps) => {
       ? createSyncIoTraceStderrFilter(deps)
       : null;
   childProcess.stdout?.on("data", (chunk) => {
-    writeRunnerStream(deps, deps.stdout, chunk);
+    const target = stdoutTarget === "stderr" ? deps.stderr : deps.stdout;
+    writeRunnerStream(deps, target, chunk);
     deps.outputTee?.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
@@ -1389,9 +1413,9 @@ export async function runNodeMain(params = {}) {
           const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
             cwd: deps.cwd,
             env: deps.env,
-            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+            stdio: ["inherit", "pipe", "pipe"],
           });
-          pipeSpawnedOutput(assetBuild, deps);
+          pipeSpawnedOutput(assetBuild, deps, { stdoutTarget: "stderr" });
           const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
           const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
           if (assetBuildInterruptedExitCode !== null) {
@@ -1407,9 +1431,9 @@ export async function runNodeMain(params = {}) {
               ...deps.env,
               [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
             },
-            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+            stdio: ["inherit", "pipe", "pipe"],
           });
-          pipeSpawnedOutput(build, deps);
+          pipeSpawnedOutput(build, deps, { stdoutTarget: "stderr" });
 
           const buildRes = await waitForSpawnedProcess(build, deps);
           const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);

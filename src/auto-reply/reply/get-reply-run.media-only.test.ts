@@ -1203,23 +1203,33 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
     vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
     vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+    const activeOperation = createReplyOperation({
+      sessionId: "session-active",
+      sessionKey: "session-key",
+      resetTriggered: false,
+    });
 
-    const result = await runPreparedReply(
-      baseParams({
-        resetTriggered: true,
-        isNewSession: true,
-        sessionId: "session-reset-new",
-      }),
-    );
+    try {
+      const result = await runPreparedReply(
+        baseParams({
+          resetTriggered: true,
+          isNewSession: true,
+          sessionId: "session-reset-new",
+        }),
+      );
 
-    expect(result).toEqual({ text: "ok" });
-    expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
-    expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
-    const call = requireRunReplyAgentCall();
-    expect(call?.shouldSteer).toBe(false);
-    expect(call?.shouldFollowup).toBe(false);
-    expect(call?.resetTriggered).toBe(true);
+      expect(result).toEqual({ text: "ok" });
+      expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
+      expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+      expect(activeOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
+      expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+      const call = requireRunReplyAgentCall();
+      expect(call?.shouldSteer).toBe(false);
+      expect(call?.shouldFollowup).toBe(false);
+      expect(call?.resetTriggered).toBe(true);
+    } finally {
+      activeOperation.complete();
+    }
   });
   it("does not enable steering for active heartbeat runs", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
@@ -1469,7 +1479,7 @@ describe("runPreparedReply media-only handling", () => {
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
-  it("continues when the original owner clears before an unrelated run appears", async () => {
+  it("reports still shutting down when a new owner appears after waiting", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
@@ -1497,8 +1507,10 @@ describe("runPreparedReply media-only handling", () => {
     });
     nextRun.setPhase("running");
 
-    await expect(runPromise).resolves.toEqual({ text: "ok" });
-    expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
+    await expect(runPromise).resolves.toEqual({
+      text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
+    });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
 
     nextRun.complete();
   });
@@ -1744,6 +1756,60 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call.followupRun.abortSignal).toBe(abortController.signal);
     expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
+  });
+
+  it("uses queued followup abort ownership instead of borrowed active-lane abort ownership", async () => {
+    const queueSettings = await import("./queue/settings-runtime.js");
+    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const activeLaneAbortController = new AbortController();
+    const sourceAbortController = new AbortController();
+    vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
+      mode: "steer",
+      debounceMs: 500,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+      .mockReturnValueOnce("active-session")
+      .mockReturnValueOnce("active-session");
+    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
+
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          abortSignal: activeLaneAbortController.signal,
+          queuedFollowupAbortSignal: sourceAbortController.signal,
+        } as NonNullable<Parameters<typeof runPreparedReply>[0]["opts"]> & {
+          queuedFollowupAbortSignal?: AbortSignal;
+        },
+        ctx: {
+          Body: "ambient",
+          RawBody: "ambient",
+          CommandBody: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "ambient",
+          BodyStripped: "ambient",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+          MessageSid: "993",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call.shouldFollowup).toBe(true);
+    expect(call.isActive).toBe(true);
+    expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.abortSignal).toBe(sourceAbortController.signal);
   });
 
   it("detaches queued user requests from superseded source abort signals", async () => {

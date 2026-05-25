@@ -24,6 +24,7 @@ import {
   applyParallelVitestCachePaths,
   buildFullSuiteVitestRunPlans,
   createVitestRunSpecs,
+  findUnmatchedExplicitTestTargets,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   parseTestProjectsArgs,
@@ -183,6 +184,16 @@ async function main() {
   const args = process.argv.slice(2);
   const baseEnv = resolveLocalVitestEnv(process.env);
   const { targetArgs } = parseTestProjectsArgs(args, process.cwd());
+  const unmatchedExplicitTargets = findUnmatchedExplicitTestTargets(args, process.cwd());
+  if (unmatchedExplicitTargets.length > 0) {
+    for (const unmatched of unmatchedExplicitTargets) {
+      const suffix = unmatched.includePattern ? ` (${unmatched.includePattern})` : "";
+      console.error(`[test] explicit test target matched no test files: ${unmatched.target}${suffix}`);
+    }
+    printTestSummary("failed", 1, performance.now() - suiteStartedAt);
+    process.exitCode = 1;
+    return;
+  }
   const changedTargetArgs =
     targetArgs.length === 0
       ? resolveChangedTargetArgs(args, process.cwd(), undefined, { env: baseEnv })

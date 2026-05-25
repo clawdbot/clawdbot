@@ -1302,6 +1302,40 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expect(incompleteTurnText).toContain("couldn't generate a response");
   });
 
+  it("does not surface incomplete-turn error while an async media task is running", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [
+          {
+            toolName: "image_generate",
+            meta: 'generate prompt="a portrait"',
+            asyncStarted: true,
+          },
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool_1",
+              name: "image_generate",
+              input: { action: "generate", prompt: "a portrait" },
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toBeNull();
+  });
+
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
       payloadCount: 1,
@@ -1962,6 +1996,17 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
         toolMetas: [],
         didSendViaMessagingTool: false,
         messagingToolSentTexts: ["Delivered through the message tool."],
+        messagingToolSentMediaUrls: [],
+      }),
+    ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });
+  });
+
+  it("treats async-started background tools as replay-invalid side effects", () => {
+    expect(
+      buildAttemptReplayMetadata({
+        toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+        didSendViaMessagingTool: false,
+        messagingToolSentTexts: [],
         messagingToolSentMediaUrls: [],
       }),
     ).toEqual({ hadPotentialSideEffects: true, replaySafe: false });

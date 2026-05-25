@@ -51,17 +51,18 @@ describe("appendWorkspaceMountArgs", () => {
   });
 
   it("omits agent workspace mount when paths are identical", () => {
+    const workspaceDir = makeTempWorkspace();
     const args: string[] = [];
     appendWorkspaceMountArgs({
       args,
-      workspaceDir: "/tmp/workspace",
-      agentWorkspaceDir: "/tmp/workspace",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
       workdir: "/workspace",
       workspaceAccess: "rw",
     });
 
-    const mounts = args.filter((arg) => arg.startsWith("/tmp/"));
-    expect(mounts).toEqual(["/tmp/workspace:/workspace:z"]);
+    const mounts = args.filter((arg) => arg.startsWith(workspaceDir));
+    expect(mounts).toEqual([`${workspaceDir}:/workspace:z`]);
   });
 
   it("marks split agent workspace mounts shared for SELinux", () => {

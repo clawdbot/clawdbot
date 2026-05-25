@@ -13,6 +13,16 @@ type QaCoverageScenarioSummary = {
   risk: string;
 };
 
+type QaScenarioSearchMatch = QaCoverageScenarioSummary & {
+  coverageIds: string[];
+  docsRefs: string[];
+  codeRefs: string[];
+  runtimeParityTier?: string;
+  requiredProviderMode?: string;
+  requiredProvider?: string;
+  requiredModel?: string;
+};
+
 type QaCoverageIntent = "primary" | "secondary";
 
 type QaCoverageScenarioReference = QaCoverageScenarioSummary & {
@@ -68,6 +78,85 @@ function summarizeScenario(scenario: QaSeedScenarioWithSource): QaCoverageScenar
     surfaces: scenarioSurfaces(scenario),
     risk: scenarioRisk(scenario),
   };
+}
+
+function normalizeSearchText(value: string) {
+  return value.toLowerCase();
+}
+
+function tokenizeScenarioSearchQuery(query: string) {
+  return query
+    .toLowerCase()
+    .split(/\s+/u)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
+function scenarioSearchText(scenario: QaSeedScenarioWithSource) {
+  const config = scenario.execution.config ?? {};
+  return normalizeSearchText(
+    [
+      scenario.id,
+      scenario.title,
+      scenario.sourcePath,
+      scenario.surface,
+      ...(scenario.surfaces ?? []),
+      scenario.category ?? "",
+      scenario.runtimeParityTier ?? "",
+      scenario.risk ?? "",
+      scenario.riskLevel ?? "",
+      scenario.objective,
+      ...scenario.successCriteria,
+      ...(scenario.capabilities ?? []),
+      ...(scenario.plugins ?? []),
+      ...(scenario.docsRefs ?? []),
+      ...(scenario.codeRefs ?? []),
+      ...(scenario.coverage?.primary ?? []),
+      ...(scenario.coverage?.secondary ?? []),
+      ...Object.entries(config).flatMap(([key, value]) => [
+        key,
+        typeof value === "string" ? value : "",
+      ]),
+    ].join("\n"),
+  );
+}
+
+function stringifyConfigValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function summarizeScenarioSearchMatch(scenario: QaSeedScenarioWithSource): QaScenarioSearchMatch {
+  const config = scenario.execution.config ?? {};
+  return {
+    ...summarizeScenario(scenario),
+    coverageIds: [
+      ...(scenario.coverage?.primary ?? []),
+      ...(scenario.coverage?.secondary ?? []),
+    ].toSorted((left, right) => left.localeCompare(right)),
+    docsRefs: [...(scenario.docsRefs ?? [])],
+    codeRefs: [...(scenario.codeRefs ?? [])],
+    runtimeParityTier: scenario.runtimeParityTier,
+    requiredProviderMode: stringifyConfigValue(config.requiredProviderMode),
+    requiredProvider: stringifyConfigValue(config.requiredProvider),
+    requiredModel: stringifyConfigValue(config.requiredModel),
+  };
+}
+
+export function findQaScenarioMatches(
+  scenarios: readonly QaSeedScenarioWithSource[],
+  query: string,
+) {
+  const tokens = tokenizeScenarioSearchQuery(query);
+  if (tokens.length === 0) {
+    return [];
+  }
+  return scenarios
+    .filter((scenario) => {
+      const haystack = scenarioSearchText(scenario);
+      return tokens.every((token) => haystack.includes(token));
+    })
+    .map(summarizeScenarioSearchMatch)
+    .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 function sortFeatures(features: readonly QaCoverageFeatureSummary[]) {
@@ -276,6 +365,55 @@ export function renderQaCoverageMarkdownReport(inventory: QaCoverageInventory): 
       lines.push(`- ${scenario.id}: ${scenario.sourcePath}`);
     }
     lines.push("");
+  }
+
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+function formatOptionalScenarioMetadata(match: QaScenarioSearchMatch) {
+  const metadata = [
+    match.runtimeParityTier ? `runtimeParityTier=${match.runtimeParityTier}` : "",
+    match.requiredProviderMode ? `providerMode=${match.requiredProviderMode}` : "",
+    match.requiredProvider ? `provider=${match.requiredProvider}` : "",
+    match.requiredModel ? `model=${match.requiredModel}` : "",
+  ].filter(Boolean);
+  return metadata.length > 0 ? metadata.join("; ") : "none";
+}
+
+export function renderQaScenarioMatchesMarkdownReport(params: {
+  query: string;
+  matches: readonly QaScenarioSearchMatch[];
+}) {
+  const scenarioArgs = params.matches.map((match) => `--scenario ${match.id}`).join(" ");
+  const lines = [
+    "# QA Scenario Matches",
+    "",
+    `- Query: ${params.query}`,
+    `- Matches: ${params.matches.length}`,
+  ];
+
+  if (scenarioArgs) {
+    lines.push(`- Suite command: \`pnpm openclaw qa suite ${scenarioArgs}\``);
+  }
+  lines.push("");
+
+  if (params.matches.length === 0) {
+    lines.push("No QA scenarios matched the query.", "");
+    return lines.join("\n");
+  }
+
+  for (const match of params.matches) {
+    lines.push(`- ${match.id}: ${match.title}`);
+    lines.push(`  - source: ${match.sourcePath}`);
+    lines.push(`  - surface: ${match.surfaces.join(", ")}`);
+    lines.push(`  - coverage: ${match.coverageIds.join(", ") || "none"}`);
+    lines.push(`  - live requirements: ${formatOptionalScenarioMetadata(match)}`);
+    if (match.codeRefs.length > 0) {
+      lines.push(`  - code refs: ${match.codeRefs.join(", ")}`);
+    }
+    if (match.docsRefs.length > 0) {
+      lines.push(`  - docs refs: ${match.docsRefs.join(", ")}`);
+    }
   }
 
   return `${lines.join("\n").trimEnd()}\n`;

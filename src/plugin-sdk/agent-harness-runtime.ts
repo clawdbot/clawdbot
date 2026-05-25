@@ -175,11 +175,13 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  getBeforeToolCallPolicyDiagnosticState,
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
+  type BeforeToolCallPolicyDiagnosticState,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,

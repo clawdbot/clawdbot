@@ -20,6 +20,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
+import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import { hasTrustedToolPolicies, runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
@@ -106,8 +107,37 @@ type HookOutcome =
   | { blocked: false; params: unknown };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 
+export type BeforeToolCallPolicyDiagnosticState = {
+  hasBeforeToolCallHook: boolean;
+  trustedToolPolicies: Array<{
+    id: string;
+    pluginId: string;
+    pluginName?: string;
+  }>;
+};
+
+export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
+  const trustedToolPolicies = (getActivePluginRegistry()?.trustedToolPolicies ?? []).map(
+    (entry) => {
+      const policy = {
+        id: entry.policy.id,
+        pluginId: entry.pluginId,
+      } as BeforeToolCallPolicyDiagnosticState["trustedToolPolicies"][number];
+      if (entry.pluginName) {
+        policy.pluginName = entry.pluginName;
+      }
+      return policy;
+    },
+  );
+  return {
+    hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
+    trustedToolPolicies,
+  };
+}
+
 export function hasBeforeToolCallPolicy(): boolean {
-  return getGlobalHookRunner()?.hasHooks("before_tool_call") === true || hasTrustedToolPolicies();
+  const state = getBeforeToolCallPolicyDiagnosticState();
+  return state.hasBeforeToolCallHook || state.trustedToolPolicies.length > 0;
 }
 
 const log = createSubsystemLogger("agents/tools");

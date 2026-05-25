@@ -586,8 +586,15 @@ export function loadAuthProfileStoreForRuntime(
   });
 }
 
-export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
+export function loadAuthProfileStoreForSecretsRuntime(
+  agentDir?: string,
+  options?: Pick<
+    LoadAuthProfileStoreOptions,
+    "config" | "externalCli" | "externalCliProviderIds" | "externalCliProfileIds"
+  >,
+): AuthProfileStore {
   return loadAuthProfileStoreForRuntime(agentDir, {
+    ...options,
     readOnly: true,
     allowKeychainPrompt: false,
     resolveLegacyOAuthSidecars: true,

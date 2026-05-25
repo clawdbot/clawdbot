@@ -268,6 +268,7 @@ export type CodexDynamicToolCallParams = {
 };
 
 export type CodexDynamicToolCallResponse = {
+  asyncStarted?: boolean;
   contentItems: CodexDynamicToolCallOutputContentItem[];
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;

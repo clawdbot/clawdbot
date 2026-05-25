@@ -93,6 +93,37 @@ def run(args: list[str], cwd: Path, *, input_text: str | None = None, check: boo
     return result
 
 
+def run_with_heartbeat(
+    args: list[str],
+    cwd: Path,
+    *,
+    input_text: str | None = None,
+    label: str,
+    heartbeat_seconds: int = 60,
+) -> subprocess.CompletedProcess[str]:
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    first_communicate = True
+    while True:
+        try:
+            stdout, stderr = proc.communicate(
+                input=input_text if first_communicate else None,
+                timeout=heartbeat_seconds,
+            )
+            return subprocess.CompletedProcess(args, int(proc.returncode or 0), stdout, stderr)
+        except subprocess.TimeoutExpired:
+            first_communicate = False
+            elapsed = int(time.monotonic() - started)
+            print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+
+
 def git(repo: Path, *args: str, check: bool = True) -> str:
     return run(["git", *args], repo, check=check).stdout
 
@@ -320,7 +351,7 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "-",
         ]
     )
-    result = run(cmd, repo, input_text=prompt, check=False)
+    result = run_with_heartbeat(cmd, repo, input_text=prompt, label="codex")
     try:
         output = output_path.read_text()
     finally:
@@ -349,7 +380,7 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--model", args.model])
     if args.thinking:
         cmd.extend(["--effort", args.thinking])
-    result = run(cmd, repo, input_text=prompt, check=False)
+    result = run_with_heartbeat(cmd, repo, input_text=prompt, label="claude")
     if result.returncode != 0:
         raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -374,7 +405,7 @@ def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--model", args.model])
     if not args.tools:
         cmd.extend(["--disabled-tools", "*"])
-    result = run(cmd, repo, check=False)
+    result = run_with_heartbeat(cmd, repo, label="droid")
     prompt_path.unlink(missing_ok=True)
     if result.returncode != 0:
         raise SystemExit(f"droid engine failed ({result.returncode})\n{result.stderr or result.stdout}")
@@ -416,7 +447,7 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         )
         if args.web_search:
             cmd.append("--allow-all-urls")
-        result = run(cmd, Path(tempdir), check=False)
+        result = run_with_heartbeat(cmd, Path(tempdir), label="copilot")
     if result.returncode != 0:
         raise SystemExit(f"copilot engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout

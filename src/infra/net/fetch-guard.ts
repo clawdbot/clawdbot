@@ -262,11 +262,16 @@ async function captureGuardedFetchExchange(params: {
   transport?: "http" | "sse";
   capture: GuardedFetchOptions["capture"];
   auditContext?: string;
+  capturedByGlobalFetchPatch?: boolean;
 }): Promise<void> {
   if (params.capture === false || !isTruthyEnvValue(process.env[OPENCLAW_DEBUG_PROXY_ENABLED])) {
     return;
   }
-  const { captureHttpExchange } = await import("../../proxy-capture/runtime.js");
+  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
+    await import("../../proxy-capture/runtime.js");
+  if (params.capturedByGlobalFetchPatch && isDebugProxyGlobalFetchPatchInstalled()) {
+    return;
+  }
   captureHttpExchange({
     url: params.url,
     method: params.method,
@@ -528,6 +533,12 @@ async function fetchWithSsrFGuardInternal(
       const response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
+      const capturedByGlobalFetchPatch =
+        !shouldUseRuntimeFetch &&
+        isAmbientGlobalFetch({
+          fetchImpl: defaultFetch,
+          globalFetch: globalThis.fetch,
+        });
 
       await captureGuardedFetchExchange({
         url: parsedUrl.toString(),
@@ -539,6 +550,7 @@ async function fetchWithSsrFGuardInternal(
         transport: "http",
         capture: params.capture,
         auditContext: params.auditContext,
+        capturedByGlobalFetchPatch,
       });
 
       if (isRedirectStatus(response.status)) {

@@ -35,6 +35,30 @@ The script prints only provider status and HTTP class, never tokens.
 
 ## Dispatch
 
+Start product performance evidence as early as the release SHA exists, in
+parallel with other release work:
+
+```bash
+gh workflow run openclaw-performance.yml \
+  --repo openclaw/openclaw \
+  --ref main \
+  -f target_ref=<release-sha> \
+  -f profile=release \
+  -f repeat=3 \
+  -f deep_profile=false \
+  -f live_openai_candidate=false \
+  -f fail_on_regression=false
+```
+
+- Do not wait for full release validation to start this early perf signal.
+- Compare available Kova, gateway startup, and CLI startup metrics with earlier
+  release evidence or clawgrit reports before publish/closeout.
+- Call out any regression in the release proof. Treat a major regression as a
+  release blocker until it is fixed, waived by the operator, or proven to be
+  infrastructure noise.
+- Full Release Validation also records advisory product-performance evidence;
+  the early standalone run is for overlap and faster regression discovery.
+
 Prefer the trusted workflow on `main`, target the exact release SHA:
 
 ```bash
@@ -85,7 +109,8 @@ Record:
 
 - release SHA
 - full parent run URL
-- child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram
+- child run IDs and conclusions: CI, Release Checks, Plugin Prerelease, NPM Telegram, Product Performance
+- performance comparison result versus earlier releases when available
 - targeted local proof commands
 - provider-secret preflight result
 - known gaps or unrelated failures

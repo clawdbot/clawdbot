@@ -564,6 +564,24 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
     Per-account overrides use `channels.imessage.accounts.<id>.reactionNotifications`.
 
   </Accordion>
+
+  <Accordion title="Approval reactions (👍 / 👎)">
+    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes to iMessage, the gateway delivers an approval prompt natively and accepts a tapback to resolve it:
+
+    - `👍` (Like tapback) → `allow-once`
+    - `👎` (Dislike tapback) → `deny`
+    - `allow-always` remains a manual fallback: send `/approve <id> allow-always` as a regular reply.
+
+    Reaction handling requires the reacting user's handle to be an explicit approver. The approver list is read from `channels.imessage.allowFrom` (or `channels.imessage.accounts.<id>.allowFrom`); add the user's phone number in E.164 form or their Apple ID email. The wildcard entry `"*"` is honored but allows any sender to approve. The reaction shortcut intentionally bypasses `reactionNotifications`, `dmPolicy`, and `groupAllowFrom` because the explicit-approver allowlist is the only gate that matters for approval resolution.
+
+    **Behavior change with this release:** When `channels.imessage.allowFrom` is non-empty, the `/approve <id> <decision>` text command is now authorized against that approver list (not the broader DM allowlist). Senders permitted on the DM allowlist but not in `allowFrom` will receive an explicit denial. Add every operator who should be able to approve via `/approve` (and via reactions) to `allowFrom` to preserve the previous behavior. When `allowFrom` is empty the legacy "same-chat fallback" stays in effect and `/approve` continues to authorize anyone the DM allowlist permits.
+
+    Operator notes:
+    - The reaction binding is stored both in memory (with TTL matched to the approval expiry) and in the gateway's persistent keyed store, so a tapback that lands shortly after a gateway restart still resolves the approval.
+    - Cross-device `is_from_me=true` tapbacks (the operator's own reaction on a paired Apple device) are intentionally ignored so the bot cannot self-approve.
+    - Legacy text-style tapbacks (`Liked "…"` plain text from very old Apple clients) cannot resolve approvals because they carry no message GUID; reaction resolution requires the structured tapback metadata that current macOS / iOS clients emit.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Config writes
@@ -701,6 +719,7 @@ Catchup keeps a per-account cursor at `<openclawStateDir>/imessage/catchup/<acco
 ```
 
 - The cursor advances on each successful dispatch and is held when a row's dispatch throws — the next startup retries the same row from the held cursor.
+- After the startup catchup query succeeds, later live-handled rows also advance the same cursor so a gateway restart does not replay messages that were already handled live. Live cursor writes do not jump past catchup failures that are still below `maxFailureRetries`.
 - After `maxFailureRetries` consecutive throws against the same `guid`, catchup logs a `warn` and force-advances the cursor past the wedged message so subsequent startups can make progress.
 - Already-given-up guids are skipped on sight (no dispatch attempt) on later runs and counted under `skippedGivenUp` in the run summary.
 

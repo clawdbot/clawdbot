@@ -41,6 +41,7 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import {
   clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
@@ -836,11 +837,19 @@ export async function startGatewayServer(
   });
   const { createChannelManager } = await import("./server-channels.js");
   const channelManager = createChannelManager({
-    getRuntimeConfig: () =>
-      applyPluginAutoEnable({
-        config: getRuntimeConfig(),
+    getRuntimeConfig: () => {
+      const runtimeConfig = getRuntimeConfig();
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        config: runtimeConfig,
         env: process.env,
-      }).config,
+      });
+      return applyPluginAutoEnable({
+        config: runtimeConfig,
+        env: process.env,
+        manifestRegistry: currentSnapshot?.manifestRegistry,
+        discovery: currentSnapshot?.discovery,
+      }).config;
+    },
     channelLogs,
     channelRuntimeEnvs,
     resolveChannelRuntime: getChannelRuntime,

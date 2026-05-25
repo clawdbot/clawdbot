@@ -27,6 +27,10 @@ import {
   describeImagesWithModel,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "../../plugins/manifest-contract-eligibility.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
@@ -309,6 +313,115 @@ function resolveCompressionModelCandidates(params: {
   });
 }
 
+function imageCompressionPolicyHasDimensionLimit(policy: ImageCompressionModelPolicy): boolean {
+  return (
+    typeof policy.maxSidePx === "number" ||
+    typeof policy.maxPixels === "number"
+  );
+}
+
+function mergeImageCompressionPolicies(params: {
+  runtimePolicy: ImageCompressionModelPolicy;
+  staticPolicy: ImageCompressionModelPolicy;
+}): ImageCompressionModelPolicy {
+  return {
+    ...params.runtimePolicy,
+    ...params.staticPolicy,
+  };
+}
+
+function providerUsesRuntimeModelAugment(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  workspaceDir?: string;
+}): boolean {
+  const provider = normalizeMediaProviderId(params.provider);
+  if (!provider) {
+    return false;
+  }
+  const config = params.cfg ?? {};
+  const snapshot = loadManifestMetadataSnapshot({
+    config,
+    env: process.env,
+    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  return snapshot.plugins.some((plugin) => {
+    const ownsProvider =
+      plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider) ||
+      Boolean(plugin.modelCatalog?.providers?.[provider]);
+    if (!ownsProvider) {
+      return false;
+    }
+    const runtimeAugment =
+      plugin.modelCatalog?.runtimeAugment === true ||
+      (plugin.origin !== "bundled" &&
+        plugin.providers.some((candidate) => normalizeMediaProviderId(candidate) === provider));
+    if (!runtimeAugment) {
+      return false;
+    }
+    return isManifestPluginAvailableForControlPlane({
+      snapshot,
+      plugin,
+      config,
+    });
+  });
+}
+
+async function resolveCompressionModelPolicyWithHooks(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  skipProviderRuntimeHooks: boolean;
+}): Promise<ImageCompressionModelPolicy> {
+  try {
+    const resolved = await resolveModelAsync(
+      params.provider,
+      params.model,
+      params.agentDir,
+      params.cfg,
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipProviderRuntimeHooks: params.skipProviderRuntimeHooks,
+        skipPiDiscovery: true,
+        workspaceDir: params.workspaceDir,
+      },
+    );
+    return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function resolveCompressionModelPolicy(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentDir?: string;
+  workspaceDir?: string;
+}): Promise<ImageCompressionModelPolicy> {
+  const staticPolicy = await resolveCompressionModelPolicyWithHooks({
+    ...params,
+    skipProviderRuntimeHooks: true,
+  });
+  if (
+    imageCompressionPolicyHasDimensionLimit(staticPolicy) ||
+    !providerUsesRuntimeModelAugment({
+      cfg: params.cfg,
+      provider: params.provider,
+      workspaceDir: params.workspaceDir,
+    })
+  ) {
+    return staticPolicy;
+  }
+  const runtimePolicy = await resolveCompressionModelPolicyWithHooks({
+    ...params,
+    skipProviderRuntimeHooks: false,
+  });
+  return mergeImageCompressionPolicies({ runtimePolicy, staticPolicy });
+}
+
 async function resolveImageCompressionPolicy(params: {
   cfg?: OpenClawConfig;
   imageModelConfig?: ImageModelConfig | null;
@@ -321,22 +434,13 @@ async function resolveImageCompressionPolicy(params: {
   const quality = params.cfg?.agents?.defaults?.imageQuality;
   const models: ImageCompressionModelPolicy[] = await Promise.all(
     modelCandidates.map(async (candidate): Promise<ImageCompressionModelPolicy> => {
-      try {
-        const resolved = await resolveModelAsync(
-          candidate.provider,
-          candidate.model,
-          params.agentDir,
-          params.cfg,
-          {
-            allowBundledStaticCatalogFallback: true,
-            skipPiDiscovery: true,
-            workspaceDir: params.workspaceDir,
-          },
-        );
-        return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
-      } catch {
-        return {};
-      }
+      return resolveCompressionModelPolicy({
+        cfg: params.cfg,
+        provider: candidate.provider,
+        model: candidate.model,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+      });
     }),
   );
   return {

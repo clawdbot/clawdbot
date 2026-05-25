@@ -13,6 +13,7 @@ export const MODEL_APIS = [
   "openai-codex-responses",
   "anthropic-messages",
   "google-generative-ai",
+  "google-vertex",
   "github-copilot",
   "bedrock-converse-stream",
   "ollama",

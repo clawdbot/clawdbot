@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 
-import { execFileSync, execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   lstatSync,
@@ -43,7 +43,10 @@ import {
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolveInstalledBinaryCommandInvocation,
+  resolveInstalledBinaryPath,
 } from "./openclaw-npm-postpublish-verify.ts";
+import { resolveNpmRunner } from "./npm-runner.mjs";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -244,8 +247,48 @@ function checkSkillShellScriptsExecutable() {
   }
 }
 
+export function resolveReleaseNpmCommand(
+  args: string[],
+  params: {
+    comSpec?: string;
+    env?: NodeJS.ProcessEnv;
+    execPath?: string;
+    existsSync?: typeof existsSync;
+    platform?: NodeJS.Platform;
+  } = {},
+) {
+  return resolveNpmRunner({
+    comSpec: params.comSpec,
+    env: params.env,
+    execPath: params.execPath,
+    existsSync: params.existsSync,
+    npmArgs: args,
+    platform: params.platform,
+  });
+}
+
+function execNpm(
+  args: string[],
+  options: {
+    cwd?: string;
+    encoding: BufferEncoding;
+    maxBuffer?: number;
+    stdio: "inherit" | ["ignore", "pipe", "pipe"];
+  },
+): string {
+  const invocation = resolveReleaseNpmCommand(args, { env: process.env });
+  return execFileSync(invocation.command, invocation.args, {
+    ...options,
+    ...(invocation.env ? { env: invocation.env } : {}),
+    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+    ...(invocation.windowsVerbatimArguments !== undefined
+      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+      : {}),
+  });
+}
+
 function runPackDry(): PackResult[] {
-  const raw = execSync("npm pack --dry-run --json --ignore-scripts", {
+  const raw = execNpm(["pack", "--dry-run", "--json", "--ignore-scripts"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     maxBuffer: 1024 * 1024 * 100,
@@ -254,15 +297,11 @@ function runPackDry(): PackResult[] {
 }
 
 function runPack(packDestination: string): PackResult[] {
-  const raw = execFileSync(
-    "npm",
-    ["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination],
-    {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-      maxBuffer: 1024 * 1024 * 100,
-    },
-  );
+  const raw = execNpm(["pack", "--json", "--ignore-scripts", "--pack-destination", packDestination], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 1024 * 1024 * 100,
+  });
   return JSON.parse(raw) as PackResult[];
 }
 
@@ -279,8 +318,7 @@ function resolvePackedTarballPath(packDestination: string, results: PackResult[]
 }
 
 function installPackedTarball(prefixDir: string, tarballPath: string, cwd: string): void {
-  execFileSync(
-    "npm",
+  execNpm(
     [
       "install",
       "-g",
@@ -300,17 +338,11 @@ function installPackedTarball(prefixDir: string, tarballPath: string, cwd: strin
 }
 
 function resolveGlobalRoot(prefixDir: string, cwd: string): string {
-  return execFileSync("npm", ["root", "-g", "--prefix", prefixDir], {
+  return execNpm(["root", "-g", "--prefix", prefixDir], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-}
-
-function resolveInstalledBinaryPath(prefixDir: string): string {
-  return process.platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
 }
 
 export function createPackedBundledPluginPostinstallEnv(
@@ -420,16 +452,13 @@ function verifyPackedInstalledPackage(params: {
   prefixDir: string;
   tmpRoot: string;
 }): void {
-  const installedBinaryVersion = execFileSync(
-    resolveInstalledBinaryPath(params.prefixDir),
-    ["--version"],
-    {
-      cwd: params.tmpRoot,
-      encoding: "utf8",
-      shell: process.platform === "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    },
-  ).trim();
+  const invocation = resolveInstalledBinaryCommandInvocation(params.prefixDir, ["--version"]);
+  const installedBinaryVersion = execFileSync(invocation.command, invocation.args, {
+    cwd: params.tmpRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,

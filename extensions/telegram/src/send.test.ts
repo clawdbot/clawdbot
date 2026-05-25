@@ -811,6 +811,34 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("43");
   });
 
+  it("normalizes raw code language HTML before sending", async () => {
+    const chatId = "123";
+    const text = [
+      "Yep. Send these in order:",
+      "",
+      '<code class="language-text">/queue followup debounce:0',
+      "</code>",
+    ].join("\n");
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 44, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, text, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      chatId,
+      ["Yep. Send these in order:", "", "<code>/queue followup debounce:0", "</code>"].join("\n"),
+      { parse_mode: "HTML" },
+    );
+    expect(res.chatId).toBe(chatId);
+    expect(res.messageId).toBe("44");
+  });
+
   it("keeps link_preview_options disabled for both html and plain-text fallback", async () => {
     const parseErr = new Error(
       "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",

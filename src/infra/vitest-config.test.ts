@@ -7,6 +7,10 @@ import baseConfig, {
   resolveLocalVitestScheduling,
 } from "../../vitest.config.ts";
 
+function normalizeConfigPath(value: unknown): string {
+  return String(value).replaceAll("\\", "/");
+}
+
 describe("resolveLocalVitestMaxWorkers", () => {
   it("uses a moderate local worker cap on larger hosts", () => {
     expect(
@@ -204,12 +208,16 @@ describe("base vitest config", () => {
 
   it("keeps the base setup file minimal", () => {
     expect(baseConfig.test?.setupFiles).toHaveLength(1);
-    expect(baseConfig.test?.setupFiles?.[0]).toMatch(/(?:^|\/)test\/setup\.ts$/u);
+    expect(normalizeConfigPath(baseConfig.test?.setupFiles?.[0])).toMatch(
+      /(?:^|\/)test\/setup\.ts$/u,
+    );
   });
 
   it("keeps the base runner non-isolated by default", () => {
     expect(baseConfig.test?.isolate).toBe(false);
-    expect(baseConfig.test?.runner).toMatch(/(?:^|\/)test\/non-isolated-runner\.ts$/u);
+    expect(normalizeConfigPath(baseConfig.test?.runner)).toMatch(
+      /(?:^|\/)test\/non-isolated-runner\.ts$/u,
+    );
   });
 });
 
@@ -221,8 +229,16 @@ describe("test scripts", () => {
       scripts?: Record<string, string>;
     };
 
-    expect(pkg.scripts?.["test:serial"]).toBe(
-      "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
+    expect(pkg.scripts?.["test:serial"]).toBe("node scripts/test-projects-serial.mjs");
+    expect(pkg.scripts?.["test:max"]).toBe("node scripts/test-projects-max.mjs");
+    expect(pkg.scripts?.["test:changed:max"]).toBe(
+      "node scripts/test-projects-max.mjs --changed origin/main",
+    );
+    expect(pkg.scripts?.["test:perf:imports"]).toBe(
+      "node scripts/test-projects-imports.mjs",
+    );
+    expect(pkg.scripts?.["test:perf:imports:changed"]).toBe(
+      "node scripts/test-projects-imports.mjs --changed origin/main",
     );
     expect(pkg.scripts?.["test:fast"]).toBe(
       "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
@@ -237,7 +253,7 @@ describe("test scripts", () => {
     expect(pkg.scripts?.["test"]).toBe("node scripts/test-projects.mjs");
     expect(pkg.scripts?.["test:force"]).toBe("node --import tsx scripts/test-force.ts");
     expect(pkg.scripts?.["test:gateway"]).toBe(
-      "OPENCLAW_GATEWAY_PROJECT_SHARDS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
+      "node scripts/run-with-env.mjs OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
     );
     expect(pkg.scripts?.["test:single"]).toBeUndefined();
   });

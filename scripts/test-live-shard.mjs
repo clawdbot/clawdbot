@@ -286,10 +286,38 @@ function usage() {
   console.error(`Usage: node scripts/test-live-shard.mjs <${LIVE_TEST_SHARDS.join("|")}> [--list]`);
 }
 
+export function parseLiveShardArgs(args) {
+  const separatorIndex = args.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? args.slice(0, separatorIndex) : args;
+  const passthroughArgs = separatorIndex >= 0 ? args.slice(separatorIndex + 1) : [];
+  let shard = "";
+  let listOnly = false;
+  for (const arg of optionArgs) {
+    if (arg === "--list") {
+      listOnly = true;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown option: ${arg}`);
+    }
+    if (shard) {
+      throw new Error(`Unexpected argument: ${arg}`);
+    }
+    shard = arg;
+  }
+  return { shard, listOnly, passthroughArgs };
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2);
-  const shard = args.find((arg) => !arg.startsWith("-"));
-  const listOnly = args.includes("--list");
+  let parsedArgs;
+  try {
+    parsedArgs = parseLiveShardArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    usage();
+    process.exit(2);
+  }
+  const { shard, listOnly, passthroughArgs } = parsedArgs;
   if (!shard) {
     usage();
     process.exit(2);
@@ -318,7 +346,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   console.log(`[test:live:shard] ${shard}: ${files.length} file(s)`);
   const child = spawnPnpmRunner({
     stdio: "inherit",
-    pnpmArgs: ["test:live", "--", ...files],
+    pnpmArgs: ["test:live", "--", ...files, ...passthroughArgs],
     env: process.env,
   });
   child.on("exit", (code, signal) => {

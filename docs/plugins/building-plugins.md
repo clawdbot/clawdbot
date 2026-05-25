@@ -230,6 +230,11 @@ Users opt in with `tools.allow`:
 }
 ```
 
+Optional tools control whether a tool is exposed to the model. Use
+[plugin permission requests](/plugins/plugin-permission-requests) when a tool
+or hook should ask for approval after the model selects it and before the
+action runs.
+
 Use optional tools for side effects, unusual binaries, or capabilities that
 should not be exposed by default. Tool names must not conflict with core tools;
 conflicts are skipped and reported in plugin diagnostics. Malformed

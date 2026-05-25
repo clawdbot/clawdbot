@@ -242,7 +242,6 @@ ensure_local_update_dist_import_closure() {
   fi
   echo "WARN: reused Docker image dist failed import-closure check; rebuilding local release artifacts" >&2
   pnpm build
-  pnpm ui:build
 }
 
 prepare_update_tarball() {
@@ -263,7 +262,6 @@ prepare_update_tarball() {
       ensure_local_update_dist_import_closure
     elif [[ "$UPDATE_SKIP_LOCAL_BUILD" != "1" ]]; then
       pnpm build
-      pnpm ui:build
     fi
     UPDATE_EXPECT_VERSION="$(
       node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version'

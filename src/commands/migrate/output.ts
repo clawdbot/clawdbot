@@ -32,6 +32,7 @@ type ItemGroup = {
 };
 
 const ITEM_GROUPS: ItemGroup[] = [
+  { kind: "auth", heading: "Auth credentials:" },
   { kind: "skill", heading: "Skills:" },
   { kind: "plugin", heading: "Plugins:" },
   { kind: "memory", heading: "Memory:" },

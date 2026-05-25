@@ -157,35 +157,155 @@ export function hasBotMention(msg: Message, botUsername: string) {
   return false;
 }
 
-type TelegramTextLinkEntity = {
+type TelegramMarkdownEntity = {
   type: string;
   offset: number;
   length: number;
   url?: string;
+  language?: string;
 };
 
-export function expandTextLinks(text: string, entities?: TelegramTextLinkEntity[] | null): string {
+type TelegramMarkdownBoundary = {
+  open: string;
+  close: string;
+  start: number;
+  end: number;
+  length: number;
+  priority: number;
+  index: number;
+};
+
+const TELEGRAM_ENTITY_MARKDOWN_PRIORITY: Record<string, number> = {
+  bold: 10,
+  italic: 20,
+  underline: 30,
+  strikethrough: 40,
+  spoiler: 50,
+  text_link: 60,
+  code: 70,
+  pre: 80,
+};
+
+function longestBacktickRun(text: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of text) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+    } else {
+      current = 0;
+    }
+  }
+  return longest;
+}
+
+function markdownInlineCodeDelimiters(content: string): [string, string] {
+  const delimiter = "`".repeat(longestBacktickRun(content) + 1);
+  if (content.startsWith(" ") || content.endsWith(" ")) {
+    return [`${delimiter} `, ` ${delimiter}`];
+  }
+  return [delimiter, delimiter];
+}
+
+function markdownPreAffixes(entity: TelegramMarkdownEntity, content: string): [string, string] {
+  const language = entity.language?.replace(/[\s`]+/g, "").trim();
+  const fence = "`".repeat(Math.max(3, longestBacktickRun(content) + 1));
+  const opener = language ? `${fence}${language}\n` : `${fence}\n`;
+  const closer = content.endsWith("\n") ? fence : `\n${fence}`;
+  return [opener, closer];
+}
+
+function markdownAffixesForTelegramEntity(
+  entity: TelegramMarkdownEntity,
+  content: string,
+): [string, string] | null {
+  switch (entity.type) {
+    case "bold":
+      return ["**", "**"];
+    case "italic":
+      return ["_", "_"];
+    case "underline":
+      return ["__", "__"];
+    case "strikethrough":
+      return ["~~", "~~"];
+    case "spoiler":
+      return ["||", "||"];
+    case "code":
+      return markdownInlineCodeDelimiters(content);
+    case "pre":
+      return markdownPreAffixes(entity, content);
+    case "text_link":
+      return entity.url ? ["[", `](${entity.url})`] : null;
+    default:
+      return null;
+  }
+}
+
+export function renderTelegramTextEntities(
+  text: string,
+  entities?: TelegramMarkdownEntity[] | null,
+): string {
   if (!text || !entities?.length) {
     return text;
   }
 
-  const textLinks = entities
-    .filter(
-      (entity): entity is TelegramTextLinkEntity & { url: string } =>
-        entity.type === "text_link" && Boolean(entity.url),
-    )
-    .toSorted((a, b) => b.offset - a.offset);
+  const boundaries = new Map<number, TelegramMarkdownBoundary[]>();
+  const addBoundary = (offset: number, boundary: TelegramMarkdownBoundary) => {
+    boundaries.set(offset, [...(boundaries.get(offset) ?? []), boundary]);
+  };
+  entities.forEach((entity, index) => {
+    if (
+      !Number.isInteger(entity.offset) ||
+      !Number.isInteger(entity.length) ||
+      entity.offset < 0 ||
+      entity.length <= 0 ||
+      entity.offset + entity.length > text.length
+    ) {
+      return;
+    }
+    const content = text.slice(entity.offset, entity.offset + entity.length);
+    const affixes = markdownAffixesForTelegramEntity(entity, content);
+    if (!affixes) {
+      return;
+    }
+    const boundary: TelegramMarkdownBoundary = {
+      open: affixes[0],
+      close: affixes[1],
+      start: entity.offset,
+      end: entity.offset + entity.length,
+      length: entity.length,
+      priority: TELEGRAM_ENTITY_MARKDOWN_PRIORITY[entity.type] ?? 100,
+      index,
+    };
+    addBoundary(boundary.start, boundary);
+    addBoundary(boundary.end, boundary);
+  });
 
-  if (textLinks.length === 0) {
+  if (boundaries.size === 0) {
     return text;
   }
 
-  let result = text;
-  for (const entity of textLinks) {
-    const linkText = text.slice(entity.offset, entity.offset + entity.length);
-    const markdown = `[${linkText}](${entity.url})`;
-    result =
-      result.slice(0, entity.offset) + markdown + result.slice(entity.offset + entity.length);
+  let result = "";
+  for (let offset = 0; offset <= text.length; offset += 1) {
+    const boundary = boundaries.get(offset);
+    if (boundary) {
+      boundary
+        .filter((entity) => entity.end === offset)
+        .toSorted((a, b) => a.length - b.length || b.priority - a.priority || b.index - a.index)
+        .forEach((entity) => {
+          result += entity.close;
+        });
+      boundary
+        .filter((entity) => entity.start === offset)
+        .toSorted((a, b) => b.length - a.length || a.priority - b.priority || a.index - b.index)
+        .forEach((entity) => {
+          result += entity.open;
+        });
+    }
+    if (offset < text.length) {
+      result += text[offset];
+    }
   }
   return result;
 }

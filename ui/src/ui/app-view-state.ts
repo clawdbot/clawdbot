@@ -1,3 +1,4 @@
+import type { ActivityEntry, ActivityStatus } from "./activity-model.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
@@ -88,12 +89,21 @@ export type AppViewState = {
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
   sessionKey: string;
+  chatSessionMessageSubscriptionKey?: string | null;
+  chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatLoading: boolean;
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
   chatMessages: unknown[];
   chatToolMessages: unknown[];
+  activityEntries: ActivityEntry[];
+  activityFilterText: string;
+  activityStatusFilters: Record<ActivityStatus, boolean>;
+  activityToolFilter: string;
+  activityExpandedIds: Set<string>;
+  activityAutoFollow: boolean;
+  activityAtBottom: boolean;
   chatStreamSegments: Array<{ text: string; ts: number }>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
@@ -513,6 +523,8 @@ export type AppViewState = {
     resetChatScroll: () => void;
     exportLogs: (lines: string[], label: string) => void;
     handleLogsScroll: (event: Event) => void;
+    handleActivityScroll: (event: Event) => void;
+    scheduleActivityScroll: (force?: boolean) => void;
     handleOpenSidebar: (content: SidebarContent) => void;
     handleCloseSidebar: () => void;
     handleSplitRatioChange: (ratio: number) => void;

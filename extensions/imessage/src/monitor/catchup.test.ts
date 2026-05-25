@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  advanceIMessageCatchupCursor,
   capFailureRetriesMap,
   loadIMessageCatchupCursor,
   performIMessageCatchup,
@@ -122,6 +123,85 @@ describe("loadIMessageCatchupCursor / saveIMessageCatchupCursor", () => {
     await saveIMessageCatchupCursor("b", { lastSeenMs: 200, lastSeenRowid: 2 });
     expect((await loadIMessageCatchupCursor("a"))?.lastSeenRowid).toBe(1);
     expect((await loadIMessageCatchupCursor("b"))?.lastSeenRowid).toBe(2);
+  });
+
+  it("advances monotonically from a live-handled row and preserves given-up retry state", async () => {
+    const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_000_000,
+      lastSeenRowid: 42,
+      failureRetries: { "GIVEN-UP": 3 },
+    });
+
+    await expect(
+      advanceIMessageCatchupCursor(
+        "primary",
+        { lastSeenMs: 1_700_000_001_000, lastSeenRowid: 41 },
+        config,
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      advanceIMessageCatchupCursor(
+        "primary",
+        { lastSeenMs: 1_700_000_002_000, lastSeenRowid: 50 },
+        config,
+      ),
+    ).resolves.toBe(true);
+
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenRowid).toBe(50);
+    expect(cursor?.lastSeenMs).toBe(1_700_000_002_000);
+    expect(cursor?.failureRetries).toEqual({ "GIVEN-UP": 3 });
+  });
+
+  it("serializes concurrent live cursor advances so a lower row cannot overwrite a higher row", async () => {
+    const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_000_000,
+      lastSeenRowid: 10,
+    });
+
+    const results = await Promise.all([
+      advanceIMessageCatchupCursor(
+        "primary",
+        { lastSeenMs: 1_700_000_050_000, lastSeenRowid: 50 },
+        config,
+      ),
+      ...Array.from({ length: 24 }, (_, index) =>
+        advanceIMessageCatchupCursor(
+          "primary",
+          { lastSeenMs: 1_700_000_011_000 + index, lastSeenRowid: 11 + index },
+          config,
+        ),
+      ),
+    ]);
+
+    expect(results[0]).toBe(true);
+    expect(results.slice(1).every((advanced) => !advanced)).toBe(true);
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenRowid).toBe(50);
+    expect(cursor?.lastSeenMs).toBe(1_700_000_050_000);
+  });
+
+  it("does not advance from live rows while a catchup failure is still retrying", async () => {
+    const config = resolveCatchupConfig({ enabled: true, maxFailureRetries: 3 });
+    await saveIMessageCatchupCursor("primary", {
+      lastSeenMs: 1_700_000_000_000,
+      lastSeenRowid: 42,
+      failureRetries: { RETRYING: 1 },
+    });
+
+    await expect(
+      advanceIMessageCatchupCursor(
+        "primary",
+        { lastSeenMs: 1_700_000_002_000, lastSeenRowid: 50 },
+        config,
+      ),
+    ).resolves.toBe(false);
+
+    const cursor = await loadIMessageCatchupCursor("primary");
+    expect(cursor?.lastSeenRowid).toBe(42);
+    expect(cursor?.failureRetries).toEqual({ RETRYING: 1 });
   });
 });
 

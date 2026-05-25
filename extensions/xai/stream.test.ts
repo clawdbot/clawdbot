@@ -14,6 +14,33 @@ import {
   runXaiGrok4ResponseStream,
 } from "./test-helpers.js";
 type XaiStreamApi = Extract<Api, "openai-completions" | "openai-responses">;
+type StreamEvent = Record<string, unknown> & { type?: string };
+
+async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
+  const events: StreamEvent[] = [];
+  for await (const event of stream as AsyncIterable<StreamEvent>) {
+    events.push(event);
+  }
+  return events;
+}
+
+function buildEventStreamFn(events: unknown[]): StreamFn {
+  return (() =>
+    ({
+      result: async () => {
+        const done = events.find((event) => {
+          const record = event && typeof event === "object" ? (event as { type?: unknown }) : {};
+          return record.type === "done";
+        }) as { message?: unknown } | undefined;
+        return (done?.message ?? { role: "assistant", content: [] }) as never;
+      },
+      async *[Symbol.asyncIterator]() {
+        for (const event of events) {
+          yield event as never;
+        }
+      },
+    }) as unknown as ReturnType<StreamFn>) as StreamFn;
+}
 
 function captureWrappedModelId(params: {
   modelId: string;
@@ -141,6 +168,62 @@ describe("xai stream wrappers", () => {
 
     runXaiGrok4ResponseStream(wrapped);
     expectXaiFastToolStreamShaping(capture);
+  });
+
+  it("promotes standalone Grok-style tool text to a structured tool call", async () => {
+    const rawToolText = '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}';
+    const baseStream = buildEventStreamFn([
+      { type: "start", partial: { content: [] } },
+      { type: "text_start", contentIndex: 0, partial: { content: [{ type: "text", text: "" }] } },
+      { type: "text_delta", contentIndex: 0, delta: rawToolText },
+      { type: "text_end", contentIndex: 0, content: rawToolText },
+      {
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "stop",
+        },
+      },
+    ]);
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStream,
+      extraParams: { tool_stream: false },
+    } as never);
+
+    const events = await collectEvents(
+      wrapped!(
+        {
+          api: "openai-responses",
+          provider: "xai",
+          id: "grok-4.3",
+        } as Model<"openai-responses">,
+        {
+          messages: [],
+          tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
+        } as unknown as Context,
+        {},
+      ),
+    );
+
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.find((event) => event.type === "done") as {
+      message?: { content?: Array<Record<string, unknown>>; stopReason?: string };
+      reason?: string;
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content?.[0]).toMatchObject({
+      type: "toolCall",
+      name: "read",
+      arguments: { path: "/app/skills/meme-maker/SKILL.md" },
+    });
   });
 
   it("strips unsupported strict and reasoning controls from tool payloads", () => {

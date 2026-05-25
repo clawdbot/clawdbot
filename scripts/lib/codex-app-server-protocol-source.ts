@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolvePnpmRunner } from "../pnpm-runner.mjs";
 
 const PROTOCOL_SCHEMA_RELATIVE_PATH = "codex-rs/app-server-protocol/schema";
 
@@ -22,6 +23,47 @@ export type GeneratedCodexAppServerProtocolSource = {
   jsonRoot: string;
   cleanup: () => Promise<void>;
 };
+
+type PnpmCommand = {
+  args: string[];
+  command: string;
+  env?: NodeJS.ProcessEnv;
+  shell: boolean;
+  windowsVerbatimArguments?: boolean;
+};
+
+type ResolvePnpmCommandOptions = {
+  comSpec?: string;
+  env?: NodeJS.ProcessEnv;
+  execPath?: string;
+  npmExecPath?: string;
+  platform?: NodeJS.Platform;
+};
+
+function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
+  return key === undefined ? undefined : env[key];
+}
+
+export function resolveCodexProtocolPnpmCommand(
+  args: string[],
+  options: ResolvePnpmCommandOptions = {},
+): PnpmCommand {
+  const env = options.env ?? process.env;
+  const command = resolvePnpmRunner({
+    comSpec: options.comSpec ?? resolveEnvValue(env, "ComSpec"),
+    npmExecPath: options.npmExecPath ?? env.npm_execpath,
+    nodeExecPath: options.execPath ?? process.execPath,
+    platform: options.platform,
+    pnpmArgs: args,
+  });
+  if (command.env === undefined) {
+    const invocation = { ...command };
+    delete invocation.env;
+    return invocation;
+  }
+  return command;
+}
 
 export async function resolveCodexAppServerProtocolSource(repoRoot: string): Promise<{
   codexRepo: string;
@@ -159,9 +201,19 @@ function runCargoProtocolGenerator(codexRepo: string, args: string[]): void {
 }
 
 function formatGeneratedTypeScript(repoRoot: string, root: string): void {
-  const result = spawnSync("pnpm", ["exec", "oxfmt", "--write", "--threads=1", root], {
+  const command = resolveCodexProtocolPnpmCommand([
+    "exec",
+    "oxfmt",
+    "--write",
+    "--threads=1",
+    root,
+  ]);
+  const result = spawnSync(command.command, command.args, {
     cwd: repoRoot,
+    env: command.env ?? process.env,
+    shell: command.shell,
     stdio: "inherit",
+    windowsVerbatimArguments: command.windowsVerbatimArguments,
   });
   if (result.status !== 0) {
     throw new Error(

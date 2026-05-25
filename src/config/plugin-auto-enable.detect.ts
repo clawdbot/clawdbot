@@ -1,3 +1,4 @@
+import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   resolveConfiguredPluginAutoEnableCandidates,
@@ -11,10 +12,11 @@ export function detectPluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   manifestRegistry?: PluginManifestRegistry;
+  discovery?: PluginDiscoveryResult;
 }): PluginAutoEnableCandidate[] {
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
-  const readiness = resolvePluginAutoEnableReadiness(config, env);
+  const readiness = resolvePluginAutoEnableReadiness(config, env, params.discovery);
   if (!readiness.mayNeedAutoEnable) {
     return [];
   }

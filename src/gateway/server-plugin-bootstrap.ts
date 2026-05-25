@@ -83,6 +83,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
     ...(params.pluginLookUpTable?.manifestRegistry
       ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
       : {}),
+    discovery: params.pluginLookUpTable?.discovery,
   });
   const resolvedConfig =
     activationSourceConfig === params.cfg

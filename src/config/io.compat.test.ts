@@ -150,6 +150,38 @@ describe("config io paths", () => {
     });
   });
 
+  it("does not warn about newer config during internal update handoff reads", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            meta: { lastTouchedVersion: "9999.1.1" },
+            gateway: { mode: "local" },
+          },
+          null,
+          2,
+        ),
+      );
+      const logger = {
+        error: vi.fn(),
+        warn: vi.fn(),
+      };
+
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger,
+      });
+      io.loadConfig();
+
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+  });
+
   it("normalizes safe-bin config entries at config load time", () => {
     const cfg = {
       tools: {

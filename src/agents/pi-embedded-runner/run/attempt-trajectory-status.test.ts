@@ -177,6 +177,17 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
+  it("keeps async-started media tool-use attempts as terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
   it("preserves prompt errors and interrupts", () => {
     expect(
       resolveAttemptTrajectoryTerminal(baseParams({ promptError: new Error("boom") })),

@@ -344,7 +344,7 @@ jobs:
           OPENCLAW_EXTENSION_BATCH_PARALLEL: 2
           OPENCLAW_VITEST_MAX_WORKERS: 1
           OPENCLAW_EXTENSION_BATCH: ${{ matrix.extensions_csv }}
-        run: pnpm test:extensions:batch -- "$OPENCLAW_EXTENSION_BATCH"
+        run: pnpm test:extensions:batch "$OPENCLAW_EXTENSION_BATCH"
 
   plugin-prerelease-inspector:
     permissions:

@@ -278,6 +278,7 @@
   "provider-model-shared",
   "provider-onboard",
   "provider-stream-family",
+  "provider-stream-runtime-internal",
   "provider-stream-shared",
   "provider-transport-runtime",
   "provider-stream",

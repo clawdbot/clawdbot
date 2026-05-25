@@ -388,6 +388,9 @@ describe("meeting-notes plugin", () => {
     expect(getMeetingNotesSourceProviderMock).toHaveBeenCalledWith("discord-voice", {});
     expect(start).toHaveBeenCalledOnce();
     const request = start.mock.calls[0]?.[0];
+    if (!request) {
+      throw new Error("Expected meeting notes source start request");
+    }
     expect(request.session).toMatchObject({
       sessionId: "standup",
       title: "Standup",

@@ -302,6 +302,7 @@ type MockWithCalls = {
 };
 
 type PluginInstallCall = {
+  allowSourceTypeScriptEntries?: boolean;
   archivePath?: string;
   dangerouslyForceUnsafeInstall?: boolean;
   dryRun?: boolean;
@@ -1321,6 +1322,7 @@ describe("plugins cli install", () => {
 
     expect(pathInstallCall().path).toBe(tmpRoot);
     expect(pathInstallCall().dryRun).toBe(true);
+    expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
   });
 
@@ -1536,6 +1538,7 @@ describe("plugins cli install", () => {
 
     expect(pathInstallCall().path).toBe(localPluginDir);
     expect(pathInstallCall().dryRun).toBe(true);
+    expect(pathInstallCall().allowSourceTypeScriptEntries).toBe(true);
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
     expect(typeof pathInstallCall().logger?.info).toBe("function");
     expect(typeof pathInstallCall().logger?.warn).toBe("function");

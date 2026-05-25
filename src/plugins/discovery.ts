@@ -389,11 +389,40 @@ function mergeDiscoveryResult(
   }
 }
 
+type InstalledPluginRecordPath = {
+  path: string;
+  requireBuiltRuntimeEntry: boolean;
+};
+
+function isLinkedLocalPluginRecord(params: {
+  record: PluginInstallRecord;
+  env: NodeJS.ProcessEnv;
+  realpathCache: Map<string, string>;
+}): boolean {
+  if (params.record.source !== "path") {
+    return false;
+  }
+  if (
+    typeof params.record.sourcePath !== "string" ||
+    !params.record.sourcePath.trim() ||
+    typeof params.record.installPath !== "string" ||
+    !params.record.installPath.trim()
+  ) {
+    return false;
+  }
+  return resolvesToSameDirectory(
+    resolveUserPath(params.record.sourcePath, params.env),
+    resolveUserPath(params.record.installPath, params.env),
+    params.realpathCache,
+  );
+}
+
 function collectInstalledPluginRecordPaths(
   installRecords: Record<string, PluginInstallRecord> | undefined,
   env: NodeJS.ProcessEnv,
-): string[] {
-  const paths: string[] = [];
+  realpathCache: Map<string, string>,
+): InstalledPluginRecordPath[] {
+  const paths: InstalledPluginRecordPath[] = [];
   const seen = new Set<string>();
   for (const record of Object.values(installRecords ?? {})) {
     const rawPath =
@@ -410,7 +439,10 @@ function collectInstalledPluginRecordPaths(
       continue;
     }
     seen.add(resolved);
-    paths.push(resolved);
+    paths.push({
+      path: resolved,
+      requireBuiltRuntimeEntry: !isLinkedLocalPluginRecord({ record, env, realpathCache }),
+    });
   }
   return paths;
 }
@@ -1380,19 +1412,26 @@ export function discoverOpenClawPlugins(params: {
           skipDirectories: readChildDirectoryNames(roots.stock),
         });
       }
-      const installedPaths = collectInstalledPluginRecordPaths(params.installRecords, env);
-      const installedPluginDirKeys = collectManagedPluginDirKeys(installedPaths, realpathCache);
+      const installedPaths = collectInstalledPluginRecordPaths(
+        params.installRecords,
+        env,
+        realpathCache,
+      );
+      const installedPluginDirKeys = collectManagedPluginDirKeys(
+        installedPaths.map((installedPath) => installedPath.path),
+        realpathCache,
+      );
       const managedPluginDirs = collectManagedPluginDirKeys(
         collectManagedPluginRecordPaths(params.installRecords, env),
         realpathCache,
       );
       for (const installedPath of installedPaths) {
         discoverFromPath({
-          rawPath: installedPath,
+          rawPath: installedPath.path,
           origin: "global",
           ownershipUid: params.ownershipUid,
           workspaceDir,
-          requireBuiltRuntimeEntry: true,
+          requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
           managedPluginDirs,
           env,
           candidates: result.candidates,

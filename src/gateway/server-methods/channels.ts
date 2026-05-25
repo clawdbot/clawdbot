@@ -13,6 +13,7 @@ import { readConfigFileSnapshot } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getChannelActivity } from "../../infra/channel-activity.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -301,9 +302,16 @@ export const channelsHandlers: GatewayRequestHandlers = {
     const rawChannel = (params as { channel?: unknown }).channel;
     const requestedChannel =
       typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : undefined;
-    const cfg = applyPluginAutoEnable({
-      config: context.getRuntimeConfig(),
+    const runtimeConfig = context.getRuntimeConfig();
+    const currentSnapshot = getCurrentPluginMetadataSnapshot({
+      config: runtimeConfig,
       env: process.env,
+    });
+    const cfg = applyPluginAutoEnable({
+      config: runtimeConfig,
+      env: process.env,
+      manifestRegistry: currentSnapshot?.manifestRegistry,
+      discovery: currentSnapshot?.discovery,
     }).config;
     const runtime = context.getRuntimeSnapshot();
     const plugins = listChannelPlugins();
@@ -579,9 +587,16 @@ export const channelsHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = applyPluginAutoEnable({
-        config: context.getRuntimeConfig(),
+      const runtimeConfig = context.getRuntimeConfig();
+      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+        config: runtimeConfig,
         env: process.env,
+      });
+      const cfg = applyPluginAutoEnable({
+        config: runtimeConfig,
+        env: process.env,
+        manifestRegistry: currentSnapshot?.manifestRegistry,
+        discovery: currentSnapshot?.discovery,
       }).config;
       const payload = await startChannelAccount({
         channelId,

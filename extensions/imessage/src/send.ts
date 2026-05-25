@@ -11,11 +11,21 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
+import {
+  appendIMessageApprovalReactionHintForOutboundMessage,
+  type IMessageApprovalConversationKey,
+  registerIMessageApprovalReactionTargetForOutboundMessage,
+} from "./approval-reactions.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
 import { rememberPersistedIMessageEcho } from "./monitor/persisted-echo-cache.js";
-import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
+import {
+  formatIMessageChatTarget,
+  type IMessageService,
+  normalizeIMessageHandle,
+  parseIMessageTarget,
+} from "./targets.js";
 
 type IMessageSendOpts = {
   cliPath?: string;
@@ -44,8 +54,22 @@ type IMessageSendOpts = {
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
-type IMessageSendResult = {
+export type IMessageSendResult = {
+  /**
+   * Generic identifier returned by the bridge. May be a GUID string, a
+   * numeric ROWID stringified, or the literal "ok"/"unknown" placeholders
+   * when the bridge declines to return one. Most callers (reply cache, echo
+   * cache, receipts) want this field — it is the broadest match for
+   * downstream lookups.
+   */
   messageId: string;
+  /**
+   * GUID-only identifier suitable for matching inbound `reacted_to_guid`
+   * fields. Undefined when the bridge returned only a numeric ROWID or
+   * placeholder. Approval-reaction bindings MUST use this field so the
+   * outbound key matches what the inbound tapback will surface.
+   */
+  guid?: string;
   sentText: string;
   echoText?: string;
   receipt: MessageReceipt;
@@ -92,6 +116,33 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
     (typeof result.message_id === "number" ? String(result.message_id) : null) ||
     (typeof result.id === "number" ? String(result.id) : null);
   return raw ? raw.trim() : null;
+}
+
+// Approval-reaction bindings need to match `reacted_to_guid` on the inbound
+// tapback, which is always the iMessage GUID (never a numeric ROWID). Some imsg
+// bridge variants return a numeric `message_id` from `send` without a `guid` —
+// for the approval path we strictly require the string GUID so we never bind
+// against a numeric id that the inbound side can't produce.
+function resolveOutboundMessageGuid(
+  result: Record<string, unknown> | null | undefined,
+): string | null {
+  if (!result) {
+    return null;
+  }
+  const candidates = [result.guid, result.messageId, result.message_id, result.id];
+  for (const value of candidates) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    // Reject all-digit strings: they came from numeric ROWIDs coerced to
+    // strings (e.g. "12345"), not real GUIDs (which look like
+    // "p:0/ABCD-EFGH-..." or contain non-digit characters).
+    if (trimmed && !/^\d+$/.test(trimmed)) {
+      return trimmed;
+    }
+  }
+  return null;
 }
 
 function resolveOutboundEchoText(text: string, mediaContentType?: string): string | undefined {
@@ -185,7 +236,7 @@ export async function sendMessageIMessage(
       : typeof account.config.mediaMaxMb === "number"
         ? account.config.mediaMaxMb * 1024 * 1024
         : 16 * 1024 * 1024;
-  let message = text ?? "";
+  let message = text ? appendIMessageApprovalReactionHintForOutboundMessage(text) : "";
   let filePath: string | undefined;
   let mediaContentType: string | undefined;
 
@@ -264,6 +315,10 @@ export async function sendMessageIMessage(
     });
     const resolvedId = resolveMessageId(result);
     const messageId = resolvedId ?? (result?.ok ? "ok" : "unknown");
+    // GUID-only id for approval-reaction binding (inbound `reacted_to_guid`
+    // never carries a numeric ROWID, so the bind key must match). Undefined
+    // when the bridge only returned a numeric or placeholder id.
+    const approvalBindingMessageId = resolveOutboundMessageGuid(result);
     const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
     if (echoScope) {
       rememberPersistedIMessageEcho({
@@ -291,9 +346,28 @@ export async function sendMessageIMessage(
         timestamp: Date.now(),
         isFromMe: true,
       });
+      if (message) {
+        if (approvalBindingMessageId) {
+          const handleForKey =
+            target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
+          const conversation: IMessageApprovalConversationKey = {
+            ...(target.kind === "chat_guid" ? { chatGuid: target.chatGuid } : {}),
+            ...(target.kind === "chat_identifier" ? { chatIdentifier: target.chatIdentifier } : {}),
+            ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
+            ...(handleForKey ? { handle: handleForKey } : {}),
+          };
+          registerIMessageApprovalReactionTargetForOutboundMessage({
+            accountId: account.accountId,
+            conversation,
+            messageId: approvalBindingMessageId,
+            text: message,
+          });
+        }
+      }
     }
     return {
       messageId,
+      ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
       sentText: message,
       ...(echoText ? { echoText } : {}),
       receipt: createIMessageSendReceipt({

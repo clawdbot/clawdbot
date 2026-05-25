@@ -285,6 +285,13 @@ function sanitizeStreamText(text: string): string {
   return stripped.trim().length > 0 ? stripped : "";
 }
 
+function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
+  if (!previousText || !text.startsWith(previousText)) {
+    return text;
+  }
+  return text.slice(previousText.length).trimStart();
+}
+
 function rawMessageTimestamp(message: unknown): number | null {
   const timestamp = asRecord(message)?.timestamp;
   return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : null;
@@ -551,14 +558,19 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
+  let previousAccumulatedStreamText: string | null = null;
   for (let i = 0; i < maxLen; i++) {
     if (i < segments.length) {
       const text = sanitizeStreamText(segments[i].text);
+      const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
       if (text.length > 0) {
+        previousAccumulatedStreamText = text;
+      }
+      if (visibleText.length > 0) {
         items.push({
           kind: "stream",
           key: `stream-seg:${props.sessionKey}:${i}`,
-          text,
+          text: visibleText,
           startedAt: segments[i].ts,
         });
       }
@@ -575,12 +587,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
-    if (text.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(text).shouldSkip) {
+    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    if (visibleText.length > 0) {
+      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
         items.push({
           kind: "stream",
           key,
-          text,
+          text: visibleText,
           startedAt: props.streamStartedAt ?? Date.now(),
         });
       }

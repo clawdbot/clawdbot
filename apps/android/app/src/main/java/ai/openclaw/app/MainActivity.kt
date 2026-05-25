@@ -79,6 +79,10 @@ class MainActivity : ComponentActivity() {
   }
 
   private fun handleAssistantIntent(intent: android.content.Intent?) {
+    parseHomeDestinationIntent(intent)?.let { destination ->
+      viewModel.requestHomeDestination(destination)
+      return
+    }
     val request = parseAssistantLaunchIntent(intent) ?: return
     viewModel.handleAssistantLaunch(request)
   }

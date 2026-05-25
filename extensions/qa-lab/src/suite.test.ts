@@ -314,6 +314,30 @@ describe("qa suite", () => {
     });
   });
 
+  it("enables Control UI only for Control UI scenarios unless explicitly overridden", () => {
+    const channelScenario = makeQaSuiteTestScenario("channel-baseline", { surface: "channel" });
+    const controlUiScenario = makeQaSuiteTestScenario("control-ui-roundtrip", {
+      surface: "control-ui",
+    });
+
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        scenarios: [channelScenario],
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        scenarios: [channelScenario, controlUiScenario],
+      }),
+    ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        explicit: true,
+        scenarios: [channelScenario],
+      }),
+    ).toBe(true);
+  });
+
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {
     const scenarios = [
       makeQaSuiteTestScenario("baseline"),

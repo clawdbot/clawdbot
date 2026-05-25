@@ -40,6 +40,19 @@ describe("boundary vitest config", () => {
     const testConfig = requireTestConfig(config);
 
     expect(testConfig.include).toEqual(["src/infra/openclaw-root.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("lets unrelated root Vitest projects skip when CLI filters match no boundary files", () => {
+    const config = createBoundaryVitestConfig({}, [
+      "node",
+      "vitest",
+      "run",
+      "src/config/channel-configured.test.ts",
+    ]);
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual([]);
     expect(testConfig.passWithNoTests).toBe(true);
   });
 });

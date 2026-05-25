@@ -41,6 +41,17 @@ function expectUnsetOrZeroNpmJsonConfig(value: unknown): void {
   expect(value == null || value === false || value === 0 || value === "0").toBe(true);
 }
 
+function createIsolatedNpmConfigEnv(dir: string): NodeJS.ProcessEnv {
+  const home = path.join(dir, "home");
+  const globalconfig = path.join(dir, "global-npmrc");
+  fsSync.mkdirSync(home, { recursive: true });
+  fsSync.writeFileSync(globalconfig, "", "utf-8");
+  return {
+    HOME: home,
+    NPM_CONFIG_GLOBALCONFIG: globalconfig,
+  };
+}
+
 describe("npm project install env", () => {
   it("uses an absolute POSIX script shell for npm lifecycle scripts", () => {
     withMockedPlatform("linux", () => {
@@ -163,10 +174,12 @@ describe("npm project install env", () => {
   it("uses a current before override for explicit npm before policy", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       const npmrc = path.join(dir, "npmrc");
       fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
       const env = createNpmProjectInstallEnv(
         {
+          ...baseEnv,
           NPM_CONFIG_USERCONFIG: npmrc,
         },
         {},
@@ -180,6 +193,7 @@ describe("npm project install env", () => {
 
       const envWithParentAge = createNpmProjectInstallEnv(
         {
+          ...baseEnv,
           NPM_CONFIG_USERCONFIG: npmrc,
           NPM_CONFIG_MIN_RELEASE_AGE: "7",
         },
@@ -200,12 +214,14 @@ describe("npm project install env", () => {
   it("uses before args for stale npm before policies", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       const npmrc = path.join(dir, "npmrc");
       fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
 
       expect(
         createNpmFreshnessBypassArgs(
           {
+            ...baseEnv,
             NPM_CONFIG_USERCONFIG: npmrc,
           },
           FROZEN_NOW,
@@ -219,11 +235,13 @@ describe("npm project install env", () => {
   it("uses before args for expanded npm userconfig paths", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       fsSync.writeFileSync(path.join(dir, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n", "utf-8");
 
       expect(
         createNpmFreshnessBypassArgs(
           {
+            ...baseEnv,
             HOME: dir,
             NPM_CONFIG_USERCONFIG: "~/.npmrc",
           },
@@ -233,6 +251,7 @@ describe("npm project install env", () => {
       expect(
         createNpmFreshnessBypassArgs(
           {
+            ...baseEnv,
             HOME: dir,
             NPM_CONFIG_USERCONFIG: "${HOME}/.npmrc",
           },
@@ -247,7 +266,9 @@ describe("npm project install env", () => {
   it("uses before args for npm default globalconfig before policies", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npm-prefix-"));
     try {
+      const home = path.join(dir, "home");
       const npmrcDir = path.join(dir, "etc");
+      fsSync.mkdirSync(home, { recursive: true });
       fsSync.mkdirSync(npmrcDir, { recursive: true });
       fsSync.writeFileSync(
         path.join(npmrcDir, "npmrc"),
@@ -258,6 +279,7 @@ describe("npm project install env", () => {
       expect(
         createNpmFreshnessBypassArgs(
           {
+            HOME: home,
             NPM_CONFIG_PREFIX: dir,
           },
           FROZEN_NOW,
@@ -271,13 +293,14 @@ describe("npm project install env", () => {
   it("uses before args for command project npmrc before policies", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-project-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       fsSync.writeFileSync(path.join(dir, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n", "utf-8");
 
-      expect(createNpmFreshnessBypassArgs({}, FROZEN_NOW, { npmConfigCwd: dir })).toEqual([
+      expect(createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW, { npmConfigCwd: dir })).toEqual([
         `--before=${FROZEN_NOW.toISOString()}`,
       ]);
 
-      const env = createNpmProjectInstallEnv({}, { npmConfigCwd: dir }, FROZEN_NOW);
+      const env = createNpmProjectInstallEnv(baseEnv, { npmConfigCwd: dir }, FROZEN_NOW);
       expect(env.npm_config_min_release_age).toBe("");
       expect(env.npm_config_before).toBe(FROZEN_NOW.toISOString());
     } finally {
@@ -288,10 +311,11 @@ describe("npm project install env", () => {
   it("uses before args for the current project npmrc by default", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-current-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       fsSync.writeFileSync(path.join(dir, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n", "utf-8");
       const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(dir);
       withRestoredMocks([cwdSpy], () => {
-        expect(createNpmFreshnessBypassArgs({}, FROZEN_NOW)).toEqual([
+        expect(createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW)).toEqual([
           `--before=${FROZEN_NOW.toISOString()}`,
         ]);
       });
@@ -303,6 +327,7 @@ describe("npm project install env", () => {
   it("uses before args for scoped npm prefix before policies", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-prefix-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       const npmrcDir = path.join(dir, "etc");
       fsSync.mkdirSync(npmrcDir, { recursive: true });
       fsSync.writeFileSync(
@@ -311,7 +336,7 @@ describe("npm project install env", () => {
         "utf-8",
       );
 
-      expect(createNpmFreshnessBypassArgs({}, FROZEN_NOW, { npmConfigPrefix: dir })).toEqual([
+      expect(createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW, { npmConfigPrefix: dir })).toEqual([
         `--before=${FROZEN_NOW.toISOString()}`,
       ]);
     } finally {
@@ -322,10 +347,12 @@ describe("npm project install env", () => {
   it("overrides stale npmrc before config without emitting release-age config", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       const npmrc = path.join(dir, "npmrc");
       fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
       const env = createNpmProjectInstallEnv(
         {
+          ...baseEnv,
           NPM_CONFIG_USERCONFIG: npmrc,
         },
         {},

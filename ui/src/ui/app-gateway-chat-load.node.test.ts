@@ -109,6 +109,7 @@ vi.mock("./controllers/sessions.ts", () => ({
   applySessionsChangedEvent: vi.fn(() => ({ applied: false })),
   loadSessions: vi.fn(async () => undefined),
   subscribeSessions: subscribeSessionsMock,
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 
 afterAll(() => {

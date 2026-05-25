@@ -6,6 +6,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
+import {
+  getActivePluginRegistryWorkspaceDirFromState,
+  getPluginRegistryState,
+} from "../plugins/runtime-state.js";
 import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -211,6 +218,8 @@ type ModelFallbackAuthRuntime = typeof import("./model-fallback-auth.runtime.js"
 const modelFallbackAuthRuntimeLoader = createLazyImportLoader<ModelFallbackAuthRuntime>(
   () => import("./model-fallback-auth.runtime.js"),
 );
+const MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES = 256;
+const fallbackCandidateCache = new Map<string, ModelCandidate[]>();
 
 async function loadModelFallbackAuthRuntime() {
   return await modelFallbackAuthRuntimeLoader.load();
@@ -632,6 +641,109 @@ export const testing = {
 } as const;
 
 function resolveFallbackCandidates(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+    fallbacksOverride?: string[];
+  } & ModelManifestNormalizationContext,
+): ModelCandidate[] {
+  const cacheKey = resolveFallbackCandidateCacheKey(params);
+  if (cacheKey) {
+    const cached = fallbackCandidateCache.get(cacheKey);
+    if (cached) {
+      return cached.map(cloneModelCandidate);
+    }
+  }
+  const candidates = resolveFallbackCandidatesUncached(params);
+  if (cacheKey) {
+    fallbackCandidateCache.set(cacheKey, candidates.map(cloneModelCandidate));
+    while (fallbackCandidateCache.size > MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES) {
+      const oldest = fallbackCandidateCache.keys().next();
+      if (oldest.done) {
+        break;
+      }
+      fallbackCandidateCache.delete(oldest.value);
+    }
+  }
+  return candidates;
+}
+
+function cloneModelCandidate(candidate: ModelCandidate): ModelCandidate {
+  return {
+    provider: candidate.provider,
+    model: candidate.model,
+  };
+}
+
+function resolveFallbackCandidateCacheKey(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    fallbacksOverride?: string[];
+  } & ModelManifestNormalizationContext,
+): string | null {
+  if (params.manifestPlugins) {
+    return null;
+  }
+  const workspaceDir = getActivePluginRegistryWorkspaceDirFromState();
+  const env = process.env;
+  if (
+    isPluginProvidersLoadInFlight({
+      config: params.cfg,
+      workspaceDir,
+      env,
+      activate: false,
+      bundledProviderAllowlistCompat: true,
+      bundledProviderVitestCompat: true,
+    })
+  ) {
+    return null;
+  }
+  const pluginMetadata = getCurrentPluginMetadataSnapshot({
+    env,
+    workspaceDir,
+    allowWorkspaceScopedSnapshot: true,
+  });
+  const registryState = getPluginRegistryState();
+  return JSON.stringify({
+    provider: params.provider,
+    model: params.model,
+    fallbacksOverride: params.fallbacksOverride,
+    agentsDefaultsModel: params.cfg?.agents?.defaults?.model,
+    agentsDefaultsModels: params.cfg?.agents?.defaults?.models,
+    modelProviders: resolveFallbackCandidateModelProviderCacheParts(params.cfg),
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params.cfg,
+      env,
+      workspaceDir,
+    }),
+    pluginMetadataFingerprint: pluginMetadata?.configFingerprint ?? null,
+    pluginRegistryKey: registryState?.key ?? null,
+    pluginRegistryVersion: registryState?.activeVersion ?? null,
+    pluginWorkspaceDir: workspaceDir ?? null,
+  });
+}
+
+function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | undefined): unknown {
+  const providers = cfg?.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  return Object.entries(providers).map(([providerId, providerConfig]) => ({
+    providerId,
+    api: typeof providerConfig?.api === "string" ? providerConfig.api : undefined,
+    models: Array.isArray(providerConfig?.models)
+      ? providerConfig.models
+          .map((entry) => (typeof entry?.id === "string" ? entry.id : undefined))
+          .filter((id): id is string => id !== undefined)
+      : [],
+  }));
+}
+
+function resolveFallbackCandidatesUncached(
   params: {
     cfg: OpenClawConfig | undefined;
     provider: string;

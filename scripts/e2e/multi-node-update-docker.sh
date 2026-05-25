@@ -131,13 +131,87 @@ set -euo pipefail
 printf "%s %s\n" "\$(date -u +%H:%M:%S)" "\$*" >>"$SYSTEMCTL_LOG"
 
 filtered=()
-for arg in "\$@"; do
+for ((i = 1; i <= \$#; i++)); do
+  arg="\${!i}"
   case "\$arg" in
-    --user|--quiet|--no-page|--now) ;;
+    --user|--quiet|--no-page|--now|--value) ;;
+    --property)
+      i=\$((i + 1))
+      ;;
+    --property=*) ;;
     *) filtered+=("\$arg") ;;
   esac
 done
 command="\${filtered[0]:-status}"
+
+is_running() {
+  [ -s "$GATEWAY_PID_FILE" ] || return 1
+  local pid
+  pid="\$(cat "$GATEWAY_PID_FILE" 2>/dev/null || true)"
+  [ -n "\$pid" ] || return 1
+  kill -0 "\$pid" >/dev/null 2>&1
+}
+
+stop_gateway() {
+  [ -s "$GATEWAY_PID_FILE" ] || return 0
+  local pid
+  pid="\$(cat "$GATEWAY_PID_FILE" 2>/dev/null || true)"
+  if [[ "\$pid" =~ ^[0-9]+$ ]] && [ "\$pid" -gt 1 ] && kill -0 "\$pid" >/dev/null 2>&1; then
+    kill "\$pid" >/dev/null 2>&1 || true
+    for _ in \$(seq 1 100); do
+      kill -0 "\$pid" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+    kill -9 "\$pid" >/dev/null 2>&1 || true
+  fi
+  rm -f "$GATEWAY_PID_FILE"
+}
+
+load_unit_environment() {
+  local unit="\$1"
+  while IFS= read -r line; do
+    case "\$line" in
+      EnvironmentFile=*)
+        local spec="\${line#EnvironmentFile=}"
+        for token in \$spec; do
+          local file="\${token#-}"
+          [ -f "\$file" ] || continue
+          set -a
+          # shellcheck disable=SC1090
+          . "\$file"
+          set +a
+        done
+        ;;
+      Environment=*)
+        local assignment="\${line#Environment=}"
+        assignment="\${assignment#\"}"
+        assignment="\${assignment%\"}"
+        export "\$assignment"
+        ;;
+    esac
+  done <"\$unit"
+}
+
+start_gateway() {
+  local unit="$GATEWAY_UNIT_PATH"
+  local exec_start
+  if [ ! -f "\$unit" ]; then
+    echo "systemctl shim: unit not found: \$unit" >&2
+    return 1
+  fi
+  exec_start="\$(sed -n 's/^ExecStart=//p' "\$unit" | tail -n 1)"
+  if [ -z "\$exec_start" ]; then
+    echo "systemctl shim: no ExecStart in \$unit" >&2
+    return 1
+  fi
+  (
+    load_unit_environment "\$unit"
+    export OPENCLAW_NO_RESPAWN=1
+    echo "systemctl shim: starting: \$exec_start"
+    nohup bash -lc "exec \$exec_start" >>"$GATEWAY_DAEMON_LOG" 2>&1 &
+    printf '%s\n' "\$!" >"$GATEWAY_PID_FILE"
+  )
+}
 
 case "\$command" in
   daemon-reload)
@@ -146,50 +220,18 @@ case "\$command" in
   enable)
     echo "enable (shim: no-op)"
     ;;
+  is-enabled)
+    echo "enabled"
+    ;;
   restart|start)
-    if [ -s "$GATEWAY_PID_FILE" ]; then
-      old_pid="\$(cat "$GATEWAY_PID_FILE" 2>/dev/null || true)"
-      if kill -0 "\$old_pid" 2>/dev/null; then
-        kill "\$old_pid" 2>/dev/null || true
-        sleep 0.5
-      fi
-    fi
-    unit="$GATEWAY_UNIT_PATH"
-    if [ ! -f "\$unit" ]; then
-      echo "systemctl shim: unit not found: \$unit" >&2
-      exit 1
-    fi
-    exec_start="\$(grep "^ExecStart=" "\$unit" | head -1 | sed "s/^ExecStart=//")"
-    if [ -z "\$exec_start" ]; then
-      echo "systemctl shim: no ExecStart in \$unit" >&2
-      exit 1
-    fi
-    # Source EnvironmentFile if present
-    env_file="\$(grep "^EnvironmentFile=" "\$unit" | head -1 | sed "s/^EnvironmentFile=//" | sed "s/^-//")"
-    if [ -n "\$env_file" ] && [ -f "\$env_file" ]; then
-      set -a; source "\$env_file"; set +a
-    fi
-    # Inline Environment= entries
-    while IFS= read -r env_line; do
-      env_entry="\${env_line#Environment=}"
-      env_entry="\${env_entry#\"}"
-      env_entry="\${env_entry%\"}"
-      export "\$env_entry"
-    done < <(grep "^Environment=" "\$unit" || true)
-    echo "systemctl shim: starting: \$exec_start"
-    eval nohup \$exec_start >>"$GATEWAY_DAEMON_LOG" 2>&1 &
-    echo "\$!" >"$GATEWAY_PID_FILE"
-    echo "systemctl shim: started pid \$(cat "$GATEWAY_PID_FILE")"
+    stop_gateway
+    start_gateway
     ;;
   stop)
-    if [ -s "$GATEWAY_PID_FILE" ]; then
-      pid="\$(cat "$GATEWAY_PID_FILE")"
-      kill "\$pid" 2>/dev/null || true
-      rm -f "$GATEWAY_PID_FILE"
-    fi
+    stop_gateway
     ;;
   is-active)
-    if [ -s "$GATEWAY_PID_FILE" ] && kill -0 "\$(cat "$GATEWAY_PID_FILE" 2>/dev/null)" 2>/dev/null; then
+    if is_running; then
       echo "active"
     else
       echo "inactive"
@@ -197,10 +239,15 @@ case "\$command" in
     fi
     ;;
   show)
-    echo "ActiveState=inactive"
+    if is_running; then
+      printf 'ActiveState=active\nSubState=running\nMainPID=%s\nExecMainStatus=0\nExecMainCode=0\n' "\$(cat "$GATEWAY_PID_FILE")"
+    else
+      printf 'ActiveState=inactive\nSubState=dead\nMainPID=0\nExecMainStatus=0\nExecMainCode=0\n'
+    fi
     ;;
   *)
-    echo "systemctl shim: ignoring: \$*"
+    echo "systemctl shim: unsupported command: \$*" >&2
+    exit 1
     ;;
 esac
 SHIMEOF
@@ -210,9 +257,12 @@ echo "systemctl shim installed."
 # Now install the gateway service using node-A.
 echo "Installing gateway service..."
 mkdir -p "$(dirname "$GATEWAY_UNIT_PATH")"
-# gateway install may exit non-zero because our systemctl shim cannot fully
-# restart, but the unit file gets written before the restart step.
-openclaw gateway install --json >"$ARTIFACTS/gateway-install.json" 2>"$ARTIFACTS/gateway-install.err" || true
+if ! openclaw gateway install --json >"$ARTIFACTS/gateway-install.json" 2>"$ARTIFACTS/gateway-install.err"; then
+  echo "FAIL: gateway install failed before update"
+  cat "$ARTIFACTS/gateway-install.json" 2>/dev/null || true
+  cat "$ARTIFACTS/gateway-install.err" 2>/dev/null || true
+  exit 1
+fi
 
 echo ""
 echo "── Step 4: Inspect what node path was baked into the service ──"
@@ -240,6 +290,8 @@ echo "── Step 5: Switch PATH so node-B comes first ──"
 # Crucially, node-B has its own working npm with its own global prefix,
 # but openclaw is NOT installed there.
 export PATH="$NPM_PREFIX_B/bin:$NODE_B_ROOT/bin:$NPM_PREFIX_A/bin:$NODE_A_DIR:$PATH"
+export npm_config_prefix="$NPM_PREFIX_B"
+export NPM_CONFIG_PREFIX="$NPM_PREFIX_B"
 
 # Verify node-B npm works independently.
 echo "node-B npm prefix: $($NODE_B_ROOT/bin/node $NODE_B_ROOT/bin/npm prefix -g 2>/dev/null || echo unknown)"
@@ -249,6 +301,10 @@ echo "process.execPath will be: $(node -e "console.log(process.execPath)")"
 
 echo ""
 echo "── Step 6: Run openclaw update (this is the bug) ──"
+
+UPDATE_FAILED=0
+GATEWAY_START_FAILED=0
+GATEWAY_HEALTH_FAILED=0
 
 # Run the update WITH restart so that the update flow re-runs
 # `gateway install --force` and bakes the current process.execPath
@@ -263,9 +319,12 @@ echo ""
 echo "Update exit code: $UPDATE_EXIT"
 echo "Update stderr (if any):"
 cat "$ARTIFACTS/update.err" 2>/dev/null | tail -10 || true
+if [ "$UPDATE_EXIT" -ne 0 ]; then
+  UPDATE_FAILED=1
+fi
 
-# The update may fail during restart (systemctl shim limitations) but it must
-# have at least attempted the package install. Check that it ran past early exit.
+# Keep inspecting after a non-zero update so the log shows whether the unit was
+# rewritten, but fail immediately if update never reached the service refresh.
 if [ "$UPDATE_EXIT" -ne 0 ] && ! grep -q "gateway" "$ARTIFACTS/update.err" 2>/dev/null; then
   echo "FAIL: openclaw update failed before reaching the package install step"
   cat "$ARTIFACTS/update.err" 2>/dev/null || true
@@ -343,23 +402,38 @@ fi
 echo ""
 echo "── Step 9: Try starting the gateway with the post-update unit ──"
 
+GATEWAY_START_FAILED=0
 if [ -f "$GATEWAY_UNIT_PATH" ]; then
   systemctl restart 2>&1 || true
-  sleep 3
-  if [ -s "$GATEWAY_PID_FILE" ] && kill -0 "$(cat "$GATEWAY_PID_FILE" 2>/dev/null)" 2>/dev/null; then
-    echo "OK: Gateway started (pid $(cat "$GATEWAY_PID_FILE"))"
-    # Try a health probe.
-    if openclaw gateway status --json >"$ARTIFACTS/status.json" 2>&1; then
-      echo "OK: Gateway status probe succeeded"
-    else
-      echo "WARNING: Gateway status probe failed"
-    fi
-    # Stop it.
-    kill "$(cat "$GATEWAY_PID_FILE")" 2>/dev/null || true
+  if PORT=18789 node <<NODE
+const url = "http://127.0.0.1:" + process.env.PORT + "/healthz";
+const deadline = Date.now() + 30000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let last = "timeout";
+while (Date.now() < deadline) {
+  try {
+    const response = await fetch(url);
+    if (response.ok) {
+      process.exit(0);
+    }
+    last = "HTTP " + response.status;
+  } catch (error) {
+    last = error instanceof Error ? error.message : String(error);
+  }
+  await sleep(500);
+}
+console.error(last);
+process.exit(1);
+NODE
+  then
+    echo "OK: Gateway healthz probe succeeded"
   else
-    echo "BUG: Gateway failed to start with the post-update unit"
+    echo "BUG: Gateway healthz probe failed with the post-update unit"
+    GATEWAY_START_FAILED=1
+    GATEWAY_HEALTH_FAILED=1
     cat "$GATEWAY_DAEMON_LOG" 2>/dev/null | tail -20 || true
   fi
+  systemctl stop 2>&1 || true
 fi
 
 echo ""
@@ -382,6 +456,15 @@ if [ -f "$GATEWAY_UNIT_PATH" ]; then
   if [ -n "$ENTRYPOINT_PATH_CHECK" ] && [ ! -f "$ENTRYPOINT_PATH_CHECK" ]; then
     EXIT_CODE=1
   fi
+fi
+if [ "$UPDATE_FAILED" -ne 0 ]; then
+  EXIT_CODE=1
+fi
+if [ "$GATEWAY_START_FAILED" -ne 0 ]; then
+  EXIT_CODE=1
+fi
+if [ "$GATEWAY_HEALTH_FAILED" -ne 0 ]; then
+  EXIT_CODE=1
 fi
 exit $EXIT_CODE
 ' || CONTAINER_EXIT=$?

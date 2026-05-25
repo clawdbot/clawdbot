@@ -132,9 +132,13 @@ describe("runMessageAction send validation", () => {
       target: "current-run",
       sourceReplyDeliveryMode: "message_tool_only",
       sourceReplySink: "internal-ui",
+      sourceReply: {
+        text: "hello from codex",
+      },
+      message: "hello from codex",
       dryRun: false,
     });
-    expect(JSON.stringify(result.toolResult)).not.toContain("hello from codex");
+    expect(JSON.stringify(result.toolResult?.content)).not.toContain("hello from codex");
   });
 
   it("strips unsupported citation control markers from internal UI source replies", async () => {
@@ -244,6 +248,20 @@ describe("runMessageAction send validation", () => {
     });
     expect(sentText).toEqual(["v2026.5.20 release note"]);
     expect(JSON.stringify(result.payload)).not.toContain("turn2view0");
+  });
+
+  it("rejects message sends whose body is only leaked plain-text tool calls", async () => {
+    await expect(
+      runDrySend({
+        cfg: workspaceConfig,
+        actionParams: {
+          channel: "workspace",
+          target: "#C12345678",
+          message: '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}',
+        },
+        toolContext: { currentChannelId: "C12345678" },
+      }),
+    ).rejects.toThrow(/send requires text or media/i);
   });
 
   it.each([

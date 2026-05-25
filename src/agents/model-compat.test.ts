@@ -489,7 +489,7 @@ describe("isHighSignalLiveModelRef", () => {
     );
   });
 
-  it("keeps only GPT-5.2 OpenAI-family models in the default live matrix", () => {
+  it("keeps only the current direct OpenAI-family model in the default live matrix", () => {
     providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
 
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-3.5-turbo" })).toBe(
@@ -504,7 +504,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.1" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.4" })).toBe(false);
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(true);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-codex" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2-chat-latest" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.1-chat" })).toBe(
@@ -513,8 +513,9 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "opencode", id: "gpt-5.1-codex-mini" })).toBe(
       false,
     );
-    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(true);
-    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "openai", id: "gpt-5.2" })).toBe(false);
+    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.5" })).toBe(true);
+    expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openai-codex", id: "gpt-5.2-codex" })).toBe(false);
     expect(isHighSignalLiveModelRef({ provider: "openrouter", id: "openai/gpt-5.2-chat" })).toBe(
       true,
@@ -663,8 +664,8 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },
-      { provider: "openai", id: "gpt-5.2" },
-      { provider: "openai-codex", id: "gpt-5.2" },
+      { provider: "openai", id: "gpt-5.5" },
+      { provider: "openai-codex", id: "gpt-5.5" },
       { provider: "openrouter", id: "openai/gpt-5.2-chat" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
       { provider: "opencode-go", id: "glm-5" },
@@ -686,7 +687,7 @@ describe("selectHighSignalLiveItems", () => {
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
-      { provider: "openai", id: "gpt-5.2" },
+      { provider: "openai", id: "gpt-5.5" },
       { provider: "opencode", id: "big-pickle" },
     ];
 
@@ -707,7 +708,7 @@ describe("selectHighSignalLiveItems", () => {
 
   it("prioritizes DeepSeek V4 before later fallback providers", () => {
     const items = [
-      { provider: "openai", id: "gpt-5.2" },
+      { provider: "openai", id: "gpt-5.5" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },

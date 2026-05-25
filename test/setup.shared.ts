@@ -6,9 +6,12 @@ type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
 };
 
 vi.mock("@earendil-works/pi-ai/oauth", () => ({
+  getOAuthProvider: () => undefined,
   getOAuthApiKey: () => undefined,
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),
+  registerOAuthProvider: vi.fn(),
+  resetOAuthProviders: vi.fn(),
   refreshOpenAICodexToken: vi.fn((...args: unknown[]) =>
     (globalThis as GlobalWithOpenAiCodexTokenRefreshTestHook)[openAiCodexTokenRefreshTestHook]?.(
       ...args,

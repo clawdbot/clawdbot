@@ -619,7 +619,9 @@ describe("doctor legacy state migrations", () => {
   it("imports plugin-state legacy plans through doctor", async () => {
     const root = await makeTempRoot();
     const sourcePath = path.join(root, "legacy-cache.json");
+    const globalSourcePath = path.join(root, "legacy-global-cache.json");
     fs.writeFileSync(sourcePath, "legacy", "utf-8");
+    fs.writeFileSync(globalSourcePath, "global", "utf-8");
     mockedChannelMigrationPlans.plans = [
       {
         kind: "plugin-state-import",
@@ -636,6 +638,18 @@ describe("doctor legacy state migrations", () => {
           { key: "existing", value: { body: "stale" } },
           { key: "overflow", value: { body: "overflow" } },
         ],
+      },
+      {
+        kind: "plugin-state-import",
+        label: "Test global cache",
+        sourcePath: globalSourcePath,
+        targetPath: "plugin state:test.global-cache",
+        pluginId: "telegram",
+        namespace: "test.global-cache",
+        maxEntries: 4,
+        scopeKey: "",
+        cleanupSource: "rename",
+        readEntries: () => [{ key: "default", value: { body: "global" } }],
       },
     ];
 
@@ -657,11 +671,17 @@ describe("doctor legacy state migrations", () => {
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.changes).toContain("Migrated 2 Test prompt-context cache entries → plugin state");
+    expect(result.changes).toContain("Migrated 1 Test global cache entry → plugin state");
     expect(result.changes).toContain(
       `Archived Test prompt-context cache legacy source → ${sourcePath}.migrated`,
     );
+    expect(result.changes).toContain(
+      `Archived Test global cache legacy source → ${globalSourcePath}.migrated`,
+    );
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    expect(fs.existsSync(globalSourcePath)).toBe(false);
+    expect(fs.existsSync(`${globalSourcePath}.migrated`)).toBe(true);
 
     await withStateDir(root, async () => {
       const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
@@ -676,6 +696,17 @@ describe("doctor legacy state migrations", () => {
         "scope:existing": "fresh",
         "scope:old": "old",
         "scope:overflow": "overflow",
+      });
+
+      const globalStore = createPluginStateKeyedStore<{ body: string }>("telegram", {
+        namespace: "test.global-cache",
+        maxEntries: 4,
+      });
+      const globalValuesByKey = new Map(
+        (await globalStore.entries()).map(({ key, value }) => [key, value.body]),
+      );
+      expect(Object.fromEntries(globalValuesByKey)).toEqual({
+        default: "global",
       });
     });
   });

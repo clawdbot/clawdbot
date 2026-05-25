@@ -7,6 +7,7 @@ import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl 
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentHarnessPolicy } from "../harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
@@ -178,6 +179,45 @@ function isRecoverableNativeHarnessCompactionFailure(
     result?.ok === false &&
     (result.failure?.reason === "missing_thread_binding" ||
       result.failure?.reason === "stale_thread_binding")
+  );
+}
+
+function isCodexNativeHarnessCompactionSession(
+  sessionEntry: SessionEntry,
+  provider: string,
+): boolean {
+  const harnessId = sessionEntry.agentHarnessId?.trim().toLowerCase();
+  const providerId = provider.trim().toLowerCase();
+  return (
+    harnessId === "codex" &&
+    (providerId === "codex" || providerId === "openai" || providerId === "openai-codex")
+  );
+}
+
+function shouldSkipAutomaticCompactionForCodexRuntime(params: {
+  cfg: OpenClawConfig;
+  sessionEntry: SessionEntry;
+  sessionAgentId: string;
+  sessionKey: string;
+  provider: string;
+  model: string;
+}): boolean {
+  const runtimeOverride = params.sessionEntry.agentRuntimeOverride?.trim().toLowerCase();
+  if (runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default") {
+    return runtimeOverride === "codex";
+  }
+  const harnessId = params.sessionEntry.agentHarnessId?.trim().toLowerCase();
+  if (harnessId) {
+    return isCodexNativeHarnessCompactionSession(params.sessionEntry, params.provider);
+  }
+  return (
+    resolveAgentHarnessPolicy({
+      provider: params.provider,
+      modelId: params.model,
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+    }).runtime === "codex"
   );
 }
 
@@ -401,8 +441,9 @@ async function compactNativeHarnessCliTranscript(params: {
 
   if (!result?.compacted) {
     const fallbackToContextEngine =
-      isUnsupportedNativeHarnessCompaction(result) ||
-      isRecoverableNativeHarnessCompactionFailure(result);
+      !isCodexNativeHarnessCompactionSession(params.sessionEntry, params.provider) &&
+      (isUnsupportedNativeHarnessCompaction(result) ||
+        isRecoverableNativeHarnessCompactionFailure(result));
     log.warn(
       `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${result?.reason ?? "nothing to compact"}`,
     );
@@ -435,10 +476,32 @@ export async function runCliTurnCompactionLifecycle(params: {
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
 }): Promise<SessionEntry | undefined> {
-  const sessionFile = params.sessionEntry?.sessionFile;
-  const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
+  const sessionEntry = params.sessionEntry;
+  const sessionFile = sessionEntry?.sessionFile;
+  const contextTokenBudget = resolvePositiveInteger(sessionEntry?.contextTokens);
   if (!sessionFile || !contextTokenBudget) {
-    return params.sessionEntry;
+    return sessionEntry;
+  }
+  if (
+    shouldSkipAutomaticCompactionForCodexRuntime({
+      cfg: params.cfg,
+      sessionEntry,
+      sessionAgentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: params.model,
+    })
+  ) {
+    // Codex CLI/app-server runtimes own their automatic transcript compaction.
+    // Avoid resurrecting OpenClaw's paternalistic budget fallback here; explicit
+    // /compact or plugin compaction still forwards through the harness path.
+    log.debug("skipping OpenClaw CLI compaction for Codex runtime session", {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      provider: params.provider,
+      model: params.model,
+    });
+    return sessionEntry;
   }
 
   const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);

@@ -255,6 +255,43 @@ describe("openclaw path CLI", () => {
       expect(readFileSync(filePath, "utf-8")).toBe(before);
     });
 
+    it("CLI-S08 sets slash-deep JSONC paths and parsed JSON values", async () => {
+      const filePath = join(workspaceDir, "openclaw.json");
+      writeFileSync(
+        filePath,
+        '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] }, "gateway": { "auth": { "token": "${TOKEN}" } } }\n',
+        "utf-8",
+      );
+      const rt = createTestRuntime();
+
+      await pathSetCommand(
+        "oc://openclaw.json/gateway/auth/token",
+        '{"source":"file","provider":"secrets","id":"/test"}',
+        { cwd: workspaceDir, json: true, valueJson: true },
+        rt,
+      );
+
+      expect(rt.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(filePath, "utf8")).gateway.auth.token).toEqual({
+        source: "file",
+        provider: "secrets",
+        id: "/test",
+      });
+
+      const rt2 = createTestRuntime();
+      await pathSetCommand(
+        "oc://openclaw.json/agents/list/0/tools/exec/security",
+        "allowlist",
+        { cwd: workspaceDir, json: true },
+        rt2,
+      );
+
+      expect(rt2.exitCode).toBe(0);
+      expect(JSON.parse(readFileSync(filePath, "utf8")).agents.list[0].tools.exec.security).toBe(
+        "allowlist",
+      );
+    });
+
     it("CLI-S03 sentinel-bearing value is refused at emit", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "token": "x" }', "utf-8");

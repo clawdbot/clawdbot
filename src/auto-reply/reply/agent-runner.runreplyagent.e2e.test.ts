@@ -13,9 +13,12 @@ import {
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { createReplyOperation, testing as replyRunTesting } from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 type AgentRunParams = {
+  sessionId?: string;
+  sessionFile?: string;
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
   onAssistantMessageStart?: () => Promise<void> | void;
   onReasoningStream?: (payload: { text?: string }) => Promise<void> | void;
@@ -116,6 +119,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedPiSessionMock.mockReset();
   state.compactEmbeddedPiSessionMock.mockResolvedValue({
     ok: true,
@@ -228,6 +232,78 @@ function createMinimalRun(params?: {
 }
 
 describe("runReplyAgent heartbeat followup guard", () => {
+  it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    const { run, typing } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+    active.complete();
+  });
+
+  it("runs visible turns with the session id returned by admission", async () => {
+    const active = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "pre-compact-session",
+      resetTriggered: false,
+    });
+    active.setPhase("preflight_compacting");
+    const sessionStore = {
+      main: {
+        sessionId: "pre-compact-session",
+        sessionFile: "/tmp/pre-compact.jsonl",
+        updatedAt: Date.now(),
+      },
+    };
+    const { run } = createMinimalRun({
+      runOverrides: { sessionId: "stale-session" },
+      sessionStore,
+    });
+
+    const pending = run();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    active.updateSessionId("post-compact-session");
+    sessionStore.main = {
+      sessionId: "post-compact-session",
+      sessionFile: "/tmp/post-compact.jsonl",
+      updatedAt: Date.now(),
+    };
+    active.complete();
+    await pending;
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const [call] = mockCallArgs(state.runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
+    expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
+  });
+
+  it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const { run, typing } = createMinimalRun({
+      opts: { abortSignal: abortController.signal },
+      isActive: false,
+      shouldFollowup: false,
+    });
+
+    const result = await run();
+
+    expect(result).toBeUndefined();
+    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(typing.cleanup).toHaveBeenCalledTimes(1);
+  });
+
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },

@@ -262,6 +262,11 @@ class MicCaptureManager(
     }
   }
 
+  internal fun submitTranscribedMessage(text: String) {
+    queueRecognizedMessage(text)
+    sendQueuedIfIdle()
+  }
+
   fun handleGatewayEvent(
     event: String,
     payloadJson: String?,
@@ -701,8 +706,7 @@ class MicCaptureManager(
         val text = obj["text"].asStringOrNull()?.trim().orEmpty()
         if (text.isNotEmpty()) {
           if (text != flushedPartialTranscript) {
-            queueRecognizedMessage(text)
-            sendQueuedIfIdle()
+            submitTranscribedMessage(text)
           } else {
             flushedPartialTranscript = null
             _liveTranscript.value = null

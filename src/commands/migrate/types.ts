@@ -7,6 +7,7 @@ export type MigrateCommonOptions = {
   provider?: string;
   source?: string;
   includeSecrets?: boolean;
+  authCredentials?: boolean;
   overwrite?: boolean;
   skills?: string[];
   plugins?: string[];

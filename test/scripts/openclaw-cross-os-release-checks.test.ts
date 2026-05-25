@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
@@ -50,7 +50,10 @@ import {
   packageHasScript,
   readInstalledVersion,
   readRunnerOverrideEnv,
+  runCommand,
+  resolveCommandSpawnInvocation,
   resolveExplicitBaselineVersion,
+  resolveInstalledCliInvocation,
   resolveInstalledPackageRootFromCliPath,
   resolveProviderConfig,
   resolveDevUpdateVerificationRef,
@@ -689,6 +692,77 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(normalizeWindowsCommandShimPath(String.raw`C:\Program Files\nodejs\node.exe`)).toBe(
       String.raw`C:\Program Files\nodejs\node.exe`,
     );
+  });
+
+  it("wraps Windows cmd shims without Node shell argv", () => {
+    expect(
+      resolveCommandSpawnInvocation(
+        String.raw`C:\Program Files\nodejs\npm.cmd`,
+        ["view", "openclaw@latest", "version"],
+        {
+          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: String.raw`C:\Windows\System32\cmd.exe`,
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        String.raw`""C:\Program Files\nodejs\npm.cmd" view openclaw@latest version"`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("wraps installed Windows CLI cmd fallbacks without Node shell argv", () => {
+    expect(
+      resolveInstalledCliInvocation(
+        win32.join(String.raw`C:\OpenClaw Prefix`, "openclaw.cmd"),
+        ["gateway", "run", "--port", "1234"],
+        {
+          comSpec: String.raw`C:\Windows\System32\cmd.exe`,
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: String.raw`C:\Windows\System32\cmd.exe`,
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        String.raw`""C:\OpenClaw Prefix\openclaw.cmd" gateway run --port 1234"`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("runs resolved command invocations and writes command logs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-run-command-"));
+    try {
+      const logPath = join(dir, "command.log");
+      const result = await runCommand(
+        process.execPath,
+        ["-e", "process.stdout.write('ok')"],
+        {
+          cwd: dir,
+          env: process.env,
+          logPath,
+        },
+      );
+
+      expect(result).toMatchObject({
+        exitCode: 0,
+        stdout: "ok",
+        stderr: "",
+      });
+      expect(readFileSync(logPath, "utf8")).toContain("start command=");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("derives the installed prefix from resolved CLI paths", () => {

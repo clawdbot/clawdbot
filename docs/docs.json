@@ -1232,6 +1232,7 @@
                   "plugins/sdk-provider-plugins",
                   "plugins/cli-backend-plugins",
                   "plugins/hooks",
+                  "plugins/plugin-permission-requests",
                   "plugins/adding-capabilities"
                 ]
               },

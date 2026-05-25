@@ -195,6 +195,7 @@ type BeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
+    allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (
       decision: "allow-once" | "allow-always" | "deny" | "timeout" | "cancelled",
@@ -214,6 +215,10 @@ Hook guard behavior for typed lifecycle hooks:
   requested approval.
 - `onResolution` receives the resolved approval decision - `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
+
+See [Plugin permission requests](/plugins/plugin-permission-requests) for
+approval routing, decision behavior, and when to use `requireApproval` instead
+of optional tools or exec approvals.
 
 Bundled plugins that need host-level policy can register trusted tool policies
 with `api.registerTrustedToolPolicy(...)`. These run before ordinary

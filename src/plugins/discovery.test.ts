@@ -879,6 +879,45 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("allows linked local install records to point at TypeScript source entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "linked-source-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/linked-source-pack",
+      extensions: ["./src/index.ts"],
+      setupEntry: "./src/setup-entry.ts",
+    });
+    writePluginManifest({ pluginDir, id: "linked-source-pack" });
+    writePluginEntry(path.join(pluginDir, "src", "index.ts"));
+    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+
+    const installRecords = {
+      "linked-source-pack": {
+        source: "path",
+        installPath: pluginDir,
+        sourcePath: pluginDir,
+      },
+    } satisfies Record<string, PluginInstallRecord>;
+    const result = await discoverWithStateDir(stateDir, { installRecords });
+
+    expectCandidateSource(
+      result.candidates,
+      "linked-source-pack",
+      fs.realpathSync(path.join(pluginDir, "src", "index.ts")),
+    );
+    expectCandidateFields(requireCandidateById(result.candidates, "linked-source-pack"), {
+      setupSource: fs.realpathSync(path.join(pluginDir, "src", "setup-entry.ts")),
+    });
+    expectNoDiagnostic({
+      diagnostics: result.diagnostics,
+      pluginId: "linked-source-pack",
+      messageIncludes: "requires compiled runtime output",
+    });
+  });
+
   it("still requires compiled runtime output for tracked installed package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "source-only-pack");

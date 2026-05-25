@@ -1,5 +1,9 @@
 import { normalizePluginsConfig } from "./config-state.js";
-import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import {
+  discoverOpenClawPlugins,
+  type PluginCandidate,
+  type PluginDiscoveryResult,
+} from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { LoadInstalledPluginIndexParams } from "./installed-plugin-index-types.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
@@ -7,6 +11,7 @@ import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manif
 export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginIndexParams): {
   registry: PluginManifestRegistry;
   candidates: readonly PluginCandidate[];
+  discovery?: PluginDiscoveryResult;
 } {
   if (params.candidates) {
     return {
@@ -35,6 +40,7 @@ export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginI
     });
   return {
     candidates: discovery.candidates,
+    discovery,
     registry: loadPluginManifestRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,

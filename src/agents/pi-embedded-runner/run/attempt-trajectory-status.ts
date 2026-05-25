@@ -17,7 +17,7 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   aborted: boolean;
   timedOut: boolean;
   assistantTexts: string[];
-  toolMetas: Array<{ toolName: string; meta?: string }>;
+  toolMetas: Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt: boolean;
   messagingToolSentTexts: string[];
@@ -71,6 +71,10 @@ function hasCommittedMessagingDeliveryEvidence(
   );
 }
 
+function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boolean }[]): boolean {
+  return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
+}
+
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
@@ -91,7 +95,8 @@ export function resolveAttemptTrajectoryTerminal(
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||
     params.yieldDetected === true ||
-    params.lastToolError !== undefined;
+    params.lastToolError !== undefined ||
+    hasAsyncStartedToolActivity(params.toolMetas);
 
   if (params.lastAssistantStopReason === "toolUse" && !hasExplicitTerminalDelivery) {
     return {

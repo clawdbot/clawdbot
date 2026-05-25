@@ -73,7 +73,8 @@ import {
   resolveMissingMetaError,
   resolveRuntimeIdleTtlMs,
 } from "./manager.utils.js";
-import { CachedRuntimeState, RuntimeCache } from "./runtime-cache.js";
+import { RuntimeCache } from "./runtime-cache.js";
+import type { CachedRuntimeState } from "./runtime-cache.js";
 import {
   inferRuntimeOptionPatchFromConfigOption,
   mergeRuntimeOptions,
@@ -179,8 +180,11 @@ export class AcpSessionManager {
   private readonly errorCountsByCode = new Map<string, number>();
   private evictedRuntimeCount = 0;
   private lastEvictedAt: number | undefined;
+  private readonly deps: AcpSessionManagerDeps;
 
-  constructor(private readonly deps: AcpSessionManagerDeps = DEFAULT_DEPS) {}
+  constructor(deps: AcpSessionManagerDeps = DEFAULT_DEPS) {
+    this.deps = deps;
+  }
 
   resolveSession(params: { cfg: OpenClawConfig; sessionKey: string }): AcpSessionResolution {
     const sessionKey = canonicalizeAcpSessionKey(params);

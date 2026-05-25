@@ -56,6 +56,7 @@ export async function buildDiscordMessageProcessContext(params: {
     discordConfig,
     accountId,
     runtime,
+    botUserId,
     mediaMaxBytes,
     discordRestFetch,
     abortSignal,
@@ -197,11 +198,13 @@ export async function buildDiscordMessageProcessContext(params: {
       })
     : null;
   const filteredReplyContext = replyContext && replyVisibility?.include ? replyContext : null;
+  const isReplyTargetSelf = Boolean(botUserId && filteredReplyContext?.senderId === botUserId);
+  const replyContextForPromptBody = isReplyTargetSelf ? null : filteredReplyContext;
   if (replyContext && !filteredReplyContext && isGuildMessage) {
     logVerbose(`discord: drop reply context (mode=${contextVisibilityMode})`);
   }
   const mediaListForContext = [...mediaList];
-  if (filteredReplyContext) {
+  if (replyContextForPromptBody) {
     const referencedReplyMediaList = await resolveReferencedReplyMediaList(message, mediaMaxBytes, {
       fetchImpl: discordRestFetch,
       ssrfPolicy: cfg.browser?.ssrfPolicy,
@@ -408,7 +411,7 @@ export async function buildDiscordMessageProcessContext(params: {
       quote: filteredReplyContext
         ? {
             id: filteredReplyContext.id,
-            body: filteredReplyContext.body,
+            body: replyContextForPromptBody?.body,
             sender: filteredReplyContext.sender,
           }
         : undefined,

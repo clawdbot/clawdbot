@@ -72,7 +72,7 @@ jobs:
             echo "PNPM_HOME=$PNPM_HOME"
           } >> "$GITHUB_ENV"
 
-          corepack enable
+          corepack enable --install-directory "$PNPM_HOME"
           node_bin="$(dirname "$(node -p 'process.execPath')")"
           echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
           echo "$node_bin" >> "$GITHUB_PATH"

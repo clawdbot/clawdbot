@@ -10,7 +10,8 @@ const mocks = vi.hoisted(() => ({
   updateAuthProfileStoreWithLock: vi.fn(async () => null),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
   updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
 }));
 
@@ -58,6 +59,12 @@ function makeContext(params: {
   };
 }
 
+function fakeJwt(payload: Record<string, unknown>): string {
+  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
+  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  return `${header}.${body}.signature`;
+}
+
 describe("Hermes migration provider secret write failures", () => {
   afterEach(async () => {
     for (const root of tempRoots) {
@@ -100,6 +107,65 @@ describe("Hermes migration provider secret write failures", () => {
           profileId: "openai:hermes-import",
         },
       },
+    ]);
+    expect(result.summary.errors).toBe(1);
+    expect(result.summary.migrated).toBe(0);
+  });
+
+  it("reports an error when an OAuth auth-profile write fails", async () => {
+    const root = await makeTempRoot();
+    const source = path.join(root, "hermes");
+    const workspaceDir = path.join(root, "workspace");
+    const stateDir = path.join(root, "state");
+    const accessToken = fakeJwt({
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      "https://api.openai.com/profile": { email: "codex@example.test" },
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct_fail",
+        chatgpt_plan_type: "plus",
+      },
+    });
+    await writeFile(
+      path.join(source, "auth.json"),
+      JSON.stringify({
+        providers: {
+          "openai-codex": {
+            last_refresh: new Date().toISOString(),
+            tokens: {
+              access_token: accessToken,
+              refresh_token: "refresh-fail-token",
+            },
+          },
+        },
+      }),
+    );
+
+    const provider = buildHermesMigrationProvider();
+    const result = await provider.apply(
+      makeContext({
+        source,
+        stateDir,
+        workspaceDir,
+        reportDir: path.join(root, "report"),
+      }),
+    );
+
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        id: "auth:openai-codex",
+        kind: "auth",
+        action: "create",
+        source: path.join(source, "auth.json"),
+        target: `${path.join(stateDir, "agents", "main", "agent")}/auth-profiles.json#openai-codex:account-acct_fail`,
+        status: "error",
+        sensitive: true,
+        reason: HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
+        details: expect.objectContaining({
+          provider: "openai-codex",
+          profileId: "openai-codex:account-acct_fail",
+          sourceProfileId: "openai-codex:account-acct_fail",
+        }),
+      }),
     ]);
     expect(result.summary.errors).toBe(1);
     expect(result.summary.migrated).toBe(0);

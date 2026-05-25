@@ -50,7 +50,12 @@ import type { EmbeddedPiCompactResult } from "./types.js";
 
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedPiCompactResult | undefined,
+  harnessPolicyRuntime: string | undefined,
+  explicitHarnessId: string | undefined,
 ): boolean {
+  if (harnessPolicyRuntime === "codex" || explicitHarnessId === "codex") {
+    return false;
+  }
   return (
     result?.ok === false &&
     (result.failure?.reason === "missing_thread_binding" ||
@@ -126,6 +131,13 @@ export async function compactEmbeddedPiSession(
     contextTokenBudget,
     contextEnginePluginId: resolveContextEngineOwnerPluginId(contextEngine),
   });
+  const harnessPolicy = resolveAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.config,
+    agentId: agentIds.sessionAgentId,
+    sessionKey: params.sessionKey,
+  });
   const harnessResult = await maybeCompactAgentHarnessSession({
     ...params,
     contextEngine,
@@ -133,7 +145,13 @@ export async function compactEmbeddedPiSession(
     contextEngineRuntimeContext,
   });
   if (harnessResult) {
-    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+    if (
+      !shouldFallbackAfterHarnessCompaction(
+        harnessResult,
+        harnessPolicy.runtime,
+        params.agentHarnessId,
+      )
+    ) {
       await contextEngine.dispose?.();
       return harnessResult;
     }

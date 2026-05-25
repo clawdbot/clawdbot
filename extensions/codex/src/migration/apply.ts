@@ -43,6 +43,7 @@ import {
   clearSharedCodexAppServerClientIfCurrentAndWait,
   getSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
+import { applyCodexAuthItem, buildCodexAuthConfigPatchItems } from "./auth.js";
 import { buildCodexMigrationPlan } from "./plan.js";
 import {
   buildCodexPluginsConfigValue,
@@ -115,6 +116,21 @@ export async function applyCodexMigrationPlan(params: {
   const plan = params.plan ?? (await buildCodexMigrationPlan(params.ctx));
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "codex");
   const items: MigrationItem[] = [];
+  const targets = resolveCodexMigrationTargets(params.ctx);
+  const codexHome =
+    typeof plan.metadata?.codexHome === "string" && plan.metadata.codexHome.trim()
+      ? plan.metadata.codexHome
+      : plan.source;
+  const authSource = {
+    root: plan.source,
+    confidence: "high" as const,
+    codexHome,
+    authPath: path.join(codexHome, "auth.json"),
+    modelsCachePath: path.join(codexHome, "models_cache.json"),
+    skills: [],
+    plugins: [],
+    archivePaths: [],
+  };
   const runtime = withCachedMigrationConfigRuntime(
     params.ctx.runtime ?? params.runtime,
     params.ctx.config,
@@ -127,6 +143,21 @@ export async function applyCodexMigrationPlan(params: {
     }
     if (item.id === CODEX_PLUGIN_CONFIG_ITEM_ID) {
       items.push(await applyCodexPluginConfigItem(applyCtx, item, items));
+    } else if (item.kind === "auth") {
+      const authItem = await applyCodexAuthItem({
+        ctx: applyCtx,
+        item,
+        source: authSource,
+        targets,
+      });
+      items.push(authItem);
+      items.push(
+        ...(await buildCodexAuthConfigPatchItems({
+          ctx: applyCtx,
+          item: authItem,
+          source: authSource,
+        })),
+      );
     } else if (item.kind === "plugin" && item.action === "install") {
       items.push(await applyCodexPluginInstallItem(applyCtx, item));
     } else if (item.kind === "manual") {

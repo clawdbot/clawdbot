@@ -2226,6 +2226,7 @@ export async function runEmbeddedAttempt(
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
         sessionManager,
+        workspaceDir: effectiveWorkspace,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
@@ -4608,10 +4609,19 @@ export async function runEmbeddedAttempt(
 
       const toolMetasNormalized = toolMetas
         .filter(
-          (entry): entry is { toolName: string; meta?: string } =>
+          (entry): entry is { toolName: string; meta?: string; asyncStarted?: boolean } =>
             typeof entry.toolName === "string" && entry.toolName.trim().length > 0,
         )
-        .map((entry) => ({ toolName: entry.toolName, meta: entry.meta }));
+        .map((entry) => {
+          const normalized: { toolName: string; meta?: string; asyncStarted?: boolean } = {
+            toolName: entry.toolName,
+            meta: entry.meta,
+          };
+          if (entry.asyncStarted === true) {
+            normalized.asyncStarted = true;
+          }
+          return normalized;
+        });
       if (cacheObservabilityEnabled) {
         const cacheBreakForLog = cacheBreak as PromptCacheBreak | null;
         if (cacheBreakForLog) {
@@ -4783,6 +4793,7 @@ export async function runEmbeddedAttempt(
           replayMetadata,
           promptErrorSource,
           timedOutDuringCompaction,
+          toolMetas: toolMetasNormalized,
         },
       });
       const terminalAssistantTexts = resolveTerminalAssistantTexts({

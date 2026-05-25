@@ -2370,7 +2370,9 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
     const outside = path.join(root, "outside-secret.txt");
     fs.writeFileSync(outside, "secret");
     createAlias(outside, path.join(root, "AGENTS.md"));
-    await expect(readWorkspaceContextForSummary()).resolves.toBe("");
+    await expect(readWorkspaceContextForSummary(["Session Startup", "Red Lines"])).resolves.toBe(
+      "",
+    );
   } finally {
     cwdSpy.mockRestore();
     fs.rmSync(root, { recursive: true, force: true });
@@ -2378,6 +2380,83 @@ async function expectWorkspaceSummaryEmptyForAgentsAlias(
 }
 
 describe("readWorkspaceContextForSummary", () => {
+  async function withWorkspaceSummary(
+    content: string,
+    sectionNames: string[] | undefined,
+  ): Promise<string> {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-summary-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+    try {
+      fs.writeFileSync(path.join(root, "AGENTS.md"), content);
+      return await readWorkspaceContextForSummary(sectionNames);
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("returns empty when post-compaction sections are not configured", async () => {
+    const result = await withWorkspaceSummary(
+      "## Session Startup\n\nRead AGENTS.md\n\n## Red Lines\n\nBe careful.\n",
+      undefined,
+    );
+
+    expect(result).toBe("");
+  });
+
+  it("returns empty when post-compaction sections are explicitly disabled", async () => {
+    const result = await withWorkspaceSummary("## Session Startup\n\nRead AGENTS.md\n", []);
+
+    expect(result).toBe("");
+  });
+
+  it("injects workspace critical rules only for explicit section opt-in", async () => {
+    const result = await withWorkspaceSummary(
+      "## Session Startup\n\nRead AGENTS.md\n\n## Other\n\nIgnore me.\n",
+      ["Session Startup", "Red Lines"],
+    );
+
+    expect(result).toContain("<workspace-critical-rules>");
+    expect(result).toContain("## Session Startup");
+    expect(result).toContain("Read AGENTS.md");
+    expect(result).not.toContain("Ignore me");
+  });
+
+  it("reads workspace context from the configured workspace instead of process cwd", async () => {
+    const processRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-cwd-"));
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-compaction-workspace-"));
+    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(processRoot);
+    try {
+      fs.writeFileSync(
+        path.join(processRoot, "AGENTS.md"),
+        "## Session Startup\n\nWrong cwd rules.\n",
+      );
+      fs.writeFileSync(
+        path.join(workspaceRoot, "AGENTS.md"),
+        "## Session Startup\n\nUse the run workspace rules.\n",
+      );
+
+      const result = await readWorkspaceContextForSummary(["Session Startup"], workspaceRoot);
+
+      expect(result).toContain("Use the run workspace rules.");
+      expect(result).not.toContain("Wrong cwd rules.");
+    } finally {
+      cwdSpy.mockRestore();
+      fs.rmSync(processRoot, { recursive: true, force: true });
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves legacy fallback only for the explicit default section pair", async () => {
+    const result = await withWorkspaceSummary(
+      "## Every Session\n\nDo startup things.\n\n## Safety\n\nBe safe.\n",
+      ["Red Lines", "Session Startup"],
+    );
+
+    expect(result).toContain("Do startup things");
+    expect(result).toContain("Be safe");
+  });
+
   it.runIf(process.platform !== "win32")(
     "returns empty when AGENTS.md is a symlink escape",
     async () => {

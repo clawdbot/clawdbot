@@ -234,6 +234,10 @@ type OpenAIRealtimeApiKeyResolution =
   | { status: "available"; value: string }
   | { status: "missing" };
 
+type OpenAIRealtimeAuthResolution =
+  | { status: "available"; kind: "api-key" | "codex-oauth"; value: string }
+  | { status: "missing" };
+
 const KEYCHAIN_SECRET_REF_RE = /^keychain:([^:]+):([^:]+)$/;
 const KEYCHAIN_LOOKUP_TIMEOUT_MS = 5000;
 const resolvedKeychainSecretRefCache = new Map<string, string>();
@@ -269,7 +273,7 @@ function resolveKeychainSecretRef(value: string): string | undefined {
   }
 }
 
-function resolveOpenAIRealtimeApiKey(
+function resolveOpenAIRealtimeSecretInput(
   configuredApiKey: string | undefined,
 ): OpenAIRealtimeApiKeyResolution {
   const configured = normalizeSecretInputString(configuredApiKey);
@@ -278,12 +282,29 @@ function resolveOpenAIRealtimeApiKey(
     return value ? { status: "available", value } : { status: "missing" };
   }
 
+  return { status: "missing" };
+}
+
+function resolveOpenAIRealtimeEnvApiKey(): OpenAIRealtimeApiKeyResolution {
   const envValue = normalizeSecretInputString(process.env.OPENAI_API_KEY);
   if (!envValue) {
     return { status: "missing" };
   }
   const value = resolveKeychainSecretRef(envValue);
   return value ? { status: "available", value } : { status: "missing" };
+}
+
+function resolveOpenAIRealtimeApiKey(
+  configuredApiKey: string | undefined,
+): OpenAIRealtimeApiKeyResolution {
+  const configured = resolveOpenAIRealtimeSecretInput(configuredApiKey);
+  if (
+    configured.status === "available" ||
+    hasOpenAIRealtimeConfiguredApiKeyInput(configuredApiKey)
+  ) {
+    return configured;
+  }
+  return resolveOpenAIRealtimeEnvApiKey();
 }
 
 function requireOpenAIRealtimeApiKey(configuredApiKey: string | undefined): string {
@@ -294,6 +315,10 @@ function requireOpenAIRealtimeApiKey(configuredApiKey: string | undefined): stri
   throw new Error("OpenAI API key missing");
 }
 
+function hasOpenAIRealtimeConfiguredApiKeyInput(configuredApiKey: string | undefined): boolean {
+  return Boolean(normalizeSecretInputString(configuredApiKey));
+}
+
 function hasOpenAIRealtimeApiKeyInput(configuredApiKey: string | undefined): boolean {
   return Boolean(
     normalizeSecretInputString(configuredApiKey) ??
@@ -301,27 +326,51 @@ function hasOpenAIRealtimeApiKeyInput(configuredApiKey: string | undefined): boo
   );
 }
 
-async function resolveOpenAIRealtimeBrowserApiKey(params: {
-  configuredApiKey: string | undefined;
-  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-}): Promise<string | undefined> {
-  const resolved = resolveOpenAIRealtimeApiKey(params.configuredApiKey);
-  if (resolved.status === "available") {
-    return resolved.value;
-  }
-  return await resolveProviderAuthProfileApiKey({
-    provider: "openai-codex",
-    cfg: params.cfg,
-  });
+function prefersCodexOAuthForRealtimeModel(model: string | undefined): boolean {
+  return (model ?? OPENAI_REALTIME_DEFAULT_MODEL).trim().toLowerCase().startsWith("gpt-");
 }
 
-async function requireOpenAIRealtimeBrowserApiKey(params: {
+async function resolveOpenAIRealtimeDefaultAuth(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
-}): Promise<string> {
-  const apiKey = await resolveOpenAIRealtimeBrowserApiKey(params);
-  if (apiKey) {
-    return apiKey;
+  model: string | undefined;
+}): Promise<OpenAIRealtimeAuthResolution> {
+  const configured = resolveOpenAIRealtimeSecretInput(params.configuredApiKey);
+  if (
+    configured.status === "available" ||
+    hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)
+  ) {
+    return configured.status === "available"
+      ? { status: "available", kind: "api-key", value: configured.value }
+      : { status: "missing" };
+  }
+
+  if (prefersCodexOAuthForRealtimeModel(params.model)) {
+    const codexToken = await resolveProviderAuthProfileApiKey({
+      provider: "openai-codex",
+      cfg: params.cfg,
+      includeExternalCliAuth: true,
+    });
+    if (codexToken) {
+      return { status: "available", kind: "codex-oauth", value: codexToken };
+    }
+  }
+
+  const env = resolveOpenAIRealtimeEnvApiKey();
+  if (env.status === "available") {
+    return { status: "available", kind: "api-key", value: env.value };
+  }
+  return { status: "missing" };
+}
+
+async function requireOpenAIRealtimeDefaultAuth(params: {
+  configuredApiKey: string | undefined;
+  cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  model: string | undefined;
+}): Promise<OpenAIRealtimeAuthResolution & { status: "available" }> {
+  const auth = await resolveOpenAIRealtimeDefaultAuth(params);
+  if (auth.status === "available") {
+    return auth;
   }
   throw new Error("OpenAI API key or Codex OAuth missing");
 }
@@ -329,14 +378,21 @@ async function requireOpenAIRealtimeBrowserApiKey(params: {
 function hasOpenAIRealtimeBrowserAuthInput(params: {
   configuredApiKey: string | undefined;
   cfg: RealtimeVoiceBrowserSessionCreateRequest["cfg"] | undefined;
+  model: string | undefined;
 }): boolean {
-  if (hasOpenAIRealtimeApiKeyInput(params.configuredApiKey)) {
+  if (hasOpenAIRealtimeConfiguredApiKeyInput(params.configuredApiKey)) {
     return true;
   }
-  return isProviderAuthProfileConfigured({
-    provider: "openai-codex",
-    cfg: params.cfg,
-  });
+  if (prefersCodexOAuthForRealtimeModel(params.model)) {
+    return (
+      isProviderAuthProfileConfigured({
+        provider: "openai-codex",
+        cfg: params.cfg,
+        includeExternalCliAuth: true,
+      }) || hasOpenAIRealtimeApiKeyInput(undefined)
+    );
+  }
+  return hasOpenAIRealtimeApiKeyInput(undefined);
 }
 
 function base64ToBuffer(b64: string): Buffer {
@@ -621,6 +677,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     | { url: string; headers: Record<string, string> }
     | Promise<{ url: string; headers: Record<string, string> }> {
     const cfg = this.config;
+    const model = cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL;
     if (cfg.azureEndpoint && cfg.azureDeployment) {
       const apiKey = requireOpenAIRealtimeApiKey(cfg.apiKey);
       const base = cfg.azureEndpoint
@@ -642,21 +699,56 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       };
     }
 
-    const directApiKey = resolveOpenAIRealtimeApiKey(cfg.apiKey);
-    if (directApiKey.status === "missing") {
-      if (cfg.azureEndpoint) {
+    if (hasOpenAIRealtimeConfiguredApiKeyInput(cfg.apiKey)) {
+      const directApiKey = resolveOpenAIRealtimeSecretInput(cfg.apiKey);
+      if (directApiKey.status === "missing") {
         throw new Error("OpenAI API key missing");
       }
-      return this.resolveOAuthConnectionParams();
+      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
     }
-    const apiKey = directApiKey.value;
+
+    if (cfg.azureEndpoint) {
+      const directApiKey = resolveOpenAIRealtimeEnvApiKey();
+      if (directApiKey.status === "missing") {
+        throw new Error("OpenAI API key missing");
+      }
+      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+    }
+
+    if (!prefersCodexOAuthForRealtimeModel(model)) {
+      const directApiKey = resolveOpenAIRealtimeEnvApiKey();
+      if (directApiKey.status === "missing") {
+        throw new Error("OpenAI API key missing");
+      }
+      return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+    }
+
+    if (
+      !isProviderAuthProfileConfigured({
+        provider: "openai-codex",
+        cfg: cfg.cfg,
+        includeExternalCliAuth: true,
+      })
+    ) {
+      const directApiKey = resolveOpenAIRealtimeEnvApiKey();
+      if (directApiKey.status === "available") {
+        return this.resolveApiKeyConnectionParams(directApiKey.value, model);
+      }
+    }
+
+    return this.resolveDefaultConnectionParams(model);
+  }
+
+  private resolveApiKeyConnectionParams(
+    apiKey: string,
+    model: string,
+  ): { url: string; headers: Record<string, string> } {
+    const cfg = this.config;
     if (cfg.azureEndpoint) {
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
         .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
-      const url = `${base}/v1/realtime?model=${encodeURIComponent(
-        cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
-      )}`;
+      const url = `${base}/v1/realtime?model=${encodeURIComponent(model)}`;
       return {
         url,
         headers: resolveProviderRequestHeaders({
@@ -669,9 +761,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       };
     }
 
-    const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(
-      cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
-    )}`;
+    const url = `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     return {
       url,
       headers: resolveProviderRequestHeaders({
@@ -688,16 +778,33 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     };
   }
 
-  private async resolveOAuthConnectionParams(): Promise<{
+  private async resolveDefaultConnectionParams(model: string): Promise<{
     url: string;
     headers: Record<string, string>;
   }> {
     const cfg = this.config;
-    const authToken = await requireOpenAIRealtimeBrowserApiKey({
+    const auth = await requireOpenAIRealtimeDefaultAuth({
       configuredApiKey: cfg.apiKey,
       cfg: cfg.cfg,
+      model,
     });
-    const model = cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL;
+    if (auth.kind === "api-key") {
+      return this.resolveApiKeyConnectionParams(auth.value, model);
+    }
+    if (cfg.azureEndpoint) {
+      throw new Error("OpenAI API key missing");
+    }
+    return this.resolveOAuthConnectionParams(model, auth.value);
+  }
+
+  private async resolveOAuthConnectionParams(
+    model: string,
+    authToken: string,
+  ): Promise<{
+    url: string;
+    headers: Record<string, string>;
+  }> {
+    const cfg = this.config;
     const clientSecret = await createOpenAIRealtimeClientSecret({
       authToken,
       auditContext: "openai-realtime-bridge-session",
@@ -1196,15 +1303,16 @@ async function createOpenAIRealtimeBrowserSession(
   req: RealtimeVoiceBrowserSessionCreateRequest,
 ): Promise<RealtimeVoiceBrowserSession> {
   const config = normalizeProviderConfig(req.providerConfig);
-  const apiKey = await requireOpenAIRealtimeBrowserApiKey({
-    configuredApiKey: config.apiKey,
-    cfg: req.cfg,
-  });
   if (config.azureEndpoint || config.azureDeployment) {
     throw new Error("OpenAI Realtime browser sessions do not support Azure endpoints yet");
   }
 
   const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+  const auth = await requireOpenAIRealtimeDefaultAuth({
+    configuredApiKey: config.apiKey,
+    cfg: req.cfg,
+    model,
+  });
   const voice = normalizeOpenAIRealtimeVoice(req.voice) ?? config.voice ?? "alloy";
   const session: Record<string, unknown> = {
     type: "realtime",
@@ -1242,7 +1350,7 @@ async function createOpenAIRealtimeBrowserSession(
   }
 
   const clientSecret = await createOpenAIRealtimeClientSecret({
-    authToken: apiKey,
+    authToken: auth.value,
     auditContext: "openai-realtime-browser-session",
     session,
   });
@@ -1288,6 +1396,7 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       return hasOpenAIRealtimeBrowserAuthInput({
         configuredApiKey: config.apiKey,
         cfg,
+        model: config.model,
       });
     },
     createBridge: (req) => {

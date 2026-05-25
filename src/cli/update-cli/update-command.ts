@@ -2750,6 +2750,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
       stdio: childStdio,
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel
@@ -2906,7 +2907,25 @@ async function markControlPlaneUpdateRestartSentinelFailureBestEffort(params: {
   }
 }
 
+async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
+  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  return run().finally(() => {
+    if (previousUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+    }
+  });
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
+  return await withUpdateInProgressEnv(async () => {
+    await updateCommandInternal(opts);
+  });
+}
+
+async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
   await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   const invocationCwd = tryResolveInvocationCwd();
@@ -2950,7 +2969,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
     process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = (await readPackageVersion(root)) ?? VERSION;
 
-    let postCoreConfigSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+    let postCoreConfigSnapshot = await readConfigFileSnapshot({
+      skipPluginValidation: true,
+      suppressFutureVersionWarning: true,
+    });
     const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
       currentSnapshot: postCoreConfigSnapshot,
@@ -3416,7 +3438,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   let postUpdateConfigSnapshot =
     result.status === "ok" && !opts.dryRun
-      ? await readConfigFileSnapshot({ skipPluginValidation: true })
+      ? await readConfigFileSnapshot({
+          skipPluginValidation: true,
+          suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+        })
       : configSnapshot;
   if (!shouldResumePostCoreInFreshProcess) {
     postUpdateConfigSnapshot = await persistRequestedUpdateChannel({

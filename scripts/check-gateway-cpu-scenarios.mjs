@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawnSync as defaultSpawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
@@ -137,9 +138,10 @@ function readJsonIfExists(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function runStep(name, command, args, options = {}) {
+function runStep(name, command, args, options = {}, params = {}) {
   console.error(`[gateway-cpu] start ${name}`);
-  const result = spawnSync(command, args, {
+  const spawn = params.spawnSync ?? defaultSpawnSync;
+  const result = spawn(command, args, {
     cwd: process.cwd(),
     env: process.env,
     stdio: "inherit",
@@ -167,8 +169,7 @@ function toRepoRelativePath(absolutePath) {
   return relativePath;
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
+async function runGatewayCpuScenarios(options, params = {}) {
   fs.mkdirSync(options.outputDir, { recursive: true });
 
   const startupOutput = path.join(options.outputDir, "gateway-startup-bench.json");
@@ -177,19 +178,35 @@ async function main() {
   const steps = [];
 
   if (!options.skipStartup) {
+    const startupBuild = runStep(
+      "startup build",
+      process.execPath,
+      ["scripts/ensure-cli-startup-build.mjs"],
+      {},
+      params,
+    );
+    steps.push(startupBuild);
     steps.push(
-      runStep("startup bench", process.execPath, [
-        "--import",
-        "tsx",
-        "scripts/bench-gateway-startup.ts",
-        "--runs",
-        String(options.runs),
-        "--warmup",
-        String(options.warmup),
-        "--output",
-        startupOutput,
-        ...options.startupCases.flatMap((id) => ["--case", id]),
-      ]),
+      startupBuild.status === 0
+        ? runStep(
+            "startup bench",
+            process.execPath,
+            [
+              "--import",
+              "tsx",
+              "scripts/bench-gateway-startup.ts",
+              "--runs",
+              String(options.runs),
+              "--warmup",
+              String(options.warmup),
+              "--output",
+              startupOutput,
+              ...options.startupCases.flatMap((id) => ["--case", id]),
+            ],
+            {},
+            params,
+          )
+        : { name: "startup bench", signal: null, status: 1 },
     );
   }
 
@@ -207,7 +224,7 @@ async function main() {
       ...options.qaScenarios.flatMap((id) => ["--scenario", id]),
     ]);
     steps.push(
-      runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options),
+      runStep("qa suite", qaCommand.command, qaCommand.args, qaCommand.options, params),
     );
   }
 
@@ -239,14 +256,30 @@ async function main() {
   };
   const summaryPath = path.join(options.outputDir, "summary.json");
   fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
-  console.log(JSON.stringify(summary, null, 2));
+  if (!params.silent) {
+    console.log(JSON.stringify(summary, null, 2));
+  }
 
-  if (steps.some((step) => step.status !== 0)) {
+  const exitCode = steps.some((step) => step.status !== 0) ? 1 : 0;
+  return { exitCode, summary };
+}
+
+async function main(params = {}) {
+  const options = parseArgs(params.argv ?? process.argv.slice(2));
+  const result = await runGatewayCpuScenarios(options, params);
+  if (result.exitCode !== 0) {
     process.exitCode = 1;
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.stack : String(error));
-  process.exitCode = 1;
-});
+export const testing = {
+  parseArgs,
+  runGatewayCpuScenarios,
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exitCode = 1;
+  });
+}

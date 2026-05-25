@@ -18,7 +18,10 @@ vi.mock("../../plugins/manifest-contract-eligibility.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
-  testing: {},
+  clearProviderRuntimePluginCacheForTest: vi.fn(),
+  testing: {
+    clearProviderRuntimePluginCacheForTest: vi.fn(),
+  },
   ensureProviderRuntimePluginHandle: vi.fn(
     (params) => params.runtimeHandle ?? { provider: "openai" },
   ),

@@ -11,6 +11,8 @@ import { isAbortError } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_CONTEXT_TOKENS } from "./defaults.js";
 import { isTimeoutError } from "./failover-error.js";
+
+type PartialSummaryError = Error & { partialSummary?: string };
 import { stripRuntimeContextCustomMessages } from "./internal-runtime-context.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
@@ -335,28 +337,56 @@ async function summarizeChunks(params: {
     params.customInstructions,
     params.summarizationInstructions,
   );
+  let hasGeneratedChunk = false;
   for (const chunk of chunks) {
-    summary = await retryAsync(
-      () =>
-        generateSummary(
-          chunk,
-          params.model,
-          params.reserveTokens,
-          params.apiKey,
-          params.headers,
-          params.signal,
-          effectiveInstructions,
-          summary,
-        ),
-      {
-        attempts: 3,
-        minDelayMs: 500,
-        maxDelayMs: 5000,
-        jitter: 0.2,
-        label: "compaction/generateSummary",
-        shouldRetry: (err) => !isAbortError(err) && !isTimeoutError(err),
-      },
-    );
+    try {
+      summary = await retryAsync(
+        () =>
+          generateSummary(
+            chunk,
+            params.model,
+            params.reserveTokens,
+            params.apiKey,
+            params.headers,
+            params.signal,
+            effectiveInstructions,
+            summary,
+          ),
+        {
+          attempts: 3,
+          minDelayMs: 500,
+          maxDelayMs: 5000,
+          jitter: 0.2,
+          label: "compaction/generateSummary",
+          shouldRetry: (err) => !isAbortError(err) && !isTimeoutError(err),
+        },
+      );
+      hasGeneratedChunk = true;
+    } catch (err) {
+      // Abort and timeout errors always propagate immediately.
+      if (isAbortError(err) || isTimeoutError(err)) {
+        throw err;
+      }
+      // No chunk has succeeded yet — rethrow so summarizeWithFallback
+      // can run its existing "Context contained N messages" fallback.
+      if (!hasGeneratedChunk) {
+        throw err;
+      }
+      // At least one chunk succeeded — throw with the partial summary
+      // attached so summarizeWithFallback can try the oversized-message
+      // retry first and only fall back to the partial summary if that
+      // also fails.
+      const completedChunks = chunks.indexOf(chunk);
+      log.warn("chunk summarization failed after retries; partial summary available", {
+        err,
+        completedChunks,
+        totalChunks: chunks.length,
+      });
+      const partial = new Error("partial summarization failure");
+      (partial as PartialSummaryError).partialSummary =
+        `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
+      throw partial;
+    }
   }
 
   return summary ?? DEFAULT_SUMMARY_FALLBACK;
@@ -419,10 +449,12 @@ export async function summarizeWithFallback(params: {
   }
 
   // Try full summarization first
+  let partialSummaryFallback: string | undefined;
   try {
     return await summarizeChunks(params);
   } catch (fullError) {
     log.warn(`Full summarization failed: ${formatErrorMessage(fullError)}`);
+    partialSummaryFallback = (fullError as PartialSummaryError).partialSummary;
   }
 
   // Fallback 1: Summarize only small messages, note oversized ones
@@ -453,10 +485,21 @@ export async function summarizeWithFallback(params: {
       return partialSummary + notes;
     } catch (partialError) {
       log.warn(`Partial summarization also failed: ${formatErrorMessage(partialError)}`);
+      // Prefer the oversized retry's partial summary over the full attempt's,
+      // since it covers the non-oversized transcript. Append oversized notes
+      // so the model knows large content was filtered.
+      const retryPartial = (partialError as PartialSummaryError).partialSummary;
+      if (retryPartial) {
+        const notes = oversizedNotes.length > 0 ? `\n\n${oversizedNotes.join("\n")}` : "";
+        partialSummaryFallback = retryPartial + notes;
+      }
     }
   }
 
-  // Final fallback: Just note what was there
+  // Final fallback: use best available partial summary, otherwise generic note
+  if (partialSummaryFallback) {
+    return partialSummaryFallback;
+  }
   return (
     `Context contained ${messages.length} messages (${oversizedNotes.length} oversized). ` +
     `Summary unavailable due to size limits.`

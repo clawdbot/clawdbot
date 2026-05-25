@@ -84,6 +84,7 @@ internal fun resolveInitialChatLoadSessionKey(
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
+  val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -164,6 +165,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 
     ChatMessageListCard(
       messages = messages,
+      historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,

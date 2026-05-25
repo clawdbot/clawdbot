@@ -1372,7 +1372,7 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     });
   });
 
-  it("falls back to context-engine compaction when native harness binding is recoverable", async () => {
+  it("does not fall back to context-engine compaction for Codex native binding failures", async () => {
     maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
       ok: false,
       compacted: false,
@@ -1389,10 +1389,11 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       }),
     );
 
-    expect(result.ok).toBe(true);
-    expect(result.compacted).toBe(true);
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("no codex app-server thread binding");
     expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
-    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
   it("does not fire after_compaction when compaction fails", async () => {

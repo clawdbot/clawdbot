@@ -103,6 +103,7 @@ export async function runIMessageCatchup(
     const sinceISO = new Date(sinceMs).toISOString();
     const collected: IMessageCatchupRow[] = [];
     const perChatLimit = Math.min(limit, PER_CHAT_HISTORY_LIMIT_CAP);
+    let historyFetchFailed = false;
     // Track the highest rowid / date the imsg bridge actually returned across
     // all chats, regardless of whether each row passed the parser. The catchup
     // loop uses this as a cursor-advance floor so an unparseable row (corrupt
@@ -140,6 +141,7 @@ export async function runIMessageCatchup(
       } catch (err) {
         // Best-effort per chat. A single broken chat must not poison the
         // whole pass — drop and continue.
+        historyFetchFailed = true;
         warnLog(`imessage catchup: messages.history failed for chat_id=${chatId}: ${String(err)}`);
         continue;
       }
@@ -237,6 +239,7 @@ export async function runIMessageCatchup(
     return {
       resolved: true,
       rows: capped,
+      fullyCaughtUp: !historyFetchFailed && !isCapTruncated,
       ...(Number.isFinite(effectiveWatermarkRowid)
         ? { highWatermarkRowid: effectiveWatermarkRowid }
         : {}),

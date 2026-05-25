@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".VoiceE2eReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="ai.openclaw.app.debug.RUN_VOICE_E2E" />
+            </intent-filter>
+        </receiver>
+        <service
+            android:name=".VoiceE2eService"
+            android:exported="false" />
+    </application>
+</manifest>

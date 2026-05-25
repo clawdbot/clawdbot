@@ -189,6 +189,7 @@ by default, plus git-checkout installs under the same prefix flow.
 <Steps>
   <Step title="Install local Node runtime">
     Downloads a pinned supported Node LTS tarball (the version is embedded in the script and updated independently) to `<prefix>/tools/node-v<version>` and verifies SHA-256.
+    On Alpine/musl Linux, where Node does not publish compatible tarballs for the pinned runtime, installs `nodejs` and `npm` with `apk` and links that runtime into the prefix wrapper path.
   </Step>
   <Step title="Ensure Git">
     If Git is missing, attempts install via apt/dnf/yum on Linux or Homebrew on macOS.

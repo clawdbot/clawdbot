@@ -258,6 +258,17 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
+  it("strips Grok-style plain-text tool calls before user-facing delivery", () => {
+    const input = [
+      "Before",
+      '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}',
+      '[tool:message] {"action":"send","channel":"channel:123","message":"[tool:read] {\\"path\\":\\"/app/skills/meme-maker/SKILL.md\\"}"}',
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\nAfter");
+  });
+
   it("strips MiniMax plain-text tool calls before user-facing delivery", () => {
     const input = [
       "Let me check that.",

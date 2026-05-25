@@ -132,12 +132,8 @@ import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from ".
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-  ReplyRunAlreadyActiveError,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
+import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import {
@@ -158,6 +154,38 @@ function isDispatchReplyOperationAbortedError(
   error: unknown,
 ): error is DispatchReplyOperationAbortedError {
   return error instanceof DispatchReplyOperationAbortedError;
+}
+
+function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals: AbortSignal[] = [];
+  for (const signal of signals) {
+    if (signal && !activeSignals.includes(signal)) {
+      activeSignals.push(signal);
+    }
+  }
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+  const controller = new AbortController();
+  const abort = (signal: AbortSignal) => {
+    if (!controller.signal.aborted) {
+      controller.abort(signal.reason);
+    }
+  };
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      abort(signal);
+      return controller.signal;
+    }
+    signal.addEventListener("abort", () => abort(signal), { once: true });
+  }
+  return controller.signal;
 }
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -682,23 +710,22 @@ async function mirrorInternalSourceReplyToTranscript(params: {
   }
 }
 
-function runWithReplyOperationAbort<T>(
-  operation: ReplyOperation | undefined,
+function runWithDispatchAbortSignal<T>(
+  signal: AbortSignal | undefined,
   run: () => Promise<T> | T,
 ): Promise<T> {
-  if (!operation) {
+  if (!signal) {
     return Promise.resolve().then(run);
   }
-  const signal = operation.abortSignal;
-  const shouldStopForOperationAbort = () => signal.aborted;
-  if (signal.aborted && shouldStopForOperationAbort()) {
+  const shouldStopForAbort = () => signal.aborted;
+  if (signal.aborted && shouldStopForAbort()) {
     return Promise.reject(new DispatchReplyOperationAbortedError());
   }
   let settled = false;
   let abortHandler: (() => void) | undefined;
   const aborted = new Promise<never>((_, reject) => {
     abortHandler = () => {
-      if (!settled && shouldStopForOperationAbort()) {
+      if (!settled && shouldStopForAbort()) {
         reject(new DispatchReplyOperationAbortedError());
       }
     };
@@ -713,7 +740,7 @@ function runWithReplyOperationAbort<T>(
       },
       (error: unknown) => {
         settled = true;
-        if (shouldStopForOperationAbort() && isAbortError(error)) {
+        if (shouldStopForAbort() && isAbortError(error)) {
           throw new DispatchReplyOperationAbortedError();
         }
         throw error;
@@ -918,49 +945,116 @@ export async function dispatchReplyFromConfig(
   const workspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   let dispatchReplyOperation: ReplyOperation | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
-  const ensureDispatchReplyOperation = (): ReplyOperation | undefined => {
+  let preDispatchAbortOperation: ReplyOperation | undefined;
+  type DispatchReplyOperationAcquisition = { status: "ready" } | { status: "busy" };
+  const ensureDispatchReplyOperation = async (
+    phase: "pre_dispatch" | "dispatch",
+  ): Promise<DispatchReplyOperationAcquisition> => {
     if (dispatchReplyOperation && !dispatchReplyOperation.result) {
-      return dispatchReplyOperation;
+      return { status: "ready" };
     }
     if (dispatchAbortOperation && !dispatchAbortOperation.result) {
-      return dispatchReplyOperation;
+      return dispatchReplyOperation ? { status: "ready" } : { status: "busy" };
+    }
+    if (
+      phase === "dispatch" &&
+      preDispatchAbortOperation?.result &&
+      preDispatchAbortOperation.result.kind !== "completed" &&
+      !dispatchReplyOperation
+    ) {
+      dispatchAbortOperation = preDispatchAbortOperation;
+      return { status: "busy" };
     }
     if (!dispatchOperationSessionKey) {
-      return undefined;
+      return { status: "ready" };
     }
     const operationSessionId =
       dispatchAbortOperation?.sessionId ??
       initialSessionStoreEntry.entry?.sessionId ??
       sessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
-    try {
-      dispatchReplyOperation = createReplyOperation({
-        sessionKey: dispatchOperationSessionKey,
-        sessionId: operationSessionId,
-        resetTriggered: false,
-        upstreamAbortSignal: params.replyOptions?.abortSignal,
-      });
-      dispatchAbortOperation = dispatchReplyOperation;
-    } catch (error) {
-      if (error instanceof ReplyRunAlreadyActiveError) {
-        dispatchAbortOperation = replyRunRegistry.get(dispatchOperationSessionKey);
-        logVerbose(
-          `dispatch-from-config: reply operation already active for ${dispatchOperationSessionKey}; using active operation abort signal without ownership`,
-        );
-        return undefined;
+    const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
+    const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
+    const admission = await admitReplyTurn({
+      sessionKey: dispatchOperationSessionKey,
+      sessionId: operationSessionId,
+      kind: replyTurnKind,
+      resetTriggered: false,
+      upstreamAbortSignal: params.replyOptions?.abortSignal,
+      waitForActive: !allowActivePreDispatch,
+    });
+    if (admission.status === "skipped") {
+      if (allowActivePreDispatch && admission.reason === "active-run") {
+        preDispatchAbortOperation = admission.activeOperation;
+        return { status: "ready" };
       }
-      throw error;
+      dispatchAbortOperation = admission.activeOperation;
+      logVerbose(
+        `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,
+      );
+      return { status: "busy" };
     }
-    return dispatchReplyOperation;
+    dispatchReplyOperation = admission.operation;
+    dispatchAbortOperation = admission.operation;
+    return { status: "ready" };
   };
-  const getReplyOptions = () =>
-    dispatchReplyOperation
-      ? {
-          ...params.replyOptions,
-          abortSignal: dispatchReplyOperation.abortSignal,
-          replyOperation: dispatchReplyOperation,
-        }
-      : params.replyOptions;
+  const getPreDispatchAbortOperation = () => dispatchAbortOperation ?? preDispatchAbortOperation;
+  let cachedPreDispatchAbortSignal:
+    | {
+        operationSignal: AbortSignal | undefined;
+        upstreamSignal: AbortSignal | undefined;
+        signal: AbortSignal | undefined;
+      }
+    | undefined;
+  let cachedDispatchAbortSignal:
+    | {
+        operationSignal: AbortSignal | undefined;
+        upstreamSignal: AbortSignal | undefined;
+        signal: AbortSignal | undefined;
+      }
+    | undefined;
+  const getPreDispatchAbortSignal = () => {
+    const operationSignal = getPreDispatchAbortOperation()?.abortSignal;
+    const upstreamSignal = params.replyOptions?.abortSignal;
+    if (
+      cachedPreDispatchAbortSignal &&
+      cachedPreDispatchAbortSignal.operationSignal === operationSignal &&
+      cachedPreDispatchAbortSignal.upstreamSignal === upstreamSignal
+    ) {
+      return cachedPreDispatchAbortSignal.signal;
+    }
+    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    cachedPreDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
+    return signal;
+  };
+  const getDispatchAbortSignal = () => {
+    const operationSignal = dispatchReplyOperation?.abortSignal;
+    const upstreamSignal = params.replyOptions?.abortSignal;
+    if (
+      cachedDispatchAbortSignal &&
+      cachedDispatchAbortSignal.operationSignal === operationSignal &&
+      cachedDispatchAbortSignal.upstreamSignal === upstreamSignal
+    ) {
+      return cachedDispatchAbortSignal.signal;
+    }
+    const signal = composeAbortSignals(operationSignal, upstreamSignal);
+    cachedDispatchAbortSignal = { operationSignal, upstreamSignal, signal };
+    return signal;
+  };
+  const getQueuedFollowupAbortSignal = () =>
+    dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
+  const getReplyOptions = () => {
+    const abortSignal = getDispatchAbortSignal();
+    if (!abortSignal) {
+      return params.replyOptions;
+    }
+    return {
+      ...params.replyOptions,
+      abortSignal,
+      queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
+      ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
+    };
+  };
   const completeDispatchReplyOperation = () => {
     if (dispatchReplyOperation) {
       dispatchReplyOperation.complete();
@@ -971,7 +1065,8 @@ export async function dispatchReplyFromConfig(
       dispatchReplyOperation.fail("run_failed", error);
     }
   };
-  const isDispatchOperationAborted = () => dispatchAbortOperation?.abortSignal.aborted === true;
+  const isDispatchOperationAborted = () => getDispatchAbortSignal()?.aborted === true;
+  const isPreDispatchOperationAborted = () => getPreDispatchAbortSignal()?.aborted === true;
   const throwIfDispatchOperationAborted = () => {
     if (isDispatchOperationAborted()) {
       throw new DispatchReplyOperationAbortedError();
@@ -979,7 +1074,7 @@ export async function dispatchReplyFromConfig(
   };
   const dispatchHookDispatcher = createAbortAwareDispatcher({
     dispatcher,
-    isAborted: isDispatchOperationAborted,
+    isAborted: isPreDispatchOperationAborted,
   });
   const { ensureRuntimePluginsLoaded } = await traceReplyPhase("reply.load_runtime_plugins", () =>
     loadRuntimePlugins(),
@@ -1122,7 +1217,7 @@ export async function dispatchReplyFromConfig(
     if (!routeReplyRuntime || !routeReplyChannel || !routeReplyTo) {
       return;
     }
-    const effectiveAbortSignal = abortSignal ?? dispatchAbortOperation?.abortSignal;
+    const effectiveAbortSignal = abortSignal ?? getDispatchAbortSignal();
     if (effectiveAbortSignal?.aborted) {
       return;
     }
@@ -1321,6 +1416,20 @@ export async function dispatchReplyFromConfig(
       commitInboundDedupe(inboundDedupeClaim.key);
     }
   };
+  const finishReplyOperationBusyDispatch = (opts?: {
+    recordAgentDispatchCompleted?: boolean;
+  }): DispatchFromConfigResult => {
+    if (opts?.recordAgentDispatchCompleted) {
+      recordAgentDispatchCompleted("completed", { reason: "reply-operation-active" });
+    }
+    recordProcessed("skipped", { reason: "reply-operation-active" });
+    markIdle("message_completed");
+    commitInboundDedupeIfClaimed();
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  };
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -1495,7 +1604,9 @@ export async function dispatchReplyFromConfig(
     }
     // Register the dispatch-owned operation before any plugin hook or model work
     // so /stop can abort pre-run and in-run stalls through the same session lane.
-    ensureDispatchReplyOperation();
+    if ((await ensureDispatchReplyOperation("pre_dispatch")).status === "busy") {
+      return finishReplyOperationBusyDispatch();
+    }
 
     const shouldSuppressDefaultToolProgressMessages = () => !shouldEmitVerboseProgress();
     const shouldSendVerboseProgressMessages = () => !shouldSuppressDefaultToolProgressMessages();
@@ -1538,8 +1649,15 @@ export async function dispatchReplyFromConfig(
     };
     const sendFinalPayload = async (
       payload: ReplyPayload,
+      options: { abortSignal?: AbortSignal } = {},
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
-      throwIfDispatchOperationAborted();
+      const abortSignal = options.abortSignal ?? getDispatchAbortSignal();
+      const throwIfFinalDeliveryAborted = () => {
+        if (abortSignal?.aborted) {
+          throw new DispatchReplyOperationAbortedError();
+        }
+      };
+      throwIfFinalDeliveryAborted();
       const sourceReplyTranscriptMirror =
         getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
       const hasVisibleFinalContent = hasOutboundReplyContent(payload, { trimText: true });
@@ -1557,11 +1675,11 @@ export async function dispatchReplyFromConfig(
         agentId: sessionAgentId,
         accountId: replyRoute.accountId,
       });
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
-        abortSignal: dispatchAbortOperation?.abortSignal,
+        abortSignal,
       });
       if (result) {
         if (!result.ok) {
@@ -1580,7 +1698,7 @@ export async function dispatchReplyFromConfig(
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
-      throwIfDispatchOperationAborted();
+      throwIfFinalDeliveryAborted();
       markInboundDedupeReplayUnsafe();
       const queuedFinal = dispatcher.sendFinalReply(normalizedPayload);
       if (queuedFinal) {
@@ -1598,7 +1716,7 @@ export async function dispatchReplyFromConfig(
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
       const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-        runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
           hookRunner.runBeforeDispatch(
             {
               content: hookContext.content,
@@ -1624,7 +1742,10 @@ export async function dispatchReplyFromConfig(
         let queuedFinal = false;
         let routedFinalCount = 0;
         if (text && !suppressDelivery) {
-          const handledReply = await sendFinalPayload({ text });
+          const handledReply = await sendFinalPayload(
+            { text },
+            { abortSignal: getPreDispatchAbortSignal() },
+          );
           queuedFinal = handledReply.queuedFinal;
           routedFinalCount += handledReply.routedFinalCount;
         }
@@ -1640,7 +1761,7 @@ export async function dispatchReplyFromConfig(
 
     if (hookRunner?.hasHooks("reply_dispatch")) {
       const replyDispatchResult = await traceReplyPhase("reply.reply_dispatch_hooks", () =>
-        runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        runWithDispatchAbortSignal(getPreDispatchAbortSignal(), () =>
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,
@@ -1662,7 +1783,7 @@ export async function dispatchReplyFromConfig(
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: dispatchAbortOperation?.abortSignal ?? params.replyOptions?.abortSignal,
+              abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,
@@ -1678,6 +1799,10 @@ export async function dispatchReplyFromConfig(
           counts: replyDispatchResult.counts,
         });
       }
+    }
+
+    if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
+      return finishReplyOperationBusyDispatch();
     }
 
     // When automatic source delivery is suppressed, still let the agent process
@@ -1929,7 +2054,7 @@ export async function dispatchReplyFromConfig(
       params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
     );
     recordAgentDispatchStarted();
-    const replyResult = await runWithReplyOperationAbort(dispatchAbortOperation, () =>
+    const replyResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
       traceReplyPhase("reply.run_reply_resolver", () =>
         replyResolver(
           ctx,
@@ -2213,14 +2338,16 @@ export async function dispatchReplyFromConfig(
         ),
       ),
     );
-    ensureDispatchReplyOperation();
+    if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
+      return finishReplyOperationBusyDispatch({ recordAgentDispatchCompleted: true });
+    }
 
     if (ctx.AcpDispatchTailAfterReset === true) {
       // Command handling prepared a trailing prompt after ACP in-place reset.
       // Route that tail through ACP now (same turn) instead of embedded dispatch.
       ctx.AcpDispatchTailAfterReset = false;
       if (hookRunner?.hasHooks("reply_dispatch")) {
-        const tailDispatchResult = await runWithReplyOperationAbort(dispatchAbortOperation, () =>
+        const tailDispatchResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
           hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx,
@@ -2243,7 +2370,7 @@ export async function dispatchReplyFromConfig(
             {
               cfg,
               dispatcher: dispatchHookDispatcher,
-              abortSignal: dispatchAbortOperation?.abortSignal ?? params.replyOptions?.abortSignal,
+              abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
               recordProcessed,
               markIdle,
@@ -2361,7 +2488,7 @@ export async function dispatchReplyFromConfig(
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             throwIfDispatchOperationAborted();
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload, {
-              abortSignal: dispatchAbortOperation?.abortSignal,
+              abortSignal: getDispatchAbortSignal(),
             });
             if (result) {
               queuedFinal = result.ok || queuedFinal;

@@ -80,6 +80,7 @@ export async function startIMessageGatewayAccount(
     config: ctx.cfg,
     runtime: ctx.runtime,
     abortSignal: ctx.abortSignal,
+    channelRuntime: ctx.channelRuntime,
   });
 }
 

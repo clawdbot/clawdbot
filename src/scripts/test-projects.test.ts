@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,7 @@ const {
   buildVitestArgs,
   buildVitestRunPlans,
   createVitestRunSpecs,
+  findUnmatchedExplicitTestTargets,
   parseTestProjectsArgs,
   resolveChangedTargetArgs,
   resolveChangedTestTargetPlan,
@@ -62,6 +64,14 @@ const {
     pnpmArgs: string[];
     watchMode: boolean;
   }>;
+  findUnmatchedExplicitTestTargets: (
+    args: string[],
+    cwd?: string,
+  ) => Array<{
+    target: string;
+    reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
+    includePattern?: string;
+  }>;
   parseTestProjectsArgs: (
     args: string[],
     cwd?: string,
@@ -97,8 +107,23 @@ const {
   ) => number;
 };
 
-const VITEST_CLI_ENTRY = path.join(process.cwd(), "node_modules", "vitest", "vitest.mjs");
-const VITEST_NODE_PREFIX = ["exec", "node", "--no-maglev", VITEST_CLI_ENTRY];
+const require = createRequire(import.meta.url);
+const resolveExpectedVitestCliEntry = () => {
+  const vitestPackageJson = require.resolve("vitest/package.json");
+  return path.join(path.dirname(vitestPackageJson), "vitest.mjs");
+};
+const resolveExpectedVitestNodeArgs = (env: NodeJS.ProcessEnv) =>
+  ["1", "true", "yes", "on"].includes(
+    env.OPENCLAW_VITEST_ENABLE_MAGLEV?.trim().toLowerCase() ?? "",
+  )
+    ? []
+    : ["--no-maglev"];
+const VITEST_NODE_PREFIX = [
+  "exec",
+  "node",
+  ...resolveExpectedVitestNodeArgs(process.env),
+  resolveExpectedVitestCliEntry(),
+];
 
 describe("test-projects args", () => {
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {
@@ -993,6 +1018,97 @@ describe("test-projects args", () => {
     ]);
     expect(spec?.includeFilePath).toContain("openclaw-vitest-include-");
     expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec?.includeFilePath);
+  });
+
+  it("rejects explicit test file targets that do not exist", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/not-a-real-openclaw-test.test.ts"])).toEqual([
+      {
+        target: "src/not-a-real-openclaw-test.test.ts",
+        reason: "path-does-not-exist",
+      },
+    ]);
+  });
+
+  it("rejects explicit globs that match no files", () => {
+    expect(findUnmatchedExplicitTestTargets(["src/**/not-a-real-openclaw-test.test.ts"])).toEqual([
+      {
+        target: "src/**/not-a-real-openclaw-test.test.ts",
+        reason: "glob-matched-no-files",
+      },
+    ]);
+  });
+
+  it("rejects explicit non-test file targets with no sibling tests", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-targets-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "src", "lonely"), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, "src", "lonely", "runtime.ts"), "export {};\n");
+
+      expect(findUnmatchedExplicitTestTargets(["src/lonely/runtime.ts"], tempDir)).toEqual([
+        {
+          target: "src/lonely/runtime.ts",
+          reason: "target-matched-no-test-files",
+          includePattern: "src/lonely/**/*.test.ts",
+        },
+      ]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts explicit untracked test files that exist on disk", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-targets-"));
+    try {
+      fs.mkdirSync(path.join(tempDir, "src"), { recursive: true });
+      fs.writeFileSync(path.join(tempDir, "src", "new.test.ts"), "test('new', () => {});\n");
+
+      expect(findUnmatchedExplicitTestTargets(["src/new.test.ts"], tempDir)).toEqual([]);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts explicit Vitest config targets routed as whole config runs", () => {
+    expect(
+      findUnmatchedExplicitTestTargets(["test/vitest/vitest.contracts-channel-surface.config.ts"]),
+    ).toEqual([]);
+  });
+
+  it("accepts split CI Vitest config targets routed as whole config runs", () => {
+    expect(
+      findUnmatchedExplicitTestTargets([
+        "test/vitest/vitest.agents-core.config.ts",
+        "test/vitest/vitest.agents-pi-embedded.config.ts",
+        "test/vitest/vitest.agents-support.config.ts",
+        "test/vitest/vitest.agents-tools.config.ts",
+      ]),
+    ).toEqual([]);
+  });
+
+  it("keeps split CI Vitest config targets on their own configs", () => {
+    expect(
+      buildVitestRunPlans([
+        "test/vitest/vitest.agents-core.config.ts",
+        "test/vitest/vitest.agents-tools.config.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.agents-core.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.agents-tools.config.ts",
+        forwardedArgs: [],
+        includePatterns: null,
+        watchMode: false,
+      },
+    ]);
+  });
+
+  it("accepts sentinel targets routed as whole config runs", () => {
+    expect(findUnmatchedExplicitTestTargets(["ui/src/test-helpers/control-ui-e2e.ts"])).toEqual([]);
   });
 
   it("skips channel contract configs with no matching external include patterns", () => {

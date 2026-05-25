@@ -128,7 +128,8 @@ mantis/
 !.agents/skills/control-ui-e2e/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
-!.agents/skills/openclaw-docs/**
+!.agents/skills/technical-documentation/
+!.agents/skills/technical-documentation/**
 !.agents/skills/openclaw-refactor-docs/
 !.agents/skills/openclaw-refactor-docs/**
 !.agents/skills/openclaw-debugging/
@@ -167,6 +168,8 @@ mantis/
 !.agents/skills/tag-duplicate-prs-issues/**
 !.agents/skills/autoreview/
 !.agents/skills/autoreview/**
+.agents/skills/**/__pycache__/
+.agents/skills/**/*.py[cod]
 
 # Agent credentials and memory (NEVER COMMIT)
 /memory/

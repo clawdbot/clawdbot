@@ -13,6 +13,7 @@ UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_UPDATE_BASELINE:-latest}"
 UPDATE_BASELINE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_BASELINE_TAG_URL:-}"
 UPDATE_EXPECT_VERSION="${OPENCLAW_INSTALL_UPDATE_EXPECT_VERSION:-}"
 UPDATE_TAG_URL="${OPENCLAW_INSTALL_UPDATE_TAG_URL:-}"
+SELF_UPDATE_WARNING_FIXED_VERSION="${OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION:-2026.5.25}"
 FRESHNESS_VERSION="${OPENCLAW_INSTALL_FRESHNESS_VERSION:-latest}"
 # npm min-release-age is days; 10000 keeps the control failure independent of normal release cadence.
 FRESHNESS_MIN_RELEASE_AGE="${OPENCLAW_INSTALL_FRESHNESS_MIN_RELEASE_AGE:-10000}"
@@ -118,6 +119,75 @@ is_self_swapped_package_process_exit() {
   [[ "$stderr" == *"[openclaw] Failed to start CLI:"* ]] &&
     [[ "$stderr" == *"ERR_MODULE_NOT_FOUND"* ]] &&
     [[ "$stderr" == *"/node_modules/openclaw/dist/"* ]]
+}
+
+is_version_before() {
+  local candidate="$1"
+  local floor="$2"
+  node - "$candidate" "$floor" <<'NODE'
+const [, , candidate, floor] = process.argv;
+function parse(version) {
+  const [core, prerelease = ""] = String(version).split("-", 2);
+  return {
+    core: core.split(".").map((part) => Number.parseInt(part, 10) || 0),
+    prerelease: prerelease ? prerelease.split(".") : [],
+  };
+}
+function comparePrerelease(left, right) {
+  if (left.length === 0 && right.length === 0) {
+    return 0;
+  }
+  if (left.length === 0) {
+    return 1;
+  }
+  if (right.length === 0) {
+    return -1;
+  }
+  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
+    const l = left[index];
+    const r = right[index];
+    if (l === undefined) {
+      return -1;
+    }
+    if (r === undefined) {
+      return 1;
+    }
+    const ln = Number.parseInt(l, 10);
+    const rn = Number.parseInt(r, 10);
+    const lNumeric = String(ln) === l;
+    const rNumeric = String(rn) === r;
+    if (lNumeric && rNumeric && ln !== rn) {
+      return ln < rn ? -1 : 1;
+    }
+    if (lNumeric !== rNumeric) {
+      return lNumeric ? -1 : 1;
+    }
+    if (l !== r) {
+      return l < r ? -1 : 1;
+    }
+  }
+  return 0;
+}
+const left = parse(candidate);
+const right = parse(floor);
+for (let index = 0; index < Math.max(left.core.length, right.core.length); index += 1) {
+  const l = left.core[index] ?? 0;
+  const r = right.core[index] ?? 0;
+  if (l < r) {
+    process.exit(0);
+  }
+  if (l > r) {
+    process.exit(1);
+  }
+}
+const prereleaseOrder = comparePrerelease(left.prerelease, right.prerelease);
+process.exit(prereleaseOrder < 0 ? 0 : 1);
+NODE
+}
+
+allow_legacy_update_warning() {
+  [[ "${OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING:-0}" == "1" ]] && return 0
+  is_version_before "$UPDATE_BASELINE_VERSION" "$SELF_UPDATE_WARNING_FIXED_VERSION"
 }
 
 npm_install_global() {
@@ -268,11 +338,20 @@ run_update_smoke() {
   local update_status
   local update_stderr_file
   local update_stderr
+  local update_env=(
+    env
+    npm_config_omit=optional
+    NPM_CONFIG_OMIT=optional
+    OPENCLAW_ALLOW_ROOT=1
+  )
+  if allow_legacy_update_warning; then
+    update_env+=(OPENCLAW_UPDATE_IN_PROGRESS=1)
+  fi
   update_stderr_file="$(mktemp)"
   set +e
   UPDATE_JSON="$(
     run_with_heartbeat "openclaw update" \
-      env npm_config_omit=optional NPM_CONFIG_OMIT=optional OPENCLAW_ALLOW_ROOT=1 \
+      "${update_env[@]}" \
       openclaw update --tag "$UPDATE_TAG_URL" --yes --json 2>"$update_stderr_file"
   )"
   update_status=$?
@@ -282,6 +361,12 @@ run_update_smoke() {
   printf "%s\n" "$UPDATE_JSON"
   if [[ -n "$update_stderr" ]]; then
     printf "%s\n" "$update_stderr" >&2
+  fi
+  if [[ "$update_stderr" == *"config was written by version"* ]] && allow_legacy_update_warning; then
+    echo "WARN: legacy baseline emitted a self-update version-skew warning; fixed baselines must not" >&2
+  elif [[ "$update_stderr" == *"config was written by version"* ]]; then
+    echo "ERROR: openclaw update emitted a self-update version-skew warning" >&2
+    return 1
   fi
   if [[ "$update_status" -ne 0 ]]; then
     if is_self_swapped_package_process_exit "$update_stderr"; then

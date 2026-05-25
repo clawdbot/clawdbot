@@ -31,12 +31,19 @@ function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function manifestPath(pluginDir) {
-  return path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json");
+function manifestPath(pluginDir, pluginRoot) {
+  const candidates = [
+    ...(isNonEmptyString(pluginRoot)
+      ? [path.join(pluginRoot, "openclaw.plugin.json")]
+      : []),
+    path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json"),
+    path.join(process.cwd(), "dist-runtime", "extensions", pluginDir, "openclaw.plugin.json"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
 }
 
-function loadManifest(pluginDir) {
-  const file = manifestPath(pluginDir);
+function loadManifest(pluginDir, pluginRoot) {
+  const file = manifestPath(pluginDir, pluginRoot);
   if (!fs.existsSync(file)) {
     throw new Error(`missing bundled plugin manifest: ${file}`);
   }
@@ -373,7 +380,7 @@ function unwrapRpcPayload(raw) {
   return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
 }
 
-async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
+async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex, pluginRoot) {
   if (requiresConfig) {
     console.log(`Runtime smoke skipped for ${pluginId}: plugin requires config`);
     return;
@@ -382,7 +389,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   if (!entrypoint) {
     throw new Error("missing OPENCLAW_ENTRY");
   }
-  const manifest = loadManifest(pluginDir);
+  const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const port =
     readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
@@ -600,12 +607,12 @@ async function assertNoPackageManagerChildren(pid) {
   }
 }
 
-async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex) {
+async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex, pluginRoot) {
   const entrypoint = process.env.OPENCLAW_ENTRY;
   if (!entrypoint) {
     throw new Error("missing OPENCLAW_ENTRY");
   }
-  const manifest = loadManifest(pluginDir);
+  const manifest = loadManifest(pluginDir, pluginRoot);
   const plan = buildPluginPlan(manifest);
   const selectedProvider = provider || plan.speechProviders[0];
   if (!selectedProvider) {
@@ -745,14 +752,14 @@ function tailText(text) {
   return text.split(/\r?\n/u).slice(-120).join("\n");
 }
 
-const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, provider] =
+const [command, pluginId, pluginDir, requiresConfigRaw, pluginIndexRaw, pluginRoot, provider] =
   process.argv.slice(2);
 const pluginIndex = Number.parseInt(pluginIndexRaw || "0", 10);
 
 if (command === "plugin") {
-  await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex);
+  await smokePlugin(pluginId, pluginDir, requiresConfigRaw === "1", pluginIndex, pluginRoot);
 } else if (command === "tts-global-disable") {
-  await smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex);
+  await smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex, pluginRoot);
 } else if (command === "tts-openai-live") {
   await smokeOpenAiTts(pluginIndex);
 } else {

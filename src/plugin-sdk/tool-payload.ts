@@ -102,6 +102,17 @@ function parseBracketOpening(text: string, start: number): PlainTextToolCallOpen
     return null;
   }
   let cursor = start + 1;
+  if (text.startsWith("tool:", cursor)) {
+    cursor += "tool:".length;
+    const nameStart = cursor;
+    while (isToolNameChar(text[cursor])) {
+      cursor += 1;
+    }
+    if (cursor === nameStart || text[cursor] !== "]") {
+      return null;
+    }
+    return { end: cursor + 1, name: text.slice(nameStart, cursor), requiresClosing: false };
+  }
   const nameStart = cursor;
   while (isToolNameChar(text[cursor])) {
     cursor += 1;
@@ -291,7 +302,7 @@ export function parseStandalonePlainTextToolCallBlocks(
 export function stripPlainTextToolCallBlocks(text: string): string {
   if (
     !text ||
-    (!/\[[A-Za-z0-9_-]+\]/.test(text) &&
+    (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
       !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text))
   ) {
     return text;

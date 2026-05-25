@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-startup.ts";
 
 async function listenOnLoopback(handler: Parameters<typeof createServer>[0]) {
@@ -111,6 +112,217 @@ describe("gateway startup benchmark script", () => {
     expect(result.summary.httpListenLogMs?.p50).toBe(10);
     expect(result.summary.gatewayReadyLogMs?.p50).toBe(40);
     expect("readyLogMs" in result.summary).toBe(false);
+  });
+
+  it("flags samples that never produced readiness or process metrics", () => {
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        cpuCoreRatio: null,
+        cpuMs: null,
+        exitCode: 1,
+        firstOutputMs: 5,
+        gatewayReadyLogLine: null,
+        gatewayReadyLogMs: null,
+        healthz: {
+          firstErrorKind: "econnrefused",
+          firstRecoveryMs: null,
+          ms: null,
+          status: null,
+          transitions: [],
+        },
+        httpListenLogLine: null,
+        httpListenLogMs: null,
+        maxRssMb: null,
+        outputTail: "Error: Cannot find module 'dist/entry.js'",
+        readyz: {
+          firstErrorKind: "econnrefused",
+          firstRecoveryMs: null,
+          ms: null,
+          status: null,
+          transitions: [],
+        },
+        signal: null,
+        startupTrace: {},
+      },
+    ]);
+
+    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+      {
+        id: "demo",
+        reason: "missing /healthz, /readyz, cpu, rss",
+        sampleIndex: 1,
+      },
+    ]);
+  });
+
+  it("flags samples that become ready and then exit nonzero", () => {
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        cpuCoreRatio: 0.5,
+        cpuMs: 100,
+        exitedBeforeTeardown: true,
+        exitCode: 1,
+        firstOutputMs: 1,
+        gatewayReadyLogLine: "[gateway] ready",
+        gatewayReadyLogMs: 20,
+        healthz: {
+          firstErrorKind: "econnrefused",
+          firstRecoveryMs: 10,
+          ms: 10,
+          status: 200,
+          transitions: [],
+        },
+        httpListenLogLine: "[gateway] http server listening (0 plugins)",
+        httpListenLogMs: 5,
+        maxRssMb: 120,
+        outputTail: "ready\\nError: startup sidecar crashed",
+        readyz: {
+          firstErrorKind: "http-503",
+          firstRecoveryMs: 18,
+          ms: 18,
+          status: 200,
+          transitions: [],
+        },
+        signal: null,
+        startupTrace: {},
+      },
+    ]);
+
+    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+      {
+        id: "demo",
+        reason: "child exited 1",
+        sampleIndex: 1,
+      },
+    ]);
+  });
+
+  it("does not flag nonzero exits from intentional teardown", () => {
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        cpuCoreRatio: 0.5,
+        cpuMs: 100,
+        exitedBeforeTeardown: false,
+        exitCode: 1,
+        firstOutputMs: 1,
+        gatewayReadyLogLine: "[gateway] ready",
+        gatewayReadyLogMs: 20,
+        healthz: {
+          firstErrorKind: "econnrefused",
+          firstRecoveryMs: 10,
+          ms: 10,
+          status: 200,
+          transitions: [],
+        },
+        httpListenLogLine: "[gateway] http server listening (0 plugins)",
+        httpListenLogMs: 5,
+        maxRssMb: 120,
+        outputTail: "",
+        readyz: {
+          firstErrorKind: "http-503",
+          firstRecoveryMs: 18,
+          ms: 18,
+          status: 200,
+          transitions: [],
+        },
+        signal: null,
+        startupTrace: {},
+      },
+    ]);
+
+    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([]);
+  });
+
+  it("flags samples that become ready and then die from a signal", () => {
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        cpuCoreRatio: 0.5,
+        cpuMs: 100,
+        exitedBeforeTeardown: true,
+        exitCode: null,
+        firstOutputMs: 1,
+        gatewayReadyLogLine: "[gateway] ready",
+        gatewayReadyLogMs: 20,
+        healthz: {
+          firstErrorKind: "econnrefused",
+          firstRecoveryMs: 10,
+          ms: 10,
+          status: 200,
+          transitions: [],
+        },
+        httpListenLogLine: "[gateway] http server listening (0 plugins)",
+        httpListenLogMs: 5,
+        maxRssMb: 120,
+        outputTail: "ready\\nsegmentation fault",
+        readyz: {
+          firstErrorKind: "http-503",
+          firstRecoveryMs: 18,
+          ms: 18,
+          status: 200,
+          transitions: [],
+        },
+        signal: "SIGSEGV",
+        startupTrace: {},
+      },
+    ]);
+
+    expect(testing.collectResultFailures([result], { processMetricsRequired: true })).toEqual([
+      {
+        id: "demo",
+        reason: "child exited by SIGSEGV",
+        sampleIndex: 1,
+      },
+    ]);
+  });
+
+  it("classifies queued child exits before sending teardown signals", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => true);
+
+    const stopped = testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0]);
+    queueMicrotask(() => {
+      child.exitCode = 7;
+      child.emit("exit", 7, null);
+    });
+
+    await expect(stopped).resolves.toEqual({
+      exitedBeforeTeardown: true,
+      exitCode: 7,
+      signal: null,
+    });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("classifies failed teardown signaling as a pre-teardown child exit", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      kill: ReturnType<typeof vi.fn>;
+      signalCode: NodeJS.Signals | null;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.kill = vi.fn(() => {
+      setImmediate(() => {
+        child.exitCode = 8;
+        child.emit("exit", 8, null);
+      });
+      return false;
+    });
+
+    await expect(
+      testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0]),
+    ).resolves.toEqual({
+      exitedBeforeTeardown: true,
+      exitCode: 8,
+      signal: null,
+    });
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
   });
 
   it("collects Count-suffixed startup trace metrics", () => {

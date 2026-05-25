@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig, type Plugin } from "vite";
+import { controlUiManualChunk } from "./build/chunking.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -98,7 +99,12 @@ export default defineConfig(() => {
       outDir,
       emptyOutDir: true,
       sourcemap: true,
-      // Keep CI/onboard logs clean; current control UI chunking is intentionally above 500 kB.
+      rollupOptions: {
+        output: {
+          manualChunks: controlUiManualChunk,
+        },
+      },
+      // Keep CI/onboard logs clean; the app chunk is split into stable runtime buckets above.
       chunkSizeWarningLimit: 1024,
     },
     server: {

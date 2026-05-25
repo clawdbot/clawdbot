@@ -66,6 +66,22 @@ export function buildAgentMainSessionKey(params: {
   return `agent:${agentId}:${mainKey}`;
 }
 
+function normalizeDefaultMainSessionAliasForUi(sessionKey: string | undefined | null): string {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalized === DEFAULT_MAIN_KEY
+    ? buildAgentMainSessionKey({ agentId: DEFAULT_AGENT_ID, mainKey: DEFAULT_MAIN_KEY })
+    : normalized;
+}
+
+export function areUiSessionKeysEquivalent(
+  left: string | undefined | null,
+  right: string | undefined | null,
+): boolean {
+  const normalizedLeft = normalizeDefaultMainSessionAliasForUi(left);
+  const normalizedRight = normalizeDefaultMainSessionAliasForUi(right);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);

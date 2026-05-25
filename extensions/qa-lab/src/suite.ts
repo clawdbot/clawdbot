@@ -237,6 +237,16 @@ function shouldRunQaSuiteWithIsolatedScenarioWorkers(params: {
   return true;
 }
 
+function resolveQaSuiteControlUiEnabled(params: {
+  explicit?: boolean;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  if (typeof params.explicit === "boolean") {
+    return params.explicit;
+  }
+  return params.scenarios.some((scenario) => scenarioRequiresControlUi(scenario));
+}
+
 const QA_IMAGE_UNDERSTANDING_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAAAAklEQVR4AewaftIAAAK4SURBVO3BAQEAMAwCIG//znsQgXfJBZjUALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsBpjVALMaYFYDzGqAWQ0wqwFmNcCsl9wFmNQAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwGmNUAsxpgVgPMaoBZDTCrAWY1wKwP4TIF+7ciPkoAAAAASUVORK5CYII=";
 
@@ -1037,6 +1047,10 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     lab: params?.lab,
     startLab: params?.startLab,
   });
+  const controlUiEnabled = resolveQaSuiteControlUiEnabled({
+    explicit: params?.controlUiEnabled,
+    scenarios: selectedCatalogScenarios,
+  });
 
   if (params?.runtimePair) {
     return await runQaRuntimeParitySuite({
@@ -1331,7 +1345,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     fastMode,
     thinkingDefault: params?.thinkingDefault,
     claudeCliAuthMode: params?.claudeCliAuthMode,
-    controlUiEnabled: params?.controlUiEnabled ?? true,
+    controlUiEnabled,
     enabledPluginIds,
     forwardHostHome: gatewayRuntimeOptions?.forwardHostHome,
     mutateConfig: gatewayConfigPatch
@@ -1350,10 +1364,12 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     progressEnabled,
     `gateway ready: ${sanitizeQaSuiteProgressValue(gateway.baseUrl)}`,
   );
-  lab.setControlUi({
-    controlUiProxyTarget: gateway.baseUrl,
-    controlUiProxyToken: gateway.token,
-  });
+  if (controlUiEnabled) {
+    lab.setControlUi({
+      controlUiProxyTarget: gateway.baseUrl,
+      controlUiProxyToken: gateway.token,
+    });
+  }
   const env: QaSuiteEnvironment = {
     lab,
     mock,
@@ -1579,6 +1595,7 @@ export const qaSuiteProgressTesting = {
   mergeQaRuntimeEnvPatches,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
+  resolveQaSuiteControlUiEnabled,
   resolveQaSuiteTransportReadyTimeoutMs,
   sanitizeQaSuiteProgressValue,
   shouldRunQaSuiteWithIsolatedScenarioWorkers,

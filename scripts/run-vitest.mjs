@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { isUiTestTarget, isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { resolveLocalVitestEnv } from "./lib/vitest-local-scheduling.mjs";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
@@ -10,7 +11,11 @@ import {
 } from "./vitest-process-group.mjs";
 
 const TRUTHY_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
-const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS] Warning:"];
+const ANSI_CSI_PREFIX = `${String.fromCharCode(27)}[`;
+const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
+const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
+const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
 const require = createRequire(import.meta.url);
 
 function isTruthyEnvValue(value) {
@@ -79,11 +84,50 @@ function resolveExplicitVitestWorkerBudget(env) {
 }
 
 export function shouldSuppressVitestStderrLine(line) {
-  return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => line.includes(pattern));
+  const normalizedLine = line
+    .split(ANSI_CSI_PREFIX)
+    .map((segment, index) => (index === 0 ? segment : segment.replace(ANSI_CSI_SUFFIX_RE, "")))
+    .join("");
+  return SUPPRESSED_VITEST_STDERR_PATTERNS.some((pattern) => normalizedLine.includes(pattern));
 }
 
 export function resolveDirectNodeVitestArgs(pnpmArgs) {
   return pnpmArgs[0] === "exec" && pnpmArgs[1] === "node" ? pnpmArgs.slice(2) : null;
+}
+
+function hasExplicitVitestConfigArg(argv) {
+  return argv.some((arg) => arg === "--config" || arg === "-c" || arg.startsWith("--config="));
+}
+
+function toRepoRelativeArg(arg, cwd) {
+  const normalized = path.isAbsolute(arg) ? path.relative(cwd, arg) : arg;
+  return normalized.replaceAll(path.sep, "/").replace(/^\.\//u, "");
+}
+
+function withImplicitVitestConfig(argv, config) {
+  if (argv[0] === "run") {
+    return ["run", "--config", config, ...argv.slice(1)];
+  }
+  return ["--config", config, ...argv];
+}
+
+export function resolveImplicitVitestArgs(argv, cwd = process.cwd()) {
+  if (hasExplicitVitestConfigArg(argv)) {
+    return argv;
+  }
+  const testTargets = argv
+    .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
+    .map((arg) => toRepoRelativeArg(arg, cwd));
+  if (testTargets.length === 0 || !testTargets.every(isUnitUiTestTarget)) {
+    if (
+      testTargets.length > 0 &&
+      testTargets.every((target) => isUiTestTarget(target) && !isUnitUiTestTarget(target))
+    ) {
+      return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
+    }
+    return argv;
+  }
+  return withImplicitVitestConfig(argv, UNIT_UI_VITEST_CONFIG);
 }
 
 function spawnVitestProcess({ pnpmArgs, spawnParams }) {
@@ -265,11 +309,18 @@ function main(argv = process.argv.slice(2), env = process.env) {
     process.exit(1);
   }
 
+  const vitestArgs = resolveImplicitVitestArgs(argv);
   const { child, teardown } = spawnWatchedVitestProcess({
-    pnpmArgs: ["exec", "node", ...resolveVitestNodeArgs(env), resolveVitestCliEntry(), ...argv],
+    pnpmArgs: [
+      "exec",
+      "node",
+      ...resolveVitestNodeArgs(env),
+      resolveVitestCliEntry(),
+      ...vitestArgs,
+    ],
     spawnParams: resolveVitestSpawnParams(env),
     env,
-    label: argv.join(" "),
+    label: vitestArgs.join(" "),
   });
 
   child.on("exit", (code, signal) => {

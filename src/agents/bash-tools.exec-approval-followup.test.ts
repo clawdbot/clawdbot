@@ -305,9 +305,7 @@ describe("exec approval followup", () => {
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("uses safe denied copy for nested-parentheses denial metadata when session resume fails", async () => {
-    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
-
+  it("uses safe direct denied copy for nested-parentheses denial metadata without resuming the session", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-denied-resume-failed-nested",
       sessionKey: "agent:main:telegram:-100123",
@@ -319,13 +317,11 @@ describe("exec approval followup", () => {
         "Exec denied (gateway id=req-denied-resume-failed-nested, approval-timeout (allowlist-miss)): uname -a",
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content:
-          "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: approval timed out.",
-        idempotencyKey: "exec-approval-followup:req-denied-resume-failed-nested",
-      }),
-    );
+    expectDirectSend({
+      content: "Command did not run: approval timed out.",
+      idempotencyKey: "exec-approval-followup:req-denied-resume-failed-nested",
+    });
+    expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("suppresses denied followups for subagent sessions", async () => {

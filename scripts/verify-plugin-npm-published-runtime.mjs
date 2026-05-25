@@ -188,20 +188,27 @@ export function collectPluginNpmPublishedRuntimeErrors(params) {
   return errors;
 }
 
+export function resolveNpmPackFilename(output) {
+  const filename = output
+    .split(/\r?\n/u)
+    .findLast((line) => line.trim().length > 0)
+    ?.trim();
+  if (typeof filename !== "string" || !filename.endsWith(".tgz")) {
+    throw new Error(`npm pack did not report a tarball filename`);
+  }
+  return filename;
+}
+
 function npmPack(spec, destinationDir) {
   const output = execFileSync(
     "npm",
-    ["pack", spec, "--json", "--ignore-scripts", "--pack-destination", destinationDir],
+    ["pack", spec, "--ignore-scripts", "--pack-destination", destinationDir],
     {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  const rows = JSON.parse(output);
-  const filename = rows?.[0]?.filename;
-  if (typeof filename !== "string" || !filename) {
-    throw new Error(`npm pack ${spec} did not report a tarball filename`);
-  }
+  const filename = resolveNpmPackFilename(output);
   return path.isAbsolute(filename) ? filename : path.join(destinationDir, filename);
 }
 

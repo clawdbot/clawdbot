@@ -367,6 +367,7 @@ describe("provider-runtime", () => {
 
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    providerRuntimeTesting.clearProviderRuntimePluginCacheForTest();
     providerRuntimeTesting.resetExternalAuthFallbackWarningCacheForTest();
     resolvePluginProvidersMock.mockReset();
     resolvePluginProvidersMock.mockReturnValue([]);
@@ -633,6 +634,88 @@ describe("provider-runtime", () => {
     }
 
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse default runtime provider cache entries across active workspaces", () => {
+    const firstProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo one",
+      auth: [],
+    };
+    const secondProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo two",
+      auth: [],
+    };
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-one", "default", "/tmp/one");
+    resolvePluginProvidersMock.mockReturnValueOnce([firstProvider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(firstProvider);
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-two", "default", "/tmp/two");
+    resolvePluginProvidersMock.mockReturnValueOnce([secondProvider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(secondProvider);
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse default runtime provider cache entries across same-workspace reloads", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-one", "default", "/tmp/work");
+    resolvePluginProvidersMock.mockReturnValueOnce([provider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(provider);
+
+    setActivePluginRegistry(createEmptyPluginRegistry(), "workspace-two", "default", "/tmp/work");
+    resolvePluginProvidersMock.mockReturnValueOnce([]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache default runtime provider misses without active registry invalidation", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+
+    resolvePluginProvidersMock.mockReturnValueOnce([]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
+
+    resolvePluginProvidersMock.mockReturnValueOnce([provider]);
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(provider);
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache provider-scoped misses while runtime provider loading is in flight", () => {
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo",
+      auth: [],
+    };
+    let providerScopedLoadInFlight = true;
+    isPluginProvidersLoadInFlightMock.mockImplementation(
+      (params) =>
+        Boolean(params.providerRefs?.includes(DEMO_PROVIDER_ID)) && providerScopedLoadInFlight,
+    );
+    resolvePluginProvidersMock.mockImplementation((params) =>
+      providerScopedLoadInFlight && params.providerRefs?.includes(DEMO_PROVIDER_ID)
+        ? []
+        : [provider],
+    );
+
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBeUndefined();
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+
+    providerScopedLoadInFlight = false;
+    expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID })).toBe(provider);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse auto-enabled runtime providers for synthetic auth fallback", () => {

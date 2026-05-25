@@ -11,7 +11,16 @@ function normalizeMatchTarget(value: string): string {
     const stripped = value.replace(/^\\\\[?.]\\/, "");
     return normalizeLowercaseStringOrEmpty(stripped.replace(/\\/g, "/"));
   }
-  return value.replace(/\\\\/g, "/");
+  const normalized = value.replace(/\\\\/g, "/");
+  if (process.platform === "darwin") {
+    if (normalized === "/private/var") {
+      return "/var";
+    }
+    if (normalized.startsWith("/private/var/")) {
+      return normalized.slice("/private".length);
+    }
+  }
+  return normalized;
 }
 
 function tryRealpath(value: string): string | null {

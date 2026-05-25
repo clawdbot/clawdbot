@@ -211,6 +211,8 @@ The `/approve` command handles both exec approvals and plugin approvals. If the 
 
 Plugin approval forwarding uses the same delivery pipeline as exec approvals but has its own
 independent config under `approvals.plugin`. Enabling or disabling one does not affect the other.
+For plugin-authoring behavior, request fields, and decision semantics, see
+[Plugin permission requests](/plugins/plugin-permission-requests).
 
 ```json5
 {

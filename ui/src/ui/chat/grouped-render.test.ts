@@ -97,10 +97,14 @@ vi.mock("./chat-avatar.ts", () => ({
 
 vi.mock("../tool-display.ts", () => ({
   formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name }: { name: string }) => ({
+  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
     name,
     label: name,
     icon: "zap",
+    detail:
+      args && typeof args === "object" && "detail" in args
+        ? String((args as { detail: unknown }).detail)
+        : undefined,
   }),
 }));
 
@@ -940,6 +944,42 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool input");
     expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
       '{\n  "mode": "session",\n  "thread": true\n}',
+    );
+  });
+
+  it("cleans collapsed tool connector copy while preserving expanded raw input", () => {
+    const container = document.createElement("div");
+    const message = {
+      id: "assistant-string-tool",
+      role: "assistant",
+      toolCallId: "call-string-tool",
+      content: [
+        {
+          type: "toolcall",
+          id: "call-string-tool",
+          name: "presentation_create",
+          arguments: "with Example Deck",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => false,
+    });
+
+    expect(container.querySelector(".chat-tool-msg-summary__label")?.textContent?.trim()).toBe(
+      "Example Deck",
+    );
+    expect(container.querySelector(".chat-tool-msg-summary")?.textContent).not.toContain(
+      "with Example Deck",
+    );
+
+    renderAssistantMessage(container, message, {
+      isToolMessageExpanded: () => true,
+    });
+
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      "with Example Deck",
     );
   });
 

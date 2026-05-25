@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { collectPluginNpmPublishedRuntimeErrors } from "../../scripts/verify-plugin-npm-published-runtime.mjs";
+import {
+  collectPluginNpmPublishedRuntimeErrors,
+  resolveNpmPackFilename,
+} from "../../scripts/verify-plugin-npm-published-runtime.mjs";
 
 describe("collectPluginNpmPublishedRuntimeErrors", () => {
   it("flags published plugin packages with TypeScript entries and no compiled runtime output", () => {
@@ -160,5 +163,18 @@ describe("collectPluginNpmPublishedRuntimeErrors", () => {
     ).toEqual([
       "@openclaw/twitch@2026.5.3 package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry",
     ]);
+  });
+});
+
+describe("resolveNpmPackFilename", () => {
+  it("uses the final tarball filename from plain npm pack output", () => {
+    const noisyOutput = [
+      "npm notice",
+      "npm notice package: @openclaw/msteams@2026.5.24-beta.1",
+      "openclaw-msteams-2026.5.24-beta.1.tgz",
+      "",
+    ].join("\n");
+
+    expect(resolveNpmPackFilename(noisyOutput)).toBe("openclaw-msteams-2026.5.24-beta.1.tgz");
   });
 });

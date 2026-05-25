@@ -101,6 +101,40 @@ class MicCaptureManagerTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun submittedTranscribedMessageUsesGatewayTurnPath() =
+    runTest {
+      val sentMessages = mutableListOf<String>()
+      val manager =
+        createManager(
+          scope = this,
+          sendToGateway = { message, onRunIdKnown ->
+            sentMessages += message
+            onRunIdKnown("run-voice-e2e")
+            "run-voice-e2e"
+          },
+        )
+
+      manager.onGatewayConnectionChanged(true)
+      manager.submitTranscribedMessage("voice e2e message")
+      runCurrent()
+      manager.handleGatewayEvent("chat", chatFinalPayload(runId = "run-voice-e2e", text = "voice e2e reply"))
+      advanceUntilIdle()
+
+      assertEquals(listOf("voice e2e message"), sentMessages)
+      assertEquals(
+        listOf(VoiceConversationRole.User, VoiceConversationRole.Assistant),
+        manager.conversation.value.map { it.role },
+      )
+      assertEquals(
+        "voice e2e reply",
+        manager.conversation.value
+          .last()
+          .text,
+      )
+    }
+
+  @Test
   fun pcm16FramesAreEncodedAsPcmuFrames() {
     val manager = createManager()
     val method = manager.javaClass.getDeclaredMethod("pcm16ToPcmu", ByteArray::class.java)

@@ -19,7 +19,10 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  clearLoadPluginMetadataSnapshotMemo,
+  resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
@@ -1396,6 +1399,7 @@ export function startGatewayModelPricingRefresh(
 
 export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
+  clearLoadPluginMetadataSnapshotMemo();
   clearRefreshTimer();
   inFlightRefresh = null;
 }

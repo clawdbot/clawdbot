@@ -870,9 +870,11 @@ describe("config help copy quality", () => {
     expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
 
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
+    expect(/opt-in|Leave unset/i.test(postCompactionSections)).toBe(true);
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);
     expect(/Every Session|Safety/i.test(postCompactionSections)).toBe(true);
     expect(/\[\]|disable/i.test(postCompactionSections)).toBe(true);
+    expect(/duplicate project context/i.test(postCompactionSections)).toBe(true);
 
     const compactionModel = FIELD_HELP["agents.defaults.compaction.model"];
     expect(/provider\/model|different model|primary agent model/i.test(compactionModel)).toBe(true);

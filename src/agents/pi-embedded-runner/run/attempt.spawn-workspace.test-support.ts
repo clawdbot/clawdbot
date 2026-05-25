@@ -97,7 +97,7 @@ type AttemptSpawnWorkspaceHoisted = {
 export function createSubscriptionMock(): SubscriptionMock {
   return {
     assistantTexts: [] as string[],
-    toolMetas: [] as Array<{ toolName: string; meta?: string }>,
+    toolMetas: [] as Array<{ toolName: string; meta?: string; asyncStarted?: boolean }>,
     runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
       await toolParams.execute(),
     unsubscribe: () => {},

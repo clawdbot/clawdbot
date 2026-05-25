@@ -52,10 +52,7 @@ describe("parseOcPath", () => {
   });
 
   it("rejects control chars in ignored query values", () => {
-    expectOcPathError(
-      () => parseOcPath("oc://SOUL.md?ignored=\x00"),
-      "OC_PATH_CONTROL_CHAR",
-    );
+    expectOcPathError(() => parseOcPath("oc://SOUL.md?ignored=\x00"), "OC_PATH_CONTROL_CHAR");
   });
 
   it("rejects missing scheme", () => {
@@ -72,6 +69,15 @@ describe("parseOcPath", () => {
 
   it("rejects too-deep nesting", () => {
     expectOcPathError(() => parseOcPath("oc://SOUL.md/a/b/c/d/e"), "OC_PATH_TOO_DEEP");
+  });
+
+  it("normalizes deep JSON paths into dotted subsegments", () => {
+    expect(parseOcPath("oc://openclaw.json/agents/list/8/tools/exec/security")).toEqual({
+      file: "openclaw.json",
+      section: "agents.list.8.tools",
+      item: "exec",
+      field: "security",
+    });
   });
 
   it("rejects non-string input", () => {

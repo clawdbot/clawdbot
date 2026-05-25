@@ -220,6 +220,30 @@ describe("createScopedVitestConfig", () => {
     const testConfig = requireTestConfig(config);
 
     expect(testConfig.include).toEqual(["browser/index.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("lets root Vitest project runs skip scoped files owned by unit-fast", () => {
+    const config = createScopedVitestConfig(["src/acp/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "src/acp/client.test.ts"],
+      dir: "src/acp",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual(["client.test.ts"]);
+    expect(testConfig.passWithNoTests).toBe(true);
+  });
+
+  it("lets unrelated root Vitest projects skip when CLI filters match no scoped files", () => {
+    const config = createScopedVitestConfig(["extensions/**/*.test.ts"], {
+      argv: ["node", "vitest", "run", "src/config/channel-configured.test.ts"],
+      dir: "extensions",
+      env: {},
+    });
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual([]);
     expect(testConfig.passWithNoTests).toBe(true);
   });
 

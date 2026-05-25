@@ -64,6 +64,15 @@ export function createVitestRunSpecs(
   },
 ): VitestRunSpec[];
 
+export function findUnmatchedExplicitTestTargets(
+  args: string[],
+  cwd?: string,
+): Array<{
+  target: string;
+  reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
+  includePattern?: string;
+}>;
+
 export function applyDefaultVitestNoOutputTimeout(
   specs: VitestRunSpec[],
   params?: {

@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+
+const CONFLICT_MARKER_GREP_PATTERN = "^(<<<<<<< |\\|\\|\\|\\|\\|\\|\\| |=======$|>>>>>>> )";
 
 function isBinaryBuffer(buffer) {
   return buffer.includes(0);
@@ -62,9 +64,39 @@ export function findConflictMarkersInFiles(filePaths, readFile = fs.readFileSync
   return violations;
 }
 
+export function listTrackedFilesWithConflictMarkerCandidates(
+  cwd = process.cwd(),
+  run = spawnSync,
+) {
+  const result = run(
+    "git",
+    ["grep", "-l", "-z", "-I", "-E", CONFLICT_MARKER_GREP_PATTERN, "--", "."],
+    {
+      cwd,
+      encoding: "buffer",
+    },
+  );
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    const stderr = result.stderr?.toString("utf8").trim();
+    throw new Error(stderr || `git grep failed with status ${result.status ?? "unknown"}`);
+  }
+  return result.stdout
+    .toString("utf8")
+    .split("\0")
+    .filter(Boolean)
+    .map((relativePath) => path.join(cwd, relativePath));
+}
+
+export function findConflictMarkersInTrackedFiles(cwd = process.cwd()) {
+  return findConflictMarkersInFiles(listTrackedFilesWithConflictMarkerCandidates(cwd));
+}
+
 export async function main() {
   const cwd = process.cwd();
-  const violations = findConflictMarkersInFiles(listTrackedFiles(cwd));
+  const violations = findConflictMarkersInTrackedFiles(cwd);
   if (violations.length === 0) {
     return;
   }

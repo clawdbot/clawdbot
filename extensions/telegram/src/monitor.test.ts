@@ -472,6 +472,46 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runOptions?.runner?.retryInterval).toBe("exponential");
   });
 
+  it("logs polling startup diagnostics without using the error channel", async () => {
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await monitorWithAutoAbort({ runtime });
+
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("polling cycle started"));
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("keeps polling restart warnings on the error channel", async () => {
+    const abort = new AbortController();
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+    const firstCycle = mockRunOnceWithStalledPollingRunner();
+    const secondCycle = mockRunOnceAndAbort(abort);
+
+    const monitor = monitorTelegramProvider(
+      withLegacyPolling({ token: "tok", abortSignal: abort.signal, runtime }),
+    );
+    await firstCycle.waitForTaskStart();
+
+    expect(emitUnhandledRejection(await makeTaggedPollingFetchError())).toBe(true);
+    await secondCycle.waitForRunStart();
+    await monitor;
+
+    expect(runtime.log).toHaveBeenCalledWith(
+      "[telegram][diag] marking transport dirty after polling network failure",
+    );
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Restarting polling after unhandled network error"),
+    );
+  });
+
   it("requires mention in groups by default", async () => {
     for (const v of Object.values(api)) {
       if (typeof v === "function" && "mockReset" in v) {

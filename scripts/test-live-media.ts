@@ -122,6 +122,9 @@ function parseSuiteToken(raw: string): MediaSuiteId | null {
 }
 
 export function parseArgs(argv: string[]): CliOptions {
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? argv.slice(0, separatorIndex) : argv;
+  const separatorPassthroughArgs = separatorIndex >= 0 ? argv.slice(separatorIndex + 1) : [];
   const suites = new Set<MediaSuiteId>();
   const suiteProviders: Partial<Record<MediaSuiteId, Set<string>>> = {};
   const passthroughArgs: string[] = [];
@@ -131,16 +134,16 @@ export function parseArgs(argv: string[]): CliOptions {
   let help = false;
 
   const readValue = (index: number): string => {
-    const value = argv[index + 1]?.trim();
+    const value = optionArgs[index + 1]?.trim();
     if (!value) {
-      throw new Error(`Missing value for ${argv[index]}`);
+      throw new Error(`Missing value for ${optionArgs[index]}`);
     }
     return value;
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index] ?? "";
-    if (!arg || arg === "--") {
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index] ?? "";
+    if (!arg) {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -207,7 +210,7 @@ export function parseArgs(argv: string[]): CliOptions {
     suiteProviders,
     requireAuth,
     quietArgs,
-    passthroughArgs,
+    passthroughArgs: [...passthroughArgs, ...separatorPassthroughArgs],
     help,
   };
 }

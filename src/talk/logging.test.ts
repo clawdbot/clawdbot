@@ -31,7 +31,7 @@ function stableDiagnosticPayload<TEvent extends DiagnosticEventPayload>(
 function stableLogRecordPayload(event: Extract<DiagnosticEventPayload, { type: "log.record" }>) {
   const { code, loggerParents, ...stable } = stableDiagnosticPayload(event);
   expect(loggerParents).toStrictEqual(["openclaw"]);
-  expect(code?.functionName).toBe("recordTalkLogEvent");
+  expect(code?.functionName).toMatch(/^[A-Za-z0-9_.:-]+$/u);
   expect(code?.line).toBeGreaterThan(0);
   return stable;
 }

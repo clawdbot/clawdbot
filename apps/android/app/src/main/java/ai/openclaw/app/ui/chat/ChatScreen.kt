@@ -6,6 +6,7 @@ import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.ui.design.ClawListItem
+import ai.openclaw.app.ui.design.ClawLoadingState
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
@@ -80,6 +81,7 @@ fun ChatScreen(
   onVoice: () -> Unit,
 ) {
   val messages by viewModel.chatMessages.collectAsState()
+  val historyLoading by viewModel.chatHistoryLoading.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
@@ -168,6 +170,7 @@ fun ChatScreen(
 
     ChatMessageList(
       messages = messages,
+      historyLoading = historyLoading,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
@@ -307,6 +310,7 @@ private fun HeaderIcon(
 @Composable
 private fun ChatMessageList(
   messages: List<ChatMessage>,
+  historyLoading: Boolean,
   pendingRunCount: Int,
   pendingToolCalls: List<ChatPendingToolCall>,
   streamingAssistantText: String?,
@@ -359,7 +363,11 @@ private fun ChatMessageList(
     }
 
     if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && stream.isNullOrBlank()) {
-      EmptyChatHint(healthOk = healthOk, onStarterPrompt = onStarterPrompt, modifier = Modifier.align(Alignment.Center))
+      if (historyLoading) {
+        ClawLoadingState(title = "Loading session", modifier = Modifier.align(Alignment.Center))
+      } else {
+        EmptyChatHint(healthOk = healthOk, onStarterPrompt = onStarterPrompt, modifier = Modifier.align(Alignment.Center))
+      }
     }
   }
 }
@@ -464,7 +472,8 @@ private fun ChatBubble(
     content.filter { part ->
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
-        else -> part.base64 != null
+        "image" -> !part.base64.isNullOrBlank()
+        else -> false
       }
     }
   if (displayableContent.isEmpty()) return

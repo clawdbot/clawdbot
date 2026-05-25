@@ -6,7 +6,8 @@
   "type": "module",
   "dependencies": {
     "@earendil-works/pi-ai": "0.75.4",
-    "@google/genai": "2.5.0"
+    "@google/genai": "2.5.0",
+    "google-auth-library": "10.6.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

@@ -11,6 +11,8 @@
  * @see https://github.com/openclaw/openclaw/issues/18558
  */
 
+import { stripPlainTextToolCallBlocks } from "../../plugin-sdk/tool-payload.js";
+
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
 const INTERNAL_RUNTIME_SCAFFOLDING_BLOCK_RE = new RegExp(
@@ -111,7 +113,7 @@ export function stripInternalRuntimeScaffolding(text: string): string {
   for (const marker of INTERNAL_RUNTIME_MARKER_LINES) {
     stripped = stripStandaloneMarkerLine(stripped, marker);
   }
-  return stripped;
+  return stripPlainTextToolCallBlocks(stripped);
 }
 
 /**

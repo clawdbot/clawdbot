@@ -58,6 +58,7 @@ on:
           - qa-parity
           - qa-live
           - npm-telegram
+          - performance
       live_suite_filter:
         description: Optional exact live/E2E suite id, or comma-separated QA live lanes such as qa-live-matrix,qa-live-telegram; blank runs all selected live suites
         required: false
@@ -180,6 +181,11 @@ jobs:
               echo "- Normal CI: \`CI\` with \`target_ref=${TARGET_SHA}\`"
             else
               echo "- Normal CI: skipped by rerun group"
+            fi
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "performance" ]]; then
+              echo "- Product performance: \`OpenClaw Performance\` with \`target_ref=${TARGET_SHA}\`"
+            else
+              echo "- Product performance: skipped by rerun group"
             fi
             if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "plugin-prerelease" ]]; then
               echo "- Plugin prerelease: \`Plugin Prerelease\` with \`target_ref=${TARGET_SHA}\`"
@@ -938,9 +944,127 @@ jobs:
             exit 1
           fi
 
+  performance:
+    name: Run product performance evidence
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    outputs:
+      run_id: ${{ steps.dispatch.outputs.run_id }}
+      url: ${{ steps.dispatch.outputs.url }}
+      conclusion: ${{ steps.dispatch.outputs.conclusion }}
+    steps:
+      - name: Dispatch and monitor OpenClaw Performance
+        id: dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          gh_with_retry() {
+            local output status attempt
+            for attempt in 1 2 3 4 5 6; do
+              set +e
+              output="$(gh "$@" 2>&1)"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                sleep $((attempt * 10))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
+          {
+            echo "### Product performance"
+            echo
+            echo "- Target SHA: \`${TARGET_SHA}\`"
+            echo "- Profile: \`release\`"
+            echo "- Repeat: \`3\`"
+            echo "- Deep profile: \`false\`"
+            echo "- Live OpenAI candidate: \`false\`"
+            echo "- Release impact: advisory"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          before_json="$(gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
+
+          gh_with_retry workflow run openclaw-performance.yml \
+            --ref "$CHILD_WORKFLOW_REF" \
+            -f target_ref="$TARGET_SHA" \
+            -f profile=release \
+            -f repeat=3 \
+            -f deep_profile=false \
+            -f live_openai_candidate=false \
+            -f fail_on_regression=false
+
+          run_id=""
+          for _ in $(seq 1 60); do
+            run_id="$(
+              BEFORE_IDS="$before_json" gh_with_retry run list --workflow openclaw-performance.yml --event workflow_dispatch --limit 50 --json databaseId,createdAt \
+                --jq 'map(select(.databaseId as $id | (env.BEFORE_IDS | fromjson | index($id) | not))) | sort_by(.createdAt) | reverse | .[0].databaseId // empty'
+            )"
+            if [[ -n "$run_id" ]]; then
+              break
+            fi
+            sleep 5
+          done
+
+          if [[ -z "$run_id" ]]; then
+            echo "::warning::Could not find dispatched run for openclaw-performance.yml."
+            exit 0
+          fi
+
+          echo "Dispatched openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+          cancel_child() {
+            if [[ -n "${run_id:-}" ]]; then
+              echo "Cancelling child workflow openclaw-performance.yml: ${run_id}" >&2
+              gh run cancel "$run_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cancel_child EXIT INT TERM
+
+          poll_count=0
+          while true; do
+            status="$(gh_with_retry run view "$run_id" --json status --jq '.status')"
+            if [[ "$status" == "completed" ]]; then
+              break
+            fi
+            poll_count=$((poll_count + 1))
+            if (( poll_count % 10 == 0 )); then
+              echo "Still waiting on openclaw-performance.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.status != "completed") | {name, status, url}' || true
+            fi
+            sleep 30
+          done
+          trap - EXIT INT TERM
+
+          conclusion="$(gh_with_retry run view "$run_id" --json conclusion --jq '.conclusion')"
+          url="$(gh_with_retry run view "$run_id" --json url --jq '.url')"
+          echo "openclaw-performance.yml finished with ${conclusion}: ${url}"
+          echo "url=${url}" >> "$GITHUB_OUTPUT"
+          echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
+          if [[ "$conclusion" != "success" ]]; then
+            echo "::warning::OpenClaw Performance is advisory and ended with ${conclusion}: ${url}"
+            gh_with_retry run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+          fi
+
   summary:
     name: Verify full validation
-    needs: [resolve_target, docker_runtime_assets_preflight, normal_ci, plugin_prerelease, release_checks, npm_telegram]
+    needs: [resolve_target, docker_runtime_assets_preflight, normal_ci, plugin_prerelease, release_checks, npm_telegram, performance]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -952,10 +1076,12 @@ jobs:
           PLUGIN_PRERELEASE_RUN_ID: ${{ needs.plugin_prerelease.outputs.run_id }}
           RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
+          PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
           NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}
           PLUGIN_PRERELEASE_RESULT: ${{ needs.plugin_prerelease.result }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
+          PERFORMANCE_RESULT: ${{ needs.performance.result }}
           DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
@@ -1088,6 +1214,7 @@ jobs:
             append_child_row "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" "$PLUGIN_PRERELEASE_RESULT"
             append_child_row "release_checks" "$RELEASE_CHECKS_RUN_ID" "$RELEASE_CHECKS_RESULT"
             append_child_row "npm_telegram" "$NPM_TELEGRAM_RUN_ID" "$NPM_TELEGRAM_RESULT"
+            append_child_row "product_performance" "$PERFORMANCE_RUN_ID" "$PERFORMANCE_RESULT"
           }
 
           summarize_child_timing() {
@@ -1246,6 +1373,7 @@ jobs:
           summarize_child_timing "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID"
           summarize_child_timing "release_checks" "$RELEASE_CHECKS_RUN_ID"
           summarize_child_timing "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
+          summarize_child_timing "product_performance" "$PERFORMANCE_RUN_ID"
 
           if [[ "$failed" != "0" ]]; then
             summarize_failed_child "normal_ci" "$NORMAL_CI_RUN_ID"
@@ -1361,6 +1489,7 @@ jobs:
             --arg pluginPrereleaseRunId "$PLUGIN_PRERELEASE_RUN_ID" \
             --arg releaseChecksRunId "$RELEASE_CHECKS_RUN_ID" \
             --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
+            --arg performanceRunId "$PERFORMANCE_RUN_ID" \
             '{
               version: 1,
               workflowName: $workflowName,
@@ -1376,7 +1505,8 @@ jobs:
                 normalCi: $normalCiRunId,
                 pluginPrerelease: $pluginPrereleaseRunId,
                 releaseChecks: $releaseChecksRunId,
-                npmTelegram: $npmTelegramRunId
+                npmTelegram: $npmTelegramRunId,
+                productPerformance: $performanceRunId
               }
             }' > "${manifest_dir}/full-release-validation-manifest.json"
 

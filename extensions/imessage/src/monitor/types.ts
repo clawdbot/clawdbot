@@ -1,3 +1,4 @@
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
@@ -49,4 +50,9 @@ export type MonitorIMessageOpts = {
   includeAttachments?: boolean;
   mediaMaxMb?: number;
   requireMention?: boolean;
+  /**
+   * Surface for registering channel runtime contexts (e.g. the approval native
+   * runtime). Threaded through from the gateway via ChannelGatewayAccountContext.
+   */
+  channelRuntime?: ChannelRuntimeSurface;
 };

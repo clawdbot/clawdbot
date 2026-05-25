@@ -693,6 +693,7 @@ export async function runPluginInstallCommand(params: {
         mode: installMode,
         path: resolved,
         dryRun: true,
+        allowSourceTypeScriptEntries: true,
         extensionsDir,
         logger: createPluginInstallLogger(runtime),
       });

@@ -56,7 +56,7 @@ internal fun NodesDevicesSettingsScreen(
         listOf(
           SettingsMetric("Nodes", summary.nodes.size.toString()),
           SettingsMetric("Online", summary.nodes.count { it.connected }.toString()),
-          SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Locked"),
+          SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Admin"),
           SettingsMetric("Pending", summary.pendingDevices.size.toString()),
         ),
     )
@@ -95,7 +95,7 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     if (!summary.devicePairingAvailable) {
       ClawPanel {
-        Text(text = "Pairing controls are not available from this connection.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        Text(text = "Device pairing admin needs elevated access. Connected nodes still work.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
     }
     if (summary.pendingDevices.isNotEmpty()) {

@@ -82,7 +82,6 @@ export function loadCapabilityMetadataSnapshot(params: {
     config: params.config ?? {},
     env: params.env ?? process.env,
     ...(workspaceDir ? { workspaceDir } : {}),
-    allowWorkspaceScopedCurrent: workspaceDir === undefined,
   });
 }
 

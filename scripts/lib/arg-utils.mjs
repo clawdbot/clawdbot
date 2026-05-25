@@ -121,9 +121,10 @@ export function booleanFlag(flag, key, value = true) {
 }
 
 export function parseFlagArgs(argv, args, specs, options = {}) {
+  const ignoreDoubleDash = options.ignoreDoubleDash ?? true;
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--" && options.ignoreDoubleDash) {
+    if (arg === "--" && ignoreDoubleDash) {
       continue;
     }
     let handled = false;

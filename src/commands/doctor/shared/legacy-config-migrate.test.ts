@@ -333,6 +333,57 @@ describe("legacy thread binding spawn migrate", () => {
   });
 });
 
+describe("legacy Feishu account bot name migrate", () => {
+  it("moves legacy account botName to name", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              appId: "cli_xxx",
+              appSecret: "redacted",
+              botName: "Legacy Feishu Bot",
+              domain: "feishu",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.channels?.feishu?.accounts?.main).toEqual({
+      appId: "cli_xxx",
+      appSecret: "redacted",
+      name: "Legacy Feishu Bot",
+      domain: "feishu",
+    });
+    expect(res.changes).toStrictEqual([
+      "Moved channels.feishu.accounts.main.botName → channels.feishu.accounts.main.name.",
+    ]);
+  });
+
+  it("removes legacy account botName when name is already set", () => {
+    const res = migrateLegacyConfigForTest({
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              name: "Current Feishu Bot",
+              botName: "Legacy Feishu Bot",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.channels?.feishu?.accounts?.main).toEqual({
+      name: "Current Feishu Bot",
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed channels.feishu.accounts.main.botName (channels.feishu.accounts.main.name already set).",
+    ]);
+  });
+});
+
 describe("legacy message queue mode migrate", () => {
   it("moves retired queue steering modes to followup mode", () => {
     const res = migrateLegacyConfigForTest({

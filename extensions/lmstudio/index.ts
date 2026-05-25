@@ -1,12 +1,12 @@
 import {
   definePluginEntry,
-  OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {

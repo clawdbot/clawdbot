@@ -1343,6 +1343,29 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("does not run a fresh embedded session when a /compact control command times out", async () => {
+    await withTempStore(async () => {
+      callGateway.mockRejectedValue(createGatewayTimeoutError());
+
+      await expect(
+        agentCliCommand(
+          {
+            message: "/compact",
+            sessionId: "locked-session",
+            runId: "locked-run",
+          },
+          runtime,
+        ),
+      ).rejects.toThrow("gateway timeout");
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(agentCommand).not.toHaveBeenCalled();
+      expect(
+        mockMessages(runtime.error).some((message) => message.includes("EMBEDDED FALLBACK")),
+      ).toBe(false);
+    });
+  });
+
   it("uses the explicit session key agent for timeout fallback sessions", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(createGatewayTimeoutError());

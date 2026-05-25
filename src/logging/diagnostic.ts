@@ -82,6 +82,7 @@ const DEFAULT_LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
 const DEFAULT_LIVENESS_EVENT_LOOP_UTILIZATION_WARN = 0.95;
 const DEFAULT_LIVENESS_CPU_CORE_RATIO_WARN = 0.9;
 const DEFAULT_LIVENESS_WARN_COOLDOWN_MS = 120_000;
+const DEFAULT_QUEUE_PRESSURE_BACKOFF_TTL_MS = 60_000;
 let commandPollBackoffRuntimePromise: Promise<
   typeof import("../agents/command-poll-backoff.runtime.js")
 > | null = null;
@@ -1137,6 +1138,32 @@ export function logActiveRuns() {
 }
 
 let heartbeatInterval: NodeJS.Timeout | null = null;
+let diagnosticQueuePressureBackoffUntil = 0;
+
+export function isDiagnosticQueuePressureBackoffActive(now = Date.now()): boolean {
+  if (!heartbeatInterval || !areDiagnosticsEnabledForProcess()) {
+    return false;
+  }
+  return diagnosticQueuePressureBackoffUntil > now;
+}
+
+export function resetDiagnosticQueuePressureBackoffForTest(): void {
+  diagnosticQueuePressureBackoffUntil = 0;
+}
+
+function updateDiagnosticQueuePressureBackoff(
+  now: number,
+  sample: DiagnosticLivenessSample,
+  work: DiagnosticWorkSnapshot,
+): void {
+  if (work.queuedCount <= 0 || sample.reasons.length === 0) {
+    return;
+  }
+  diagnosticQueuePressureBackoffUntil = Math.max(
+    diagnosticQueuePressureBackoffUntil,
+    now + DEFAULT_QUEUE_PRESSURE_BACKOFF_TTL_MS,
+  );
+}
 
 export function startDiagnosticHeartbeat(
   config?: OpenClawConfig,
@@ -1175,6 +1202,9 @@ export function startDiagnosticHeartbeat(
       livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =
       livenessSample !== null && shouldEmitDiagnosticLivenessWarning(now, work);
+    if (livenessSample) {
+      updateDiagnosticQueuePressureBackoff(now, livenessSample, work);
+    }
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
@@ -1297,6 +1327,7 @@ export function stopDiagnosticHeartbeat() {
   stopDiagnosticLivenessSampler();
   stopDiagnosticStabilityRecorder();
   uninstallDiagnosticStabilityFatalHook();
+  resetDiagnosticQueuePressureBackoffForTest();
 }
 
 export function getDiagnosticSessionStateCountForTest(): number {
@@ -1317,4 +1348,5 @@ export function resetDiagnosticStateForTest(): void {
   resetDiagnosticPhasesForTest();
   resetDiagnosticStabilityRecorderForTest();
   resetDiagnosticStabilityBundleForTest();
+  resetDiagnosticQueuePressureBackoffForTest();
 }

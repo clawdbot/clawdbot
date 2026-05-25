@@ -35,6 +35,58 @@ function relativizeScopedPatterns(values: string[], dir?: string): string[] {
   return values.map((value) => relativizeScopedPattern(value, dir));
 }
 
+function globRoot(pattern: string): string | null {
+  const globStart = pattern.search(/[*{[]/u);
+  if (globStart < 0) {
+    return null;
+  }
+  const slashBeforeGlob = pattern.lastIndexOf("/", globStart);
+  if (slashBeforeGlob < 0) {
+    return "";
+  }
+  return pattern.slice(0, slashBeforeGlob);
+}
+
+function directoryPatternCoversInclude(excludePattern: string, includePattern: string): boolean {
+  if (!excludePattern.endsWith("/**")) {
+    return false;
+  }
+  const excludeRoot = excludePattern.slice(0, -"/**".length);
+  const includeRoot = globRoot(includePattern);
+  const candidate = includeRoot ?? includePattern;
+  return candidate === excludeRoot || candidate.startsWith(`${excludeRoot}/`);
+}
+
+export function includePatternIsFullyExcluded(
+  includePattern: string,
+  excludePattern: string,
+): boolean {
+  const include = normalizePathPattern(includePattern);
+  const exclude = normalizePathPattern(excludePattern);
+  return (
+    include === exclude ||
+    path.matchesGlob(include, exclude) ||
+    directoryPatternCoversInclude(exclude, include)
+  );
+}
+
+export function shouldPassWithNoTestsForCliIncludes(
+  cliIncludePatterns: string[] | null,
+  excludePatterns: string[],
+): boolean {
+  if (cliIncludePatterns === null) {
+    return false;
+  }
+  return (
+    cliIncludePatterns.length === 0 ||
+    cliIncludePatterns.every((includePattern) =>
+      excludePatterns.some((excludePattern) =>
+        includePatternIsFullyExcluded(includePattern, excludePattern),
+      ),
+    )
+  );
+}
+
 export function resolveVitestIsolation(
   _env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -173,6 +225,7 @@ export function createScopedVitestConfig(
     [...(baseTest.exclude ?? []), ...unitFastExcludePatterns, ...(options?.exclude ?? [])],
     scopedDir,
   );
+  const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
   const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
   const setupFiles = [
     ...new Set([
@@ -210,9 +263,11 @@ export function createScopedVitestConfig(
               groupOrder: scopedGroupOrder,
             },
           }),
-      ...(options?.passWithNoTests !== undefined || cliInclude !== null
-        ? { passWithNoTests: options?.passWithNoTests ?? true }
-        : {}),
+      ...(options?.passWithNoTests !== undefined
+        ? { passWithNoTests: options.passWithNoTests }
+        : shouldPassWithNoTestsForCliIncludes(scopedCliInclude, exclude)
+          ? { passWithNoTests: true }
+          : {}),
     },
   });
 }

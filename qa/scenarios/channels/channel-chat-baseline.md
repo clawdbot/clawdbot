@@ -79,6 +79,6 @@ steps:
           - lambda:
               params: [candidate]
               expr: "candidate.conversation.id === 'qa-room' && !candidate.threadId"
-          - expr: liveTurnTimeoutMs(env, 60000)
+          - expr: liveTurnTimeoutMs(env, 180000)
     detailsExpr: message.text
 ```

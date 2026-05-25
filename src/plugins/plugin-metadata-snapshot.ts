@@ -681,6 +681,7 @@ function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams
         indexPluginCount: index.plugins.length,
         manifestPluginCount: manifestRegistry.plugins.length,
       },
+      discovery: registryResult.discovery,
     },
   };
 }

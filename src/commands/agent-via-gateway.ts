@@ -144,6 +144,11 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
   return err instanceof Error && err.message.includes("gateway request timeout for agent");
 }
 
+function isControlCommandThatMustNotFallback(opts: Pick<AgentCliOpts, "message">): boolean {
+  const normalized = opts.message.trim().toLowerCase();
+  return normalized === "/compact" || normalized.startsWith("/compact ");
+}
+
 function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
   return isGatewayTransportError(err);
 }
@@ -730,6 +735,9 @@ export async function agentCliCommand(
         throw err;
       }
       if (isGatewayAgentTimeoutError(err)) {
+        if (isControlCommandThatMustNotFallback(dispatchOpts)) {
+          throw err;
+        }
         const fallbackAgentId = resolveAgentIdForGatewayTimeoutFallback(dispatchOpts);
         const fallbackSession = createGatewayTimeoutFallbackSession(fallbackAgentId);
         runtime.error?.(

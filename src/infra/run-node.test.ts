@@ -559,6 +559,68 @@ describe("run-node script", () => {
     });
   });
 
+  it("routes local build stdout to stderr before JSON command output", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await writeRuntimePostBuildScaffold(tmp);
+      const outputPath = path.join(tmp, ".artifacts", "run-node", "output.log");
+      const spawn = (_cmd: string, args: string[]) => {
+        if (args[0] === "scripts/bundled-plugin-assets.mjs") {
+          return createPipedExitedProcess({
+            stdout: "asset stdout\n",
+            stderr: "asset stderr\n",
+          });
+        }
+        if (args[0] === "scripts/tsdown-build.mjs") {
+          return createPipedExitedProcess({
+            stdout: "build stdout\n",
+            stderr: "build stderr\n",
+          });
+        }
+        return createPipedExitedProcess({ stdout: '{"plugins":[]}\n' });
+      };
+      const stdoutChunks: string[] = [];
+      const stderrChunks: string[] = [];
+      const stdout = {
+        write: (chunk: string | Buffer) => {
+          stdoutChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+      const stderr = {
+        write: (chunk: string | Buffer) => {
+          stderrChunks.push(String(chunk));
+          return true;
+        },
+      } as unknown as NodeJS.WriteStream;
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["plugins", "list", "--json"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+          OPENCLAW_RUN_NODE_OUTPUT_LOG: outputPath,
+        },
+        spawn,
+        stdout,
+        stderr,
+        execPath: process.execPath,
+        platform: process.platform,
+      } as Parameters<typeof runNodeMain>[0] & {
+        stdout: NodeJS.WriteStream;
+        stderr: NodeJS.WriteStream;
+      });
+
+      expect(exitCode).toBe(0);
+      expect(stdoutChunks.join("")).toBe('{"plugins":[]}\n');
+      expect(stderrChunks.join("")).toContain("asset stdout\n");
+      expect(stderrChunks.join("")).toContain("asset stderr\n");
+      expect(stderrChunks.join("")).toContain("build stdout\n");
+      expect(stderrChunks.join("")).toContain("build stderr\n");
+    });
+  });
+
   it("routes sync I/O trace stderr blocks to the output log without flooding stderr", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp);

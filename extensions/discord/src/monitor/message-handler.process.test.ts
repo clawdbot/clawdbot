@@ -1165,6 +1165,64 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
+  it("does not inject the bot's previous message body when users reply to it", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("self-reply media should not be fetched");
+    });
+    const ctx = await createBaseContext({
+      botUserId: "bot-1",
+      cfg: {
+        channels: { discord: { contextVisibility: "all" } },
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      discordRestFetch: fetchImpl,
+      message: {
+        id: "m-self-reply",
+        channelId: "c1",
+        content: "<@bot> hit that again",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        messageReference: {
+          type: 0,
+          message_id: "m-bot-previous",
+          channel_id: "c1",
+        },
+        referencedMessage: {
+          id: "m-bot-previous",
+          channelId: "c1",
+          content: "The same stale bot response keeps looping.",
+          timestamp: new Date().toISOString(),
+          attachments: [
+            {
+              id: "att-bot-previous",
+              url: "https://cdn.discordapp.com/attachments/previous.png",
+              content_type: "image/png",
+              filename: "previous.png",
+            },
+          ],
+          author: {
+            id: "bot-1",
+            username: "Spartacus",
+            discriminator: "0",
+            globalName: "Spartacus",
+          },
+        },
+      },
+      baseText: "<@bot> hit that again",
+      messageText: "<@bot> hit that again",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
+    expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
+    expect(dispatchCtx.ReplyToBody).toBeUndefined();
+    expect(JSON.stringify(dispatchCtx)).not.toContain("The same stale bot response keeps looping.");
+  });
+
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     const ctx = await createBaseContext({
       ...createDirectMessageContextOverrides(),

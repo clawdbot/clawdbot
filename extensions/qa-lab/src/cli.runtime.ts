@@ -12,7 +12,12 @@ import {
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
 import { resolveRepoRelativeOutputDir } from "./cli-paths.js";
-import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./coverage-report.js";
+import {
+  buildQaCoverageInventory,
+  findQaScenarioMatches,
+  renderQaCoverageMarkdownReport,
+  renderQaScenarioMatchesMarkdownReport,
+} from "./coverage-report.js";
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -786,6 +791,7 @@ export async function runQaCoverageReportCommand(opts: {
   json?: boolean;
   tools?: boolean;
   summary?: string;
+  match?: string[];
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputPath = opts.output ? path.resolve(repoRoot, opts.output) : undefined;
@@ -793,6 +799,9 @@ export async function runQaCoverageReportCommand(opts: {
   let body: string;
   let outputLabel = "QA coverage report";
   if (opts.tools === true) {
+    if (opts.match && opts.match.length > 0) {
+      throw new Error("--match cannot be combined with --tools.");
+    }
     const summary = opts.summary?.trim()
       ? (JSON.parse(
           await fs.readFile(path.resolve(repoRoot, opts.summary), "utf8"),
@@ -810,10 +819,19 @@ export async function runQaCoverageReportCommand(opts: {
     if (opts.summary?.trim()) {
       throw new Error("--summary requires --tools.");
     }
-    const inventory = buildQaCoverageInventory(scenarios);
-    body = opts.json
-      ? `${JSON.stringify(inventory, null, 2)}\n`
-      : renderQaCoverageMarkdownReport(inventory);
+    const query = opts.match?.join(" ").trim();
+    if (query) {
+      const matches = findQaScenarioMatches(scenarios, query);
+      body = opts.json
+        ? `${JSON.stringify({ query, matches }, null, 2)}\n`
+        : renderQaScenarioMatchesMarkdownReport({ query, matches });
+      outputLabel = "QA scenario match report";
+    } else {
+      const inventory = buildQaCoverageInventory(scenarios);
+      body = opts.json
+        ? `${JSON.stringify(inventory, null, 2)}\n`
+        : renderQaCoverageMarkdownReport(inventory);
+    }
   }
 
   if (outputPath) {

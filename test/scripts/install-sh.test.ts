@@ -17,6 +17,74 @@ function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
+function writeNpmFreshnessConflictFixture(path: string, argsLog: string) {
+  writeFileSync(
+    path,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `printf '%s\\n' "$*" >> ${JSON.stringify(argsLog)}`,
+      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "min-release-age" ]]; then',
+      "  printf 'null\\n'",
+      "  exit 0",
+      "fi",
+      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "before" ]]; then',
+      "  printf 'Wed May 13 2026 21:25:20 GMT-0300 (Brasilia Standard Time)\\n'",
+      "  exit 0",
+      "fi",
+      'for arg in "$@"; do',
+      '  if [[ "$arg" == --before=* ]]; then',
+      "    printf '%s\\n' 'Exit prior to config file resolving' >&2",
+      "    printf '%s\\n' 'cause' >&2",
+      "    printf '%s\\n' '--min-release-age cannot be provided when using --before' >&2",
+      "    exit 64",
+      "  fi",
+      "done",
+      'for arg in "$@"; do',
+      '  if [[ "$arg" == "--min-release-age=0" ]]; then',
+      "    exit 0",
+      "  fi",
+      "done",
+      "exit 65",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+}
+
+function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
+  writeFileSync(
+    path,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      `printf '%s\\n' "$*" >> ${JSON.stringify(argsLog)}`,
+      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "min-release-age" ]]; then',
+      "  printf 'null\\n'",
+      "  exit 0",
+      "fi",
+      'if [[ "$1" == "config" && "$2" == "get" && "$3" == "before" ]]; then',
+      "  printf 'Wed May 13 2026 21:25:20 GMT-0300 (Brasilia Standard Time)\\n'",
+      "  exit 0",
+      "fi",
+      'for arg in "$@"; do',
+      '  if [[ "$arg" == "--min-release-age=0" ]]; then',
+      "    printf '%s\\n' 'min-release-age should not be selected for project-only npmrc' >&2",
+      "    exit 64",
+      "  fi",
+      "done",
+      'for arg in "$@"; do',
+      '  if [[ "$arg" == --before=* ]]; then',
+      "    exit 0",
+      "  fi",
+      "done",
+      "exit 65",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(path, 0o755);
+}
+
 describe("install.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -34,11 +102,256 @@ describe("install.sh", () => {
     expect(rawAptInstalls).toStrictEqual([]);
   });
 
+  it("accepts GNU and musl Linux shells in OS detection", () => {
+    expect(script).toContain('[[ "$OSTYPE" == "linux"* ]]');
+    expect(script).not.toContain('[[ "$OSTYPE" == "linux-gnu"* ]]');
+  });
+
+  it("installs Node.js with apk on Alpine before falling back to NodeSource", () => {
+    expect(script).toContain("finish_linux_node_install()");
+    expect(script).toContain('ui_info "Installing Node.js via apk (Alpine Linux detected)"');
+    expect(script).toContain('run_quiet_step "Installing Node.js" apk add --no-cache nodejs npm');
+    expect(script).toContain(
+      'run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
+    );
+    expect(script).toContain("if ! node_is_at_least_required; then");
+
+    const apkIndex = script.indexOf("if command -v apk &> /dev/null; then");
+    const nodeSourceIndex = script.indexOf('ui_info "Installing Node.js via NodeSource"');
+    expect(apkIndex).toBeGreaterThan(-1);
+    expect(nodeSourceIndex).toBeGreaterThan(apkIndex);
+  });
+
+  it("uses the apk Node.js installer path on Alpine", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      require_sudo() { :; }
+      install_build_tools_linux() { return 0; }
+      is_root() { return 0; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_success() { printf 'success:%s\\n' "$*"; }
+      run_quiet_step() { printf 'step:%s|%s\\n' "$1" "\${*:2}"; }
+      apk() { :; }
+      finish_linux_node_install() { printf 'finish-linux-node\\n'; }
+      install_node
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("info:Installing Node.js via apk (Alpine Linux detected)");
+    expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
+    expect(result.stdout).toContain("finish-linux-node");
+    expect(result.stdout).not.toContain("Installing Node.js via NodeSource");
+  });
+
   it("clears npm freshness filters for package installs", () => {
     expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
     expect(script).toContain('freshness_flag="--min-release-age=0"');
+    expect(script).toContain('npm_config_has_raw_key npm "min-release-age"');
     expect(script).toContain('freshness_flag="--before=$(date -u');
     expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")');
+  });
+
+  it("does not emit --before when raw user npmrc config contains min-release-age", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npmrc-"));
+    const bin = join(tmp, "bin");
+    const npmrc = join(tmp, "user.npmrc");
+    const calls = join(tmp, "npm-calls.txt");
+    const installArgs = join(tmp, "npm-install-args.txt");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(npmrc, "min-release-age=7\n");
+    const fakeNpm = join(bin, "npm");
+    writeFileSync(
+      fakeNpm,
+      [
+        "#!/usr/bin/env bash",
+        'printf "%s\\n" "$*" >> "$NPM_FAKE_CALLS"',
+        'if [[ "$1" == "config" && "$2" == "get" ]]; then',
+        '  if [[ "$3" == "min-release-age" ]]; then',
+        "    printf 'null\\n'",
+        "    exit 0",
+        "  fi",
+        '  if [[ "$3" == "before" ]]; then',
+        "    printf '2026-01-01T00:00:00.000Z\\n'",
+        "    exit 0",
+        "  fi",
+        "fi",
+        'printf "%s\\n" "$@" > "$NPM_FAKE_INSTALL_ARGS"',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeNpm, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
+          'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
+        ].join("\n"),
+        {
+          NPM_CONFIG_USERCONFIG: npmrc,
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_INSTALL_ARGS: installArgs,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("--min-release-age=0");
+      expect(result.stdout).not.toContain("--before=");
+      expect(readFileSync(installArgs, "utf8")).toContain("--min-release-age=0\n");
+      expect(readFileSync(installArgs, "utf8")).not.toContain("--before=");
+      expect(readFileSync(calls, "utf8")).not.toContain("config get before");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("does not emit --before when default global npmrc config contains min-release-age", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-global-npmrc-"));
+    const bin = join(tmp, "bin");
+    const home = join(tmp, "home");
+    const prefix = join(tmp, "prefix");
+    const npmrc = join(prefix, "etc", "npmrc");
+    const calls = join(tmp, "npm-calls.txt");
+    const installArgs = join(tmp, "npm-install-args.txt");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    mkdirSync(join(prefix, "etc"), { recursive: true });
+    writeFileSync(npmrc, "min-release-age=7\n");
+    const fakeNpm = join(bin, "npm");
+    writeFileSync(
+      fakeNpm,
+      [
+        "#!/usr/bin/env bash",
+        'printf "%s\\n" "$*" >> "$NPM_FAKE_CALLS"',
+        'if [[ "$1" == "config" && "$2" == "get" ]]; then',
+        '  if [[ "$3" == "min-release-age" ]]; then',
+        "    printf 'null\\n'",
+        "    exit 0",
+        "  fi",
+        '  if [[ "$3" == "globalconfig" ]]; then',
+        '    printf "%s\\n" "$NPM_FAKE_GLOBALCONFIG"',
+        "    exit 0",
+        "  fi",
+        '  if [[ "$3" == "before" ]]; then',
+        "    printf '2026-01-01T00:00:00.000Z\\n'",
+        "    exit 0",
+        "  fi",
+        "fi",
+        'printf "%s\\n" "$@" > "$NPM_FAKE_INSTALL_ARGS"',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeNpm, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
+          'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
+        ].join("\n"),
+        {
+          HOME: home,
+          NPM_CONFIG_GLOBALCONFIG: undefined,
+          NPM_CONFIG_PREFIX: undefined,
+          npm_config_globalconfig: undefined,
+          npm_config_prefix: undefined,
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_GLOBALCONFIG: npmrc,
+          NPM_FAKE_INSTALL_ARGS: installArgs,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("--min-release-age=0");
+      expect(result.stdout).not.toContain("--before=");
+      expect(readFileSync(installArgs, "utf8")).toContain("--min-release-age=0\n");
+      expect(readFileSync(installArgs, "utf8")).not.toContain("--before=");
+      expect(readFileSync(calls, "utf8")).not.toContain("config get before");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
+  it("does not emit --before when builtin npmrc config contains min-release-age", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-builtin-npmrc-"));
+    const bin = join(tmp, "bin");
+    const home = join(tmp, "home");
+    const npmrc = join(tmp, "npmrc");
+    const calls = join(tmp, "npm-calls.txt");
+    const installArgs = join(tmp, "npm-install-args.txt");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(npmrc, "min-release-age=7\n");
+    const fakeNpm = join(bin, "npm");
+    writeFileSync(
+      fakeNpm,
+      [
+        "#!/usr/bin/env bash",
+        'printf "%s\\n" "$*" >> "$NPM_FAKE_CALLS"',
+        'if [[ "$1" == "config" && "$2" == "get" ]]; then',
+        '  if [[ "$3" == "min-release-age" ]]; then',
+        "    printf 'null\\n'",
+        "    exit 0",
+        "  fi",
+        '  if [[ "$3" == "globalconfig" ]]; then',
+        '    printf "%s\\n" "$NPM_FAKE_GLOBALCONFIG"',
+        "    exit 0",
+        "  fi",
+        '  if [[ "$3" == "before" ]]; then',
+        "    printf '2026-01-01T00:00:00.000Z\\n'",
+        "    exit 0",
+        "  fi",
+        "fi",
+        'printf "%s\\n" "$@" > "$NPM_FAKE_INSTALL_ARGS"',
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(fakeNpm, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
+          'printf "cmd=%s\\n" "$LAST_NPM_INSTALL_CMD"',
+        ].join("\n"),
+        {
+          HOME: home,
+          NPM_CONFIG_GLOBALCONFIG: undefined,
+          NPM_CONFIG_PREFIX: undefined,
+          npm_config_globalconfig: undefined,
+          npm_config_prefix: undefined,
+          NPM_FAKE_CALLS: calls,
+          NPM_FAKE_GLOBALCONFIG: join(tmp, "missing-global-npmrc"),
+          NPM_FAKE_INSTALL_ARGS: installArgs,
+          PATH: `${bin}:${process.env.PATH}`,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("--min-release-age=0");
+      expect(result.stdout).not.toContain("--before=");
+      expect(readFileSync(installArgs, "utf8")).toContain("--min-release-age=0\n");
+      expect(readFileSync(installArgs, "utf8")).not.toContain("--before=");
+      expect(readFileSync(calls, "utf8")).not.toContain("config get before");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
   });
 
   it("uses OPENCLAW_HOME for git and onboarding defaults", () => {
@@ -139,6 +452,80 @@ describe("install.sh", () => {
     expect(result.stdout).toContain("--install-method git --version main");
   });
 
+  it("does not emit before args when npmrc min-release-age computes a before cutoff", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-freshness-"));
+    const bin = join(tmp, "bin");
+    const home = join(tmp, "home");
+    const argsLog = join(tmp, "npm-args.log");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, ".npmrc"), "min-release-age=7\n");
+    writeNpmFreshnessConflictFixture(join(bin, "npm"), argsLog);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    let argsOutput = "";
+    try {
+      result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `HOME=${JSON.stringify(home)}`,
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "NPM_LOGLEVEL=error",
+          "NPM_SILENT_FLAG=",
+          "SHARP_IGNORE_GLOBAL_LIBVIPS=1",
+          `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
+        ].join("\n"),
+      );
+      argsOutput = readFileSync(argsLog, "utf8");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(argsOutput).toContain("--min-release-age=0");
+    expect(argsOutput).not.toContain("--before=");
+  });
+
+  it("ignores project npmrc when choosing global install freshness args", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-global-freshness-"));
+    const bin = join(tmp, "bin");
+    const home = join(tmp, "home");
+    const project = join(tmp, "project");
+    const argsLog = join(tmp, "npm-args.log");
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(home, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n");
+    writeFileSync(join(project, ".npmrc"), "min-release-age=7\n");
+    writeNpmBeforePolicyFixture(join(bin, "npm"), argsLog);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    let argsOutput = "";
+    try {
+      result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `cd ${JSON.stringify(project)}`,
+          `source ${JSON.stringify(process.cwd() + "/" + SCRIPT_PATH)}`,
+          `HOME=${JSON.stringify(home)}`,
+          `PATH=${JSON.stringify(`${bin}:/usr/bin:/bin`)}`,
+          "NPM_LOGLEVEL=error",
+          "NPM_SILENT_FLAG=",
+          "SHARP_IGNORE_GLOBAL_LIBVIPS=1",
+          `run_npm_global_install openclaw@latest ${JSON.stringify(join(tmp, "install.log"))}`,
+        ].join("\n"),
+      );
+      argsOutput = readFileSync(argsLog, "utf8");
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(argsOutput).toContain("--before=");
+    expect(argsOutput).not.toContain("--min-release-age=0");
+  });
+
   it("exports noninteractive apt env during Linux startup", () => {
     expect(script).toMatch(
       /detect_os_or_die\s+if \[\[ "\$OS" == "linux" \]\]; then\s+export DEBIAN_FRONTEND="\$\{DEBIAN_FRONTEND:-noninteractive\}"\s+export NEEDRESTART_MODE="\$\{NEEDRESTART_MODE:-a\}"\s+fi/m,
@@ -146,6 +533,25 @@ describe("install.sh", () => {
     expect(script).toContain(
       'run_quiet_step "Configuring NodeSource repository" sudo -E bash "$tmp"',
     );
+  });
+
+  it("counts the verify stage when --verify is enabled", () => {
+    const result = runInstallShell(
+      [
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "parse_args --verify",
+        "configure_install_stage_total",
+        'ui_stage "Preparing environment"',
+        'ui_stage "Installing OpenClaw"',
+        'ui_stage "Finalizing setup"',
+        'ui_stage "Verifying installation"',
+      ].join("\n"),
+      { TERM: "dumb" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[4/4] Verifying installation");
+    expect(result.stdout).not.toContain("[4/3] Verifying installation");
   });
 
   it("loads nvm before checking Node.js so stale system Node does not win", () => {

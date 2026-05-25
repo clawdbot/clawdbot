@@ -81,4 +81,32 @@ describe("resolveCliRuntimeExecutionProvider", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("matches a configured claude-cli policy when the caller provider is empty", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createAnthropicAuthConfig({
+          models: {
+            "anthropic/opus-4.7": { agentRuntime: { id: "claude-cli" } },
+          },
+        }),
+        provider: "",
+        modelId: "opus-4.7",
+      }),
+    ).toBe("claude-cli");
+  });
+
+  it("does not return a CLI runtime when the matched entry's provider is incompatible with the runtime alias", () => {
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createAnthropicAuthConfig({
+          models: {
+            "openrouter/opus-4.7": { agentRuntime: { id: "claude-cli" } },
+          },
+        }),
+        provider: "",
+        modelId: "opus-4.7",
+      }),
+    ).toBeUndefined();
+  });
 });

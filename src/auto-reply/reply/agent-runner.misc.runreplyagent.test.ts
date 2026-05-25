@@ -8,6 +8,7 @@ import {
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
@@ -292,6 +293,7 @@ describe("runReplyAgent auto-compaction token update", () => {
   async function runBaseReplyWithAgentMeta(params: {
     agentMeta: Record<string, unknown>;
     collectDiagnostics?: boolean;
+    config?: OpenClawConfig;
     tmpPrefix: string;
     workspaceDir?: string;
   }) {
@@ -322,6 +324,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
       storePath,
       sessionEntry,
+      config: params.config,
       workspaceDir: params.workspaceDir,
     });
 
@@ -507,7 +510,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     );
   });
 
-  it("reads post-compaction context from the queued workspace instead of process cwd", async () => {
+  it("reads opted-in post-compaction context from the queued workspace instead of process cwd", async () => {
     const workspaceDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "openclaw-post-compaction-workspace-"),
     );
@@ -529,6 +532,13 @@ describe("runReplyAgent auto-compaction token update", () => {
       const { sessionKey } = await runBaseReplyWithAgentMeta({
         tmpPrefix: "openclaw-post-compaction-workspace-root-",
         workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              compaction: { postCompactionSections: ["Session Startup", "Red Lines"] },
+            },
+          },
+        },
         agentMeta: {
           compactionCount: 1,
           lastCallUsage: { input: 10_000, output: 500, total: 10_500 },

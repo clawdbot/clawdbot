@@ -20,8 +20,7 @@ diagnostic surfaces around that boundary.
 OpenClaw still owns channel routing, session files, visible message delivery,
 OpenClaw dynamic tools, approvals, media delivery, and a transcript mirror.
 Codex owns the canonical native thread, native model loop, native tool
-continuation, and native compaction unless the active OpenClaw context engine
-declares that it owns compaction.
+continuation, and native compaction.
 
 Prompt routing follows the selected runtime, not just the provider string. A
 native Codex turn receives Codex app-server developer instructions, while an
@@ -122,7 +121,7 @@ Supported in Codex runtime v1:
 | OpenClaw channel routing and delivery         | Supported                                                                        | Telegram, Discord, Slack, WhatsApp, iMessage, and other channels stay outside the model runtime.                                                                                                                                                                                                                                                                    |
 | OpenClaw dynamic tools                        | Supported                                                                        | Codex asks OpenClaw to execute these tools, so OpenClaw stays in the execution path.                                                                                                                                                                                                                                                                                |
 | Prompt and context plugins                    | Supported                                                                        | OpenClaw projects OpenClaw-specific prompt/context into the Codex turn while leaving Codex-owned base, model, personality, and configured project-doc prompts in the native Codex lane. Native Codex developer instructions accept only command guidance explicitly scoped to `codex_app_server`; legacy global command hints remain for non-Codex prompt surfaces. |
-| Context engine lifecycle                      | Supported                                                                        | Assemble, ingest, after-turn maintenance, and context-engine compaction coordination run for Codex turns.                                                                                                                                                                                                                                                           |
+| Context engine lifecycle                      | Supported                                                                        | Assemble, ingest, and after-turn maintenance run around Codex turns. Context engines do not replace native Codex compaction.                                                                                                                                                                                                                                        |
 | Dynamic tool hooks                            | Supported                                                                        | `before_tool_call`, `after_tool_call`, and tool-result middleware run around OpenClaw-owned dynamic tools.                                                                                                                                                                                                                                                          |
 | Lifecycle hooks                               | Supported as adapter observations                                                | `llm_input`, `llm_output`, `agent_end`, `before_compaction`, and `after_compaction` fire with honest Codex-mode payloads.                                                                                                                                                                                                                                           |
 | Final-answer revision gate                    | Supported through native hook relay                                              | Codex `Stop` is relayed to `before_agent_finalize`; `revise` asks Codex for one more model pass before finalization.                                                                                                                                                                                                                                                |
@@ -137,8 +136,8 @@ Not supported in Codex runtime v1:
 | Native tool argument mutation                       | Codex native pre-tool hooks can block, but OpenClaw does not rewrite Codex-native tool arguments.                                               | Requires Codex hook/schema support for replacement tool input.                            |
 | Editable Codex-native transcript history            | Codex owns canonical native thread history. OpenClaw owns a mirror and can project future context, but should not mutate unsupported internals. | Add explicit Codex app-server APIs if native thread surgery is needed.                    |
 | `tool_result_persist` for Codex-native tool records | That hook transforms OpenClaw-owned transcript writes, not Codex-native tool records.                                                           | Could mirror transformed records, but canonical rewrite needs Codex support.              |
-| Rich native compaction metadata                     | OpenClaw observes compaction start and completion, but does not receive a stable kept/dropped list, token delta, or summary payload.            | Needs richer Codex compaction events.                                                     |
-| Compaction intervention                             | Current OpenClaw compaction hooks are notification-level in Codex mode.                                                                         | Add Codex pre/post compaction hooks if plugins need to veto or rewrite native compaction. |
+| Rich native compaction metadata                     | OpenClaw can request native compaction, but does not receive a stable kept/dropped list, token delta, completion summary, or summary payload.   | Needs richer Codex compaction events.                                                     |
+| Compaction intervention                             | OpenClaw does not let plugins or context engines veto, rewrite, or replace native Codex compaction.                                             | Add Codex pre/post compaction hooks if plugins need to veto or rewrite native compaction. |
 | Byte-for-byte model API request capture             | OpenClaw can capture app-server requests and notifications, but Codex core builds the final OpenAI API request internally.                      | Needs a Codex model-request tracing event or debug API.                                   |
 
 ## Native permissions and MCP elicitations
@@ -163,6 +162,9 @@ approval flow when Codex marks `_meta.codex_approval_kind` as
 originating chat, and the next queued follow-up message answers that native
 server request instead of being steered as extra context. Other MCP elicitation
 requests fail closed.
+
+For the general plugin approval flow that carries these prompts, see
+[Plugin permission requests](/plugins/plugin-permission-requests).
 
 ## Queue steering
 
@@ -200,13 +202,18 @@ diagnostics bundle.
 
 ## Compaction and transcript mirror
 
-When the selected model uses the Codex harness, native thread compaction is
-delegated to Codex app-server unless an active context engine declares
-`ownsCompaction: true`. Owning context engines compact first and cause OpenClaw
-to abandon the old Codex backend thread so the next turn can rehydrate a fresh
-thread from engine-managed context. OpenClaw keeps a transcript mirror for
-channel history, search, `/new`, `/reset`, and future model or harness
-switching.
+When the selected model uses the Codex harness, native thread compaction belongs
+to Codex app-server. OpenClaw does not run preflight compaction for Codex turns,
+does not replace Codex compaction with context-engine compaction, and does not
+fall back to OpenClaw or public OpenAI summarization when native Codex
+compaction cannot be started. OpenClaw keeps a transcript mirror for channel
+history, search, `/new`, `/reset`, and future model or harness switching.
+
+Explicit compaction requests, such as `/compact` or a plugin-requested manual
+compact operation, start native Codex compaction with `thread/compact/start`.
+OpenClaw returns after starting that native operation. It does not wait for
+completion, impose a separate OpenClaw timeout, restart the shared Codex
+app-server, or record the operation as an OpenClaw-completed compaction.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
 projects tool-call names and ids, input shapes, and redacted tool-result content
@@ -215,9 +222,9 @@ that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight Codex
 reasoning or plan records when the app-server emits them. Today, OpenClaw only
-records native compaction start and completion signals. It does not yet expose a
-human-readable compaction summary or an auditable list of which entries Codex
-kept after compaction.
+records explicit native compaction start signals when it requests compaction. It
+does not expose a human-readable compaction summary or an auditable list of
+which entries Codex kept after compaction.
 
 Because Codex owns the canonical native thread, `tool_result_persist` does not
 currently rewrite Codex-native tool result records. It only applies when

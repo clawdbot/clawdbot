@@ -70,6 +70,15 @@ describe("markdownToTelegramHtml", () => {
     );
   });
 
+  it("normalizes raw code language HTML without leaking tags", () => {
+    const commandBlock = '<code class="language-text">/queue followup debounce:0\n</code>';
+
+    expect(markdownToTelegramHtml(commandBlock)).toBe("<code>/queue followup debounce:0\n</code>");
+    expect(
+      markdownToTelegramHtml('<pre><code class="language-python">print(1)\n</code></pre>'),
+    ).toBe('<pre><code class="language-python">print(1)\n</code></pre>');
+  });
+
   it("renders blockquotes as native Telegram blockquote tags", () => {
     const res = markdownToTelegramHtml("> Quote");
     expect(res).toContain("<blockquote>");

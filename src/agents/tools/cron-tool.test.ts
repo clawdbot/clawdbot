@@ -630,6 +630,25 @@ describe("cron tool", () => {
     expect(sessionKey).toBe("agent:main:telegram:group:-100123:topic:99");
   });
 
+  it("does not stamp caller sessionKey when add targets isolated session", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const tool = createTestCronTool({ agentSessionKey: "agent:main:webchat:dm:dashboard" });
+    await tool.execute("call-isolated-no-stamp", {
+      action: "add",
+      job: {
+        name: "isolated run",
+        schedule: { at: new Date(123).toISOString() },
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+    });
+    const call = readGatewayCall();
+    const payload = call.params as { sessionKey?: string; sessionTarget?: string } | undefined;
+    expect(payload?.sessionTarget).toBe("isolated");
+    expect(payload).not.toHaveProperty("sessionKey");
+  });
+
   it("adds recent context for systemEvent reminders when contextMessages > 0", async () => {
     callGatewayMock
       .mockResolvedValueOnce({

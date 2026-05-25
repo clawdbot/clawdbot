@@ -97,6 +97,30 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
     ]);
   });
 
+  it("parses Grok-style bracketed tool calls", () => {
+    const firstRaw = '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}';
+    const secondRaw = '[tool:message] {"action":"send","channel":"channel:123","message":"done"}';
+    const raw = [firstRaw, "", secondRaw].join("\n");
+    const blocks = parseStandalonePlainTextToolCallBlocks(raw);
+
+    expect(blocks).toEqual([
+      {
+        name: "read",
+        arguments: { path: "/app/skills/meme-maker/SKILL.md" },
+        start: 0,
+        end: firstRaw.length,
+        raw: firstRaw,
+      },
+      {
+        name: "message",
+        arguments: { action: "send", channel: "channel:123", message: "done" },
+        start: firstRaw.length + 2,
+        end: raw.length,
+        raw: secondRaw,
+      },
+    ]);
+  });
+
   it("respects allowed tool names for Harmony calls", () => {
     const blocks = parseStandalonePlainTextToolCallBlocks(
       'commentary to=write code {"path":"/tmp/file.txt","content":"x"}',
@@ -120,6 +144,19 @@ describe("stripPlainTextToolCallBlocks", () => {
     expect(
       stripPlainTextToolCallBlocks(
         'before\ncommentary to=read code {"path":"/tmp/file.txt"}\nafter',
+      ),
+    ).toBe("before\nafter");
+  });
+
+  it("strips standalone Grok-style tool calls", () => {
+    expect(
+      stripPlainTextToolCallBlocks(
+        [
+          "before",
+          '[tool:read] {"path":"/tmp/file.txt"}',
+          '[tool:message] {"action":"send","message":"[tool:read] {\\"path\\":\\"/tmp/file.txt\\"}"}',
+          "after",
+        ].join("\n"),
       ),
     ).toBe("before\nafter");
   });

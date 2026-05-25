@@ -130,14 +130,17 @@ export async function mirrorCodexAppServerTranscript(params: {
     sessionFile: params.sessionFile,
     ...resolveSessionWriteLockOptions(params.config),
   });
+  const appendedUpdates: Array<{ messageId: string; message: AgentMessage; messageSeq: number }> =
+    [];
   try {
-    const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);
+    const mirrorState = await readTranscriptMirrorState(params.sessionFile);
+    let nextMessageSeq = mirrorState.messageCount;
     for (const message of messages) {
       const dedupeIdentity = buildMirrorDedupeIdentity(message);
       const idempotencyKey = params.idempotencyScope
         ? `${params.idempotencyScope}:${dedupeIdentity}`
         : undefined;
-      if (idempotencyKey && existingIdempotencyKeys.has(idempotencyKey)) {
+      if (idempotencyKey && mirrorState.idempotencyKeys.has(idempotencyKey)) {
         continue;
       }
       const transcriptMessage = {
@@ -160,28 +163,37 @@ export async function mirrorCodexAppServerTranscript(params: {
             }
           : nextMessage
       ) as AgentMessage;
-      await appendSessionTranscriptMessage({
+      const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
         transcriptPath: params.sessionFile,
         message: messageToAppend,
         config: params.config,
       });
+      nextMessageSeq += 1;
+      appendedUpdates.push({ messageId, message: appendedMessage, messageSeq: nextMessageSeq });
       if (idempotencyKey) {
-        existingIdempotencyKeys.add(idempotencyKey);
+        mirrorState.idempotencyKeys.add(idempotencyKey);
       }
     }
   } finally {
     await lock.release();
   }
 
-  if (params.sessionKey) {
-    emitSessionTranscriptUpdate({ sessionFile: params.sessionFile, sessionKey: params.sessionKey });
-  } else {
-    emitSessionTranscriptUpdate(params.sessionFile);
+  for (const update of appendedUpdates) {
+    emitSessionTranscriptUpdate({
+      sessionFile: params.sessionFile,
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      message: update.message,
+      messageId: update.messageId,
+      messageSeq: update.messageSeq,
+    });
   }
 }
 
-async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<string>> {
-  const keys = new Set<string>();
+async function readTranscriptMirrorState(
+  sessionFile: string,
+): Promise<{ idempotencyKeys: Set<string>; messageCount: number }> {
+  const idempotencyKeys = new Set<string>();
+  let messageCount = 0;
   let raw: string;
   try {
     raw = await fs.readFile(sessionFile, "utf8");
@@ -189,7 +201,7 @@ async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<s
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       throw error;
     }
-    return keys;
+    return { idempotencyKeys, messageCount };
   }
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) {
@@ -197,12 +209,15 @@ async function readTranscriptIdempotencyKeys(sessionFile: string): Promise<Set<s
     }
     try {
       const parsed = JSON.parse(line) as { message?: { idempotencyKey?: unknown } };
+      if ((parsed as { type?: unknown }).type === "message") {
+        messageCount += 1;
+      }
       if (typeof parsed.message?.idempotencyKey === "string") {
-        keys.add(parsed.message.idempotencyKey);
+        idempotencyKeys.add(parsed.message.idempotencyKey);
       }
     } catch {
       continue;
     }
   }
-  return keys;
+  return { idempotencyKeys, messageCount };
 }

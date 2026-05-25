@@ -229,6 +229,19 @@ function resolveFollowupContextConfigProvider(params: {
   runtimePolicySessionKey?: string;
 }): string {
   const provider = params.followupRun.run.provider;
+  return resolveContextConfigProviderForRuntime({
+    provider,
+    runtimeId: resolveFollowupAgentRuntimeId(params),
+  });
+}
+
+function resolveFollowupAgentRuntimeId(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): string {
   const matchingSessionEntry =
     params.sessionEntry?.sessionId === params.followupRun.run.sessionId
       ? params.sessionEntry
@@ -243,13 +256,10 @@ function resolveFollowupContextConfigProvider(params: {
       ? persistedRuntimeOverride
       : matchingSessionEntry?.agentHarnessId;
   if (persistedRuntimeId) {
-    return resolveContextConfigProviderForRuntime({
-      provider,
-      runtimeId: persistedRuntimeId,
-    });
+    return persistedRuntimeId;
   }
   const harnessPolicy = resolveAgentHarnessPolicy({
-    provider,
+    provider: params.followupRun.run.provider,
     modelId: params.followupRun.run.model,
     config: params.cfg,
     agentId: params.followupRun.run.agentId,
@@ -259,10 +269,17 @@ function resolveFollowupContextConfigProvider(params: {
       params.followupRun.run.runtimePolicySessionKey ??
       params.followupRun.run.sessionKey,
   });
-  return resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: harnessPolicy.runtime,
-  });
+  return harnessPolicy.runtime;
+}
+
+function followupUsesCodexRuntime(params: {
+  cfg: OpenClawConfig;
+  followupRun: FollowupRun;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  runtimePolicySessionKey?: string;
+}): boolean {
+  return normalizeLowercaseStringOrEmpty(resolveFollowupAgentRuntimeId(params)) === "codex";
 }
 
 function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -611,6 +628,23 @@ export async function runPreflightCompactionIfNeeded(params: {
 
   const isCli = isCliProvider(params.followupRun.run.provider, params.cfg);
   if (params.isHeartbeat || isCli) {
+    return entry ?? params.sessionEntry;
+  }
+  if (
+    followupUsesCodexRuntime({
+      cfg: params.cfg,
+      followupRun: params.followupRun,
+      sessionEntry: entry,
+      sessionKey: params.sessionKey,
+      runtimePolicySessionKey: params.runtimePolicySessionKey,
+    })
+  ) {
+    // Codex runtime sessions should reach Codex with their real thread state.
+    // Its harness owns automatic compaction; OpenClaw preflight compaction is
+    // only for non-Codex embedded runtimes.
+    logVerbose(
+      `preflightCompaction skipped: sessionKey=${params.sessionKey} runtime=codex reason=codex_native_auto_compaction`,
+    );
     return entry ?? params.sessionEntry;
   }
 

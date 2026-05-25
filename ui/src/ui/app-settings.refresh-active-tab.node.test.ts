@@ -121,6 +121,7 @@ vi.mock("./controllers/presence.ts", () => ({
 }));
 vi.mock("./controllers/sessions.ts", () => ({
   loadSessions: mocks.loadSessionsMock,
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 vi.mock("./controllers/skills.ts", () => ({
   loadSkills: mocks.loadSkillsMock,

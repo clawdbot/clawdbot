@@ -513,9 +513,7 @@ function schemaAlternatives(
 
 function schemaLooksArray(schema: JsonSchemaRecord): boolean {
   return (
-    schemaTypes(schema).has("array") ||
-    isSchemaRecord(schema.items) ||
-    Array.isArray(schema.items)
+    schemaTypes(schema).has("array") || isSchemaRecord(schema.items) || Array.isArray(schema.items)
   );
 }
 

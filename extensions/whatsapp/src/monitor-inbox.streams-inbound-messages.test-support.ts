@@ -6,7 +6,6 @@ import { WhatsAppRetryableInboundError } from "./inbound/dedupe.js";
 import { WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES } from "./inbound/monitor.js";
 import {
   type InboxMonitorOptions,
-  InboxOnMessage,
   buildNotifyMessageUpsert,
   failNextWhatsAppPluginStateRegisterIfAbsent,
   getAuthDir,
@@ -17,6 +16,7 @@ import {
   startInboxMonitor,
   waitForMessageCalls,
 } from "./monitor-inbox.test-harness.js";
+import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
 
 const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _signal?: AbortSignal) => undefined),

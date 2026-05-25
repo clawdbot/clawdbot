@@ -83,6 +83,19 @@ function formatCompactionReason(reason?: string): string | undefined {
   return text;
 }
 
+function isCodexNativeCompactionStartedResult(result: { result?: { details?: unknown } }): boolean {
+  const details = result.result?.details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return false;
+  }
+  const record = details as Record<string, unknown>;
+  return (
+    record.backend === "codex-app-server" &&
+    record.signal === "thread/compact/start" &&
+    record.pending === true
+  );
+}
+
 function resolveManualCompactContextTokenBudget(params: {
   cfg: OpenClawConfig;
   provider?: string;
@@ -267,17 +280,20 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
 
+  const codexNativeCompactionStarted = isCodexNativeCompactionStartedResult(result);
   const compactLabel =
     result.ok || isCompactionSkipReason(result.reason)
-      ? result.compacted
-        ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
-          ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
-          : result.result?.tokensBefore
-            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
-            : "Compacted"
-        : "Compaction skipped"
+      ? codexNativeCompactionStarted
+        ? "Codex compaction started"
+        : result.compacted
+          ? result.result?.tokensBefore != null && result.result?.tokensAfter != null
+            ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(result.result.tokensAfter)})`
+            : result.result?.tokensBefore
+              ? `Compacted (${runtime.formatTokenCount(result.result.tokensBefore)} before)`
+              : "Compacted"
+          : "Compaction skipped"
       : "Compaction failed";
-  if (result.ok && result.compacted) {
+  if (result.ok && result.compacted && !codexNativeCompactionStarted) {
     await runtime.incrementCompactionCount({
       cfg: params.cfg,
       sessionEntry: targetSessionEntry,

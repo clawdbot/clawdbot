@@ -74,14 +74,15 @@ function loadRootAliasWithStubs(options?: {
   const monolithicExports = options?.monolithicExports ?? {
     slowHelper: () => "loaded",
   };
+  const context = {
+    process: {
+      env: options?.env ?? {},
+      platform: options?.platform ?? "darwin",
+    },
+  };
   const wrapper = vm.runInNewContext(
     `(function (exports, require, module, __filename, __dirname) {${rootAliasSource}\n})`,
-    {
-      process: {
-        env: options?.env ?? {},
-        platform: options?.platform ?? "darwin",
-      },
-    },
+    context,
     { filename: rootAliasPath },
   ) as (
     exports: Record<string, unknown>,
@@ -158,6 +159,7 @@ function loadRootAliasWithStubs(options?: {
       return createJitiOptions;
     },
     loadedSpecifiers,
+    globalContext: context as Record<PropertyKey, unknown>,
   };
 }
 
@@ -521,6 +523,31 @@ describe("plugin-sdk root alias", () => {
     expect(lazyModule.loadedSpecifiers).not.toContain(
       path.join(packageRoot, "dist", "diagnostic-events-zeta.js"),
     );
+  });
+
+  it("bridges diagnostic listeners through shared process state when the lazy module is isolated", () => {
+    const seen: string[] = [];
+    const lazyModule = loadDiagnosticEventsAlias(["diagnostic-events-W3Hz61fI.js"]);
+    const unsubscribe = (
+      lazyModule.moduleExports.onDiagnosticEvent as (
+        listener: (event: { type: string }) => void,
+      ) => () => void
+    )((event) => {
+      seen.push(event.type);
+    });
+    const state = lazyModule.globalContext[Symbol.for("openclaw.diagnosticEvents.state.v1")] as {
+      listeners: Set<(event: { type: string }, metadata: { trusted: boolean }) => void>;
+    };
+
+    for (const listener of state.listeners) {
+      listener({ type: "model.usage" }, { trusted: false });
+      listener({ type: "log.record" }, { trusted: false });
+      listener({ type: "model.usage" }, { trusted: true });
+    }
+    unsubscribe();
+
+    expect(seen).toEqual(["model.usage"]);
+    expect(state.listeners.size).toBe(0);
   });
 
   it.each([

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -48,6 +49,7 @@ export type PluginMetadataSnapshot = {
   normalizePluginId: (pluginId: string) => string;
   owners: PluginMetadataSnapshotOwnerMaps;
   metrics: PluginMetadataSnapshotMetrics;
+  discovery?: PluginDiscoveryResult;
 };
 
 export type PluginMetadataRegistryView = Pick<PluginMetadataSnapshot, "index" | "manifestRegistry">;

@@ -7,6 +7,7 @@ const {
   loadChatHistoryMock,
   createSessionAndRefreshMock,
   loadSessionsMock,
+  syncSelectedSessionMessageSubscriptionMock,
 } = vi.hoisted(() => ({
   refreshChatMock: vi.fn(),
   refreshChatAvatarMock: vi.fn(),
@@ -14,6 +15,7 @@ const {
   loadChatHistoryMock: vi.fn(),
   createSessionAndRefreshMock: vi.fn(),
   loadSessionsMock: vi.fn(),
+  syncSelectedSessionMessageSubscriptionMock: vi.fn(),
 }));
 
 vi.mock("./app-chat.ts", () => ({
@@ -41,6 +43,7 @@ vi.mock("./controllers/chat.ts", () => ({
 vi.mock("./controllers/sessions.ts", () => ({
   createSessionAndRefresh: createSessionAndRefreshMock,
   loadSessions: loadSessionsMock,
+  syncSelectedSessionMessageSubscription: syncSelectedSessionMessageSubscriptionMock,
 }));
 
 import {
@@ -67,6 +70,7 @@ beforeEach(() => {
   loadChatHistoryMock.mockReset();
   createSessionAndRefreshMock.mockReset();
   loadSessionsMock.mockReset();
+  syncSelectedSessionMessageSubscriptionMock.mockReset();
 });
 
 function row(overrides: Partial<SessionRow> & { key: string }): SessionRow {
@@ -977,6 +981,7 @@ describe("switchChatSession", () => {
       agentId: "main",
     });
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+    expect(syncSelectedSessionMessageSubscriptionMock).toHaveBeenCalledWith(state);
     expect(loadSessionsMock).toHaveBeenCalledWith(state, {
       activeMinutes: 120,
       limit: 50,

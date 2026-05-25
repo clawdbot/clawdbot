@@ -347,6 +347,41 @@ describe("handleCompactCommand", () => {
     expect(call.tokensAfter).toBe(321);
   });
 
+  it("reports started Codex native compaction without incrementing completed compaction state", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: 199_000,
+        details: {
+          backend: "codex-app-server",
+          threadId: "thread-1",
+          signal: "thread/compact/start",
+          pending: true,
+        },
+      },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "live-session",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Codex compaction started");
+    expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+  });
+
   it("resolves /compact context budget from the active Codex runtime config instead of stale session metadata", async () => {
     vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
       ok: true,

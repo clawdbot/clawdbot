@@ -2,8 +2,12 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, copyFile, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { normalizeCredentialPayloadForKind } from "../../qa/convex-credential-broker/convex/payload-validation.js";
+import { expandHome, writePrivateJson } from "./telegram-user-credential-paths.ts";
 
 type JsonObject = Record<string, unknown>;
 
@@ -36,16 +40,6 @@ function printUsage() {
       "  node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file <lease.json> [--env-file <path>]",
     ].join("\n"),
   );
-}
-
-function expandHome(path: string) {
-  if (path === "~") {
-    return process.env.HOME || path;
-  }
-  if (path.startsWith("~/")) {
-    return `${process.env.HOME || "~"}${path.slice(1)}`;
-  }
-  return path;
 }
 
 function parseArgs(argv: string[]) {
@@ -166,17 +160,6 @@ async function fileSha256(path: string) {
 
 async function tgzBase64(path: string) {
   return (await readFile(path)).toString("base64");
-}
-
-async function writePrivateJson(path: string, payload: JsonObject) {
-  const expanded = expandHome(path);
-  await mkdir(expanded.slice(0, expanded.lastIndexOf("/")), { recursive: true });
-  await writeFile(expanded, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
-  await chmodPrivate(expanded);
-}
-
-async function chmodPrivate(path: string) {
-  await chmod(path, 0o600);
 }
 
 function runCommand(command: string, args: string[], cwd?: string) {
@@ -384,12 +367,9 @@ async function createTelegramUserPayload(opts: Map<string, string>) {
     throw new Error("Missing group id in env, user-driver config, or bot credentials file.");
   }
 
-  const tempRoot = `/tmp/openclaw-telegram-user-credential-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}`;
-  const tdlibArchive = `${tempRoot}/tdlib.tgz`;
-  const desktopArchive = `${tempRoot}/desktop-tdata.tgz`;
-  await mkdir(tempRoot, { recursive: true });
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-telegram-user-credential-"));
+  const tdlibArchive = path.join(tempRoot, "tdlib.tgz");
+  const desktopArchive = path.join(tempRoot, "desktop-tdata.tgz");
   try {
     await runCommand("tar", ["-C", userDriverDir, "-czf", tdlibArchive, "db", "files"]);
     if (desktopTdataArchiveInput) {
@@ -397,7 +377,7 @@ async function createTelegramUserPayload(opts: Map<string, string>) {
     } else {
       await runCommand("tar", [
         "-C",
-        `${expandHome(desktopTdataDir!)}/..`,
+        path.dirname(expandHome(desktopTdataDir!)),
         "--exclude",
         "tdata/countries",
         "--exclude",
@@ -458,12 +438,9 @@ async function restoreTelegramUserPayload(params: {
     usage();
   }
   const payload = parseTelegramUserQaCredentialPayload(params.payload);
-  const tempRoot = `/tmp/openclaw-telegram-user-restore-${Date.now()}-${Math.random()
-    .toString(16)
-    .slice(2)}`;
-  const tdlibArchive = `${tempRoot}/tdlib.tgz`;
-  const desktopArchive = `${tempRoot}/desktop-tdata.tgz`;
-  await mkdir(tempRoot, { recursive: true });
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "openclaw-telegram-user-restore-"));
+  const tdlibArchive = path.join(tempRoot, "tdlib.tgz");
+  const desktopArchive = path.join(tempRoot, "desktop-tdata.tgz");
   await mkdir(expandHome(userDriverDir), { recursive: true });
   await mkdir(expandHome(desktopWorkdir), { recursive: true });
   try {
@@ -610,15 +587,21 @@ async function releaseTelegramUserLease(opts: Map<string, string>) {
   );
 }
 
-const { command, opts } = parseArgs(process.argv);
-if (command === "export") {
-  await createTelegramUserPayload(opts);
-} else if (command === "restore") {
-  await restoreTelegramUserPayloadFromFile(opts);
-} else if (command === "lease-restore") {
-  await leaseAndRestoreTelegramUser(opts);
-} else if (command === "release") {
-  await releaseTelegramUserLease(opts);
-} else {
-  usage();
+async function main(argv = process.argv) {
+  const { command, opts } = parseArgs(argv);
+  if (command === "export") {
+    await createTelegramUserPayload(opts);
+  } else if (command === "restore") {
+    await restoreTelegramUserPayloadFromFile(opts);
+  } else if (command === "lease-restore") {
+    await leaseAndRestoreTelegramUser(opts);
+  } else if (command === "release") {
+    await releaseTelegramUserLease(opts);
+  } else {
+    usage();
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
 }

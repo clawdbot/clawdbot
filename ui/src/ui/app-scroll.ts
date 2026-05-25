@@ -24,6 +24,9 @@ type ScrollHost = {
   };
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
+  activityScrollFrame?: number | null;
+  activityAutoFollow?: boolean;
+  activityAtBottom?: boolean;
   topbarObserver: ResizeObserver | null;
 };
 
@@ -165,6 +168,32 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
   });
 }
 
+export function scheduleActivityScroll(host: ScrollHost, force = false) {
+  if (host.activityScrollFrame) {
+    cancelAnimationFrame(host.activityScrollFrame);
+  }
+  void host.updateComplete.then(() => {
+    host.activityScrollFrame = requestAnimationFrame(() => {
+      host.activityScrollFrame = null;
+      const container = queryHost(host, ".activity-stream") as HTMLElement | null;
+      if (!container) {
+        return;
+      }
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      const shouldStick =
+        force ||
+        (host.activityAutoFollow !== false &&
+          (host.activityAtBottom !== false || distanceFromBottom < 120));
+      if (!shouldStick) {
+        return;
+      }
+      container.scrollTop = container.scrollHeight;
+      host.activityAtBottom = true;
+    });
+  });
+}
+
 export function handleChatScroll(host: ScrollHost, event: Event) {
   const container = event.currentTarget as HTMLElement | null;
   if (!container) {
@@ -211,6 +240,15 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.logsAtBottom = distanceFromBottom < 80;
+}
+
+export function handleActivityScroll(host: ScrollHost, event: Event) {
+  const container = event.currentTarget as HTMLElement | null;
+  if (!container) {
+    return;
+  }
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+  host.activityAtBottom = distanceFromBottom < 120;
 }
 
 export function resetChatScroll(host: ScrollHost) {

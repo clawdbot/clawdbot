@@ -1070,7 +1070,7 @@ describe("device pairing tokens", () => {
         publicKey: "bootstrap-public-key-operator-default",
         role: "node",
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.write"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
         silent: true,
       },
       baseDir,
@@ -1089,6 +1089,7 @@ describe("device pairing tokens", () => {
     expect(paired?.tokens?.operator?.scopes).toStrictEqual([
       "operator.approvals",
       "operator.read",
+      "operator.talk.secrets",
       "operator.write",
     ]);
     await expect(
@@ -1096,7 +1097,7 @@ describe("device pairing tokens", () => {
         deviceId: "bootstrap-device-operator-default",
         token: operatorToken,
         role: "operator",
-        scopes: ["operator.approvals", "operator.read", "operator.write"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });

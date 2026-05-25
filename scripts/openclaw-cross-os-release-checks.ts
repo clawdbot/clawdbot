@@ -23,6 +23,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -1674,13 +1675,41 @@ function readInstalledMetadataFromCliPath(cliPath, platform = process.platform) 
   );
 }
 
-function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
+export function resolveCommandSpawnInvocation(
+  command,
+  args,
+  options = {
+    platform: process.platform,
+    comSpec: process.env.ComSpec,
+  },
+) {
+  const platform = options.platform ?? process.platform;
+  if (platform === "win32" && /\.(cmd|bat)$/iu.test(command)) {
+    return {
+      command: options.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+  return { command, args, shell: false };
+}
+
+export function resolveInstalledCliInvocation(
+  cliPath,
+  args = [],
+  options = {
+    platform: process.platform,
+    comSpec: process.env.ComSpec,
+  },
+) {
+  const platform = options.platform ?? process.platform;
   if (platform !== "win32") {
-    return { command: cliPath, argsPrefix: [], shell: false };
+    return { command: cliPath, args, shell: false };
   }
   const normalizedCliPath = normalizeWindowsInstalledCliPath(cliPath);
   if (!/\.cmd$/iu.test(normalizedCliPath)) {
-    return { command: normalizedCliPath, argsPrefix: [], shell: false };
+    return { command: normalizedCliPath, args, shell: false };
   }
   const entryPath = installedEntryPath(
     resolveInstalledPrefixDirFromCliPath(normalizedCliPath, platform),
@@ -1688,11 +1717,14 @@ function resolveInstalledCliInvocation(cliPath, platform = process.platform) {
   if (existsSync(entryPath)) {
     return {
       command: process.execPath,
-      argsPrefix: [entryPath],
+      args: [entryPath, ...args],
       shell: false,
     };
   }
-  return { command: normalizedCliPath, argsPrefix: [], shell: true };
+  return resolveCommandSpawnInvocation(normalizedCliPath, args, {
+    comSpec: options.comSpec,
+    platform,
+  });
 }
 
 async function runPosixShellScript(script, options) {
@@ -1896,8 +1928,11 @@ async function verifyFreshShellCommand(params) {
 }
 
 async function runInstalledCli(params) {
-  const invocation = resolveInstalledCliInvocation(params.cliPath);
-  return runCommand(invocation.command, [...invocation.argsPrefix, ...params.args], {
+  const invocation = resolveInstalledCliInvocation(params.cliPath, params.args, {
+    comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+    platform: process.platform,
+  });
+  return runCommandInvocation(invocation, {
     cwd: params.cwd,
     env: params.env,
     logPath: params.logPath,
@@ -1981,11 +2016,9 @@ export function buildReleaseOnboardArgs(params) {
 async function startManualGatewayFromInstalledCli(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
-  const invocation = resolveInstalledCliInvocation(params.cliPath);
-  const child = spawn(
-    invocation.command,
+  const invocation = resolveInstalledCliInvocation(
+    params.cliPath,
     [
-      ...invocation.argsPrefix,
       "gateway",
       "run",
       "--bind",
@@ -1995,13 +2028,18 @@ async function startManualGatewayFromInstalledCli(params) {
       "--force",
     ],
     {
-      cwd: params.lane.homeDir,
-      env: params.env,
-      shell: invocation.shell,
-      stdio: ["ignore", "pipe", "pipe"],
-      windowsHide: true,
+      comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+      platform: process.platform,
     },
   );
+  const child = spawn(invocation.command, invocation.args, {
+    cwd: params.lane.homeDir,
+    env: params.env,
+    shell: invocation.shell,
+    stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    windowsHide: true,
+  });
   child.stdout?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
@@ -3481,14 +3519,23 @@ function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 
-async function runCommand(command, args, options) {
+export async function runCommand(command, args, options) {
+  const invocation = resolveCommandSpawnInvocation(command, args, {
+    comSpec: options.env?.ComSpec ?? options.env?.COMSPEC,
+    platform: process.platform,
+  });
+  return runCommandInvocation(invocation, options);
+}
+
+async function runCommandInvocation(invocation, options) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const useWindowsShell = process.platform === "win32" && /\.(cmd|bat)$/iu.test(command);
-    const child = spawn(command, args, {
+    const commandLabel = `${invocation.command} ${invocation.args.join(" ")}`;
+    const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd,
       env: options.env,
-      shell: useWindowsShell,
+      shell: invocation.shell,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       windowsHide: true,
     });
     const logStream = createWriteStream(options.logPath, { flags: "a" });
@@ -3546,15 +3593,13 @@ async function runCommand(command, args, options) {
       options.timeoutMs && Number.isFinite(options.timeoutMs)
         ? setTimeout(() => {
             timedOut = true;
-            logStream.write(
-              `${new Date().toISOString()} timeout command=${command} args=${args.join(" ")}\n`,
-            );
+            logStream.write(`${new Date().toISOString()} timeout command=${commandLabel}\n`);
             requestKill();
             killWaitTimer = setTimeout(() => {
               finalize(() => {
                 rejectPromise(
                   new Error(
-                    `Command timed out and could not be terminated cleanly: ${command} ${args.join(" ")}`,
+                    `Command timed out and could not be terminated cleanly: ${commandLabel}`,
                   ),
                 );
               });
@@ -3565,16 +3610,14 @@ async function runCommand(command, args, options) {
       CROSS_OS_COMMAND_HEARTBEAT_SECONDS > 0
         ? setInterval(() => {
             const elapsedSeconds = Math.floor((Date.now() - startedAt) / 1000);
-            const message = `${new Date().toISOString()} still running after ${elapsedSeconds}s: ${command} ${args.join(" ")}\n`;
+            const message = `${new Date().toISOString()} still running after ${elapsedSeconds}s: ${commandLabel}\n`;
             logStream.write(message);
             process.stdout.write(`[release-checks] ${message}`);
           }, CROSS_OS_COMMAND_HEARTBEAT_SECONDS * 1000)
         : null;
     heartbeatTimer?.unref?.();
 
-    logStream.write(
-      `${new Date().toISOString()} start command=${command} args=${args.join(" ")}\n`,
-    );
+    logStream.write(`${new Date().toISOString()} start command=${commandLabel}\n`);
 
     child.stdout?.on("data", (chunk) => {
       const text = chunk.toString();
@@ -3599,13 +3642,13 @@ async function runCommand(command, args, options) {
           stderr,
         };
         if (timedOut) {
-          rejectPromise(new Error(`Command timed out: ${command} ${args.join(" ")}`));
+          rejectPromise(new Error(`Command timed out: ${commandLabel}`));
           return;
         }
         if ((options.check ?? true) && result.exitCode !== 0) {
           rejectPromise(
             new Error(
-              `Command failed (${result.exitCode}): ${command} ${args.join(" ")}\n${trimForSummary(
+              `Command failed (${result.exitCode}): ${commandLabel}\n${trimForSummary(
                 `${stdout}\n${stderr}`,
               )}`,
             ),

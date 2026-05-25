@@ -34,11 +34,13 @@ import {
   logSessionStateChange,
   logMessageQueued,
   diagnosticLogger,
+  isDiagnosticQueuePressureBackoffActive,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
+  stopDiagnosticHeartbeat,
 } from "./diagnostic.js";
 
 function createEmitMemorySampleMock() {
@@ -1690,6 +1692,35 @@ describe("stuck session diagnostics threshold", () => {
       },
       "queued backlog liveness stability event",
     );
+  });
+
+  it("marks queued gateway pressure for low-priority backoff", () => {
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["cpu"],
+          intervalMs: 30_000,
+          eventLoopUtilization: 0.99,
+          cpuTotalMs: 30_000,
+          cpuCoreRatio: 1,
+        }),
+      },
+    );
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "discord" });
+    vi.advanceTimersByTime(30_000);
+
+    expect(isDiagnosticQueuePressureBackoffActive(Date.now())).toBe(true);
+    stopDiagnosticHeartbeat();
+    expect(isDiagnosticQueuePressureBackoffActive(Date.now())).toBe(false);
+    expect(isDiagnosticQueuePressureBackoffActive(Date.now() + 60_001)).toBe(false);
   });
 
   it("does not let idle liveness samples suppress later active-work warnings", () => {

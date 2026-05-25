@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   completionRequiresMessageToolDelivery,
   resolveCompletionChatType,
@@ -6,13 +6,6 @@ import {
 } from "./completion-delivery-policy.js";
 
 describe("completion delivery policy", () => {
-  beforeAll(() => {
-    resolveCompletionChatType({ requesterSessionKey: "agent:main:whatsapp:warmup@g.us" });
-    resolveCompletionChatType({
-      requesterSessionKey: "agent:main:discord:guild-warmup:channel-warmup",
-    });
-  });
-
   it.each([
     {
       name: "canonical group key",

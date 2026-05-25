@@ -1350,6 +1350,145 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("sends a friendly retry hint when the pairing allowlist store cannot be read", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
+    upsertChannelPairingRequest.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        message_id: 9,
+        date: 1736380800,
+        from: { id: 123456789, username: "testuser" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      1234,
+      "⚠️ Couldn't process this message, please try again in a moment.",
+      expect.objectContaining({
+        reply_parameters: expect.objectContaining({ message_id: 9 }),
+      }),
+    );
+  });
+
+  it("keeps the same private chat usable after a transient pairing store read failure", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing" } },
+    });
+    readChannelAllowFromStore
+      .mockRejectedValueOnce(new Error("store temporarily unavailable"))
+      .mockResolvedValueOnce(["123456789"]);
+    upsertChannelPairingRequest.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const firstMessage = {
+      chat: { id: 1234, type: "private" },
+      text: "hello",
+      date: 1736380800,
+      message_id: 10,
+      from: { id: 123456789, username: "testuser" },
+    };
+    await handler({
+      message: firstMessage,
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+    await handler({
+      message: {
+        ...firstMessage,
+        text: "still there?",
+        date: 1736380801,
+        message_id: 11,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(readChannelAllowFromStore).toHaveBeenCalledTimes(2);
+    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+    // First message: failure → retry hint via sendMessageSpy. Second message: success → agent reply via replySpy.
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0]?.[1]).toMatch(/please try again/i);
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows a configured private sender when the pairing allowlist store cannot be read", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "pairing", allowFrom: ["123456789"] } },
+    });
+    readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
+    upsertChannelPairingRequest.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        date: 1736380800,
+        from: { id: 123456789, username: "testuser" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(readChannelAllowFromStore).not.toHaveBeenCalled();
+    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not require the pairing allowlist store for open private messages", async () => {
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+    readChannelAllowFromStore.mockRejectedValueOnce(new Error("store temporarily unavailable"));
+    upsertChannelPairingRequest.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        date: 1736380800,
+        from: { id: 123456789, username: "testuser" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(readChannelAllowFromStore).not.toHaveBeenCalled();
+    expect(upsertChannelPairingRequest).not.toHaveBeenCalled();
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores private self-authored message updates instead of issuing a pairing challenge", async () => {
     loadConfig.mockReturnValue({
       channels: { telegram: { dmPolicy: "pairing" } },

@@ -6,6 +6,7 @@
     "esModuleInterop": true,
     "experimentalDecorators": true,
     "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
     "lib": ["DOM", "DOM.Iterable", "ES2023", "ScriptHost"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
@@ -21,6 +22,7 @@
     "target": "es2023",
     "types": ["node"],
     "useDefineForClassFields": false,
+    "verbatimModuleSyntax": true,
     "paths": {
       "openclaw/extension-api": ["./src/extensionAPI.ts"],
       "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],

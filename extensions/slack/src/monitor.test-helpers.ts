@@ -1,5 +1,6 @@
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { Mock, vi } from "vitest";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;

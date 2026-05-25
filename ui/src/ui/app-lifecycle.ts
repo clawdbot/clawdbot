@@ -7,7 +7,12 @@ import {
   startDebugPolling,
   stopDebugPolling,
 } from "./app-polling.ts";
-import { observeTopbar, scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import {
+  observeTopbar,
+  scheduleActivityScroll,
+  scheduleChatScroll,
+  scheduleLogsScroll,
+} from "./app-scroll.ts";
 import {
   applySettingsFromUrl,
   detachThemeListener,
@@ -51,9 +56,13 @@ type LifecycleHost = {
   logsAutoFollow: boolean;
   logsAtBottom: boolean;
   logsEntries: unknown[];
+  activityEntries: unknown[];
+  activityAutoFollow: boolean;
+  activityAtBottom: boolean;
   chatScrollFrame?: number | null;
   chatScrollTimeout?: number | null;
   logsScrollFrame?: number | null;
+  activityScrollFrame?: number | null;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiTabPaintSeq?: number;
   controlUiResponsivenessObserver?: { disconnect: () => void } | null;
@@ -124,6 +133,8 @@ export function handleDisconnected(host: LifecycleHost) {
   host.chatScrollFrame = null;
   cancelHostAnimationFrame(host.logsScrollFrame);
   host.logsScrollFrame = null;
+  cancelHostAnimationFrame(host.activityScrollFrame);
+  host.activityScrollFrame = null;
   clearHostTimeout(host.chatScrollTimeout);
   host.chatScrollTimeout = null;
   clearHostGlobalTimeout(host.sessionsChangedReloadTimer);
@@ -180,6 +191,17 @@ export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unk
       scheduleLogsScroll(
         host as unknown as Parameters<typeof scheduleLogsScroll>[0],
         changed.has("tab") || changed.has("logsAutoFollow"),
+      );
+    }
+  }
+  if (
+    host.tab === "activity" &&
+    (changed.has("activityEntries") || changed.has("activityAutoFollow") || changed.has("tab"))
+  ) {
+    if (host.activityAutoFollow && host.activityAtBottom) {
+      scheduleActivityScroll(
+        host as unknown as Parameters<typeof scheduleActivityScroll>[0],
+        changed.has("tab") || changed.has("activityAutoFollow"),
       );
     }
   }

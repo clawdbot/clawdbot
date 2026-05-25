@@ -24,7 +24,6 @@ import {
   type ExtractMode,
 } from "./web-fetch-utils.js";
 import {
-  CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
@@ -34,6 +33,7 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+import type { CacheEntry } from "./web-shared.js";
 import { resolveWebFetchToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const EXTRACT_MODES = ["markdown", "text"] as const;

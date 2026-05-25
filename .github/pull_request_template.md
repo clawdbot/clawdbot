@@ -1,49 +1,53 @@
 ## Summary
 
-Describe the problem and fix in 2–5 bullets:
+What problem does this PR solve?
+
+
+Why does this matter now?
+
+
+What is the intended outcome?
+
+
+What is intentionally out of scope?
+
+
+What does success look like?
+
+
+What should reviewers focus on?
+
+<details>
+<summary>Summary guidance</summary>
+
+This PR description is the contributor's durable explanation of the change. Write it for human maintainers first; ClawSweeper and Barnacle use the same text to understand intent, proof, risk, and current review state.
+
+Describe the intent and outcome in 2-5 bullets. Avoid restating the diff; reviewers and bots can read the changed files.
 
 If this PR fixes a plugin beta-release blocker, title it `fix(<plugin-id>): beta blocker - <summary>` and link the matching `Beta blocker: <plugin-name> - <summary>` issue labeled `beta-blocker`. Contributors cannot label PRs, so the title is the PR-side signal for maintainers and automation.
 
-- Problem:
-- Solution:
-- What changed:
-- What did NOT change (scope boundary):
+</details>
 
-## Motivation
+## Linked context
 
-Explain why this change should exist now. Link it to the user pain, failure mode, maintainer need, or product goal. If this is purely mechanical, write `N/A`.
+Which issue does this close?
 
--
+Closes #
 
-## Change Type (select all)
+Which issues, PRs, or discussions are related?
 
-- [ ] Bug fix
-- [ ] Feature
-- [ ] Refactor required for the fix
-- [ ] Docs
-- [ ] Security hardening
-- [ ] Chore/infra
+Related #
 
-## Scope (select all touched areas)
+Was this requested by a maintainer or owner?
 
-- [ ] Gateway / orchestration
-- [ ] Skills / tool execution
-- [ ] Auth / tokens
-- [ ] Memory / storage
-- [ ] Integrations
-- [ ] API / contracts
-- [ ] UI / DX
-- [ ] CI/CD / infra
+<details>
+<summary>Linked context guidance</summary>
 
-## Linked Issue/PR
+Link the issue, PR, discussion, maintainer request, or owner request that explains why this PR should exist. Maintainer context helps reviewers and automation distinguish intended work from drive-by churn.
 
-- Closes #
-- Related #
-- [ ] This PR fixes a bug or regression
+</details>
 
 ## Real behavior proof (required for external PRs)
-
-External contributors must show after-fix evidence from a real OpenClaw setup. Unit tests, mocks, lint, typechecks, snapshots, and CI are supplemental only. Screenshots are encouraged even for CLI, console, text, or log changes; terminal screenshots and copied live output count. Be mindful of private information like IP addresses, API keys, phone numbers, non-public endpoints, or other private details when providing evidence.
 
 - Behavior or issue addressed:
 - Real environment tested:
@@ -51,115 +55,78 @@ External contributors must show after-fix evidence from a real OpenClaw setup. U
 - Evidence after fix (screenshot, recording, terminal capture, console output, redacted runtime log, linked artifact, or copied live output):
 - Observed result after fix:
 - What was not tested:
+- Proof limitations or environment constraints:
 - Before evidence (optional but encouraged):
 
-## Root Cause (if applicable)
+<details>
+<summary>Real behavior proof guidance</summary>
 
-For bug fixes or regressions, explain why this happened, not just what changed. Otherwise write `N/A`. If the cause is unclear, write `Unknown`.
+External contributors must show after-fix evidence from a real OpenClaw setup. Unit tests, mocks, lint, typechecks, snapshots, and CI are supplemental only.
 
-- Root cause:
-- Missing detection / guardrail:
-- Contributing context (if known):
+Screenshots are encouraged even for CLI, console, text, or log changes. Terminal screenshots, copied live output, redacted runtime logs, recordings, and linked artifacts count.
 
-## Regression Test Plan (if applicable)
+If your environment cannot produce the ideal proof, explain that under `Proof limitations or environment constraints` so reviewers and ClawSweeper can direct the next step properly.
 
-For bug fixes or regressions, name the smallest reliable test coverage that should catch this. Otherwise write `N/A`.
+Be mindful of private information like IP addresses, API keys, phone numbers, non-public endpoints, or other private details when providing evidence.
 
-- Coverage level that should have caught this:
-  - [ ] Unit test
-  - [ ] Seam / integration test
-  - [ ] End-to-end test
-  - [ ] Existing coverage already sufficient
-- Target test or file:
-- Scenario the test should lock in:
-- Why this is the smallest reliable guardrail:
-- Existing test that already covers this (if any):
-- If no new test is added, why not:
+</details>
 
-## User-visible / Behavior Changes
+## Tests and validation
 
-List user-visible changes (including defaults/config).  
-If none, write `None`.
+Which commands did you run?
 
-## Diagram (if applicable)
 
-For UI changes or non-trivial logic flows, include a small ASCII diagram reviewers can scan quickly. Otherwise write `N/A`.
+What regression coverage was added or updated?
 
-```text
-Before:
-[user action] -> [old state]
 
-After:
-[user action] -> [new state] -> [result]
-```
+What failed before this fix, if known?
 
-## Security Impact (required)
 
-- New permissions/capabilities? (`Yes/No`)
-- Secrets/tokens handling changed? (`Yes/No`)
-- New/changed network calls? (`Yes/No`)
-- Command/tool execution surface changed? (`Yes/No`)
-- Data access scope changed? (`Yes/No`)
-- If any `Yes`, explain risk + mitigation:
+If no test was added, why not?
 
-## Repro + Verification
+<details>
+<summary>Testing guidance</summary>
 
-### Environment
+List focused commands, not every incidental check. CI is useful support, but external PRs still need real behavior proof above when behavior changes.
 
-- OS:
-- Runtime/container:
-- Model/provider:
-- Integration/channel (if any):
-- Relevant config (redacted):
+</details>
 
-### Steps
+## Risk checklist
 
-1.
-2.
-3.
+Did user-visible behavior change? (`Yes/No`)
 
-### Expected
 
--
+Did config, environment, or migration behavior change? (`Yes/No`)
 
-### Actual
 
--
+Did security, auth, secrets, network, or tool execution behavior change? (`Yes/No`)
 
-## Evidence
 
-Attach at least one:
+What is the highest-risk area?
 
-- [ ] Failing test/log before + passing after
-- [ ] Trace/log snippets
-- [ ] Screenshot/recording
-- [ ] Perf numbers (if relevant)
 
-## Human Verification (required)
+How is that risk mitigated?
 
-What you personally verified (not just CI), and how:
+<details>
+<summary>Risk guidance</summary>
 
-- Verified scenarios:
-- Edge cases checked:
-- What you did **not** verify:
+Use this for author judgment that is not obvious from the diff. ClawSweeper can see touched files, but it cannot know which behavior you think is risky, why the risk is acceptable, or what mitigation reviewers should verify.
 
-## Review Conversations
+</details>
 
-- [ ] I replied to or resolved every bot review conversation I addressed in this PR.
-- [ ] I left unresolved only the conversations that still need reviewer or maintainer judgment.
+## Current review state
 
-If a bot review conversation is addressed by this PR, resolve that conversation yourself. Do not leave bot review conversation cleanup for maintainers.
+What is the next action?
 
-## Compatibility / Migration
 
-- Backward compatible? (`Yes/No`)
-- Config/env changes? (`Yes/No`)
-- Migration needed? (`Yes/No`)
-- If yes, exact upgrade steps:
+What is still waiting on author, maintainer, CI, or external proof?
 
-## Risks and Mitigations
 
-List only real risks for this PR. Add/remove entries as needed. If none, write `None`.
+Which bot or reviewer comments were addressed?
 
-- Risk:
-  - Mitigation:
+<details>
+<summary>Review state guidance</summary>
+
+Keep this as the durable state for review progress. If useful information appears in comments, fold the current next action or blocker back here so maintainers and ClawSweeper do not need to reconstruct state from comment history.
+
+</details>

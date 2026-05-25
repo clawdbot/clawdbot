@@ -248,6 +248,10 @@ After compaction, future turns see:
 - The compaction summary
 - Messages after `firstKeptEntryId`
 
+AGENTS.md section reinjection after compaction is opt-in via
+`agents.defaults.compaction.postCompactionSections`; when unset or `[]`,
+OpenClaw does not append AGENTS.md excerpts on top of the compaction summary.
+
 Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Compaction chunk boundaries and tool pairing

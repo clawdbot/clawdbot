@@ -56,6 +56,7 @@ vi.mock("./controllers/sessions.ts", () => ({
   applySessionsChangedEvent: applySessionsChangedEventMock,
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
+  syncSelectedSessionMessageSubscription: vi.fn(),
 }));
 vi.mock("./gateway.ts", () => ({
   GatewayBrowserClient: function GatewayBrowserClient() {},
@@ -521,6 +522,23 @@ describe("handleGatewayEvent session.message", () => {
       type: "event",
       event: "session.message",
       payload: { sessionKey: "agent:qa:main" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("reloads chat history when the selected main session receives canonical session messages", () => {
+    loadChatHistoryMock.mockReset();
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+    host.sessionKey = "main";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:main:main" },
       seq: 1,
     });
 

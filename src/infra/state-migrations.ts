@@ -122,6 +122,10 @@ function buildLegacyMigrationPreview(plan: ChannelLegacyStateMigrationPlan): str
   return `- ${plan.label}: ${plan.sourcePath} → ${plan.targetPath}`;
 }
 
+function resolvePluginStateImportTargetKey(scopeKey: string, key: string): string {
+  return scopeKey ? `${scopeKey}:${key}` : key;
+}
+
 async function withPluginStateImportEnv<T>(
   plan: Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>,
   run: () => Promise<T>,
@@ -168,7 +172,7 @@ async function runLegacyMigrationPlans(
         const entries = await plan.readEntries();
         let imported = 0;
         for (const entry of entries) {
-          const targetKey = `${plan.scopeKey}:${entry.key}`;
+          const targetKey = resolvePluginStateImportTargetKey(plan.scopeKey, entry.key);
           if (existingKeys.has(targetKey)) {
             continue;
           }
@@ -191,7 +195,9 @@ async function runLegacyMigrationPlans(
         }
         const allEntriesCovered =
           entries.length > 0 &&
-          entries.every(({ key }) => existingKeys.has(`${plan.scopeKey}:${key}`));
+          entries.every(({ key }) =>
+            existingKeys.has(resolvePluginStateImportTargetKey(plan.scopeKey, key)),
+          );
         if (allEntriesCovered && plan.cleanupSource === "rename" && fileExists(plan.sourcePath)) {
           const archivedPath = `${plan.sourcePath}.migrated`;
           if (fileExists(archivedPath)) {

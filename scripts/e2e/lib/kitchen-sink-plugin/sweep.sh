@@ -6,13 +6,14 @@ source scripts/lib/docker-e2e-logs.sh
 
 OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
 export OPENCLAW_ENTRY
+export KITCHEN_SINK_TMP_DIR="${KITCHEN_SINK_TMP_DIR:-/tmp}"
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 
 run_expect_failure() {
   local label="$1"
   shift
-  local output_file="/tmp/kitchen-sink-expected-failure-${label}.txt"
+  local output_file="${KITCHEN_SINK_TMP_DIR}/kitchen-sink-expected-failure-${label}.txt"
   set +e
   "$@" >"$output_file" 2>&1
   local status="$?"
@@ -90,9 +91,9 @@ run_success_scenario() {
   run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "${install_args[@]}"
   configure_kitchen_sink_runtime
   run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
-  node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
-  node "$OPENCLAW_ENTRY" plugins inspect "$KITCHEN_SINK_ID" --runtime --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json"
-  node "$OPENCLAW_ENTRY" plugins inspect --all --runtime --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json"
+  node "$OPENCLAW_ENTRY" plugins list --json >"${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
+  node "$OPENCLAW_ENTRY" plugins inspect "$KITCHEN_SINK_ID" --runtime --json >"${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect.json"
+  node "$OPENCLAW_ENTRY" plugins inspect --all --runtime --json >"${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-inspect-all.json"
   assert_kitchen_sink_installed
   if [ "$KITCHEN_SINK_SOURCE" = "clawhub" ]; then
     run_logged_print "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins uninstall "$KITCHEN_SINK_SPEC" --force
@@ -100,7 +101,7 @@ run_success_scenario() {
     run_logged_print "kitchen-sink-uninstall-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins uninstall "$KITCHEN_SINK_ID" --force
   fi
   remove_kitchen_sink_channel_config
-  node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json"
+  node "$OPENCLAW_ENTRY" plugins list --json >"${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json"
   assert_kitchen_sink_removed
 }
 
@@ -108,7 +109,7 @@ run_failure_scenario() {
   echo "Testing expected ${KITCHEN_SINK_LABEL} install failure from ${KITCHEN_SINK_SPEC}..."
   run_expect_failure "install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
   remove_kitchen_sink_channel_config
-  node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json"
+  node "$OPENCLAW_ENTRY" plugins list --json >"${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-uninstalled.json"
   assert_kitchen_sink_removed
 }
 

@@ -107,6 +107,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.querySucceeded).toBe(true);
+    expect(summary.fullyCaughtUp).toBe(true);
     expect(summary.replayed).toBe(3);
     expect(dispatched.map((m) => m.guid)).toEqual(["g-100", "g-101", "g-102"]);
     expect(calls[0]?.method).toBe("chats.list");
@@ -177,6 +178,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.querySucceeded).toBe(false);
+    expect(summary.fullyCaughtUp).toBe(false);
     expect(summary.replayed).toBe(0);
   });
 
@@ -220,6 +222,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.querySucceeded).toBe(true);
+    expect(summary.fullyCaughtUp).toBe(false);
     expect(summary.replayed).toBe(1);
     expect(dispatched).toEqual(["g-300"]);
   });
@@ -267,6 +270,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary.fetchedCount).toBe(5);
+    expect(summary.fullyCaughtUp).toBe(false);
     expect(summary.replayed).toBe(5);
     // Oldest-first by rowid: 100, 101, 102, 103, 200 (chat 1's first 4, then chat 2's first).
     expect(dispatched).toEqual(["g-100", "g-101", "g-102", "g-103", "g-200"]);

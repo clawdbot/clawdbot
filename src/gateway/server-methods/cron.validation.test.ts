@@ -75,6 +75,7 @@ function createCronContext(currentJob?: CronJob) {
     cron: {
       add: vi.fn(async () => ({ id: "cron-1" })),
       update: vi.fn(async () => ({ id: "cron-1" })),
+      remove: vi.fn(async () => ({ ok: true, removed: true })),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn(() => currentJob),
       wake: vi.fn(() => ({ ok: true }) as const),
@@ -119,6 +120,26 @@ async function invokeCronUpdate(params: Record<string, unknown>, currentJob: Cro
   const context = createCronContext(currentJob);
   const respond = vi.fn();
   await cronHandlers["cron.update"]({
+    req: {} as never,
+    params: params as never,
+    respond: respond as never,
+    context: context as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  return { context, respond };
+}
+
+async function invokeCronRemove(
+  params: Record<string, unknown>,
+  options?: { removeResult?: { ok: boolean; removed: boolean } },
+) {
+  const context = createCronContext();
+  if (options?.removeResult) {
+    context.cron.remove.mockResolvedValueOnce(options.removeResult);
+  }
+  const respond = vi.fn();
+  await cronHandlers["cron.remove"]({
     req: {} as never,
     params: params as never,
     respond: respond as never,
@@ -244,6 +265,17 @@ describe("cron method validation", () => {
       threadId: 123,
     });
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("returns invalid-request error when cron.remove target id is missing", async () => {
+    const { respond } = await invokeCronRemove(
+      { id: "missing-id" },
+      { removeResult: { ok: true, removed: false } },
+    );
+    expectResponseError(respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "invalid cron.remove params: id not found",
+    });
   });
 
   it("returns a single cron job for cron.get", async () => {

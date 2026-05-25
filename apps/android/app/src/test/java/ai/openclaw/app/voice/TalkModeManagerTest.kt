@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.currentTime
@@ -328,6 +329,28 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun e2eRealtimeTurnUsesRelayTranscriptPath() =
+    runTest {
+      val manager = createManager(scope = this)
+
+      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      setMutableStateFlow(manager, "_isEnabled", true)
+      manager.runE2eRealtimeTurn(
+        userText = "voice e2e user",
+        assistantText = "voice e2e assistant",
+        timeoutMs = 1_000L,
+      )
+
+      val entries = manager.conversation.value
+      assertEquals(2, entries.size)
+      assertEquals(VoiceConversationRole.User, entries[0].role)
+      assertEquals("voice e2e user", entries[0].text)
+      assertEquals(VoiceConversationRole.Assistant, entries[1].role)
+      assertEquals("voice e2e assistant", entries[1].text)
+      assertTrue(entries.none { it.isStreaming })
+    }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun realtimeStartWithoutGatewayTurnsTalkOff() =
     runTest {
@@ -339,7 +362,6 @@ class TalkModeManagerTest {
           onStoppedByRelay = { stoppedByRelay.set(true) },
         )
 
-      setPrivateField(manager, "executionMode", TalkModeExecutionMode.RealtimeRelay)
       setPrivateField(manager, "configLoaded", true)
       manager.setEnabled(true)
       advanceUntilIdle()
@@ -418,22 +440,21 @@ class TalkModeManagerTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun chatFinalWaitWithoutSubscribeUsesShortTimeout() =
+  fun chatFinalWaitUsesGatewayEventTimeout() =
     runTest {
-      val manager = createManager(scope = this, supportsChatSubscribe = false)
+      val manager = createManager(scope = this)
 
       setPrivateField(manager, "pendingRunId", "run-missing-final")
       setPrivateField(manager, "pendingFinal", CompletableDeferred<Boolean>())
 
       assertFalse(manager.waitForChatFinal("run-missing-final"))
-      assertEquals(6_000, currentTime)
+      assertEquals(45_000, currentTime)
     }
 
   private fun createManager(
     talkSpeakClient: TalkSpeechSynthesizing = TalkSpeakClient(),
     talkAudioPlayer: TalkAudioPlaying? = null,
     scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
-    supportsChatSubscribe: Boolean = false,
     isConnected: () -> Boolean = { true },
     onStoppedByRelay: () -> Unit = {},
   ): TalkModeManager {
@@ -452,7 +473,6 @@ class TalkModeManagerTest {
       context = app,
       scope = scope,
       session = session,
-      supportsChatSubscribe = supportsChatSubscribe,
       isConnected = isConnected,
       onStoppedByRelay = onStoppedByRelay,
       talkSpeakClient = talkSpeakClient,
@@ -483,6 +503,15 @@ class TalkModeManagerTest {
     val field = target.javaClass.getDeclaredField(name)
     field.isAccessible = true
     return field.get(target)
+  }
+
+  @Suppress("UNCHECKED_CAST")
+  private fun <T> setMutableStateFlow(
+    target: Any,
+    name: String,
+    value: T,
+  ) {
+    (readPrivateField(target, name) as MutableStateFlow<T>).value = value
   }
 
   private fun shouldAppendRealtimeCapturedFrame(

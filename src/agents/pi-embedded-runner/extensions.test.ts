@@ -16,7 +16,7 @@ vi.mock("../../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: () => undefined,
 }));
 
-function buildSafeguardFactories(cfg: OpenClawConfig) {
+function buildSafeguardFactories(cfg: OpenClawConfig, workspaceDir?: string) {
   const sessionManager = {} as SessionManager;
   const model = {
     id: "claude-sonnet-4-20250514",
@@ -26,6 +26,7 @@ function buildSafeguardFactories(cfg: OpenClawConfig) {
   const factories = buildEmbeddedExtensionFactories({
     cfg,
     sessionManager,
+    workspaceDir,
     provider: "anthropic",
     modelId: "claude-sonnet-4-20250514",
     model,
@@ -99,6 +100,25 @@ describe("buildEmbeddedExtensionFactories", () => {
       qualityGuardEnabled: true,
       qualityGuardMaxRetries: 2,
     });
+  });
+
+  it("wires the run workspace into safeguard runtime", () => {
+    const { sessionManager } = buildSafeguardFactories(
+      {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      "/tmp/openclaw-workspace",
+    );
+
+    expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
+      "/tmp/openclaw-workspace",
+    );
   });
 
   it("enables cache-ttl pruning for custom anthropic-messages providers", () => {

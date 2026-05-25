@@ -670,7 +670,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
                 (job as { agentId?: string }).agentId = agentId;
               }
             }
-            if (!("sessionKey" in job) && resolvedSessionKey) {
+            const sessionTarget = normalizeLowercaseStringOrEmpty(
+              (job as { sessionTarget?: unknown }).sessionTarget,
+            );
+            if (!("sessionKey" in job) && resolvedSessionKey && sessionTarget !== "isolated") {
               (job as { sessionKey?: string }).sessionKey = resolvedSessionKey;
             }
           }

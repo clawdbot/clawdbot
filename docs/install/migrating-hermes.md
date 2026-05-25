@@ -65,8 +65,8 @@ Imports require a fresh OpenClaw setup. If you already have local OpenClaw state
   <Accordion title="Skills">
     Skills with a `SKILL.md` file under `skills/<name>/` are copied, along with per-skill config values from `skills.config`.
   </Accordion>
-  <Accordion title="API keys (opt-in)">
-    Set `--include-secrets` to import supported `.env` keys: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`. Without the flag, secrets are never copied.
+  <Accordion title="Auth credentials">
+    Interactive `openclaw migrate` asks before importing auth credentials, with yes selected by default. Accepted imports include supported OAuth credentials from Hermes `auth.json`, OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys). Use `--include-secrets` for non-interactive `openclaw migrate` credential import, `--no-auth-credentials` to skip it, or onboarding `--import-secrets` when importing from the onboarding wizard.
   </Accordion>
 </AccordionGroup>
 
@@ -79,7 +79,6 @@ The provider copies these into the migration report directory for manual review,
 - `logs/`
 - `cron/`
 - `mcp-tokens/`
-- `auth.json`
 - `state.db`
 
 OpenClaw refuses to execute or trust this state automatically because the formats and trust assumptions can drift between systems. Move what you need by hand after reviewing the archive.
@@ -100,7 +99,7 @@ OpenClaw refuses to execute or trust this state automatically because the format
     openclaw migrate apply hermes --yes
     ```
 
-    OpenClaw creates and verifies a backup before applying. If you need API keys imported, add `--include-secrets`.
+    OpenClaw creates and verifies a backup before applying. This non-interactive example imports non-secret state. Run without `--yes` to answer the credential prompt, or add `--include-secrets` to include supported credentials in unattended runs.
 
   </Step>
   <Step title="Run doctor">
@@ -136,10 +135,12 @@ If a conflict surfaces mid-apply (for example, an unexpected race on a config fi
 
 ## Secrets
 
-Secrets are never imported by default.
+Interactive `openclaw migrate` asks whether to import detected auth credentials, with yes selected by default.
 
-- Run `openclaw migrate apply hermes --yes` first to import non-secret state.
-- If you also want supported `.env` keys copied across, rerun with `--include-secrets`.
+- Accepting the prompt imports supported OAuth credentials from Hermes `auth.json`, OpenCode OpenAI OAuth credentials from OpenCode `auth.json`, OpenCode and GitHub Copilot entries from OpenCode `auth.json`, and the [supported `.env` keys](/cli/migrate#supported-env-keys).
+- Use `--no-auth-credentials` or choose no at the prompt to import non-secret state only.
+- Use `--include-secrets` when running unattended with `--yes`.
+- Use onboarding `--import-secrets` when importing credentials from the onboarding wizard.
 - For SecretRef-managed credentials, configure the SecretRef source after the import completes.
 
 ## JSON output for automation
@@ -164,7 +165,7 @@ With `--json` and no `--yes`, apply prints the plan and does not mutate state. T
     Onboarding imports require a fresh setup. Either reset state and re-onboard, or use `openclaw migrate apply hermes` directly, which supports `--overwrite` and explicit backup control.
   </Accordion>
   <Accordion title="API keys did not import">
-    `--include-secrets` is required, and only the keys listed above are recognized. Other variables in `.env` are ignored.
+    Interactive `openclaw migrate` imports API keys only when you accept the credential prompt. Non-interactive `--yes` runs require `--include-secrets`; onboarding imports require `--import-secrets`. Only the [supported `.env` keys](/cli/migrate#supported-env-keys) are recognized; other variables in `.env` are ignored.
   </Accordion>
 </AccordionGroup>
 

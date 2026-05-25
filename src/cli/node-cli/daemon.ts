@@ -277,7 +277,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
     return;
   }
@@ -285,7 +285,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   if (runtime?.status === "stopped") {
     defaultRuntime.error(errorText("Service is loaded but not running."));
     for (const hint of buildNodeRuntimeHints(hintEnv)) {
-      defaultRuntime.error(errorText(hint));
+      defaultRuntime.log(errorText(hint));
     }
   }
 }

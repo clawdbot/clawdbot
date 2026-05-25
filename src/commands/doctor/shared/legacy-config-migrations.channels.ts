@@ -200,6 +200,48 @@ function migrateTelegramRequireMention(raw: Record<string, unknown>, changes: st
   raw.channels = channels;
 }
 
+function hasLegacyFeishuAccountBotName(value: unknown): boolean {
+  const accounts = getRecord(value);
+  if (!accounts) {
+    return false;
+  }
+  return Object.values(accounts).some((entry) => {
+    const account = getRecord(entry);
+    return Boolean(account && hasOwnKey(account, "botName"));
+  });
+}
+
+function migrateFeishuAccountBotName(raw: Record<string, unknown>, changes: string[]): void {
+  const channels = getRecord(raw.channels);
+  const feishu = getRecord(channels?.feishu);
+  const accounts = getRecord(feishu?.accounts);
+  if (!channels || !feishu || !accounts) {
+    return;
+  }
+
+  for (const [accountId, accountRaw] of Object.entries(accounts)) {
+    const account = getRecord(accountRaw);
+    if (!account || !hasOwnKey(account, "botName")) {
+      continue;
+    }
+
+    const legacyPath = `channels.feishu.accounts.${accountId}.botName`;
+    const currentPath = `channels.feishu.accounts.${accountId}.name`;
+    if (account.name === undefined) {
+      account.name = account.botName;
+      changes.push(`Moved ${legacyPath} → ${currentPath}.`);
+    } else {
+      changes.push(`Removed ${legacyPath} (${currentPath} already set).`);
+    }
+    delete account.botName;
+    accounts[accountId] = account;
+  }
+
+  feishu.accounts = accounts;
+  channels.feishu = feishu;
+  raw.channels = channels;
+}
+
 function hasLegacyThreadBindingTtl(value: unknown): boolean {
   const threadBindings = getRecord(value);
   return Boolean(threadBindings && hasOwnKey(threadBindings, "ttlHours"));
@@ -409,6 +451,15 @@ const GROUP_ROUTING_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const FEISHU_ACCOUNT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["channels", "feishu", "accounts"],
+    message:
+      'channels.feishu.accounts.<id>.botName was renamed to channels.feishu.accounts.<id>.name. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyFeishuAccountBotName(value),
+  },
+];
+
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "legacy-group-routing->channel-groups",
@@ -419,6 +470,14 @@ export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [
       migrateRoutingAllowFrom(raw, changes);
       migrateRoutingGroupChat(raw, changes);
       migrateTelegramRequireMention(raw, changes);
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "feishu.accounts.botName->name",
+    describe: "Move legacy Feishu account botName config to account name",
+    legacyRules: FEISHU_ACCOUNT_RULES,
+    apply: (raw, changes) => {
+      migrateFeishuAccountBotName(raw, changes);
     },
   }),
   defineLegacyConfigMigration({

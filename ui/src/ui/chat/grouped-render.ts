@@ -25,10 +25,13 @@ import { isToolResultMessage, normalizeMessage } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import {
   extractToolCards,
+  formatCollapsedToolPreviewText,
+  formatCollapsedToolSummaryText,
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
+  resolveCollapsedToolDetail,
 } from "./tool-cards.ts";
 
 type AssistantAttachmentAvailability =
@@ -1537,21 +1540,28 @@ function renderGroupedMessage(
         detailMode: "explain",
       })
     : null;
-  const toolSummaryLabel = singleToolDisplay?.detail
+  const singleToolDisplayDetail =
+    singleToolCard && singleToolDisplay
+      ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
+      : undefined;
+  const toolSummaryLabelRaw = singleToolDisplayDetail
     ? singleToolCard?.outputText?.trim()
       ? "output"
       : undefined
     : toolNames.length <= 3
       ? toolNames.join(", ")
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
+  const toolSummaryLabel = formatCollapsedToolSummaryText(toolSummaryLabelRaw);
   const toolPreview =
-    markdown && !toolSummaryLabel ? markdown.trim().replace(/\s+/g, " ").slice(0, 120) : "";
-  const toolMessageLabel =
-    singleToolDisplay?.detail && !markdown && !hasImages
-      ? singleToolDisplay.detail
+    markdown && !toolSummaryLabel ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
+  const toolMessageLabelRaw =
+    singleToolDisplayDetail && !markdown && !hasImages
+      ? singleToolDisplayDetail
       : singleToolDisplay && !markdown && !hasImages
         ? singleToolDisplay.label
         : "Tool output";
+  const toolMessageLabel =
+    formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
   const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
 
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));

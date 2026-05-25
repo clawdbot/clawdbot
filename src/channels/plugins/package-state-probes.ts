@@ -8,6 +8,7 @@ import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
@@ -174,10 +175,12 @@ function resolveChannelPackageStateMetadata(
 
 function listChannelPackageStateCatalog(
   metadataKey: ChannelPackageStateMetadataKey,
+  discovery?: PluginDiscoveryResult,
 ): PluginChannelCatalogEntry[] {
-  return listChannelCatalogEntries({ origin: "bundled" }).filter((entry) =>
-    Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)),
-  );
+  return listChannelCatalogEntries({
+    origin: "bundled",
+    discovery,
+  }).filter((entry) => Boolean(resolveChannelPackageStateMetadata(entry, metadataKey)));
 }
 
 function resolveChannelPackageStateChecker(params: {
@@ -235,8 +238,9 @@ function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string 
 
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
+  discovery?: PluginDiscoveryResult,
 ): string[] {
-  return listChannelPackageStateCatalog(metadataKey)
+  return listChannelPackageStateCatalog(metadataKey, discovery)
     .map((entry) => resolvePackageStateChannelId(entry))
     .filter((channelId): channelId is string => Boolean(channelId))
     .toSorted((left, right) => left.localeCompare(right));
@@ -247,9 +251,10 @@ export function hasBundledChannelPackageState(params: {
   channelId: string;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): boolean {
   const requestedChannelId = normalizeOptionalString(params.channelId);
-  const entry = listChannelPackageStateCatalog(params.metadataKey).find(
+  const entry = listChannelPackageStateCatalog(params.metadataKey, params.discovery).find(
     (candidate) => resolvePackageStateChannelId(candidate) === requestedChannelId,
   );
   if (!entry) {

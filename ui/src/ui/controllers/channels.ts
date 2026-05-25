@@ -1,4 +1,4 @@
-import { ChannelsStatusSnapshot } from "../types.ts";
+import type { ChannelsStatusSnapshot } from "../types.ts";
 import type { ChannelsState } from "./channels.types.ts";
 import {
   formatMissingOperatorReadScopeMessage,

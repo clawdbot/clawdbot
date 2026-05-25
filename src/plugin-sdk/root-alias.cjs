@@ -10,6 +10,7 @@ const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const privateQaExcludedPluginSdkSubpaths = new Set(["ssrf-runtime-internal"]);
+const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const isDistRootAlias = __filename.includes(
   `${path.sep}dist${path.sep}plugin-sdk${path.sep}root-alias.cjs`,
 );
@@ -77,12 +78,94 @@ function resolveControlCommandGate(params) {
   return { commandAuthorized, shouldBlock };
 }
 
+function createDiagnosticEventsState() {
+  return {
+    marker: DIAGNOSTIC_EVENTS_STATE_KEY,
+    enabled: true,
+    seq: 0,
+    listeners: new Set(),
+    dispatchDepth: 0,
+    asyncQueue: [],
+    asyncDrainScheduled: false,
+    asyncDroppedEvents: 0,
+    asyncDroppedTrustedEvents: 0,
+    asyncDroppedUntrustedEvents: 0,
+    asyncDroppedPriorityEvents: 0,
+  };
+}
+
+function isDiagnosticEventsState(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    value.marker === DIAGNOSTIC_EVENTS_STATE_KEY &&
+    typeof value.enabled === "boolean" &&
+    typeof value.seq === "number" &&
+    value.listeners instanceof Set &&
+    typeof value.dispatchDepth === "number" &&
+    Array.isArray(value.asyncQueue) &&
+    typeof value.asyncDrainScheduled === "boolean"
+  );
+}
+
+function getDiagnosticEventsState(create) {
+  const existing = globalThis[DIAGNOSTIC_EVENTS_STATE_KEY];
+  if (isDiagnosticEventsState(existing)) {
+    existing.asyncDroppedEvents ??= 0;
+    existing.asyncDroppedTrustedEvents ??= 0;
+    existing.asyncDroppedUntrustedEvents ??= 0;
+    existing.asyncDroppedPriorityEvents ??= 0;
+    return existing;
+  }
+  if (!create) {
+    return null;
+  }
+  const state = createDiagnosticEventsState();
+  Object.defineProperty(globalThis, DIAGNOSTIC_EVENTS_STATE_KEY, {
+    configurable: true,
+    enumerable: false,
+    value: state,
+    writable: false,
+  });
+  return state;
+}
+
+function onDiagnosticEventFromSharedState(listener) {
+  const state = getDiagnosticEventsState(true);
+  const internalListener = (event, metadata) => {
+    if (metadata && metadata.trusted) {
+      return;
+    }
+    if (event && event.type === "log.record") {
+      return;
+    }
+    listener(event);
+  };
+  state.listeners.add(internalListener);
+  return () => {
+    state.listeners.delete(internalListener);
+  };
+}
+
 function onDiagnosticEvent(listener) {
+  const beforeState = getDiagnosticEventsState(false);
+  const beforeSize = beforeState?.listeners?.size;
   const diagnosticEvents = loadDiagnosticEventsModule();
   if (!diagnosticEvents || typeof diagnosticEvents.onDiagnosticEvent !== "function") {
-    throw new Error("openclaw/plugin-sdk root alias could not resolve onDiagnosticEvent");
+    return onDiagnosticEventFromSharedState(listener);
   }
-  return diagnosticEvents.onDiagnosticEvent(listener);
+  const unsubscribeDiagnosticEvents = diagnosticEvents.onDiagnosticEvent(listener);
+  const afterState = getDiagnosticEventsState(false);
+  if (afterState && afterState.listeners.size > (beforeSize ?? 0)) {
+    return unsubscribeDiagnosticEvents;
+  }
+  // Keep legacy root listeners connected when a built alias resolves the lazy
+  // diagnostic module in a separate graph from the active core emitter.
+  const unsubscribeSharedState = onDiagnosticEventFromSharedState(listener);
+  return () => {
+    unsubscribeDiagnosticEvents();
+    unsubscribeSharedState();
+  };
 }
 
 function getPackageRoot() {

@@ -3,6 +3,7 @@ package ai.openclaw.app
 import android.content.Intent
 
 const val actionAskOpenClaw = "ai.openclaw.app.action.ASK_OPENCLAW"
+const val actionOpenVoiceE2e = "ai.openclaw.app.debug.OPEN_VOICE_E2E"
 const val extraAssistantPrompt = "prompt"
 
 enum class HomeDestination {
@@ -18,6 +19,14 @@ data class AssistantLaunchRequest(
   val prompt: String?,
   val autoSend: Boolean,
 )
+
+fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
+  val action = intent?.action ?: return null
+  return when {
+    BuildConfig.DEBUG && action == actionOpenVoiceE2e -> HomeDestination.Voice
+    else -> null
+  }
+}
 
 fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
   val action = intent?.action ?: return null

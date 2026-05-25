@@ -130,7 +130,7 @@ cat >"$OPENCLAW_STATE_DIR/workspace/MEMORY.md" <<EOF
 - The release media memory marker is $MEMORY_MARKER.
 EOF
 
-openclaw memory index --force >/tmp/openclaw-release-media-memory-index.log 2>&1 || true
+openclaw memory index --force >/tmp/openclaw-release-media-memory-index.log 2>&1
 openclaw memory search "$MEMORY_MARKER" --json >/tmp/openclaw-release-media-memory-search-before.json 2>/tmp/openclaw-release-media-memory-search-before.stderr.log
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-memory-search /tmp/openclaw-release-media-memory-search-before.json "$MEMORY_MARKER"
 

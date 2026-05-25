@@ -171,6 +171,7 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
+      "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
       "write-cli-compat",
@@ -207,6 +208,39 @@ describe("resolveBuildAllSteps", () => {
     expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
       labels.indexOf("build-stamp"),
     );
+  });
+
+  it("includes ui:build in the full and ciArtifacts profiles after runtime postbuild", () => {
+    for (const profile of ["full", "ciArtifacts"]) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      expect(labels).toContain("ui:build");
+      // Control UI bundling must run after tsdown clears dist so that
+      // dist/control-ui survives `pnpm build` without a second command.
+      expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("tsdown"));
+      expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
+      // ui:build must run before write-build-info so the build manifest can
+      // see the final dist/control-ui assets.
+      expect(labels.indexOf("ui:build")).toBeLessThan(labels.indexOf("write-build-info"));
+    }
+  });
+
+  it("keeps ui:build out of minimal backend-only profiles", () => {
+    for (const profile of ["gatewayWatch", "cliStartup"]) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      expect(labels).not.toContain("ui:build");
+    }
+  });
+
+  it("does not cache ui:build because Vite reads package.json, git HEAD, and env metadata", () => {
+    // ui/vite.config.ts derives the Control UI build ID from package.json,
+    // git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a file-input
+    // signature cannot exactly invalidate generated assets. Leaving this
+    // step uncached avoids restoring stale service-worker/app cache
+    // metadata after `tsdown` clears `dist`.
+    const step = getBuildAllStep("ui:build");
+    expect(step.kind).toBe("pnpm");
+    expect(step.pnpmArgs).toEqual(["ui:build"]);
+    expect(step.cache).toBeUndefined();
   });
 
   it("does not cache plugin-sdk entry shims over compiled JS", () => {

@@ -815,6 +815,9 @@ The report should answer:
 - What follow-up scenarios are worth adding
 
 For the inventory of available scenarios - useful when sizing follow-up work or wiring a new transport - run `pnpm openclaw qa coverage` (add `--json` for machine-readable output).
+When choosing focused proof for a touched behavior or file path, run `pnpm openclaw qa coverage --match <query>`.
+The match report searches scenario metadata, docs refs, code refs, coverage IDs, plugins, and provider requirements, then prints matching `qa suite --scenario ...` targets.
+Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:

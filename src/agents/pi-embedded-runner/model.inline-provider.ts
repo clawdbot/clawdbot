@@ -40,6 +40,7 @@ export function normalizeResolvedTransportApi(
     case "bedrock-converse-stream":
     case "github-copilot":
     case "google-generative-ai":
+    case "google-vertex":
     case "ollama":
     case "openai-codex-responses":
     case "openai-completions":

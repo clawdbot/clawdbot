@@ -247,9 +247,11 @@ async function deliverTelegramDirectMessageCompletion(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
+  requesterSessionId?: string | null;
   queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
   requesterSessionKey?: string;
   sourceTool?: string;
+  runtimeConfig?: Record<string, unknown>;
   origin?: {
     channel: "telegram";
     to: string;
@@ -266,10 +268,13 @@ async function deliverTelegramDirectMessageCompletion(params: {
   testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
-      sessionId: "requester-session-telegram",
+      sessionId:
+        params.requesterSessionId === null
+          ? undefined
+          : (params.requesterSessionId ?? "requester-session-telegram"),
       isActive: params.isActive === true,
     }),
-    getRuntimeConfig: () => ({}) as never,
+    getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
@@ -1416,13 +1421,35 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it("reports failure for Telegram DMs when announce-agent delivery fails", async () => {
-    const callGateway = vi.fn(async () => {
-      throw new Error("UNAVAILABLE: requester wake failed");
-    }) as unknown as typeof runtimeCallGateway;
+    const callGateway = createGatewayMock({
+      result: {
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "requester wake failed",
+        },
+      },
+    });
     const sendMessage = createSendMessageMock();
     const result = await deliverTelegramDirectMessageCompletion({
       callGateway,
       sendMessage,
+      queueEmbeddedPiMessageWithOutcome: createQueueOutcomeMock(false),
+      requesterSessionId: null,
+      requesterSessionKey: "agent:main:telegram:direct:123456789",
+      origin: {
+        channel: "telegram",
+        to: "direct:123456789",
+        accountId: "bot-1",
+      },
+      runtimeConfig: {
+        agents: {
+          defaults: {
+            subagents: {
+              announceTimeoutMs: 10,
+            },
+          },
+        },
+      },
       internalEvents: [
         {
           type: "task_completion",
@@ -1442,7 +1469,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "UNAVAILABLE: requester wake failed",
+      error: "requester wake failed",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1460,6 +1487,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sendMessage,
       isActive: true,
       queueEmbeddedPiMessageWithOutcome,
+      runtimeConfig: {
+        agents: {
+          defaults: {
+            subagents: {
+              announceTimeoutMs: 10,
+            },
+          },
+        },
+      },
       internalEvents: [
         {
           type: "task_completion",
@@ -1496,7 +1532,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
-        deliveryTimeoutMs: 120_000,
+        deliveryTimeoutMs: 10,
       },
     );
     expect(callGateway).toHaveBeenCalledTimes(1);

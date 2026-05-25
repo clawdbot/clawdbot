@@ -13,7 +13,6 @@ import {
   createGoogleGenerativeAiTransportStreamFn,
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
-import { hasGoogleVertexAuthorizedUserAdcSync } from "./vertex-adc.js";
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -57,7 +56,7 @@ export function buildGoogleProvider(): ProviderPlugin {
       if (model.api === "google-generative-ai") {
         return createGoogleGenerativeAiTransportStreamFn();
       }
-      if (model.api === "google-vertex" && hasGoogleVertexAuthorizedUserAdcSync()) {
+      if (model.api === "google-vertex") {
         return createGoogleVertexTransportStreamFn();
       }
       return undefined;

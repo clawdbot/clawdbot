@@ -6,9 +6,13 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   clearCurrentPluginMetadataSnapshot,
+  resolvePluginMetadataControlPlaneFingerprint,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -164,10 +168,7 @@ let authTempRoot = "";
 let authTempCounter = 0;
 
 beforeAll(() => {
-  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
-    config: {},
-    env: process.env,
-  });
+  setDefaultPluginMetadataSnapshot();
 });
 
 afterAll(() => {
@@ -179,6 +180,73 @@ function resetModelFallbackTestState(): void {
   authRuntimeMock.runtime.ensureAuthProfileStore.mockClear();
   authRuntimeMock.runtime.loadAuthProfileStoreForRuntime.mockClear();
   authSourceCheckMock.hasAnyAuthProfileStoreSource.mockReset().mockReturnValue(false);
+}
+
+function setDefaultPluginMetadataSnapshot(): void {
+  setCurrentPluginMetadataSnapshot(loadPluginMetadataSnapshot({ config: {}, env: process.env }), {
+    config: {},
+    env: process.env,
+  });
+}
+
+function createModelNormalizerSnapshot(params: {
+  manifestHash: string;
+  prefix: string;
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const index: InstalledPluginIndex = {
+    version: 1,
+    hostContractVersion: "test-host",
+    compatRegistryVersion: "test-compat",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [
+      {
+        pluginId: "fallback-normalizer",
+        manifestPath: `/tmp/fallback-normalizer-${params.manifestHash}/openclaw.plugin.json`,
+        manifestHash: params.manifestHash,
+        source: `/tmp/fallback-normalizer-${params.manifestHash}/index.ts`,
+        rootDir: `/tmp/fallback-normalizer-${params.manifestHash}`,
+        origin: "global",
+        enabled: true,
+        startup: {
+          sidecar: false,
+          memory: false,
+          deferConfiguredChannelFullLoadUntilAfterListen: false,
+          agentHarnesses: [],
+        },
+        compat: [],
+      },
+    ],
+    diagnostics: [],
+  };
+  return {
+    policyHash,
+    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(
+      {},
+      {
+        env: process.env,
+        index,
+        policyHash,
+      },
+    ),
+    index,
+    registryDiagnostics: [],
+    plugins: [
+      {
+        id: "fallback-normalizer",
+        modelIdNormalization: {
+          providers: {
+            demo: {
+              prefixWhenBare: params.prefix,
+            },
+          },
+        },
+      },
+    ],
+  } as unknown as PluginMetadataSnapshot;
 }
 
 afterEach(resetModelFallbackTestState);
@@ -225,6 +293,31 @@ function makeProviderFallbackCfg(provider: string): OpenClawConfig {
       },
     },
   });
+}
+
+function makeProviderOrderFallbackCfg(
+  entries: Array<[provider: string, model: string]>,
+): OpenClawConfig {
+  return {
+    agents: {
+      defaults: {
+        model: {
+          fallbacks: [],
+        },
+      },
+    },
+    models: {
+      providers: Object.fromEntries(
+        entries.map(([provider, model]) => [
+          provider,
+          {
+            baseUrl: `https://${provider}.example.test`,
+            models: [{ id: model }],
+          },
+        ]),
+      ),
+    },
+  } as unknown as OpenClawConfig;
 }
 
 async function withTempAuthStore<T>(
@@ -1967,6 +2060,82 @@ describe("runWithModelFallback", () => {
       { provider: "openai", model: "gpt-4o" },
       { provider: "ollama", model: "llama-3" },
     ]);
+  });
+
+  it("does not reuse provider-order-sensitive configured fallback candidates", () => {
+    const anthropicFirst = makeProviderOrderFallbackCfg([
+      ["anthropic", "claude-sonnet-4"],
+      ["ollama", "llama3"],
+    ]);
+    const ollamaFirst = makeProviderOrderFallbackCfg([
+      ["ollama", "llama3"],
+      ["anthropic", "claude-sonnet-4"],
+    ]);
+
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg: anthropicFirst,
+        provider: "",
+        model: "",
+        fallbacksOverride: [],
+      }),
+    ).toEqual([{ provider: "anthropic", model: "claude-sonnet-4" }]);
+    expect(
+      testing.resolveFallbackCandidates({
+        cfg: ollamaFirst,
+        provider: "",
+        model: "",
+        fallbacksOverride: [],
+      }),
+    ).toEqual([{ provider: "ollama", model: "llama3" }]);
+  });
+
+  it("does not reuse fallback candidate cache entries across manifest normalization snapshots", () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            fallbacks: [],
+          },
+        },
+      },
+    });
+
+    try {
+      setCurrentPluginMetadataSnapshot(
+        createModelNormalizerSnapshot({
+          manifestHash: "alpha",
+          prefix: "alpha",
+        }),
+        { config: {}, env: process.env },
+      );
+      expect(
+        testing.resolveFallbackCandidates({
+          cfg,
+          provider: "demo",
+          model: "demo-model",
+          fallbacksOverride: [],
+        }),
+      ).toEqual([{ provider: "demo", model: "alpha/demo-model" }]);
+
+      setCurrentPluginMetadataSnapshot(
+        createModelNormalizerSnapshot({
+          manifestHash: "bravo",
+          prefix: "bravo",
+        }),
+        { config: {}, env: process.env },
+      );
+      expect(
+        testing.resolveFallbackCandidates({
+          cfg,
+          provider: "demo",
+          model: "demo-model",
+          fallbacksOverride: [],
+        }),
+      ).toEqual([{ provider: "demo", model: "bravo/demo-model" }]);
+    } finally {
+      setDefaultPluginMetadataSnapshot();
+    }
   });
 
   it("defaults provider/model when missing (regression #946)", () => {

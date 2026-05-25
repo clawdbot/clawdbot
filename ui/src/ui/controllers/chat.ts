@@ -11,6 +11,7 @@ import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
 import { formatConnectError } from "../connect-error.ts";
 import { GatewayRequestError, type GatewayBrowserClient } from "../gateway.ts";
+import { areUiSessionKeysEquivalent } from "../session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { ChatAttachment } from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
@@ -662,13 +663,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   if (!payload) {
     return null;
   }
-  const sessionMatches = payload.sessionKey === state.sessionKey;
+  const sessionMatches = areUiSessionKeysEquivalent(payload.sessionKey, state.sessionKey);
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&
     payload.runId === state.chatRunId;
   if (!sessionMatches && !activeRunMatches) {
     return null;
+  }
+  if (!state.chatRunId && sessionMatches && typeof payload.runId === "string") {
+    state.chatRunId = payload.runId;
+    state.chatStreamStartedAt ??= Date.now();
   }
 
   // Terminal events for the active client run carry runId; missing-runId events are unowned.
@@ -696,7 +701,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       sessionStatus,
       runId: terminalRunId,
       sessionKey: state.sessionKey,
-      sessionKeys: payload.sessionKey === state.sessionKey ? [payload.sessionKey] : [],
+      sessionKeys: sessionMatches ? [state.sessionKey, payload.sessionKey] : [],
       clearLocalRun: true,
       clearChatStream: true,
     });

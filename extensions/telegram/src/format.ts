@@ -198,6 +198,7 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
   ["tg-emoji", /^\s+emoji-id="[^"]+"\s*$/],
   ["tg-time", /^\s+datetime="[^"]+"\s*$/],
 ]);
+const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
 let fileReferencePattern: RegExp | undefined;
 let orphanedTldPattern: RegExp | undefined;
 
@@ -228,17 +229,32 @@ function isSupportedTelegramHtmlTag(rawTag: string): boolean {
   return TELEGRAM_ATTR_HTML_TAG_PATTERNS.get(name)?.test(attrs) ?? false;
 }
 
+function hasOpenTelegramHtmlTag(tags: readonly string[], name: string): boolean {
+  return tags.includes(name);
+}
+
 function preserveTelegramHtmlTag(
   rawTag: string,
   openTags: string[],
   escapeTag: (rawTag: string) => string,
 ): string {
   const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
-  if (!match || !isSupportedTelegramHtmlTag(rawTag)) {
+  if (!match) {
     return escapeTag(rawTag);
   }
   const closing = match[1] === "/";
   const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  const attrs = match[3] ?? "";
+  if (!closing && tagName === "code" && TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN.test(attrs)) {
+    openTags.push(tagName);
+    if (hasOpenTelegramHtmlTag(openTags, "pre")) {
+      return rawTag;
+    }
+    return "<code>";
+  }
+  if (!isSupportedTelegramHtmlTag(rawTag)) {
+    return escapeTag(rawTag);
+  }
   if (closing) {
     return popLastTagName(openTags, tagName) ? rawTag : escapeTag(rawTag);
   }

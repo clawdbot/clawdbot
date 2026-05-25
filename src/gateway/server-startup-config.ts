@@ -125,6 +125,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
           ...(pluginMetadataSnapshot?.manifestRegistry
             ? { manifestRegistry: pluginMetadataSnapshot.manifestRegistry }
             : {}),
+          discovery: pluginMetadataSnapshot?.discovery,
         }),
       );
   if (autoEnable.changes.length === 0) {

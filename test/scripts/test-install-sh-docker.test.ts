@@ -66,7 +66,7 @@ describe("test-install-sh-docker", () => {
     expect(script).toContain('node scripts/check-package-dist-imports.mjs "$ROOT_DIR"');
     expect(script).toContain("WARN: reused Docker image dist failed import-closure check");
     expect(script).toContain("pnpm build");
-    expect(script).toContain("pnpm ui:build");
+    expect(script).not.toContain("pnpm ui:build");
     expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
   });
 

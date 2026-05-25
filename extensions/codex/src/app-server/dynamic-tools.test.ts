@@ -819,8 +819,10 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Background task started."));
+    expect(result.asyncStarted).toBe(true);
     expect(result.sideEffectEvidence).toBe(true);
     expect(result.terminate).toBe(true);
+    expect(Object.keys(result)).not.toContain("asyncStarted");
     expect(Object.keys(result)).not.toContain("terminate");
   });
 

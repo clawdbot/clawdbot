@@ -9,6 +9,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { buildAuthItems } from "./auth.js";
 import { buildConfigItems } from "./config.js";
 import { exists, parseHermesConfig, readText } from "./helpers.js";
 import { createHermesModelItem } from "./items.js";
@@ -114,6 +115,7 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
     );
   }
   items.push(...(await buildSkillItems({ source, targets, overwrite: ctx.overwrite })));
+  items.push(...(await buildAuthItems({ ctx, source, targets })));
   items.push(...(await buildSecretItems({ ctx, source, targets })));
   for (const archivePath of source.archivePaths) {
     items.push(
@@ -130,9 +132,9 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   }
 
   const warnings = [
-    ...(!ctx.includeSecrets && items.some((item) => item.kind === "secret")
+    ...(!ctx.includeSecrets && items.some((item) => item.kind === "secret" || item.kind === "auth")
       ? [
-          "Secrets were detected but skipped. Re-run with --include-secrets to import supported API keys.",
+          "Auth credentials were detected but skipped. Re-run interactively or pass --include-secrets to import supported credentials.",
         ]
       : []),
     ...(items.some((item) => item.status === "conflict")

@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -28,6 +28,7 @@ import {
   PACKED_CLI_SMOKE_COMMANDS,
   PACKED_COMPLETION_SMOKE_ARGS,
   packageNameFromSpecifier,
+  resolveReleaseNpmCommand,
   resolveMissingPackBuildHint,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
@@ -155,6 +156,43 @@ describe("packed CLI smoke", () => {
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
     });
+  });
+});
+
+describe("resolveReleaseNpmCommand", () => {
+  it("wraps Windows npm.cmd release checks through cmd.exe without shell mode", () => {
+    const nodeDir = "C:\\Program Files\\nodejs";
+    const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");
+
+    expect(
+      resolveReleaseNpmCommand(["pack", "--dry-run", "--json"], {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: { PATH: "C:\\bin" },
+        execPath: win32.join(nodeDir, "node.exe"),
+        existsSync: (candidate) => candidate === npmCmdPath,
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\nodejs\\npm.cmd" pack --dry-run --json"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("rejects bare npm fallback on Windows release checks", () => {
+    expect(() =>
+      resolveReleaseNpmCommand(["pack"], {
+        execPath: "C:\\Program Files\\nodejs\\node.exe",
+        existsSync: () => false,
+        platform: "win32",
+      }),
+    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
   });
 });
 

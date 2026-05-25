@@ -4,7 +4,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
-  CacheEntry,
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
   normalizeCacheKey,
@@ -14,6 +13,7 @@ import {
   resolveTimeoutSeconds,
   writeCache,
 } from "./web-shared.js";
+import type { CacheEntry } from "./web-shared.js";
 
 type WebGuardedFetchModule = Pick<
   typeof import("./web-guarded-fetch.js"),

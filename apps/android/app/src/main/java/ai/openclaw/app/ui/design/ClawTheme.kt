@@ -57,10 +57,11 @@ internal data class ClawSpacing(
 @Immutable
 internal data class ClawRadii(
   val row: Dp = 4.dp,
-  val panel: Dp = 7.dp,
-  val control: Dp = 8.dp,
-  val sheet: Dp = 12.dp,
-  val pill: Dp = 999.dp,
+  val panel: Dp = 5.dp,
+  val control: Dp = 6.dp,
+  val button: Dp = 8.dp,
+  val sheet: Dp = 10.dp,
+  val pill: Dp = 12.dp,
 )
 
 @Immutable

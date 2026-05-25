@@ -171,9 +171,10 @@ function installDebugProxyGlobalFetchPatch(
   if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
-  const originalFetch = fetchTarget.fetch.bind(fetchTarget);
+  const fetchImpl = fetchTarget.fetch;
+  const originalFetch = fetchImpl.bind(fetchTarget);
   fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
-  fetchTarget.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const patchedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
     const normalizedInit = normalizeRequestInitHeadersForFetch(init);
     try {
@@ -238,7 +239,12 @@ function installDebugProxyGlobalFetchPatch(
       }
       throw error;
     }
-  }) as typeof globalThis.fetch;
+  };
+  const mockState = (fetchImpl as typeof globalThis.fetch & { mock?: unknown }).mock;
+  if (typeof mockState === "object" && mockState !== null) {
+    (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
+  }
+  fetchTarget.fetch = patchedFetch as typeof globalThis.fetch;
 }
 
 function uninstallDebugProxyGlobalFetchPatch(deps: DebugProxyCaptureRuntimeDeps = {}): void {

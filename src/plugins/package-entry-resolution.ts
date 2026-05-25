@@ -142,6 +142,7 @@ export async function validatePackageExtensionEntriesForInstall(params: {
   packageDir: string;
   extensions: string[];
   manifest: PackageManifest;
+  allowSourceTypeScriptEntries?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const runtimeResolution = resolvePackageRuntimeExtensionEntries({
     manifest: params.manifest,
@@ -195,6 +196,14 @@ export async function validatePackageExtensionEntriesForInstall(params: {
     }
 
     if (foundBuiltEntry) {
+      continue;
+    }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(entry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
       continue;
     }
 
@@ -279,6 +288,14 @@ export async function validatePackageExtensionEntriesForInstall(params: {
     }
 
     if (foundBuiltSetupEntry) {
+      return { ok: true };
+    }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(setupEntry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
       return { ok: true };
     }
 

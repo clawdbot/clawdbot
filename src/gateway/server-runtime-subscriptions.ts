@@ -44,6 +44,7 @@ export function startGatewayEventSubscriptions(params: {
         clearAgentRunContext,
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
+        sessionMessageSubscribers: params.sessionMessageSubscribers,
         isChatSendRunActive: (runId) => {
           const entry = params.chatAbortControllers.get(runId);
           return entry !== undefined && entry.kind !== "agent";

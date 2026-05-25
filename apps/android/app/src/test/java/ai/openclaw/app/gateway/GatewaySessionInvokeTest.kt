@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -266,6 +267,126 @@ class GatewaySessionInvokeTest {
     }
 
   @Test
+  fun connect_reusesStoredDeviceTokenScopes() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          if (method == "connect") {
+            if (!connectParams.isCompleted) {
+              connectParams.complete(frame["params"]!!.jsonObject)
+            }
+            webSocket.send(connectResponseFrame(id))
+            webSocket.close(1000, "done")
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        val deviceId = DeviceIdentityStore(RuntimeEnvironment.getApplication()).loadOrCreate().deviceId
+        harness.deviceAuthStore.saveToken(
+          deviceId = deviceId,
+          role = "operator",
+          token = "operator-device-token",
+          scopes = listOf("operator.pairing", "operator.write"),
+        )
+
+        connectNodeSession(
+          session = harness.session,
+          port = server.port,
+          token = null,
+          role = "operator",
+          scopes = listOf("operator.approvals", "operator.read", "operator.write"),
+        )
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(
+          "operator-device-token",
+          params["auth"]
+            ?.jsonObject
+            ?.get("token")
+            ?.jsonPrimitive
+            ?.content,
+        )
+        assertEquals(listOf("operator.pairing", "operator.write"), params.scopes())
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun bootstrapConnect_filtersOperatorHandoffScopesFromConnectRequest() =
+    runBlocking {
+      val json = testJson()
+      val connected = CompletableDeferred<Unit>()
+      val connectParams = CompletableDeferred<JsonObject>()
+      val lastDisconnect = AtomicReference("")
+      val server =
+        startGatewayServer(json) { webSocket, id, method, frame ->
+          if (method == "connect") {
+            if (!connectParams.isCompleted) {
+              connectParams.complete(frame["params"]!!.jsonObject)
+            }
+            webSocket.send(connectResponseFrame(id))
+            webSocket.close(1000, "done")
+          }
+        }
+
+      val harness =
+        createNodeHarness(
+          connected = connected,
+          lastDisconnect = lastDisconnect,
+        ) { GatewaySession.InvokeResult.ok("""{"handled":true}""") }
+
+      try {
+        connectNodeSession(
+          session = harness.session,
+          port = server.port,
+          token = null,
+          bootstrapToken = "setup-bootstrap-token",
+          role = "operator",
+          scopes =
+            listOf(
+              "operator.approvals",
+              "operator.pairing",
+              "operator.read",
+              "operator.write",
+            ),
+        )
+        awaitConnectedOrThrow(connected, lastDisconnect, server)
+
+        val params = withTimeout(TEST_TIMEOUT_MS) { connectParams.await() }
+        assertEquals(
+          "setup-bootstrap-token",
+          params["auth"]
+            ?.jsonObject
+            ?.get("bootstrapToken")
+            ?.jsonPrimitive
+            ?.content,
+        )
+        assertEquals(
+          listOf(
+            "operator.approvals",
+            "operator.read",
+            "operator.write",
+          ),
+          params.scopes(),
+        )
+      } finally {
+        shutdownHarness(harness, server)
+      }
+    }
+
+  @Test
   fun connect_retriesWithStoredDeviceTokenAfterSharedTokenMismatch() =
     runBlocking {
       val json = testJson()
@@ -417,10 +538,7 @@ class GatewaySessionInvokeTest {
         assertEquals("bootstrap-node-token", nodeEntry?.token)
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
-        assertEquals(
-          listOf("operator.approvals", "operator.pairing", "operator.read", "operator.write"),
-          operatorEntry?.scopes,
-        )
+        assertEquals(listOf("operator.approvals", "operator.read", "operator.write"), operatorEntry?.scopes)
       } finally {
         shutdownHarness(harness, server)
       }
@@ -682,6 +800,11 @@ class GatewaySessionInvokeTest {
 
   private fun testJson(): Json = Json { ignoreUnknownKeys = true }
 
+  private fun JsonObject.scopes(): List<String> =
+    (this["scopes"] as? JsonArray)
+      ?.map { it.jsonPrimitive.content }
+      ?: emptyList()
+
   private fun createNodeHarness(
     connected: CompletableDeferred<Unit>,
     lastDisconnect: AtomicReference<String>,
@@ -714,6 +837,8 @@ class GatewaySessionInvokeTest {
     port: Int,
     token: String? = "test-token",
     bootstrapToken: String? = null,
+    role: String = "node",
+    scopes: List<String> = listOf("node:invoke"),
   ) {
     session.connect(
       endpoint =
@@ -729,8 +854,8 @@ class GatewaySessionInvokeTest {
       password = null,
       options =
         GatewayConnectOptions(
-          role = "node",
-          scopes = listOf("node:invoke"),
+          role = role,
+          scopes = scopes,
           caps = emptyList(),
           commands = emptyList(),
           permissions = emptyMap(),
@@ -740,7 +865,7 @@ class GatewaySessionInvokeTest {
               displayName = "Android Test",
               version = "1.0.0-test",
               platform = "android",
-              mode = "node",
+              mode = role,
               instanceId = "android-test-instance",
               deviceFamily = "android",
               modelIdentifier = "test",

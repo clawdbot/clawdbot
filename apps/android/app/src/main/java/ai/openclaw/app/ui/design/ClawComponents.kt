@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 internal enum class ClawStatus {
   Neutral,
@@ -105,7 +106,7 @@ internal fun ClawPrimaryButton(
     onClick = onClick,
     enabled = enabled,
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     colors =
       ButtonDefaults.buttonColors(
         containerColor = ClawTheme.colors.primary,
@@ -136,7 +137,7 @@ internal fun ClawSecondaryButton(
     onClick = onClick,
     enabled = enabled,
     modifier = modifier.heightIn(min = ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = if (enabled) ClawTheme.colors.surfaceRaised else ClawTheme.colors.surface,
     contentColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle,
     border = BorderStroke(1.dp, if (enabled) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
@@ -195,7 +196,7 @@ internal fun ClawStatusPill(
 
   Surface(
     modifier = modifier,
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.control),
     color = backgroundColor,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
@@ -207,11 +208,11 @@ internal fun ClawStatusPill(
       Box(
         modifier =
           Modifier
-            .size(6.dp)
+            .size(5.dp)
             .clip(CircleShape)
             .background(dotColor),
       )
-      Text(text = text, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+      Text(text = text, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
     }
   }
 }
@@ -253,7 +254,7 @@ internal fun <T> ClawListPanel(
   modifier: Modifier = Modifier,
   row: @Composable (T) -> Unit,
 ) {
-  ClawPanel(modifier = modifier, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+  ClawPanel(modifier = modifier, contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     ClawSeparatedColumn(items = items, row = row)
   }
 }
@@ -268,7 +269,7 @@ internal fun <T> ClawSeparatedColumn(
     items.forEachIndexed { index, item ->
       row(item)
       if (index != items.lastIndex) {
-        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+        HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
       }
     }
   }
@@ -286,8 +287,8 @@ internal fun ClawDetailRow(
     modifier =
       modifier
         .fillMaxWidth()
-        .heightIn(min = 52.dp)
-        .padding(horizontal = 12.dp, vertical = 5.dp),
+        .heightIn(min = 54.dp)
+        .padding(horizontal = 0.dp, vertical = 7.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(9.dp),
   ) {
@@ -399,8 +400,8 @@ internal fun ClawSegmentedControl(
   Row(
     modifier =
       modifier
-        .clip(RoundedCornerShape(ClawTheme.radii.pill))
-        .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.pill))
+        .clip(RoundedCornerShape(ClawTheme.radii.control))
+        .border(1.dp, ClawTheme.colors.border, RoundedCornerShape(ClawTheme.radii.control))
         .padding(2.dp),
     horizontalArrangement = Arrangement.spacedBy(2.dp),
   ) {
@@ -410,7 +411,7 @@ internal fun ClawSegmentedControl(
         modifier =
           Modifier
             .weight(1f)
-            .clip(RoundedCornerShape(ClawTheme.radii.pill))
+            .clip(RoundedCornerShape(ClawTheme.radii.control))
             .background(if (active) ClawTheme.colors.primary else Color.Transparent)
             .clickable { onSelect(option) }
             .padding(horizontal = 9.dp, vertical = 7.dp),

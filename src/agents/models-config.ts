@@ -178,7 +178,6 @@ export async function ensureOpenClawModelsJson(
       config: cfg,
       env: createConfigRuntimeEnv(cfg),
       ...(workspaceDir ? { workspaceDir } : {}),
-      allowWorkspaceScopedCurrent: workspaceDir === undefined,
     });
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
   const targetPath = path.join(agentDir, "models.json");

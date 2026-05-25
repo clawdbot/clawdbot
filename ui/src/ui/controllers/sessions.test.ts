@@ -5,10 +5,24 @@ import {
   deleteSessionsAndRefresh,
   loadSessions,
   subscribeSessions,
+  syncSelectedSessionMessageSubscription,
   type SessionsState,
 } from "./sessions.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+
+function createDeferred<T>() {
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
+  return { promise, resolve, reject };
+}
 
 if (!("window" in globalThis)) {
   Object.assign(globalThis, {
@@ -52,6 +66,98 @@ describe("subscribeSessions", () => {
 
     expect(request).toHaveBeenCalledWith("sessions.subscribe", {});
     expect(state.sessionsError).toBeNull();
+  });
+});
+
+describe("syncSelectedSessionMessageSubscription", () => {
+  it("subscribes to the selected session message stream", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:main" }));
+    const state = createState(request, { sessionKey: "agent:main:main" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "agent:main:main",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:main");
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:main");
+  });
+
+  it("unsubscribes the previous selected session before switching streams", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:next" }));
+    const state = createState(request, {
+      sessionKey: "agent:main:next",
+      chatSessionMessageSubscriptionKey: "agent:main:previous",
+    } as Partial<SessionsState & { sessionKey: string }>) as SessionsState & {
+      sessionKey: string;
+    };
+
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.messages.unsubscribe", {
+      key: "agent:main:previous",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.messages.subscribe", {
+      key: "agent:main:next",
+    });
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:next");
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:next");
+  });
+
+  it("does not churn when the selected alias resolves to a canonical key", async () => {
+    const request = vi.fn(async () => ({ key: "agent:main:main" }));
+    const state = createState(request, { sessionKey: "main" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    await syncSelectedSessionMessageSubscription(state);
+    await syncSelectedSessionMessageSubscription(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", { key: "main" });
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("main");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:main");
+  });
+
+  it("ignores stale subscription completions after the selected session changes", async () => {
+    const firstSubscribe = createDeferred<{ key: string }>();
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      const key = (params as { key?: string } | undefined)?.key;
+      if (method === "sessions.messages.subscribe" && key === "agent:main:first") {
+        return await firstSubscribe.promise;
+      }
+      if (method === "sessions.messages.subscribe" && key === "agent:main:second") {
+        return { key: "agent:main:second" };
+      }
+      if (method === "sessions.messages.unsubscribe") {
+        return { subscribed: false, key };
+      }
+      throw new Error(`unexpected request: ${method} ${String(key)}`);
+    });
+    const state = createState(request, { sessionKey: "agent:main:first" } as Partial<
+      SessionsState & { sessionKey: string }
+    >) as SessionsState & { sessionKey: string };
+
+    const firstSync = syncSelectedSessionMessageSubscription(state);
+    expect(request).toHaveBeenCalledWith("sessions.messages.subscribe", {
+      key: "agent:main:first",
+    });
+
+    state.sessionKey = "agent:main:second";
+    await syncSelectedSessionMessageSubscription(state);
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:second");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:second");
+
+    firstSubscribe.resolve({ key: "agent:main:first" });
+    await firstSync;
+
+    expect(state.chatSessionMessageSubscriptionRequestedKey).toBe("agent:main:second");
+    expect(state.chatSessionMessageSubscriptionKey).toBe("agent:main:second");
+    expect(request).toHaveBeenCalledWith("sessions.messages.unsubscribe", {
+      key: "agent:main:first",
+    });
   });
 });
 

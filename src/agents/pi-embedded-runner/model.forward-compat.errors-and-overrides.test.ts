@@ -44,6 +44,7 @@ vi.mock("../pi-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
+import { resetModelDiscoveryCacheForTest } from "./model-discovery-cache.js";
 import {
   expectResolvedForwardCompatFallbackResult,
   expectUnknownModelErrorResult,
@@ -57,6 +58,7 @@ import {
 } from "./model.test-harness.js";
 
 beforeEach(() => {
+  resetModelDiscoveryCacheForTest();
   resetMockDiscoverModels(discoverModels);
 });
 

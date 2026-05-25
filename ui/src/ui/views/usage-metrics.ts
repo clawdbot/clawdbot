@@ -6,7 +6,7 @@ import {
 } from "../../../../src/shared/usage-aggregates.js";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
+import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./usageTypes.ts";
 
 const CHARS_PER_TOKEN = 4;
 

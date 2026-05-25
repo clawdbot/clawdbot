@@ -1,4 +1,5 @@
-import { Mock, vi } from "vitest";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 
 export const runCommandWithTimeoutMock: Mock<(...args: unknown[]) => unknown> = vi.fn();
 export const scanDirectoryWithSummaryMock: Mock<(...args: unknown[]) => unknown> = vi.fn();

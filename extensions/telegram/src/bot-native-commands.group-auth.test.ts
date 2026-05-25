@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createNativeCommandsHarness,
+  createTelegramDmCommandContext,
   createTelegramGroupCommandContext,
   findNotAuthorizedCalls,
 } from "./bot-native-commands.test-helpers.js";
@@ -184,6 +185,27 @@ describe("native command auth in groups", () => {
 
     const notAuthCalls = findNotAuthorizedCalls(sendMessage);
     expect(notAuthCalls.length).toBeGreaterThan(0);
+  });
+
+  it("authorizes a DM native command from commands.allowFrom.telegram when pairing-store read fails transiently", async () => {
+    const readChannelAllowFromStore = vi.fn(async () => {
+      throw new Error("store temporarily unavailable");
+    });
+    const { handlers, sendMessage } = createNativeCommandsHarness({
+      cfg: {
+        commands: { native: true, allowFrom: { telegram: ["12345"] } },
+        channels: { telegram: { dmPolicy: "pairing" } },
+      } as OpenClawConfig,
+      telegramCfg: { dmPolicy: "pairing" } as TelegramAccountConfig,
+      readChannelAllowFromStore,
+    });
+
+    const ctx = createTelegramDmCommandContext({ senderId: 12345 });
+
+    await handlers.status?.(ctx);
+
+    expect(readChannelAllowFromStore).not.toHaveBeenCalled();
+    expect(findNotAuthorizedCalls(sendMessage)).toHaveLength(0);
   });
 
   it("replies in the originating forum topic when auth is rejected", async () => {

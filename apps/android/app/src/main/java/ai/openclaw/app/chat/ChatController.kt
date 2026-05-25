@@ -17,12 +17,12 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 class ChatController(
   private val scope: CoroutineScope,
   private val session: GatewaySession,
   private val json: Json,
-  private val supportsChatSubscribe: Boolean,
 ) {
   private var appliedMainSessionKey = "main"
   private val _sessionKey = MutableStateFlow("main")
@@ -33,6 +33,9 @@ class ChatController(
 
   private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
   val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+
+  private val _historyLoading = MutableStateFlow(false)
+  val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
   private val _errorText = MutableStateFlow<String?>(null)
   val errorText: StateFlow<String?> = _errorText.asStateFlow()
@@ -60,25 +63,27 @@ class ChatController(
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
   private val optimisticMessagesByRunId = LinkedHashMap<String, ChatMessage>()
   private val pendingRunTimeoutMs = 120_000L
+  private val historyLoadGeneration = AtomicLong(0)
 
   private var lastHealthPollAtMs: Long? = null
 
   fun onDisconnected(message: String) {
     _healthOk.value = false
-    // Not an error; keep connection status in the UI pill.
     _errorText.value = null
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     _streamingAssistantText.value = null
+    _historyLoading.value = false
     _sessionId.value = null
   }
 
   fun load(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
-    _sessionKey.value = key
-    optimisticMessagesByRunId.clear()
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
+    val generation = beginHistoryLoad(key, clearMessages = key != _sessionKey.value)
+    scope.launch {
+      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = true)
+    }
   }
 
   fun applyMainSessionKey(mainSessionKey: String) {
@@ -92,12 +97,23 @@ class ChatController(
       )
     appliedMainSessionKey = nextState.appliedMainSessionKey
     if (_sessionKey.value == nextState.currentSessionKey) return
-    _sessionKey.value = nextState.currentSessionKey
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
+    val generation = beginHistoryLoad(nextState.currentSessionKey, clearMessages = true)
+    scope.launch {
+      bootstrap(
+        sessionKey = nextState.currentSessionKey,
+        generation = generation,
+        forceHealth = true,
+        refreshSessions = true,
+      )
+    }
   }
 
   fun refresh() {
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
+    val key = normalizeRequestedSessionKey(_sessionKey.value)
+    val generation = beginHistoryLoad(key, clearMessages = false)
+    scope.launch {
+      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = true)
+    }
   }
 
   fun refreshSessions(limit: Int? = null) {
@@ -114,11 +130,30 @@ class ChatController(
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
     if (key == _sessionKey.value) return
+    val generation = beginHistoryLoad(key, clearMessages = true)
+    scope.launch {
+      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = false)
+    }
+  }
+
+  private fun beginHistoryLoad(
+    key: String,
+    clearMessages: Boolean,
+  ): Long {
+    val generation = historyLoadGeneration.incrementAndGet()
     _sessionKey.value = key
-    optimisticMessagesByRunId.clear()
-    // Keep the thread switch path lean: history + health are needed immediately,
-    // but the session list is usually unchanged and can refresh on explicit pull-to-refresh.
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = false) }
+    _errorText.value = null
+    _healthOk.value = false
+    clearPendingRuns()
+    pendingToolCallsById.clear()
+    publishPendingToolCalls()
+    _streamingAssistantText.value = null
+    _sessionId.value = null
+    _historyLoading.value = true
+    if (clearMessages) {
+      _messages.value = emptyList()
+    }
+    return generation
   }
 
   private fun normalizeRequestedSessionKey(sessionKey: String): String {
@@ -289,27 +324,22 @@ class ChatController(
   }
 
   private suspend fun bootstrap(
+    sessionKey: String,
+    generation: Long,
     forceHealth: Boolean,
     refreshSessions: Boolean,
   ) {
-    _errorText.value = null
-    _healthOk.value = false
-    clearPendingRuns()
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
-    _sessionId.value = null
-
-    val key = _sessionKey.value
     try {
-      if (supportsChatSubscribe) {
-        session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
-      }
-
-      val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
-      val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
+      val historyJson =
+        session.request(
+          "chat.history",
+          buildJsonObject { put("sessionKey", JsonPrimitive(sessionKey)) }.toString(),
+        )
+      if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
+      val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
       _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
+      _historyLoading.value = false
       history.thinkingLevel
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
@@ -320,7 +350,9 @@ class ChatController(
         fetchSessions(limit = 50)
       }
     } catch (err: Throwable) {
+      if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       _errorText.value = err.message
+      _historyLoading.value = false
     }
   }
 
@@ -387,9 +419,29 @@ class ChatController(
         _streamingAssistantText.value = null
         scope.launch {
           try {
+            val currentSessionKey = _sessionKey.value
+            val currentGeneration = historyLoadGeneration.get()
             val historyJson =
-              session.request("chat.history", """{"sessionKey":"${_sessionKey.value}"}""")
-            val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
+              session.request(
+                "chat.history",
+                buildJsonObject { put("sessionKey", JsonPrimitive(currentSessionKey)) }.toString(),
+              )
+            if (
+              !isCurrentHistoryLoad(
+                currentSessionKey,
+                _sessionKey.value,
+                currentGeneration,
+                historyLoadGeneration.get(),
+              )
+            ) {
+              return@launch
+            }
+            val history =
+              parseHistory(
+                historyJson,
+                sessionKey = currentSessionKey,
+                previousMessages = _messages.value,
+              )
             _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
             history.thinkingLevel
@@ -527,7 +579,7 @@ class ChatController(
       array.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
-        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseMessageContent) ?: emptyList()
+        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseChatMessageContent) ?: emptyList()
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
@@ -543,21 +595,6 @@ class ChatController(
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
     )
-  }
-
-  private fun parseMessageContent(el: JsonElement): ChatMessageContent? {
-    val obj = el.asObjectOrNull() ?: return null
-    val type = obj["type"].asStringOrNull() ?: "text"
-    return if (type == "text") {
-      ChatMessageContent(type = "text", text = obj["text"].asStringOrNull())
-    } else {
-      ChatMessageContent(
-        type = type,
-        mimeType = obj["mimeType"].asStringOrNull(),
-        fileName = obj["fileName"].asStringOrNull(),
-        base64 = obj["content"].asStringOrNull(),
-      )
-    }
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
@@ -591,6 +628,34 @@ class ChatController(
       "high" -> "high"
       else -> "off"
     }
+}
+
+internal fun isCurrentHistoryLoad(
+  requestedSessionKey: String,
+  currentSessionKey: String,
+  requestGeneration: Long,
+  activeGeneration: Long,
+): Boolean = requestedSessionKey == currentSessionKey && requestGeneration == activeGeneration
+
+internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
+  val obj = el.asObjectOrNull() ?: return null
+  return when (obj["type"].asStringOrNull() ?: "text") {
+    "text", "input_text", "output_text" ->
+      ChatMessageContent(
+        type = "text",
+        text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
+      )
+
+    "image" ->
+      ChatMessageContent(
+        type = "image",
+        mimeType = obj["mimeType"].asStringOrNull(),
+        fileName = obj["fileName"].asStringOrNull(),
+        base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
+      )
+
+    else -> null
+  }
 }
 
 internal data class MainSessionState(

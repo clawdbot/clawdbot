@@ -100,6 +100,12 @@ async function runStreamingSandboxHttpRequest(
   child.once("close", () => {
     socket.off("close", abortOnSocketClose);
   });
+  child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") {
+      return;
+    }
+    embeddedAgentLog.warn("codex sandbox http/request stdin write failed", { error });
+  });
   child.stdin.end(JSON.stringify(params));
   return await readStreamingSandboxHttpResponse({
     child,

@@ -95,13 +95,9 @@ import {
   type QueueSettings,
 } from "./queue.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
-import {
-  createReplyOperation,
-  ReplyRunAlreadyActiveError,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -1277,23 +1273,45 @@ export async function runReplyAgent(params: {
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
   let replyOperation: ReplyOperation;
-  try {
-    replyOperation =
-      providedReplyOperation ??
-      createReplyOperation({
-        sessionId: followupRun.run.sessionId,
-        sessionKey: replySessionKey ?? "",
-        resetTriggered: effectiveResetTriggered,
-        upstreamAbortSignal: opts?.abortSignal,
-      });
-  } catch (error) {
-    if (error instanceof ReplyRunAlreadyActiveError) {
+  if (providedReplyOperation) {
+    replyOperation = providedReplyOperation;
+  } else {
+    const replyTurnKind = resolveReplyTurnKind(opts);
+    const admission = await admitReplyTurn({
+      sessionId: followupRun.run.sessionId,
+      sessionKey: replySessionKey ?? "",
+      kind: replyTurnKind,
+      resetTriggered: effectiveResetTriggered,
+      upstreamAbortSignal: opts?.abortSignal,
+    });
+    if (admission.status === "skipped") {
       typing.cleanup();
+      if (admission.reason !== "active-run" || replyTurnKind !== "visible") {
+        return undefined;
+      }
       return markReplyPayloadForSourceSuppressionDelivery({
         text: REPLY_RUN_STILL_SHUTTING_DOWN_TEXT,
       });
     }
-    throw error;
+    replyOperation = admission.operation;
+    const previousRunSessionId = followupRun.run.sessionId;
+    followupRun.run.sessionId = replyOperation.sessionId;
+    if (replyOperation.sessionId !== previousRunSessionId) {
+      const admittedSessionEntry = refreshSessionEntryFromStore({
+        storePath,
+        sessionKey: replySessionKey,
+        fallbackEntry: replySessionKey
+          ? (activeSessionStore?.[replySessionKey] ?? activeSessionEntry)
+          : activeSessionEntry,
+        activeSessionStore,
+      });
+      if (admittedSessionEntry?.sessionId === replyOperation.sessionId) {
+        activeSessionEntry = admittedSessionEntry;
+        if (admittedSessionEntry.sessionFile) {
+          followupRun.run.sessionFile = admittedSessionEntry.sessionFile;
+        }
+      }
+    }
   }
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;

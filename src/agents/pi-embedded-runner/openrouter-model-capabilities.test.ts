@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
@@ -89,6 +89,112 @@ describe("openrouter-model-capabilities", () => {
       expect(maxOutput?.supportsTools).toBeUndefined();
       expect(maxOutput?.contextWindow).toBe(54321);
       expect(maxOutput?.maxTokens).toBe(23456);
+    });
+  });
+
+  it("uses endpoint-specific OpenRouter context length when top_provider reports one", async () => {
+    await withOpenRouterStateDir(async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          async () =>
+            new Response(
+              JSON.stringify({
+                data: [
+                  {
+                    id: "nvidia/nemotron-3-super-120b-a12b:free",
+                    name: "Nemotron 3 Super 120B Free",
+                    architecture: { modality: "text->text" },
+                    context_length: 1_000_000,
+                    top_provider: {
+                      context_length: 262_144,
+                      max_completion_tokens: 262_144,
+                    },
+                    pricing: { prompt: "0", completion: "0" },
+                  },
+                ],
+              }),
+              {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              },
+            ),
+        ),
+      );
+
+      const module = await importOpenRouterModelCapabilities("top-provider-context-length");
+      await module.loadOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free");
+
+      expect(
+        module.getOpenRouterModelCapabilities("nvidia/nemotron-3-super-120b-a12b:free"),
+      ).toMatchObject({
+        contextWindow: 262_144,
+        maxTokens: 262_144,
+      });
+    });
+  });
+
+  it("does not reuse older disk caches with precomputed OpenRouter context windows", async () => {
+    await withOpenRouterStateDir(async (stateDir) => {
+      const modelId = "nvidia/nemotron-3-super-120b-a12b:free";
+      const cacheDir = join(stateDir, "cache");
+      mkdirSync(cacheDir, { recursive: true });
+      writeFileSync(
+        join(cacheDir, "openrouter-models.json"),
+        JSON.stringify({
+          version: 2,
+          models: {
+            [modelId]: {
+              name: "Nemotron 3 Super 120B Free",
+              input: ["text"],
+              reasoning: false,
+              contextWindow: 1_000_000,
+              maxTokens: 262_144,
+              cost: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+              },
+            },
+          },
+        }),
+      );
+
+      const fetchSpy = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: modelId,
+                  name: "Nemotron 3 Super 120B Free",
+                  architecture: { modality: "text->text" },
+                  context_length: 1_000_000,
+                  top_provider: {
+                    context_length: 262_144,
+                    max_completion_tokens: 262_144,
+                  },
+                  pricing: { prompt: "0", completion: "0" },
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            },
+          ),
+      );
+      vi.stubGlobal("fetch", fetchSpy);
+
+      const module = await importOpenRouterModelCapabilities("old-context-window-cache");
+      await module.loadOpenRouterModelCapabilities(modelId);
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(module.getOpenRouterModelCapabilities(modelId)).toMatchObject({
+        contextWindow: 262_144,
+        maxTokens: 262_144,
+      });
     });
   });
 

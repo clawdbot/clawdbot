@@ -34,10 +34,10 @@ import type {
 import {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
@@ -224,7 +224,10 @@ export async function resolveTelegramInboundBody(params: {
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
-  const rawText = expandTextLinks(messageTextParts.text, messageTextParts.entities).trim();
+  const rawText = renderTelegramTextEntities(
+    messageTextParts.text,
+    messageTextParts.entities,
+  ).trim();
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {

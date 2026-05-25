@@ -28,43 +28,47 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
   sanitizeSessionMessagesImages: vi.fn(async (msgs) => msgs),
 }));
 
-vi.mock("../plugins/provider-hook-runtime.js", async () => ({
-  testing: {},
-  prepareProviderExtraParams: vi.fn(() => undefined),
-  resolveProviderHookPlugin: vi.fn(() => undefined),
-  resolveProviderPluginsForHooks: vi.fn(() => []),
-  resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
-    provider === "openrouter" || provider === "github-copilot"
-      ? {
-          buildReplayPolicy: (context?: { modelId?: string | null }) => {
-            const modelId = (context?.modelId ?? "").toLowerCase();
-            if (provider === "openrouter") {
-              return {
-                applyAssistantFirstOrderingFix: false,
-                validateGeminiTurns: false,
-                validateAnthropicTurns: false,
-                ...(modelId.includes("gemini")
-                  ? {
-                      sanitizeThoughtSignatures: {
-                        allowBase64Only: true,
-                        includeCamelCase: true,
-                      },
-                    }
-                  : {}),
-              };
-            }
-            if (provider === "github-copilot" && modelId.includes("claude")) {
-              return {
-                dropThinkingBlocks: true,
-              };
-            }
-            return undefined;
-          },
-        }
-      : undefined,
-  ),
-  wrapProviderStreamFn: vi.fn(() => undefined),
-}));
+vi.mock("../plugins/provider-hook-runtime.js", async () => {
+  const clearProviderRuntimePluginCacheForTest = vi.fn();
+  return {
+    clearProviderRuntimePluginCacheForTest,
+    testing: { clearProviderRuntimePluginCacheForTest },
+    prepareProviderExtraParams: vi.fn(() => undefined),
+    resolveProviderHookPlugin: vi.fn(() => undefined),
+    resolveProviderPluginsForHooks: vi.fn(() => []),
+    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+      provider === "openrouter" || provider === "github-copilot"
+        ? {
+            buildReplayPolicy: (context?: { modelId?: string | null }) => {
+              const modelId = (context?.modelId ?? "").toLowerCase();
+              if (provider === "openrouter") {
+                return {
+                  applyAssistantFirstOrderingFix: false,
+                  validateGeminiTurns: false,
+                  validateAnthropicTurns: false,
+                  ...(modelId.includes("gemini")
+                    ? {
+                        sanitizeThoughtSignatures: {
+                          allowBase64Only: true,
+                          includeCamelCase: true,
+                        },
+                      }
+                    : {}),
+                };
+              }
+              if (provider === "github-copilot" && modelId.includes("claude")) {
+                return {
+                  dropThinkingBlocks: true,
+                };
+              }
+              return undefined;
+            },
+          }
+        : undefined,
+    ),
+    wrapProviderStreamFn: vi.fn(() => undefined),
+  };
+});
 
 vi.mock("../plugins/provider-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/provider-runtime.js")>(

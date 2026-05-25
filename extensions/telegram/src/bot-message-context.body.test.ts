@@ -72,6 +72,25 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it("renders Telegram text entities before building the agent body", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        text: "Hello world docs",
+        entities: [
+          { type: "bold", offset: 6, length: 5 },
+          { type: "text_link", offset: 12, length: 4, url: "https://docs.example" },
+        ],
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Hello **world** [docs](https://docs.example)");
+    expect(result?.bodyText).toBe("Hello **world** [docs](https://docs.example)");
+  });
+
   it("keeps the media marker when a captioned video has no downloaded media", async () => {
     const result = await resolveTelegramBody({
       msg: {

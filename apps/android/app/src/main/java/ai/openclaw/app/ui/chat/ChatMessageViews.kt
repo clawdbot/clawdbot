@@ -62,7 +62,8 @@ fun ChatMessageBubble(message: ChatMessage) {
     message.content.filter { part ->
       when (part.type) {
         "text" -> !part.text.isNullOrBlank()
-        else -> part.base64 != null
+        "image" -> !part.base64.isNullOrBlank()
+        else -> false
       }
     }
 

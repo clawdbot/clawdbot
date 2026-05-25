@@ -70,6 +70,7 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -90,6 +91,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 
 internal enum class SettingsRoute {
@@ -676,12 +678,19 @@ private fun GatewaySettingsScreen(
           SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
           SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
           SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
-          SettingsMetric("Status", statusText),
+          SettingsMetric("Status", gatewayStatusLabel(statusText = statusText, isConnected = isConnected)),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
       ClawPrimaryButton(text = "Reconnect", onClick = viewModel::refreshGatewayConnection, modifier = Modifier.weight(1f))
       ClawSecondaryButton(text = "Disconnect", onClick = viewModel::disconnect, modifier = Modifier.weight(1f))
+    }
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "Clear this phone's saved gateway access and scan a fresh setup code.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+      }
     }
     ClawPanel {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -775,6 +784,23 @@ private fun AppearanceSettingsScreen(onBack: () -> Unit) {
   }
 }
 
+private fun gatewayStatusLabel(
+  statusText: String,
+  isConnected: Boolean,
+): String {
+  if (isConnected) return "Ready"
+  val status = statusText.trim().lowercase()
+  return when {
+    status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
+    status.contains("pair") -> "Pairing needed"
+    status.contains("auth") -> "Authentication needed"
+    status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
+    status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> "Cannot reach gateway"
+    status.isBlank() -> "Not connected"
+    else -> "Not connected"
+  }
+}
+
 @Composable
 private fun AboutSettingsScreen(
   viewModel: MainViewModel,
@@ -850,7 +876,7 @@ internal fun SettingsDetailFrame(
   onBack: () -> Unit,
   content: @Composable () -> Unit,
 ) {
-  ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
+  ClawScaffold(contentPadding = PaddingValues(start = ClawTheme.spacing.lg, top = 14.dp, end = ClawTheme.spacing.lg, bottom = 20.dp)) {
     LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
       item {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -863,7 +889,9 @@ internal fun SettingsDetailFrame(
         Text(text = subtitle, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
       item {
-        content()
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          content()
+        }
       }
       item {
         Spacer(modifier = Modifier.height(12.dp))
@@ -1097,11 +1125,11 @@ private fun SettingsToggleListRow(row: SettingsToggleRow) {
 
 @Composable
 internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     ClawSeparatedColumn(items = rows) { row ->
-      Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      Row(modifier = Modifier.fillMaxWidth().heightIn(min = 50.dp).padding(horizontal = 0.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
-        Text(text = row.value, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
     }
   }

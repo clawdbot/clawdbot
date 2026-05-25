@@ -423,6 +423,8 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "overview":
         await loadOverview(host);
         break;
+      case "activity":
+        break;
       case "channels":
         await loadChannelsTab(host);
         break;

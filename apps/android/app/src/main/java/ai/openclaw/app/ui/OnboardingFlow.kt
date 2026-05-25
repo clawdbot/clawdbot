@@ -23,6 +23,7 @@ import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.os.Build
+import android.os.SystemClock
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -79,6 +80,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -100,6 +102,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
+import kotlinx.coroutines.delay
 
 private enum class OnboardingStep {
   Welcome,
@@ -107,6 +110,8 @@ private enum class OnboardingStep {
   Recovery,
   Permissions,
 }
+
+private const val GATEWAY_CONNECT_SETTLING_MS = 2_500L
 
 @Composable
 fun OnboardingFlow(
@@ -123,6 +128,7 @@ fun OnboardingFlow(
     val gateways by viewModel.gateways.collectAsState()
     val savedToken by viewModel.gatewayToken.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+    val startAtGatewaySetup by viewModel.startOnboardingAtGatewaySetup.collectAsState()
     val ready = canFinishOnboarding(isConnected = isConnected, isNodeConnected = isNodeConnected)
 
     var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
@@ -134,6 +140,8 @@ fun OnboardingFlow(
     var password by rememberSaveable { mutableStateOf("") }
     var setupError by rememberSaveable { mutableStateOf<String?>(null) }
     var attemptedConnect by rememberSaveable { mutableStateOf(false) }
+    var connectAttemptStartedAtMs by rememberSaveable { mutableLongStateOf(0L) }
+    var recoveryNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
 
     val qrScannerOptions =
       remember {
@@ -146,10 +154,24 @@ fun OnboardingFlow(
 
     val permissionState = rememberPermissionState(context = context, viewModel = viewModel)
 
+    LaunchedEffect(startAtGatewaySetup) {
+      if (startAtGatewaySetup) {
+        step = OnboardingStep.Gateway
+        viewModel.clearGatewaySetupStartRequest()
+      }
+    }
+
     LaunchedEffect(ready, attemptedConnect) {
       if (attemptedConnect && ready) {
         step = OnboardingStep.Permissions
       }
+    }
+
+    LaunchedEffect(step, connectAttemptStartedAtMs) {
+      if (step != OnboardingStep.Recovery || connectAttemptStartedAtMs <= 0L) return@LaunchedEffect
+      recoveryNowMs = SystemClock.elapsedRealtime()
+      delay(GATEWAY_CONNECT_SETTLING_MS)
+      recoveryNowMs = SystemClock.elapsedRealtime()
     }
 
     pendingTrust?.let { prompt ->
@@ -250,6 +272,7 @@ fun OnboardingFlow(
 
             setupError = null
             attemptedConnect = true
+            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
             viewModel.resetGatewaySetupAuth()
             viewModel.setManualEnabled(true)
             viewModel.setManualHost(config.host)
@@ -275,10 +298,12 @@ fun OnboardingFlow(
           remoteAddress = remoteAddress,
           ready = ready,
           attemptedConnect = attemptedConnect,
+          connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
           onAutoRetry = viewModel::refreshGatewayConnection,
           onBack = { step = OnboardingStep.Gateway },
           onRetry = {
             attemptedConnect = true
+            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
             val config =
               resolveGatewayConfig(
                 setupCode = setupCode,
@@ -496,6 +521,7 @@ private fun GatewayRecoveryScreen(
   remoteAddress: String?,
   ready: Boolean,
   attemptedConnect: Boolean,
+  connectSettling: Boolean,
   onAutoRetry: () -> Unit,
   onBack: () -> Unit,
   onRetry: () -> Unit,
@@ -503,9 +529,9 @@ private fun GatewayRecoveryScreen(
   onContinue: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val pairingRequired = gatewayStatusLooksLikePairing(statusText)
+  val recoveryState = gatewayRecoveryUiState(ready = ready, statusText = statusText, connectSettling = connectSettling)
   val context = LocalContext.current
-  PairingAutoRetryEffect(enabled = pairingRequired && attemptedConnect && !ready, onRetry = onAutoRetry)
+  PairingAutoRetryEffect(enabled = recoveryState.canAutoRetry && attemptedConnect, onRetry = onAutoRetry)
 
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
@@ -513,14 +539,26 @@ private fun GatewayRecoveryScreen(
       Spacer(modifier = Modifier.height(12.dp))
       Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(
-          imageVector = if (ready) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
+          imageVector =
+            when (recoveryState) {
+              GatewayRecoveryUiState.Connected -> Icons.Default.CheckCircle
+              GatewayRecoveryUiState.Pairing -> Icons.Default.WifiTethering
+              GatewayRecoveryUiState.Finishing -> Icons.Default.WifiTethering
+              GatewayRecoveryUiState.Failed -> Icons.Default.ErrorOutline
+            },
           contentDescription = null,
           modifier = Modifier.size(64.dp),
-          tint = if (ready) ClawTheme.colors.success else ClawTheme.colors.warning,
+          tint =
+            when (recoveryState) {
+              GatewayRecoveryUiState.Connected -> ClawTheme.colors.success
+              GatewayRecoveryUiState.Pairing -> ClawTheme.colors.text
+              GatewayRecoveryUiState.Finishing -> ClawTheme.colors.text
+              GatewayRecoveryUiState.Failed -> ClawTheme.colors.warning
+            },
         )
-        Text(text = if (ready) "Connected" else "Connection failed", style = ClawTheme.type.display, color = ClawTheme.colors.text)
+        Text(text = recoveryState.title, style = ClawTheme.type.display, color = ClawTheme.colors.text)
         Text(
-          text = if (ready) "Your Gateway is ready." else "We could not reach your Gateway.\nLet's fix this.",
+          text = recoveryState.message,
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
           textAlign = TextAlign.Center,
@@ -534,18 +572,30 @@ private fun GatewayRecoveryScreen(
           Text(text = recoveryGatewayDetail(ready = ready, remoteAddress = remoteAddress, statusText = statusText), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           ClawStatusPill(
             text =
-              when {
-                ready -> "Healthy"
-                pairingRequired -> "Pairing"
-                else -> "Needs attention"
+              when (recoveryState) {
+                GatewayRecoveryUiState.Connected -> "Healthy"
+                GatewayRecoveryUiState.Pairing -> "Pairing"
+                GatewayRecoveryUiState.Finishing -> "Connecting"
+                GatewayRecoveryUiState.Failed -> "Needs attention"
               },
-            status = if (ready) ClawStatus.Success else ClawStatus.Warning,
+            status =
+              when (recoveryState) {
+                GatewayRecoveryUiState.Connected -> ClawStatus.Success
+                GatewayRecoveryUiState.Pairing -> ClawStatus.Neutral
+                GatewayRecoveryUiState.Finishing -> ClawStatus.Neutral
+                GatewayRecoveryUiState.Failed -> ClawStatus.Warning
+              },
           )
         }
       }
 
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        ClawPrimaryButton(text = if (ready) "Continue" else "Retry connection", icon = if (ready) Icons.Default.CheckCircle else Icons.Default.Refresh, onClick = if (ready) onContinue else onRetry, modifier = Modifier.fillMaxWidth())
+        ClawPrimaryButton(
+          text = if (ready) "Continue" else "Retry connection",
+          icon = if (ready) Icons.Default.CheckCircle else Icons.Default.Refresh,
+          onClick = if (ready) onContinue else onRetry,
+          modifier = Modifier.fillMaxWidth(),
+        )
         OutlinedAction(title = "Edit connection", icon = Icons.Default.Edit, onClick = onEdit)
         OutlinedAction(title = "Copy diagnostic", icon = Icons.Default.ContentCopy, onClick = { copyGatewayDiagnostic(context, statusText, serverName, remoteAddress, ready) })
       }
@@ -562,7 +612,11 @@ private fun PermissionSetupScreen(
 ) {
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.SpaceBetween) {
-      LazyColumn(contentPadding = PaddingValues(bottom = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      LazyColumn(
+        modifier = Modifier.weight(1f),
+        contentPadding = PaddingValues(bottom = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
         item {
           PermissionTopBar(onBack = onBack)
         }
@@ -822,6 +876,51 @@ private fun PermissionContinueButton(onClick: () -> Unit) {
       )
     }
   }
+}
+
+internal enum class GatewayRecoveryUiState(
+  val title: String,
+  val message: String,
+  val canAutoRetry: Boolean,
+) {
+  Connected(
+    title = "Connected",
+    message = "Your Gateway is ready.",
+    canAutoRetry = false,
+  ),
+  Pairing(
+    title = "Pairing Gateway",
+    message = "Approval is in progress.\nOpenClaw will reconnect automatically.",
+    canAutoRetry = true,
+  ),
+  Finishing(
+    title = "Finishing Setup",
+    message = "Gateway approved this phone.\nOpenClaw is bringing the node online.",
+    canAutoRetry = true,
+  ),
+  Failed(
+    title = "Connection issue",
+    message = "We could not reach your Gateway.\nLet's fix this.",
+    canAutoRetry = false,
+  ),
+}
+
+internal fun gatewayRecoveryUiState(
+  ready: Boolean,
+  statusText: String,
+  connectSettling: Boolean,
+): GatewayRecoveryUiState =
+  when {
+    ready -> GatewayRecoveryUiState.Connected
+    connectSettling -> GatewayRecoveryUiState.Finishing
+    gatewayStatusLooksLikePairing(statusText) -> GatewayRecoveryUiState.Pairing
+    gatewayStatusLooksLikePartialConnect(statusText) -> GatewayRecoveryUiState.Finishing
+    else -> GatewayRecoveryUiState.Failed
+  }
+
+internal fun gatewayStatusLooksLikePartialConnect(statusText: String): Boolean {
+  val lower = gatewayStatusForDisplay(statusText).lowercase()
+  return lower.contains("operator offline") || lower.contains("node offline")
 }
 
 private data class GatewayConfig(

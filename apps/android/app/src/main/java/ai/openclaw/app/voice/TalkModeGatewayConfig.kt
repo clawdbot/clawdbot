@@ -11,13 +11,7 @@ internal data class TalkModeGatewayConfigState(
   val mainSessionKey: String,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
-  val executionMode: TalkModeExecutionMode,
 )
-
-internal enum class TalkModeExecutionMode {
-  Native,
-  RealtimeRelay,
-}
 
 internal object TalkModeGatewayConfigParser {
   fun parse(config: JsonObject?): TalkModeGatewayConfigState {
@@ -27,20 +21,7 @@ internal object TalkModeGatewayConfigParser {
       mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
-      executionMode = resolvedExecutionMode(talk),
     )
-  }
-
-  fun resolvedExecutionMode(talk: JsonObject?): TalkModeExecutionMode {
-    val realtime = talk?.get("realtime").asObjectOrNull() ?: return TalkModeExecutionMode.Native
-    val mode = realtime["mode"].asStringOrNull()
-    val transport = realtime["transport"].asStringOrNull()
-    val brain = realtime["brain"].asStringOrNull()
-    return if (mode == "realtime" && transport == "gateway-relay" && (brain == null || brain == "agent-consult")) {
-      TalkModeExecutionMode.RealtimeRelay
-    } else {
-      TalkModeExecutionMode.Native
-    }
   }
 
   fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {

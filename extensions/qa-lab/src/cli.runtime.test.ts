@@ -859,9 +859,7 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         pack: "personal-admin",
       }),
-    ).rejects.toThrow(
-      '--pack must be one of personal-agent, observability, got "personal-admin"',
-    );
+    ).rejects.toThrow('--pack must be one of personal-agent, observability, got "personal-admin"');
   });
 
   it("rejects unknown suite CLI auth modes", async () => {
@@ -1085,6 +1083,28 @@ describe("qa cli runtime", () => {
 
     expectWriteContains(stdoutWrite, "# QA Coverage Inventory");
     expectWriteContains(stdoutWrite, "memory.recall");
+  });
+
+  it("prints a focused scenario match report from coverage metadata", async () => {
+    await runQaCoverageReportCommand({
+      repoRoot: process.cwd(),
+      match: ["image roundtrip"],
+    });
+
+    expectWriteContains(stdoutWrite, "# QA Scenario Matches");
+    expectWriteContains(stdoutWrite, "image-generation-roundtrip");
+    expectWriteContains(stdoutWrite, "--scenario image-generation-roundtrip");
+    expect(stdoutWrite.mock.calls.flat().join("")).not.toContain("memory-recall");
+  });
+
+  it("rejects scenario match queries for tool coverage reports", async () => {
+    await expect(
+      runQaCoverageReportCommand({
+        repoRoot: process.cwd(),
+        tools: true,
+        match: ["runtime"],
+      }),
+    ).rejects.toThrow("--match cannot be combined with --tools.");
   });
 
   it("prints a markdown tool coverage report from runtime tool fixtures", async () => {

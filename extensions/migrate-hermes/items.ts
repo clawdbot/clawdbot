@@ -9,7 +9,7 @@ import { readString } from "./helpers.js";
 
 export const HERMES_REASON_ALREADY_CONFIGURED = "already configured";
 export const HERMES_REASON_DEFAULT_MODEL_CONFIGURED = "default model already configured";
-export const HERMES_REASON_INCLUDE_SECRETS = "use --include-secrets to import";
+export const HERMES_REASON_INCLUDE_SECRETS = "auth credential migration not selected";
 export const HERMES_REASON_AUTH_PROFILE_EXISTS = "auth profile exists";
 export const HERMES_REASON_CONFIG_RUNTIME_UNAVAILABLE = "config runtime unavailable";
 export const HERMES_REASON_MISSING_SECRET_METADATA = "missing secret metadata";
@@ -50,9 +50,13 @@ export function createHermesSecretItem(params: {
   includeSecrets?: boolean;
   existsAlready?: boolean;
   details: {
-    envVar: string;
+    envVar?: string;
     provider: string;
     profileId: string;
+    mode?: "token";
+    sourceKind?: "hermes-env" | "opencode-auth-json";
+    sourceProvider?: string;
+    secretField?: string;
   };
 }): MigrationItem {
   const skipped = !params.includeSecrets;
@@ -74,13 +78,36 @@ export function createHermesSecretItem(params: {
   });
 }
 
-export function readHermesSecretDetails(
-  item: MigrationItem,
-): { envVar: string; provider: string; profileId: string } | undefined {
+export function readHermesSecretDetails(item: MigrationItem):
+  | {
+      envVar?: string;
+      provider: string;
+      profileId: string;
+      mode?: "token";
+      sourceKind?: string;
+      sourceProvider?: string;
+      secretField?: string;
+    }
+  | undefined {
   const envVar = readString(item.details?.envVar);
   const provider = readString(item.details?.provider);
   const profileId = readString(item.details?.profileId);
-  return envVar && provider && profileId ? { envVar, provider, profileId } : undefined;
+  if (!provider || !profileId) {
+    return undefined;
+  }
+  const mode = item.details?.mode === "token" ? "token" : undefined;
+  const sourceKind = readString(item.details?.sourceKind);
+  const sourceProvider = readString(item.details?.sourceProvider);
+  const secretField = readString(item.details?.secretField);
+  return {
+    ...(envVar ? { envVar } : {}),
+    provider,
+    profileId,
+    ...(mode ? { mode } : {}),
+    ...(sourceKind ? { sourceKind } : {}),
+    ...(sourceProvider ? { sourceProvider } : {}),
+    ...(secretField ? { secretField } : {}),
+  };
 }
 
 export function hermesItemConflict(item: MigrationItem, reason: string): MigrationItem {

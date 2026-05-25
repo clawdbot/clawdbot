@@ -128,9 +128,9 @@ function coerceTimestamp(value: unknown): number {
   return 0;
 }
 
-function sessionBranchEntryToMessage(entry: SessionBranchEntry): AgentMessage | undefined {
+function sessionBranchEntryToMessage(entry: SessionBranchEntry): unknown {
   if (entry.type === "message" && entry.message && typeof entry.message === "object") {
-    return entry.message as AgentMessage;
+    return entry.message;
   }
   if (entry.type === "custom_message") {
     return {
@@ -140,7 +140,7 @@ function sessionBranchEntryToMessage(entry: SessionBranchEntry): AgentMessage | 
       display: entry.display !== false,
       details: entry.details,
       timestamp: coerceTimestamp(entry.timestamp),
-    } as AgentMessage;
+    };
   }
   if (entry.type === "branch_summary") {
     return {
@@ -148,7 +148,7 @@ function sessionBranchEntryToMessage(entry: SessionBranchEntry): AgentMessage | 
       summary: typeof entry.summary === "string" ? entry.summary : "",
       fromId: typeof entry.fromId === "string" ? entry.fromId : "root",
       timestamp: coerceTimestamp(entry.timestamp),
-    } as AgentMessage;
+    };
   }
   return undefined;
 }
@@ -706,13 +706,10 @@ function splitPreservedRecentTurns(params: {
       continue;
     }
     const message = params.messages[i];
-    const role = (message as { role?: unknown }).role;
-    if (role !== "assistant") {
+    if (message.role !== "assistant") {
       continue;
     }
-    const toolCalls = extractToolCallsFromAssistant(
-      message as Extract<AgentMessage, { role: "assistant" }>,
-    );
+    const toolCalls = extractToolCallsFromAssistant(message);
     for (const toolCall of toolCalls) {
       preservedToolCallIds.add(toolCall.id);
     }
@@ -728,12 +725,10 @@ function splitPreservedRecentTurns(params: {
     if (preservedStartIndex >= 0) {
       for (let i = preservedStartIndex; i < params.messages.length; i += 1) {
         const message = params.messages[i];
-        if ((message as { role?: unknown }).role !== "toolResult") {
+        if (message.role !== "toolResult") {
           continue;
         }
-        const toolResultId = extractToolResultId(
-          message as Extract<AgentMessage, { role: "toolResult" }>,
-        );
+        const toolResultId = extractToolResultId(message);
         if (toolResultId && preservedToolCallIds.has(toolResultId)) {
           preservedIndexSet.add(i);
         }
@@ -824,13 +819,19 @@ function extractLatestUserAsk(messages: AgentMessage[]): string | null {
 
 /**
  * Read and format critical workspace context for compaction summary.
- * Extracts "Session Startup" and "Red Lines" from AGENTS.md.
- * Falls back to legacy names "Every Session" and "Safety".
+ * Uses explicitly configured AGENTS.md section names only.
+ * The default "Session Startup" / "Red Lines" pair preserves the legacy
+ * "Every Session" / "Safety" fallback.
  * Limited to 2000 chars to avoid bloating the summary.
  */
-async function readWorkspaceContextForSummary(): Promise<string> {
+async function readWorkspaceContextForSummary(
+  sectionNames?: string[],
+  workspaceDir = process.cwd(),
+): Promise<string> {
   const MAX_SUMMARY_CONTEXT_CHARS = 2000;
-  const workspaceDir = process.cwd();
+  if (!Array.isArray(sectionNames) || sectionNames.length === 0) {
+    return "";
+  }
   const agentsPath = path.join(workspaceDir, "AGENTS.md");
 
   try {
@@ -850,10 +851,13 @@ async function readWorkspaceContextForSummary(): Promise<string> {
         fs.closeSync(opened.fd);
       }
     })();
-    // Accept legacy section names ("Every Session", "Safety") as fallback
-    // for backward compatibility with older AGENTS.md templates.
-    let sections = extractSections(content, ["Session Startup", "Red Lines"]);
-    if (sections.length === 0) {
+    let sections = extractSections(content, sectionNames);
+    if (
+      sections.length === 0 &&
+      sectionNames.length === 2 &&
+      sectionNames.some((name) => name.trim().toLowerCase() === "session startup") &&
+      sectionNames.some((name) => name.trim().toLowerCase() === "red lines")
+    ) {
       sections = extractSections(content, ["Every Session", "Safety"]);
     }
 
@@ -981,7 +985,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           if (providerResult !== undefined) {
             // Provider succeeded — assemble suffix metadata and return.
             // No quality guard: the provider is trusted.
-            const workspaceContext = await readWorkspaceContextForSummary();
+            const workspaceContext = await readWorkspaceContextForSummary(
+              runtime?.postCompactionSections,
+              runtime?.workspaceDir,
+            );
             const suffix = assembleSuffix({
               splitTurnSection,
               preservedTurnsSection,
@@ -1268,7 +1275,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
 
       // Cap the main history body first, then append split-turn context, preserved
       // turns, diagnostics, and workspace rules so they survive truncation.
-      const workspaceContext = await readWorkspaceContextForSummary();
+      const workspaceContext = await readWorkspaceContextForSummary(
+        runtime?.postCompactionSections,
+        runtime?.workspaceDir,
+      );
       const suffix = assembleSuffix({
         splitTurnSection: lastSplitTurnSection,
         preservedTurnsSection,

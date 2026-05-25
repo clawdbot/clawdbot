@@ -512,8 +512,8 @@ export type AgentCompactionConfig = {
   memoryFlush?: AgentCompactionMemoryFlushConfig;
   /**
    * H2/H3 section names from AGENTS.md to inject after compaction.
-   * Defaults to ["Session Startup", "Red Lines"] when unset.
-   * Set to [] to disable post-compaction context injection entirely.
+   * Disabled when unset or [].
+   * Explicit ["Session Startup", "Red Lines"] preserves legacy fallback headings.
    */
   postCompactionSections?: string[];
   /** Optional model override for compaction summarization (e.g. "openrouter/anthropic/claude-sonnet-4-6").

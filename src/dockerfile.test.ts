@@ -327,15 +327,24 @@ describe("Dockerfile", () => {
   it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
-    const stateDirIndex = dockerfile.indexOf(
-      "RUN install -d -m 0700 -o node -g node \\",
+    const parentConfigDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0755 -o node -g node /home/node/.config",
       runtimeStageIndex,
+    );
+    const stateDirIndex = dockerfile.indexOf(
+      "install -d -m 0700 -o node -g node \\",
+      parentConfigDirIndex,
     );
     const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
 
     expect(runtimeStageIndex).toBeGreaterThan(-1);
+    // Regression: /home/node/.config parent must be created with node ownership
+    // before the leaf .config/openclaw dir (issue #85968).
+    expect(parentConfigDirIndex).toBeGreaterThan(-1);
     expect(stateDirIndex).toBeGreaterThan(-1);
     expect(userIndex).toBeGreaterThan(-1);
+    expect(parentConfigDirIndex).toBeGreaterThan(runtimeStageIndex);
+    expect(parentConfigDirIndex).toBeLessThan(stateDirIndex);
     expect(stateDirIndex).toBeGreaterThan(runtimeStageIndex);
     expect(stateDirIndex).toBeLessThan(userIndex);
     expect(dockerfile).not.toContain("mkdir -p /home/node/.openclaw");
@@ -346,6 +355,10 @@ describe("Dockerfile", () => {
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700'",
+    );
+    // Regression: assert parent /home/node/.config is also node-owned (issue #85968).
+    expect(dockerfile).toContain(
+      "stat -c '%U:%G %a' /home/node/.config | grep -qx 'node:node 755'",
     );
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'",

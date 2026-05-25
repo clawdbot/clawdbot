@@ -26,7 +26,8 @@ import {
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
-import { createUiVitestConfig, unitUiIncludePatterns } from "./vitest/vitest.ui.config.ts";
+import { unitUiIncludePatterns } from "./vitest/vitest.ui-paths.mjs";
+import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";

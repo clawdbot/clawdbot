@@ -108,7 +108,15 @@ async function loadTelegramMonitorWebhookRuntime() {
 }
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const log = opts.runtime?.error ?? console.error;
+  const logInfo = (line: string) => (opts.runtime?.log ?? console.log)(line);
+  const logError = (line: string) => (opts.runtime?.error ?? console.error)(line);
+  const log = (line: string) => {
+    if (line.includes("[telegram][diag]")) {
+      logInfo(line);
+      return;
+    }
+    logError(line);
+  };
   let pollingSession: TelegramPollingSessionInstance | undefined;
 
   const handlePollingNetworkFailure = (err: unknown, label: string) => {
@@ -231,7 +239,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           try {
             await deleteTelegramUpdateOffset({ accountId: account.accountId });
           } catch (err) {
-            (opts.runtime?.error ?? console.error)(
+            logError(
               `telegram: failed to delete stale update offset after rotation: ${String(err)}`,
             );
           }
@@ -261,9 +269,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
             botToken: token,
           });
         } catch (err) {
-          (opts.runtime?.error ?? console.error)(
-            `telegram: failed to persist update offset: ${String(err)}`,
-          );
+          logError(`telegram: failed to persist update offset: ${String(err)}`);
         }
       };
 

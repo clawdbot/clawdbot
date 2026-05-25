@@ -1,5 +1,45 @@
 import { spawnSync } from "node:child_process";
 
+type ProcessTreeSnapshot = {
+  childrenByParent: Map<number, number[]>;
+  cpuByPid: Map<number, number>;
+  rssByPid: Map<number, number>;
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parsePositiveInteger(value: unknown): number | null {
+  const raw = typeof value === "string" ? value.trim() : value;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: unknown): number | null {
+  const raw = typeof value === "string" ? value.trim() : value;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
+function parseNonNegativeNumber(value: unknown): number | null {
+  const raw = typeof value === "string" ? value.trim() : value;
+  if (raw === "") {
+    return null;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
 export function parsePsCpuTimeMs(raw: string): number | null {
   const parts = raw.trim().split(":").map(Number);
   if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
@@ -26,14 +66,135 @@ export function parsePsRssBytes(raw: string): number | null {
   return Math.round(rssKiB * 1024);
 }
 
-export function readProcessTreeCpuMs(rootPid: number | null | undefined): number | null {
-  if (
-    typeof rootPid !== "number" ||
-    !Number.isInteger(rootPid) ||
-    rootPid <= 0 ||
-    process.platform === "win32"
-  ) {
+export function parseWindowsProcessCpuTimeMs(params: {
+  kernelModeTime: unknown;
+  userModeTime: unknown;
+}): number | null {
+  const kernelModeTime = parseNonNegativeNumber(params.kernelModeTime);
+  const userModeTime = parseNonNegativeNumber(params.userModeTime);
+  if (kernelModeTime === null || userModeTime === null) {
     return null;
+  }
+  return Math.round((kernelModeTime + userModeTime) / 10_000);
+}
+
+export function parseWindowsWorkingSetBytes(raw: unknown): number | null {
+  const parsed = parseNonNegativeNumber(raw);
+  return parsed === null ? null : Math.round(parsed);
+}
+
+export function parseWindowsProcessTreeSnapshot(raw: string): ProcessTreeSnapshot | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const entries = Array.isArray(parsed) ? parsed : isPlainObject(parsed) ? [parsed] : [];
+  if (entries.length === 0) {
+    return null;
+  }
+
+  const childrenByParent = new Map<number, number[]>();
+  const cpuByPid = new Map<number, number>();
+  const rssByPid = new Map<number, number>();
+  for (const entry of entries) {
+    if (!isPlainObject(entry)) {
+      continue;
+    }
+    const pid = parsePositiveInteger(entry.ProcessId);
+    const ppid = parseNonNegativeInteger(entry.ParentProcessId);
+    if (pid === null || ppid === null) {
+      continue;
+    }
+
+    const children = childrenByParent.get(ppid) ?? [];
+    children.push(pid);
+    childrenByParent.set(ppid, children);
+
+    const cpuMs = parseWindowsProcessCpuTimeMs({
+      kernelModeTime: entry.KernelModeTime,
+      userModeTime: entry.UserModeTime,
+    });
+    if (cpuMs !== null) {
+      cpuByPid.set(pid, cpuMs);
+    }
+
+    const rssBytes = parseWindowsWorkingSetBytes(entry.WorkingSetSize);
+    if (rssBytes !== null) {
+      rssByPid.set(pid, rssBytes);
+    }
+  }
+
+  return {
+    childrenByParent,
+    cpuByPid,
+    rssByPid,
+  };
+}
+
+function collectProcessTreeMetric(
+  rootPid: number,
+  childrenByParent: Map<number, number[]>,
+  metricByPid: Map<number, number>,
+): number | null {
+  if (!metricByPid.has(rootPid)) {
+    return null;
+  }
+
+  let total = 0;
+  const seen = new Set<number>();
+  const stack: number[] = [rootPid];
+  while (stack.length > 0) {
+    const pid = stack.pop();
+    if (pid === undefined || seen.has(pid)) {
+      continue;
+    }
+    seen.add(pid);
+    total += metricByPid.get(pid) ?? 0;
+    for (const childPid of childrenByParent.get(pid) ?? []) {
+      stack.push(childPid);
+    }
+  }
+  return total;
+}
+
+function readWindowsProcessTreeSnapshot(): ProcessTreeSnapshot | null {
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      [
+        "$ErrorActionPreference='Stop';",
+        "Get-CimInstance Win32_Process |",
+        "Select-Object ProcessId,ParentProcessId,KernelModeTime,UserModeTime,WorkingSetSize |",
+        "ConvertTo-Json -Compress",
+      ].join(" "),
+    ],
+    {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return parseWindowsProcessTreeSnapshot(result.stdout);
+}
+
+export function readProcessTreeCpuMs(rootPid: number | null | undefined): number | null {
+  if (typeof rootPid !== "number" || !Number.isInteger(rootPid) || rootPid <= 0) {
+    return null;
+  }
+  if (process.platform === "win32") {
+    const snapshot = readWindowsProcessTreeSnapshot();
+    return snapshot
+      ? collectProcessTreeMetric(rootPid, snapshot.childrenByParent, snapshot.cpuByPid)
+      : null;
   }
   const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
     encoding: "utf8",
@@ -66,31 +227,18 @@ export function readProcessTreeCpuMs(rootPid: number | null | undefined): number
     return null;
   }
 
-  let totalCpuMs = 0;
-  const seen = new Set<number>();
-  const stack: number[] = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (pid === undefined || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalCpuMs += cpuByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalCpuMs;
+  return collectProcessTreeMetric(rootPid, childrenByParent, cpuByPid);
 }
 
 export function readProcessTreeRssBytes(rootPid: number | null | undefined): number | null {
-  if (
-    typeof rootPid !== "number" ||
-    !Number.isInteger(rootPid) ||
-    rootPid <= 0 ||
-    process.platform === "win32"
-  ) {
+  if (typeof rootPid !== "number" || !Number.isInteger(rootPid) || rootPid <= 0) {
     return null;
+  }
+  if (process.platform === "win32") {
+    const snapshot = readWindowsProcessTreeSnapshot();
+    return snapshot
+      ? collectProcessTreeMetric(rootPid, snapshot.childrenByParent, snapshot.rssByPid)
+      : null;
   }
   const result = spawnSync("ps", ["-eo", "pid=,ppid=,rss="], {
     encoding: "utf8",
@@ -123,19 +271,5 @@ export function readProcessTreeRssBytes(rootPid: number | null | undefined): num
     return null;
   }
 
-  let totalRssBytes = 0;
-  const seen = new Set<number>();
-  const stack: number[] = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (pid === undefined || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalRssBytes += rssByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalRssBytes;
+  return collectProcessTreeMetric(rootPid, childrenByParent, rssByPid);
 }

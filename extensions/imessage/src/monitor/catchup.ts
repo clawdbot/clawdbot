@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import type { FileLockOptions } from "openclaw/plugin-sdk/file-lock";
+import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -27,6 +29,17 @@ const MAX_MAX_FAILURE_RETRIES = 1_000;
 // should not balloon the cursor file. When over the bound, keep only the
 // highest-count entries (closest to give-up) and drop the rest.
 const MAX_FAILURE_RETRY_MAP_SIZE = 5_000;
+const CATCHUP_CURSOR_LOCK_OPTIONS: FileLockOptions = {
+  retries: {
+    retries: 6,
+    factor: 1.35,
+    minTimeout: 8,
+    maxTimeout: 180,
+    randomize: true,
+  },
+  stale: 60_000,
+};
+const cursorWriteQueues = new Map<string, Promise<unknown>>();
 
 export type IMessageCatchupConfig = {
   enabled?: boolean;
@@ -68,6 +81,7 @@ export type IMessageCatchupRow = {
 
 export type IMessageCatchupSummary = {
   querySucceeded: boolean;
+  fullyCaughtUp: boolean;
   fetchedCount: number;
   replayed: number;
   skippedFromMe: number;
@@ -114,6 +128,20 @@ function resolveCursorFilePath(accountId: string): string {
   return path.join(resolveStateDirFromEnv(), "imessage", "catchup", `${safePrefix}__${hash}.json`);
 }
 
+function enqueueCursorWrite<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
+  const prev = cursorWriteQueues.get(filePath) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  cursorWriteQueues.set(filePath, next);
+  next
+    .finally(() => {
+      if (cursorWriteQueues.get(filePath) === next) {
+        cursorWriteQueues.delete(filePath);
+      }
+    })
+    .catch(() => {});
+  return next;
+}
+
 function sanitizeFailureRetriesInput(raw: unknown): Record<string, number> {
   if (!raw || typeof raw !== "object") {
     return {};
@@ -141,6 +169,12 @@ export async function loadIMessageCatchupCursor(
   accountId: string,
 ): Promise<IMessageCatchupCursor | null> {
   const filePath = resolveCursorFilePath(accountId);
+  return await loadIMessageCatchupCursorFromPath(filePath);
+}
+
+async function loadIMessageCatchupCursorFromPath(
+  filePath: string,
+): Promise<IMessageCatchupCursor | null> {
   const { value } = await readJsonFileWithFallback<IMessageCatchupCursor | null>(filePath, null);
   if (!value || typeof value !== "object") {
     return null;
@@ -166,6 +200,13 @@ export async function saveIMessageCatchupCursor(
   next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
 ): Promise<void> {
   const filePath = resolveCursorFilePath(accountId);
+  await saveIMessageCatchupCursorToPath(filePath, next);
+}
+
+async function saveIMessageCatchupCursorToPath(
+  filePath: string,
+  next: { lastSeenMs: number; lastSeenRowid: number; failureRetries?: Record<string, number> },
+): Promise<void> {
   const sanitized = sanitizeFailureRetriesInput(next.failureRetries);
   const hasRetries = Object.keys(sanitized).length > 0;
   const cursor: IMessageCatchupCursor = {
@@ -259,6 +300,12 @@ export type CatchupFetchFn = (params: {
   highWatermarkRowid?: number;
   /** Companion to `highWatermarkRowid` — highest `date` seen in the raw response. */
   highWatermarkMs?: number;
+  /**
+   * True when the fetcher reached every eligible source row for this pass.
+   * False means a best-effort partial pass occurred (for example one chat
+   * history fetch failed, or the global cap left rows for a later startup).
+   */
+  fullyCaughtUp?: boolean;
 }>;
 
 export type CatchupDispatchFn = (row: IMessageCatchupRow) => Promise<{ ok: boolean }>;
@@ -272,6 +319,40 @@ export type PerformCatchupParams = {
   log?: (message: string) => void;
   warn?: (message: string) => void;
 };
+
+export async function advanceIMessageCatchupCursor(
+  accountId: string,
+  next: { lastSeenMs: number; lastSeenRowid: number },
+  config: ResolvedCatchupConfig,
+): Promise<boolean> {
+  if (!Number.isFinite(next.lastSeenMs) || !Number.isFinite(next.lastSeenRowid)) {
+    return false;
+  }
+
+  const filePath = resolveCursorFilePath(accountId);
+  return await enqueueCursorWrite(filePath, () =>
+    withFileLock(filePath, CATCHUP_CURSOR_LOCK_OPTIONS, async () => {
+      const cursor = await loadIMessageCatchupCursorFromPath(filePath);
+      if (cursor && next.lastSeenRowid <= cursor.lastSeenRowid) {
+        return false;
+      }
+
+      const blockingFailure = Object.values(cursor?.failureRetries ?? {}).some(
+        (count) => count < config.maxFailureRetries,
+      );
+      if (blockingFailure) {
+        return false;
+      }
+
+      await saveIMessageCatchupCursorToPath(filePath, {
+        lastSeenMs: Math.max(cursor?.lastSeenMs ?? next.lastSeenMs, next.lastSeenMs),
+        lastSeenRowid: next.lastSeenRowid,
+        failureRetries: cursor?.failureRetries,
+      });
+      return true;
+    }),
+  );
+}
 
 /**
  * One catchup pass. Loads the cursor, fetches `messages.history`, replays
@@ -299,6 +380,7 @@ export async function performIMessageCatchup(
 
   const summary: IMessageCatchupSummary = {
     querySucceeded: false,
+    fullyCaughtUp: false,
     fetchedCount: 0,
     replayed: 0,
     skippedFromMe: 0,
@@ -333,6 +415,7 @@ export async function performIMessageCatchup(
     return summary;
   }
   summary.querySucceeded = true;
+  summary.fullyCaughtUp = fetchResult.fullyCaughtUp !== false;
   summary.fetchedCount = fetchResult.rows.length;
 
   // Stable order: process oldest-first so the cursor advances monotonically

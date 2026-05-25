@@ -29,6 +29,7 @@ describe("iconForTab", () => {
     expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, iconForTab(tab)]))).toEqual({
       chat: "messageSquare",
       overview: "barChart",
+      activity: "activity",
       channels: "link",
       instances: "radio",
       sessions: "fileText",
@@ -61,6 +62,7 @@ describe("titleForTab", () => {
     expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, titleForTab(tab)]))).toEqual({
       chat: "Chat",
       overview: "Overview",
+      activity: "Activity",
       channels: "Channels",
       instances: "Instances",
       sessions: "Sessions",
@@ -87,6 +89,7 @@ describe("subtitleForTab", () => {
     expect(Object.fromEntries(ALL_TABS.map((tab) => [tab, subtitleForTab(tab)]))).toEqual({
       chat: "Gateway chat for quick interventions.",
       overview: "Status, entry points, health.",
+      activity: "Browser-local tool activity summaries.",
       channels: "Channels and settings.",
       instances: "Connected clients and nodes.",
       sessions: "Active sessions and defaults.",
@@ -162,6 +165,7 @@ describe("tabFromPath", () => {
   it("returns tab for valid path", () => {
     expect(tabFromPath("/chat")).toBe("chat");
     expect(tabFromPath("/overview")).toBe("overview");
+    expect(tabFromPath("/activity")).toBe("activity");
     expect(tabFromPath("/sessions")).toBe("sessions");
     expect(tabFromPath("/dreaming")).toBe("dreams");
     expect(tabFromPath("/dreams")).toBe("dreams");

@@ -5,7 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import { parseToolSummary } from "../usage-helpers.ts";
 import { charsToTokens, formatCost, formatTokens } from "./usage-metrics.ts";
 import { renderInsightList } from "./usage-render-overview.ts";
-import {
+import type {
   SessionLogEntry,
   SessionLogRole,
   TimeSeriesPoint,

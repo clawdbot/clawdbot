@@ -152,6 +152,30 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain("-InstallMethod git -Tag main");
   });
 
+  it("does not read project npmrc when choosing global install freshness args", () => {
+    const rawKeyBody = extractFunctionBody(source, "Test-NpmConfigRawKey");
+    expect(rawKeyBody).not.toContain("Get-Location");
+    expect(rawKeyBody).not.toContain('Join-Path (Get-Location) ".npmrc"');
+  });
+
+  it("preserves the min-release-age probe status before raw npmrc detection", () => {
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
+    const probeStatusCapture = npmInstallBody.indexOf("$minReleaseAgeStatus = $LASTEXITCODE");
+    const rawKeyProbe = npmInstallBody.indexOf("Test-NpmConfigRawKey -Key");
+    expect(probeStatusCapture).toBeGreaterThan(-1);
+    expect(rawKeyProbe).toBeGreaterThan(-1);
+    expect(probeStatusCapture).toBeLessThan(rawKeyProbe);
+    expect(npmInstallBody).toContain(
+      "} elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge",
+    );
+    expect(npmInstallBody).toContain(
+      'Invoke-NpmCommand -Arguments @("config", "get", "min-release-age", "--global")',
+    );
+    expect(npmInstallBody).toContain(
+      'Invoke-NpmCommand -Arguments @("config", "get", "before", "--global")',
+    );
+  });
+
   it("preserves caller-relative local tarball install specs before safe-cwd npm calls", () => {
     const resolveSpecBody = extractFunctionBody(source, "Resolve-NpmOpenClawInstallSpec");
     const localSpecBody = extractFunctionBody(source, "Resolve-LocalNpmPackageInstallSpec");

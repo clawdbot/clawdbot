@@ -41,6 +41,7 @@ export type OutputRuntimeEnv = {
 export interface PathCommandOptions {
   readonly json?: boolean;
   readonly human?: boolean;
+  readonly valueJson?: boolean;
   readonly cwd?: string;
   readonly file?: string;
   readonly dryRun?: boolean;
@@ -334,7 +335,9 @@ export async function pathSetCommand(
   const oldBytes = await fs.readFile(fsPath, "utf-8");
   const ast = await loadAst(fsPath, ocPath.file);
 
-  const result = catchSentinel("set", runtime, mode, () => setOcPath(ast, ocPath, value));
+  const result = catchSentinel("set", runtime, mode, () =>
+    setOcPath(ast, ocPath, value, { valueJson: options.valueJson === true }),
+  );
   if (result === null) {
     return;
   }
@@ -553,6 +556,7 @@ export function registerPathCli(program: Command): void {
       .description("Write a leaf value at an oc:// path")
       .argument("<oc-path>", "oc:// path to write")
       .argument("<value>", "string value to write")
+      .option("--value-json", "Parse <value> as JSON for JSON/JSONC/JSONL leaf replacement")
       .option("--dry-run", "Print bytes without writing")
       .option("--diff", "With --dry-run, print a unified diff instead of full bytes"),
   ).action(async (pathStr: string, value: string, opts: PathCommandOptions) => {

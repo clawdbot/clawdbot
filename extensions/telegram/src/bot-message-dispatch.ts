@@ -11,6 +11,11 @@ import {
   removeAckReactionAfterReply,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  formatInboundEnvelope,
+  resolveEnvelopeFormatOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
+import {
   createChannelMessageReplyPipeline,
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-message";
@@ -54,6 +59,7 @@ import {
   sleepWithAbort,
 } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramConfigReasoningDefault } from "./agent-config.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMessageContext } from "./bot-message-context.js";
@@ -79,7 +85,16 @@ import {
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
-import { getTelegramTextParts, resolveTelegramReplyId } from "./bot/helpers.js";
+import {
+  buildTelegramGroupPeerId,
+  buildTelegramGroupFrom,
+  buildTelegramInboundOriginTarget,
+  buildGroupLabel,
+  buildTypingThreadParams,
+  getTelegramTextParts,
+  resolveTelegramReplyId,
+  type TelegramThreadSpec,
+} from "./bot/helpers.js";
 import {
   addTelegramNativeQuoteCandidate,
   buildTelegramNativeQuoteCandidate,
@@ -372,6 +387,7 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
 }
 
 const MAX_PROGRESS_MARKDOWN_TEXT_CHARS = 300;
+const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
 function clipProgressMarkdownText(text: string): string {
   if (text.length <= MAX_PROGRESS_MARKDOWN_TEXT_CHARS) {
@@ -389,6 +405,266 @@ function formatProgressAsMarkdownCode(text: string): string {
   return `\`${sanitizeProgressMarkdownText(clipped)}\``;
 }
 
+function normalizeTelegramThreadId(value: unknown): number | undefined {
+  const raw =
+    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(raw)) {
+    return undefined;
+  }
+  const normalized = Math.trunc(raw);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function resolveTelegramForumThreadScopeFromSessionKey(
+  sessionKey: unknown,
+): { chatId: string; threadId: number } | undefined {
+  if (typeof sessionKey !== "string") {
+    return undefined;
+  }
+  const match = /:telegram:group:(-?\d+):topic:(\d+)(?::|$)/.exec(sessionKey);
+  const threadId = normalizeTelegramThreadId(match?.[2]);
+  if (!match?.[1] || threadId == null) {
+    return undefined;
+  }
+  return { chatId: match[1], threadId };
+}
+
+function resolveDispatchTelegramThreadSpec(params: {
+  chatId: TelegramMessageContext["chatId"];
+  ctxPayload: TelegramMessageContext["ctxPayload"];
+  threadSpec: TelegramThreadSpec;
+}): TelegramThreadSpec {
+  if (
+    params.threadSpec.scope !== "forum" ||
+    (params.threadSpec.id != null && params.threadSpec.id !== TELEGRAM_GENERAL_TOPIC_ID)
+  ) {
+    return params.threadSpec;
+  }
+  const scopedThread = resolveTelegramForumThreadScopeFromSessionKey(params.ctxPayload.SessionKey);
+  const scopedThreadId =
+    scopedThread?.chatId === String(params.chatId) ? scopedThread.threadId : undefined;
+  const payloadThreadId =
+    normalizeTelegramThreadId(params.ctxPayload.MessageThreadId) ??
+    normalizeTelegramThreadId(params.ctxPayload.TransportThreadId);
+  // Missing forum IDs are normalized to General; topic-scoped turn facts are more specific.
+  const recoveredThreadId = scopedThreadId ?? payloadThreadId;
+  return recoveredThreadId == null || recoveredThreadId === params.threadSpec.id
+    ? params.threadSpec
+    : { ...params.threadSpec, id: recoveredThreadId };
+}
+
+function extractCurrentTelegramBody(body: string | undefined): string {
+  if (!body) {
+    return "";
+  }
+  const markerIndex = body.lastIndexOf(CURRENT_MESSAGE_MARKER);
+  if (markerIndex === -1) {
+    return body;
+  }
+  return body.slice(markerIndex + CURRENT_MESSAGE_MARKER.length).trimStart();
+}
+
+function buildRecoveredTelegramBody(params: {
+  cfg: OpenClawConfig;
+  context: TelegramMessageContext;
+  currentMessage: string;
+  historyKey?: string;
+  threadSpec: TelegramThreadSpec;
+}): string {
+  if (!params.context.isGroup || !params.historyKey || params.context.historyLimit <= 0) {
+    return params.currentMessage;
+  }
+  const groupLabel = buildGroupLabel(
+    params.context.msg,
+    params.context.chatId,
+    params.threadSpec.id,
+  );
+  const envelopeOptions = resolveEnvelopeFormatOptions(params.cfg);
+  return createChannelHistoryWindow({
+    historyMap: params.context.groupHistories,
+  }).buildPendingContext({
+    historyKey: params.historyKey,
+    limit: params.context.historyLimit,
+    currentMessage: params.currentMessage,
+    formatEntry: (entry) =>
+      formatInboundEnvelope({
+        channel: "Telegram",
+        from: groupLabel,
+        timestamp: entry.timestamp,
+        body: `${entry.body} [id:${entry.messageId ?? "unknown"} chat:${params.context.chatId}]`,
+        chatType: "group",
+        senderLabel: entry.sender,
+        envelope: envelopeOptions,
+      }),
+  });
+}
+
+function buildRecoveredTelegramChatActionSender(params: {
+  context: TelegramMessageContext;
+  threadId?: number;
+  action: "typing" | "record_voice";
+}): () => Promise<void> {
+  return async () => {
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "sendChatAction",
+        fn: () =>
+          params.context.sendChatActionHandler.sendChatAction(
+            params.context.chatId,
+            params.action,
+            buildTypingThreadParams(params.threadId),
+          ),
+      });
+    } catch (err) {
+      if (params.action !== "record_voice") {
+        throw err;
+      }
+      logVerbose(
+        `telegram record_voice cue failed for chat ${params.context.chatId}: ${String(err)}`,
+      );
+    }
+  };
+}
+
+function migrateRecoveredTelegramRoomEventHistory(params: {
+  context: TelegramMessageContext;
+  recoveredHistoryKey?: string;
+}) {
+  const originalHistoryKey = params.context.historyKey;
+  const recoveredHistoryKey = params.recoveredHistoryKey;
+  if (
+    !params.context.isGroup ||
+    params.context.ctxPayload.InboundEventKind !== "room_event" ||
+    !originalHistoryKey ||
+    !recoveredHistoryKey ||
+    originalHistoryKey === recoveredHistoryKey ||
+    params.context.historyLimit <= 0
+  ) {
+    return;
+  }
+  const originalEntries = params.context.groupHistories.get(originalHistoryKey);
+  if (!originalEntries?.length) {
+    return;
+  }
+  const messageId = params.context.ctxPayload.MessageSid;
+  const rawBody = params.context.ctxPayload.RawBody;
+  const entryIndex = originalEntries.findLastIndex((entry) => {
+    if (messageId && entry.messageId === messageId) {
+      return true;
+    }
+    return !messageId && typeof rawBody === "string" && entry.body === rawBody;
+  });
+  if (entryIndex === -1) {
+    return;
+  }
+  const [entry] = originalEntries.splice(entryIndex, 1);
+  if (!entry) {
+    return;
+  }
+  createChannelHistoryWindow({
+    historyMap: params.context.groupHistories,
+  }).record({
+    historyKey: recoveredHistoryKey,
+    limit: params.context.historyLimit,
+    entry,
+  });
+}
+
+function resolveDispatchTelegramContext(params: {
+  cfg: OpenClawConfig;
+  context: TelegramMessageContext;
+}): TelegramMessageContext {
+  const threadSpec = resolveDispatchTelegramThreadSpec({
+    chatId: params.context.chatId,
+    ctxPayload: params.context.ctxPayload,
+    threadSpec: params.context.threadSpec,
+  });
+  if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
+    return params.context;
+  }
+  const recoveredRoutingTarget = buildTelegramInboundOriginTarget(
+    params.context.chatId,
+    threadSpec,
+  );
+  const recoveredFrom = params.context.isGroup
+    ? buildTelegramGroupFrom(params.context.chatId, threadSpec.id)
+    : params.context.ctxPayload.From;
+  const recoveredUpdateLastRoute =
+    params.context.turn.record.updateLastRoute && threadSpec.id != null
+      ? {
+          ...params.context.turn.record.updateLastRoute,
+          to: `telegram:${params.context.chatId}:topic:${threadSpec.id}`,
+          threadId: String(threadSpec.id),
+        }
+      : params.context.turn.record.updateLastRoute;
+  const recoveredHistoryKey = params.context.isGroup
+    ? buildTelegramGroupPeerId(params.context.chatId, threadSpec.id)
+    : params.context.historyKey;
+  migrateRecoveredTelegramRoomEventHistory({
+    context: params.context,
+    recoveredHistoryKey,
+  });
+  const recoveredInboundHistory =
+    params.context.isGroup && recoveredHistoryKey && params.context.historyLimit > 0
+      ? createChannelHistoryWindow({
+          historyMap: params.context.groupHistories,
+        }).buildInboundHistory({
+          historyKey: recoveredHistoryKey,
+          limit: params.context.historyLimit,
+        })
+      : params.context.ctxPayload.InboundHistory;
+  const recoveredBodyForAgent = extractCurrentTelegramBody(
+    params.context.ctxPayload.BodyForAgent ?? params.context.ctxPayload.Body,
+  );
+  const recoveredBody = buildRecoveredTelegramBody({
+    cfg: params.cfg,
+    context: params.context,
+    currentMessage: recoveredBodyForAgent,
+    historyKey: recoveredHistoryKey,
+    threadSpec,
+  });
+  const recoveredSendTyping = buildRecoveredTelegramChatActionSender({
+    context: params.context,
+    threadId: threadSpec.id,
+    action: "typing",
+  });
+  const recoveredSendRecordVoice = buildRecoveredTelegramChatActionSender({
+    context: params.context,
+    threadId: threadSpec.id,
+    action: "record_voice",
+  });
+  return {
+    ...params.context,
+    historyKey: recoveredHistoryKey,
+    threadSpec,
+    resolvedThreadId: threadSpec.id,
+    replyThreadId: threadSpec.id,
+    sendTyping: recoveredSendTyping,
+    sendRecordVoice: recoveredSendRecordVoice,
+    turn: {
+      ...params.context.turn,
+      record: {
+        ...params.context.turn.record,
+        updateLastRoute: recoveredUpdateLastRoute,
+      },
+    },
+    ctxPayload:
+      threadSpec.id == null
+        ? params.context.ctxPayload
+        : {
+            ...params.context.ctxPayload,
+            Body: recoveredBody,
+            BodyForAgent: recoveredBodyForAgent,
+            From: recoveredFrom,
+            InboundHistory: recoveredInboundHistory,
+            MessageThreadId: threadSpec.id,
+            OriginatingTo: recoveredRoutingTarget,
+            To: recoveredRoutingTarget,
+            TransportThreadId: threadSpec.id,
+          },
+  };
+}
+
 export const dispatchTelegramMessage = async ({
   context,
   bot,
@@ -402,6 +678,7 @@ export const dispatchTelegramMessage = async ({
   opts,
 }: DispatchTelegramMessageParams) => {
   const dispatchStartedAt = Date.now();
+  const dispatchContext = resolveDispatchTelegramContext({ cfg, context });
   const telegramDeps =
     injectedTelegramDeps ?? (await import("./bot-deps.js")).defaultTelegramBotDeps;
   const loadFreshSessionStore = createFreshTelegramSessionStoreLoader({ cfg, telegramDeps });
@@ -424,7 +701,7 @@ export const dispatchTelegramMessage = async ({
     reactionApi,
     removeAckAfterReply,
     statusReactionController: rawStatusReactionController,
-  } = context;
+  } = dispatchContext;
   const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
   const statusReactionController = isRoomEvent ? null : rawStatusReactionController;
   const statusReactionTiming = {
@@ -1343,7 +1620,7 @@ export const dispatchTelegramMessage = async ({
       const turnResult = await runInboundReplyTurn({
         channel: "telegram",
         accountId: route.accountId,
-        raw: context,
+        raw: dispatchContext,
         adapter: {
           ingest: () => ({
             id: ctxPayload.MessageSid ?? `${chatId}:${Date.now()}`,
@@ -1351,16 +1628,16 @@ export const dispatchTelegramMessage = async ({
             rawText: ctxPayload.RawBody ?? "",
             textForAgent: ctxPayload.BodyForAgent,
             textForCommands: ctxPayload.CommandBody,
-            raw: context,
+            raw: dispatchContext,
           }),
           resolveTurn: () => ({
             channel: "telegram",
             accountId: route.accountId,
             routeSessionKey: route.sessionKey,
-            storePath: context.turn.storePath,
+            storePath: dispatchContext.turn.storePath,
             ctxPayload,
-            recordInboundSession: context.turn.recordInboundSession,
-            record: context.turn.record,
+            recordInboundSession: dispatchContext.turn.recordInboundSession,
+            record: dispatchContext.turn.record,
             runDispatch: () => {
               const sentBlockMediaUrls = new Set<string>();
 

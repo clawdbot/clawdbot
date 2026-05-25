@@ -11,6 +11,7 @@ import {
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import {
   type PluginManifestRecord,
@@ -265,10 +266,15 @@ function collectPluginIdsForConfiguredChannel(
   return [claims[0]?.plugin.id ?? builtInId ?? normalizedChannelId];
 }
 
-function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState());
+function collectConfiguredChannelIds(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+  discovery?: PluginDiscoveryResult,
+): string[] {
+  const configuredStateChannelIds = new Set(listBundledChannelIdsWithConfiguredState(discovery));
   return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
     includePersistedAuthState: false,
+    discovery,
   })
     .map((signal) => ({
       source: signal.source,
@@ -281,6 +287,7 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
         channelId,
         source,
         configuredStateChannelIds,
+        discovery,
       }),
     )
     .map(({ channelId }) => channelId);
@@ -292,6 +299,7 @@ function isAutoEnableConfiguredChannelSignal(params: {
   channelId: string;
   source: ChannelPresenceSignalSource;
   configuredStateChannelIds: ReadonlySet<string>;
+  discovery?: PluginDiscoveryResult;
 }): boolean {
   if (
     params.source === "env" &&
@@ -300,6 +308,7 @@ function isAutoEnableConfiguredChannelSignal(params: {
       channelId: params.channelId,
       cfg: params.cfg,
       env: params.env,
+      discovery: params.discovery,
     })
   ) {
     return false;
@@ -535,6 +544,7 @@ export function configMayNeedPluginAutoEnable(
 export function resolvePluginAutoEnableReadiness(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  discovery?: PluginDiscoveryResult,
 ): { mayNeedAutoEnable: boolean; configuredChannelIds: string[] } {
   if (arePluginsGloballyDisabled(cfg)) {
     return { mayNeedAutoEnable: false, configuredChannelIds: [] };
@@ -545,7 +555,7 @@ export function resolvePluginAutoEnableReadiness(
   if (hasConfiguredPluginConfigEntry(cfg)) {
     return { mayNeedAutoEnable: true, configuredChannelIds: [] };
   }
-  const configuredChannelIds = collectConfiguredChannelIds(cfg, env);
+  const configuredChannelIds = collectConfiguredChannelIds(cfg, env, discovery);
   if (configuredChannelIds.length > 0) {
     return { mayNeedAutoEnable: true, configuredChannelIds };
   }

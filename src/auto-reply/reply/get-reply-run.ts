@@ -75,7 +75,14 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptEnvelope, buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import {
+  abortReplyRunBySessionId,
+  isReplyRunActiveForSessionId,
+  isReplyRunStreamingForSessionId,
+  resolveActiveReplyRunSessionId,
+  waitForReplyRunEndBySessionId,
+  type ReplyOperation,
+} from "./reply-run-registry.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
@@ -93,6 +100,11 @@ type InternalGetReplyOptions = GetReplyOptions & {
    * diagnostic/abort ownership as the eventual agent run.
    */
   replyOperation?: ReplyOperation;
+  /**
+   * Source-owned abort signal to persist with queued room-event followups. This
+   * can differ from abortSignal when dispatch temporarily borrows an active lane.
+   */
+  queuedFollowupAbortSignal?: AbortSignal;
 };
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -964,20 +976,37 @@ export async function runPreparedReply(
   );
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
+  const resolveActiveReplyOperationSessionId = () =>
+    sessionKey ? resolveActiveReplyRunSessionId(sessionKey) : undefined;
   const resolveActiveQueueSessionId = () =>
-    piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ?? preparedSessionState.sessionId;
+    piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey) ??
+    resolveActiveReplyOperationSessionId() ??
+    preparedSessionState.sessionId;
   const resolveQueueBusyState = () => {
-    const activeSessionId = resolveActiveQueueSessionId();
-    if (!activeSessionId || !piRuntime) {
+    const embeddedActiveSessionId = piRuntime?.resolveActiveEmbeddedRunSessionId(sessionKey);
+    const replyOperationActiveSessionId = resolveActiveReplyOperationSessionId();
+    const activeSessionId =
+      embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
+    if (!activeSessionId || (!piRuntime && !replyOperationActiveSessionId)) {
       return { activeSessionId: undefined, isActive: false, isStreaming: false };
     }
     if (isOwnPreDispatchOperationSession(activeSessionId)) {
       return { activeSessionId, isActive: false, isStreaming: false };
     }
+    const replyOperationActive =
+      replyOperationActiveSessionId != null &&
+      isReplyRunActiveForSessionId(replyOperationActiveSessionId);
     return {
       activeSessionId,
-      isActive: piRuntime.isEmbeddedPiRunActive(activeSessionId),
-      isStreaming: piRuntime.isEmbeddedPiRunStreaming(activeSessionId),
+      isActive:
+        (embeddedActiveSessionId != null &&
+          (piRuntime?.isEmbeddedPiRunActive(embeddedActiveSessionId) ?? false)) ||
+        replyOperationActive,
+      isStreaming:
+        (embeddedActiveSessionId != null &&
+          (piRuntime?.isEmbeddedPiRunStreaming(embeddedActiveSessionId) ?? false)) ||
+        (replyOperationActiveSessionId != null &&
+          isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
@@ -1004,10 +1033,15 @@ export async function runPreparedReply(
       queueMode: activeRunQueueMode,
       sessionKey,
       sessionId: sessionIdFinal,
-      abortActiveRun: (activeRunSessionId) =>
-        piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false,
+      abortActiveRun: (activeRunSessionId) => {
+        const embeddedAborted = piRuntime?.abortEmbeddedPiRun(activeRunSessionId) ?? false;
+        const replyOperationAborted = abortReplyRunBySessionId(activeRunSessionId);
+        return embeddedAborted || replyOperationAborted;
+      },
       waitForActiveRunEnd: (activeRunSessionId) =>
-        piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined),
+        isReplyRunActiveForSessionId(activeRunSessionId)
+          ? waitForReplyRunEndBySessionId(activeRunSessionId)
+          : (piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined)),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
         ({ authProfileId, authProfileIdSource } = await resolveRuntimeAuthProfile());
@@ -1046,7 +1080,9 @@ export async function runPreparedReply(
     }),
   );
   const queuedFollowupAbortSignal =
-    inboundEventKind === "room_event" ? opts?.abortSignal : undefined;
+    inboundEventKind === "room_event"
+      ? (internalOpts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
+      : undefined;
   const followupRun = {
     prompt: queuedBody,
     transcriptPrompt: transcriptCommandBody,

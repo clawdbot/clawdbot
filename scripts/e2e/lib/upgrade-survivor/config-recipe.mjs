@@ -2,6 +2,8 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { buildCmdExeCommandLine } from "../../../windows-cmd-helpers.mjs";
 
 const args = process.argv.slice(2);
 const command = args.shift();
@@ -195,15 +197,38 @@ function adaptStepForBaseline(step, baselineVersion, summary) {
   return step;
 }
 
+export function resolveUpgradeSurvivorOpenClawCommand(argv, params = {}) {
+  const platform = params.platform ?? process.platform;
+  if (platform === "win32") {
+    const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
+    return {
+      command: comSpec,
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine("openclaw.cmd", argv)],
+      commandLabel: ["openclaw", ...argv].join(" "),
+      shell: false,
+      windowsVerbatimArguments: true,
+    };
+  }
+  return {
+    command: "openclaw",
+    args: argv,
+    commandLabel: ["openclaw", ...argv].join(" "),
+    shell: false,
+  };
+}
+
 function runOpenClaw(step) {
-  const result = spawnSync("openclaw", step.argv, {
+  const invocation = resolveUpgradeSurvivorOpenClawCommand(step.argv);
+  const result = spawnSync(invocation.command, invocation.args, {
     encoding: "utf8",
     env: process.env,
+    shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
   return {
     id: step.id,
     intent: step.intent,
-    command: ["openclaw", ...step.argv].join(" "),
+    command: invocation.commandLabel,
     status: result.status,
     signal: result.signal,
     ok: result.status === 0,
@@ -252,8 +277,14 @@ function applyRecipe() {
   }
 }
 
-if (command === "apply") {
-  applyRecipe();
-} else {
-  throw new Error(`unknown upgrade-survivor config-recipe command: ${command ?? "<missing>"}`);
+function main() {
+  if (command === "apply") {
+    applyRecipe();
+  } else {
+    throw new Error(`unknown upgrade-survivor config-recipe command: ${command ?? "<missing>"}`);
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
 }

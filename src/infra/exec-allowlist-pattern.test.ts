@@ -83,6 +83,21 @@ describe("matchesExecAllowlistPattern", () => {
     expect(matchesExecAllowlistPattern("/tmp/Allowed-Tool", "/tmp/Allowed-Tool")).toBe(true);
   });
 
+  it.runIf(process.platform === "darwin")("matches macOS /private/var temp aliases", () => {
+    expect(
+      matchesExecAllowlistPattern(
+        "/var/folders/example/bin/tool",
+        "/private/var/folders/example/bin/tool",
+      ),
+    ).toBe(true);
+    expect(
+      matchesExecAllowlistPattern(
+        "/private/var/folders/example/bin/tool",
+        "/var/folders/example/bin/tool",
+      ),
+    ).toBe(true);
+  });
+
   it.runIf(process.platform === "win32")("preserves case-insensitive matching on Windows", () => {
     expect(matchesExecAllowlistPattern("C:/Tools/Allowed-Tool", "c:/tools/allowed-tool")).toBe(
       true,

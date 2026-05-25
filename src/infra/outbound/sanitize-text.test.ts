@@ -218,6 +218,19 @@ describe("stripInternalRuntimeScaffolding", () => {
     );
   });
 
+  it("strips Grok-style tool call text before outbound delivery", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "Before",
+          '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}',
+          '[tool:message] {"action":"send","message":"[tool:read] {\\"path\\":\\"/app/skills/meme-maker/SKILL.md\\"}"}',
+          "After",
+        ].join("\n"),
+      ),
+    ).toBe("Before\nAfter");
+  });
+
   it("removes stray standalone marker lines", () => {
     expect(
       stripInternalRuntimeScaffolding(

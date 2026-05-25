@@ -1,4 +1,4 @@
-import { getChannelPlugin } from "../../../channels/plugins/index.js";
+import { getLoadedChannelPlugin } from "../../../channels/plugins/index.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { resolveQueueSettings as resolveQueueSettingsCore } from "./settings.js";
 import type { QueueSettings, ResolveQueueSettingsParams } from "./types.js";
@@ -7,7 +7,7 @@ function resolvePluginDebounce(channelKey: string | undefined): number | undefin
   if (!channelKey) {
     return undefined;
   }
-  const plugin = getChannelPlugin(channelKey);
+  const plugin = getLoadedChannelPlugin(channelKey);
   const value = plugin?.defaults?.queue?.debounceMs;
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }

@@ -646,8 +646,10 @@ function restoreSubagentRunsOnce() {
     // Cold-start restore path: queue the same recovery pass that restart
     // startup also uses so resumed children are handled through one seam.
     scheduleSubagentOrphanRecovery();
-  } catch {
-    // ignore restore failures
+  } catch (err) {
+    log.warn(
+      `failed to restore subagent runs from disk: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

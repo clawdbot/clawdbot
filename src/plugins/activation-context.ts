@@ -12,6 +12,7 @@ import {
   type PluginActivationConfigSource,
 } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 
 export type PluginActivationCompatConfig = {
   allowlistPluginIds?: readonly string[];
@@ -68,6 +69,7 @@ type BundledPluginCompatibleActivationParams = {
     env?: NodeJS.ProcessEnv;
     onlyPluginIds?: readonly string[];
   }) => string[];
+  discovery?: PluginDiscoveryResult;
 };
 
 export function withActivatedPluginIds(params: {
@@ -175,6 +177,7 @@ function applyPluginAutoEnableForActivation(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   workspaceDir?: string;
+  discovery?: PluginDiscoveryResult;
 }) {
   const currentSnapshot = getCurrentPluginMetadataSnapshot({
     config: params.config,
@@ -196,7 +199,8 @@ function applyPluginAutoEnableForActivation(params: {
   return applyPluginAutoEnable({
     config: params.config,
     env: params.env,
-    ...(currentManifestRegistry ? { manifestRegistry: currentManifestRegistry } : {}),
+    manifestRegistry: currentManifestRegistry,
+    discovery: params.discovery,
   });
 }
 
@@ -207,6 +211,7 @@ export function resolvePluginActivationSnapshot(params: {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   applyAutoEnable?: boolean;
+  discovery?: PluginDiscoveryResult;
 }): PluginActivationSnapshot {
   const env = params.env ?? process.env;
   const rawConfig = params.rawConfig ?? params.resolvedConfig;
@@ -218,6 +223,7 @@ export function resolvePluginActivationSnapshot(params: {
       config: rawConfig,
       env,
       workspaceDir: params.workspaceDir,
+      discovery: params.discovery,
     });
     resolvedConfig = autoEnabled.config;
     autoEnabledReasons = autoEnabled.autoEnabledReasons;
@@ -243,6 +249,7 @@ export function resolvePluginActivationInputs(params: {
   workspaceDir?: string;
   compat?: PluginActivationCompatConfig;
   applyAutoEnable?: boolean;
+  discovery?: PluginDiscoveryResult;
 }): PluginActivationInputs {
   const env = params.env ?? process.env;
   const snapshot = resolvePluginActivationSnapshot({
@@ -252,6 +259,7 @@ export function resolvePluginActivationInputs(params: {
     env,
     workspaceDir: params.workspaceDir,
     applyAutoEnable: params.applyAutoEnable,
+    discovery: params.discovery,
   });
   const config = applyPluginCompatibilityOverrides({
     config: snapshot.config,
@@ -279,6 +287,7 @@ export function resolveBundledPluginCompatibleActivationInputs(
     env: params.env,
     workspaceDir: params.workspaceDir,
     applyAutoEnable: params.applyAutoEnable,
+    discovery: params.discovery,
   });
   const allowlistCompatEnabled = params.compatMode.allowlist === true;
   const shouldResolveCompatPluginIds = shouldResolveBundledCompatPluginIds({
@@ -304,6 +313,7 @@ export function resolveBundledPluginCompatibleActivationInputs(
       allowlistCompatEnabled,
       compatPluginIds,
     }),
+    discovery: params.discovery,
   });
 
   return {
@@ -325,6 +335,7 @@ export function resolveBundledPluginCompatibleLoadValues(
       config: rawConfig,
       env,
       workspaceDir: params.workspaceDir,
+      discovery: params.discovery,
     });
     resolvedConfig = autoEnabled.config;
     autoEnabledReasons = autoEnabled.autoEnabledReasons;

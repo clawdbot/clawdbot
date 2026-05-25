@@ -151,6 +151,11 @@ fun ShellScreen(
           VoiceShellScreen(
             viewModel = viewModel,
             onOpenCommand = { commandOpen = true },
+            onOpenGatewaySettings = {
+              settingsRoute = SettingsRoute.Gateway
+              returnToOverviewFromSettings = false
+              activeTab = Tab.Settings
+            },
             onOpenVoiceSettings = {
               settingsRoute = SettingsRoute.Voice
               returnToOverviewFromSettings = false
@@ -304,7 +309,7 @@ private fun OverviewScreen(
 
   ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 82.dp)) {
+      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 104.dp)) {
         item {
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -402,7 +407,7 @@ private fun OverviewScreen(
           }
         }
       }
-      OverviewChatButton(onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
+      OverviewChatButton(onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 20.dp))
     }
   }
 }
@@ -424,17 +429,17 @@ private fun OverviewChatButton(
   Surface(
     onClick = onClick,
     modifier = modifier.height(ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = ClawTheme.colors.primary,
     contentColor = ClawTheme.colors.primaryText,
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 18.dp),
+      modifier = Modifier.padding(horizontal = 16.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(7.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
-      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 22.sp))
+      Text(text = "Chat", style = ClawTheme.type.label.copy(fontSize = 16.sp, lineHeight = 20.sp))
     }
   }
 }
@@ -475,7 +480,7 @@ private fun ModuleList(
   onSelectTab: (Tab) -> Unit,
   onOpenSettingsRoute: (SettingsRoute) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
       rows.forEachIndexed { index, row ->
         ModuleListRow(
@@ -490,7 +495,7 @@ private fun ModuleList(
           },
         )
         if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
         }
       }
     }
@@ -507,14 +512,14 @@ private fun ModuleListRow(
       modifier =
         Modifier
           .fillMaxWidth()
-          .heightIn(min = 50.dp)
+          .heightIn(min = 54.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
-          .padding(horizontal = 2.dp, vertical = 5.dp),
+          .padding(horizontal = 0.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
       Text(
         text = row.title,
         style = ClawTheme.type.body,
@@ -526,7 +531,7 @@ private fun ModuleListRow(
       row.metadata?.let {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(statusDotColor(it)))
-          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
       }
       Icon(
@@ -561,7 +566,7 @@ private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
   onOpen: (String) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
         RecentSessionRowContent(
@@ -571,7 +576,7 @@ private fun RecentSessionList(
           onClick = { onOpen(row.key) },
         )
         if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
         }
       }
     }
@@ -593,7 +598,7 @@ private fun RecentSessionRowContent(
           .heightIn(min = 58.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
-          .padding(horizontal = 2.dp, vertical = 6.dp),
+          .padding(horizontal = 0.dp, vertical = 7.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -609,9 +614,9 @@ private fun RecentSessionRowContent(
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
+        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
       }
-      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open session",
@@ -637,10 +642,16 @@ private fun ChatShellScreen(
 private fun VoiceShellScreen(
   viewModel: MainViewModel,
   onOpenCommand: () -> Unit,
+  onOpenGatewaySettings: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
 ) {
   ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    VoiceScreen(viewModel = viewModel, onOpenCommand = onOpenCommand, onOpenVoiceSettings = onOpenVoiceSettings)
+    VoiceScreen(
+      viewModel = viewModel,
+      onOpenCommand = onOpenCommand,
+      onOpenGatewaySettings = onOpenGatewaySettings,
+      onOpenVoiceSettings = onOpenVoiceSettings,
+    )
   }
 }
 
@@ -903,7 +914,7 @@ private fun SettingsGroup(
   onOpen: (SettingsRoute) -> Unit,
   onAction: (() -> Unit)? = null,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
         SettingsListRow(
@@ -918,7 +929,7 @@ private fun SettingsGroup(
           },
         )
         if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
         }
       }
     }
@@ -934,17 +945,17 @@ private fun SettingsListRow(
     modifier =
       Modifier
         .fillMaxWidth()
-        .heightIn(min = 52.dp)
+        .heightIn(min = 54.dp)
         .clip(RoundedCornerShape(ClawTheme.radii.row))
         .clickable(onClick = onClick)
-        .padding(horizontal = 10.dp, vertical = 6.dp),
+        .padding(horizontal = 0.dp, vertical = 7.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
+    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
     Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }

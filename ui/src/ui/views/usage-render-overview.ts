@@ -2,14 +2,9 @@ import { html, nothing } from "lit";
 import { formatDurationCompact } from "../../../../src/infra/format-time/format-duration.ts";
 import { t } from "../../i18n/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-import {
-  formatCost,
-  formatDayLabel,
-  formatFullDate,
-  formatTokens,
-  UsageInsightStats,
-} from "./usage-metrics.ts";
-import {
+import { formatCost, formatDayLabel, formatFullDate, formatTokens } from "./usage-metrics.ts";
+import type { UsageInsightStats } from "./usage-metrics.ts";
+import type {
   UsageAggregates,
   UsageColumnId,
   UsageSessionEntry,

@@ -18,8 +18,8 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "deepseek/deepseek-v4-flash",
   "deepseek/deepseek-v4-pro",
   "minimax/minimax-m2.7",
-  "openai/gpt-5.2",
-  "openai-codex/gpt-5.2",
+  "openai/gpt-5.5",
+  "openai-codex/gpt-5.5",
   "openrouter/openai/gpt-5.2-chat",
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
@@ -125,7 +125,7 @@ function isUnsupportedOpenAiLiveModelRef(provider: string, id: string): boolean 
   }
   const modelName = normalizeLowercaseStringOrEmpty(id).split("/").pop() ?? "";
   if (provider === "openai" || provider === "openai-codex") {
-    return modelName !== "gpt-5.2";
+    return modelName !== "gpt-5.5";
   }
   return !modelName.startsWith("gpt-5.2");
 }

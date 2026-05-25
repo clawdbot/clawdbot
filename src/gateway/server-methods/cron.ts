@@ -477,9 +477,15 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await context.cron.remove(jobId);
-    if (result.removed) {
-      context.logGateway.info("cron: job removed", { jobId });
+    if (!result.removed) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.remove params: id not found"),
+      );
+      return;
     }
+    context.logGateway.info("cron: job removed", { jobId });
     respond(true, result, undefined);
   },
   "cron.run": async ({ params, respond, context }) => {

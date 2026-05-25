@@ -70,7 +70,8 @@ function addMigrationOptions(command: Command): Command {
       addMigrationSkillOption(
         command
           .option("--from <path>", "Source directory to migrate from")
-          .option("--include-secrets", "Import supported credentials and secrets", false)
+          .option("--include-secrets", "Import supported credentials and secrets")
+          .option("--no-auth-credentials", "Skip auth credential migration")
           .option(
             "--overwrite",
             "Overwrite conflicting target files after item-level backups",
@@ -93,7 +94,8 @@ export function registerMigrateCommand(program: Command) {
       .description("Import state from another agent system")
       .argument("[provider]", "Migration provider id, for example hermes")
       .option("--from <path>", "Source directory to migrate from")
-      .option("--include-secrets", "Import supported credentials and secrets", false)
+      .option("--include-secrets", "Import supported credentials and secrets")
+      .option("--no-auth-credentials", "Skip auth credential migration")
       .option("--overwrite", "Overwrite conflicting target files after item-level backups", false)
       .option("--dry-run", "Preview only; do not apply changes", false)
       .option("--yes", "Apply without prompting after preview", false)
@@ -124,8 +126,8 @@ export function registerMigrateCommand(program: Command) {
             "Apply Hermes migration non-interactively after writing a verified backup.",
           ],
           [
-            "openclaw migrate apply hermes --include-secrets --yes",
-            "Include supported credentials in the migration.",
+            "openclaw migrate hermes --no-auth-credentials",
+            "Preview and apply Hermes migration while skipping auth credential import.",
           ],
         ])}`,
     )
@@ -134,7 +136,8 @@ export function registerMigrateCommand(program: Command) {
         await migrateDefaultCommand(defaultRuntime, {
           provider: provider as string | undefined,
           source: opts.from as string | undefined,
-          includeSecrets: Boolean(opts.includeSecrets),
+          includeSecrets: opts.includeSecrets === true ? true : undefined,
+          authCredentials: opts.authCredentials as boolean | undefined,
           overwrite: Boolean(opts.overwrite),
           skills: readMigrationSkills(opts.skill),
           plugins: readMigrationPlugins(opts.plugin),
@@ -168,7 +171,8 @@ export function registerMigrateCommand(program: Command) {
       await migratePlanCommand(defaultRuntime, {
         provider: provider as string,
         source: opts.from as string | undefined,
-        includeSecrets: Boolean(opts.includeSecrets),
+        includeSecrets: opts.includeSecrets === true ? true : undefined,
+        authCredentials: opts.authCredentials as boolean | undefined,
         overwrite: Boolean(opts.overwrite),
         skills: readMigrationSkills(opts.skill),
         plugins: readMigrationPlugins(opts.plugin),
@@ -190,7 +194,8 @@ export function registerMigrateCommand(program: Command) {
         await migrateApplyCommand(defaultRuntime, {
           provider: provider as string,
           source: opts.from as string | undefined,
-          includeSecrets: Boolean(opts.includeSecrets),
+          includeSecrets: opts.includeSecrets === true ? true : undefined,
+          authCredentials: opts.authCredentials as boolean | undefined,
           overwrite: Boolean(opts.overwrite),
           skills: readMigrationSkills(opts.skill),
           plugins: readMigrationPlugins(opts.plugin),

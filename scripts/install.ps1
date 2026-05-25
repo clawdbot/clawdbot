@@ -930,6 +930,63 @@ function Test-OpenClawSourcePackageInstallSpec {
     )
 }
 
+function Resolve-NpmConfigPath {
+    param([string]$RawPath)
+    if ([string]::IsNullOrWhiteSpace($RawPath) -or $RawPath -eq "null" -or $RawPath -eq "undefined") {
+        return $null
+    }
+    if (($RawPath.StartsWith("~/") -or $RawPath.StartsWith("~\")) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(2))
+    }
+    if (($RawPath.StartsWith('${HOME}/') -or $RawPath.StartsWith('${HOME}\')) -and -not [string]::IsNullOrWhiteSpace($HOME)) {
+        return (Join-Path $HOME $RawPath.Substring(8))
+    }
+    return $RawPath
+}
+
+function Test-NpmConfigFileKey {
+    param(
+        [string]$Path,
+        [string]$Key
+    )
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+    $escapedKey = [regex]::Escape($Key)
+    return [bool](Select-String -LiteralPath $Path -Pattern "^\s*$escapedKey\s*=" -Quiet)
+}
+
+function Test-NpmConfigRawKey {
+    param([string]$Key)
+    $files = New-Object System.Collections.Generic.List[string]
+    $userConfig = if ($env:NPM_CONFIG_USERCONFIG) { $env:NPM_CONFIG_USERCONFIG } else { $env:npm_config_userconfig }
+    if ($userConfig) {
+        $resolvedUserConfig = Resolve-NpmConfigPath $userConfig
+        if ($resolvedUserConfig) { $files.Add($resolvedUserConfig) }
+    } elseif (-not [string]::IsNullOrWhiteSpace($HOME)) {
+        $files.Add((Join-Path $HOME ".npmrc"))
+    }
+
+    $globalConfig = if ($env:NPM_CONFIG_GLOBALCONFIG) { $env:NPM_CONFIG_GLOBALCONFIG } else { $env:npm_config_globalconfig }
+    if ($globalConfig) {
+        $resolvedGlobalConfig = Resolve-NpmConfigPath $globalConfig
+        if ($resolvedGlobalConfig) { $files.Add($resolvedGlobalConfig) }
+    }
+
+    $detectedGlobalConfig = (Invoke-NpmCommand -Arguments @("config", "get", "globalconfig", "--global") 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $resolvedDetectedGlobalConfig = Resolve-NpmConfigPath $detectedGlobalConfig
+        if ($resolvedDetectedGlobalConfig) { $files.Add($resolvedDetectedGlobalConfig) }
+    }
+
+    foreach ($file in ($files | Select-Object -Unique)) {
+        if (Test-NpmConfigFileKey -Path $file -Key $Key) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Install-OpenClaw {
     if ([string]::IsNullOrWhiteSpace($Tag)) {
         $Tag = "latest"
@@ -951,9 +1008,12 @@ function Install-OpenClaw {
     $installSpec = Resolve-NpmOpenClawInstallSpec -PackageName $packageName -RequestedTag $Tag
     Write-Host "[*] Installing OpenClaw ($installSpec)..." -ForegroundColor Yellow
     $freshnessArgs = @("--min-release-age=0")
-    $minReleaseAge = (Invoke-NpmCommand -Arguments @("config", "get", "min-release-age") 2>$null)
-    if ($LASTEXITCODE -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
-        $beforeValue = (Invoke-NpmCommand -Arguments @("config", "get", "before") 2>$null)
+    $minReleaseAge = (Invoke-NpmCommand -Arguments @("config", "get", "min-release-age", "--global") 2>$null)
+    $minReleaseAgeStatus = $LASTEXITCODE
+    if (Test-NpmConfigRawKey -Key "min-release-age") {
+        $freshnessArgs = @("--min-release-age=0")
+    } elseif ($minReleaseAgeStatus -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
+        $beforeValue = (Invoke-NpmCommand -Arguments @("config", "get", "before", "--global") 2>$null)
         if ($LASTEXITCODE -eq 0 -and $beforeValue -and $beforeValue.Trim() -ne "null" -and $beforeValue.Trim() -ne "undefined") {
             $freshnessArgs = @("--before=$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))")
         }

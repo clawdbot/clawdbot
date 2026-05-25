@@ -5,7 +5,7 @@ import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 describe("resolveVisibleModelCatalog", () => {
   it("can use static auth checks for gateway read-only model lists", async () => {
-    const authChecker = vi.fn(async (provider: string) => provider === "openai");
+    const authChecker = vi.fn((provider: string) => provider === "openai");
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai", id: "gpt-test", name: "GPT Test" },
@@ -27,7 +27,7 @@ describe("resolveVisibleModelCatalog", () => {
   });
 
   it("limits visible catalog to provider wildcard entries after default discovery", async () => {
-    const authChecker = vi.fn(async (provider: string) => provider !== "blocked");
+    const authChecker = vi.fn((provider: string) => provider !== "blocked");
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
@@ -67,7 +67,7 @@ describe("resolveVisibleModelCatalog", () => {
   });
 
   it("does not broaden visibility when selected providers have no catalog rows", async () => {
-    const authChecker = vi.fn(async () => true);
+    const authChecker = vi.fn(() => true);
 
     const cfg = {
       agents: {

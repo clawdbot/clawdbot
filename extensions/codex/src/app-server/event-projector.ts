@@ -146,7 +146,10 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
-  private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
+  private readonly toolMetas = new Map<
+    string,
+    { toolName: string; meta?: string; asyncStarted?: boolean }
+  >();
   private readonly sideEffectingToolItemIds = new Set<string>();
   private readonly sideEffectingDynamicToolCallIds = new Set<string>();
   private readonly toolTranscriptMessages: AgentMessage[] = [];
@@ -375,11 +378,20 @@ export class CodexAppServerEventProjector {
   recordDynamicToolResult(params: {
     callId: string;
     tool: string;
+    asyncStarted?: boolean;
     success: boolean;
     terminalType?: "blocked" | "completed" | "error";
     sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
+    const existingMeta = this.toolMetas.get(params.callId);
+    this.toolMetas.set(params.callId, {
+      toolName: params.tool,
+      ...(existingMeta?.meta ? { meta: existingMeta.meta } : {}),
+      ...(existingMeta?.asyncStarted === true || params.asyncStarted === true
+        ? { asyncStarted: true }
+        : {}),
+    });
     this.recordToolTranscriptResult({
       id: params.callId,
       name: params.tool,
@@ -1210,9 +1222,11 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const existingMeta = this.toolMetas.get(item.id);
     this.toolMetas.set(item.id, {
       toolName,
       ...(meta ? { meta } : {}),
+      ...(existingMeta?.asyncStarted === true ? { asyncStarted: true } : {}),
     });
     if (isSideEffectingNativeToolItem(item)) {
       this.sideEffectingToolItemIds.add(item.id);

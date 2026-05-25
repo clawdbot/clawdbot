@@ -293,6 +293,10 @@ function expectWarningExcludes(warnings: readonly string[], fragment: string) {
   expect(warnings.join("\n")).not.toContain(fragment);
 }
 
+function expectMessageIncludesPath(message: string, fragment: string) {
+  expect(message.replaceAll("\\", "/")).toContain(fragment);
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`expected ${label} to be an object`);
@@ -1187,6 +1191,33 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("allows linked source probes when TypeScript extension entries have no compiled runtime output", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "source-link-runtime-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      dryRun: true,
+      allowSourceTypeScriptEntries: true,
+    });
+
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.pluginId).toBe("source-link-runtime-plugin");
+    expect(result.targetDir).toBe(resolvePluginInstallDir(result.pluginId, extensionsDir));
+  });
+
   it("rejects package installs when runtimeExtensions length does not match extensions", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
@@ -1450,7 +1481,7 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(result.error).toContain("dist/payload.js");
+      expectMessageIncludesPath(result.error, "dist/payload.js");
     }
     expectWarningIncludes(warnings, "dangerous code pattern");
   });
@@ -1601,7 +1632,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
-      expect(result.error).toContain("declared in axios (vendor/axios/package.json)");
+      expectMessageIncludesPath(result.error, "declared in axios (vendor/axios/package.json)");
     }
   });
 
@@ -1628,7 +1659,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependency directory "plain-crypto-js"');
-      expect(result.error).toContain("vendor/node_modules/plain-crypto-js");
+      expectMessageIncludesPath(result.error, "vendor/node_modules/plain-crypto-js");
     }
   });
 
@@ -1655,7 +1686,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js.Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js.Js");
     }
   });
 
@@ -1682,7 +1713,7 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js");
     }
   });
 
@@ -2085,7 +2116,8 @@ describe("installPluginFromArchive", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error).toContain(
+      expectMessageIncludesPath(
+        result.error,
         "vendor/pkg-127/node_modules/nested-safe/node_modules/plain-crypto-js/package.json",
       );
     }
@@ -2410,7 +2442,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "blocked-dependency-bundle" installation blocked');
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" in dependencies');
-      expect(result.error).toContain("declared in axios (vendor/axios/package.json)");
+      expectMessageIncludesPath(result.error, "declared in axios (vendor/axios/package.json)");
     }
     expect(
       warnings.some((warning) =>
@@ -2442,7 +2474,8 @@ describe("installPluginFromArchive", () => {
         'Bundle "blocked-vendored-package-name-bundle" installation blocked',
       );
       expect(result.error).toContain('"plain-crypto-js" as package name');
-      expect(result.error).toContain(
+      expectMessageIncludesPath(
+        result.error,
         "declared in plain-crypto-js (vendor/plain-crypto-js/package.json)",
       );
     }
@@ -2464,7 +2497,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "blocked-package-dir-bundle" installation blocked');
       expect(result.error).toContain('blocked dependency directory "plain-crypto-js"');
-      expect(result.error).toContain("vendor/node_modules/plain-crypto-js");
+      expectMessageIncludesPath(result.error, "vendor/node_modules/plain-crypto-js");
     }
   });
 
@@ -2484,7 +2517,7 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Bundle "blocked-package-file-bundle" installation blocked');
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js.Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js.Js");
     }
   });
 
@@ -2506,7 +2539,7 @@ describe("installPluginFromArchive", () => {
         'Bundle "blocked-package-extensionless-file-bundle" installation blocked',
       );
       expect(result.error).toContain('blocked dependency file alias "Plain-Crypto-Js"');
-      expect(result.error).toContain("vendor/Node_Modules/Plain-Crypto-Js");
+      expectMessageIncludesPath(result.error, "vendor/Node_Modules/Plain-Crypto-Js");
     }
   });
 
@@ -3111,7 +3144,7 @@ describe("installPluginFromDir", () => {
     if (!result.ok) {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
-      expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
+      expectMessageIncludesPath(result.error, "node_modules/plain-crypto-js/package.json");
     }
     expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
