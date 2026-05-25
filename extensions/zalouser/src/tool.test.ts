@@ -4,6 +4,7 @@ import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send
 import { createZalouserTool } from "./tool.js";
 import {
   checkZaloAuthenticated,
+  getZaloGroupInviteLink,
   getZaloUserInfo,
   listZaloFriendsMatching,
   listZaloGroupsMatching,
@@ -18,6 +19,7 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./zalo-js.js", () => ({
   checkZaloAuthenticated: vi.fn(),
+  getZaloGroupInviteLink: vi.fn(),
   getZaloUserInfo: vi.fn(),
   listZaloFriendsMatching: vi.fn(),
   listZaloGroupsMatching: vi.fn(),
@@ -30,6 +32,7 @@ const mockCheckAuth = vi.mocked(checkZaloAuthenticated);
 const mockGetUserInfo = vi.mocked(getZaloUserInfo);
 const mockListFriends = vi.mocked(listZaloFriendsMatching);
 const mockListGroups = vi.mocked(listZaloGroupsMatching);
+const mockGetGroupLink = vi.mocked(getZaloGroupInviteLink);
 
 function extractDetails(result: { content?: Array<{ type: string; text?: string }> }): unknown {
   const text = result.content?.[0]?.text ?? "{}";
@@ -52,6 +55,31 @@ describe("executeZalouserTool", () => {
     mockGetUserInfo.mockReset();
     mockListFriends.mockReset();
     mockListGroups.mockReset();
+    mockGetGroupLink.mockReset();
+  });
+
+  it("returns the group invite link for groupLink action", async () => {
+    mockGetGroupLink.mockResolvedValueOnce({
+      link: "https://zalo.me/g/abc123",
+      expiresAt: 1799999999,
+    } as never);
+    const result = await executeZalouserTool("tool-1", {
+      action: "groupLink",
+      threadId: "g-1",
+      profile: "work",
+    });
+    expect(mockGetGroupLink).toHaveBeenCalledWith("work", "g-1");
+    expect(extractDetails(result)).toEqual({
+      link: "https://zalo.me/g/abc123",
+      expiresAt: 1799999999,
+    });
+  });
+
+  it("returns error when groupLink action is missing the group id", async () => {
+    const result = await executeZalouserTool("tool-1", { action: "groupLink" });
+    expect(extractDetails(result)).toEqual({
+      error: "threadId (group id) required for groupLink action",
+    });
   });
 
   it("returns error when send action is missing required fields", async () => {

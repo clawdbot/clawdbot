@@ -8,12 +8,22 @@ import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send
 import { parseZalouserOutboundTarget } from "./session-route.js";
 import {
   checkZaloAuthenticated,
+  getZaloGroupInviteLink,
   getZaloUserInfo,
   listZaloFriendsMatching,
   listZaloGroupsMatching,
 } from "./zalo-js.js";
 
-const ACTIONS = ["send", "image", "link", "friends", "groups", "me", "status"] as const;
+const ACTIONS = [
+  "send",
+  "image",
+  "link",
+  "friends",
+  "groups",
+  "groupLink",
+  "me",
+  "status",
+] as const;
 
 const ZalouserToolSchema = Type.Object(
   {
@@ -148,6 +158,16 @@ async function executeZalouserTool(
         return json(rows);
       }
 
+      case "groupLink": {
+        const target = resolveZalouserSendTarget(params, context);
+        const groupId = target.threadId;
+        if (!groupId) {
+          throw new Error("threadId (group id) required for groupLink action");
+        }
+        const result = await getZaloGroupInviteLink(params.profile, groupId);
+        return json(result);
+      }
+
       case "me": {
         const info = await getZaloUserInfo(params.profile);
         return json(info ?? { error: "Not authenticated" });
@@ -164,7 +184,7 @@ async function executeZalouserTool(
       default: {
         params.action satisfies never;
         throw new Error(
-          `Unknown action: ${String(params.action)}. Valid actions: send, image, link, friends, groups, me, status`,
+          `Unknown action: ${String(params.action)}. Valid actions: send, image, link, friends, groups, groupLink, me, status`,
         );
       }
     }

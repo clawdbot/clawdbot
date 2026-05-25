@@ -1059,6 +1059,23 @@ export async function listZaloGroupsMatching(
   });
 }
 
+/**
+ * Returns a shareable invite link for a group. Zalo only exposes a link once it
+ * is enabled, so this enables it (idempotent on Zalo's side) and returns the
+ * link plus its expiry. The caller (e.g. a CS hand-off) can share it so staff
+ * can reach the customer's group.
+ */
+export async function getZaloGroupInviteLink(
+  profileInput: string | null | undefined,
+  groupId: string,
+): Promise<{ link: string; expiresAt?: number }> {
+  const profile = normalizeProfile(profileInput);
+  return await withZaloApi(profile, async (api) => {
+    const res = await api.enableGroupLink(groupId);
+    return { link: res.link, expiresAt: res.expiration_date || undefined };
+  });
+}
+
 export async function listZaloGroupMembers(
   profileInput: string | null | undefined,
   groupId: string,
