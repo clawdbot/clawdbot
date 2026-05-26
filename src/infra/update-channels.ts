@@ -37,8 +37,12 @@ export function isBetaTag(tag: string): boolean {
   return /(?:^|[.-])beta(?:[.-]|$)/i.test(tag);
 }
 
+export function isPrereleaseTag(tag: string): boolean {
+  return /(?:^|[.-])(alpha|beta|rc|pre|preview|canary|dev)(?:[.-]|$)/i.test(tag);
+}
+
 export function isStableTag(tag: string): boolean {
-  return !isBetaTag(tag);
+  return !isPrereleaseTag(tag);
 }
 
 export function resolveRegistryUpdateChannel(params: {

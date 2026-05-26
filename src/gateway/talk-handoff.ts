@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   createTalkSessionController,
@@ -385,9 +386,4 @@ function joinTalkHandoffRoom(record: TalkHandoffRecord, clientId: string | undef
     }),
   );
   return events;
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }

@@ -15,6 +15,9 @@ packages:
     path: ../shared/OpenClawKit
   Swabble:
     path: ../swabble
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    exactVersion: 147.0.0
 
 schemes:
   OpenClaw:
@@ -57,6 +60,7 @@ targets:
         product: OpenClawProtocol
       - package: Swabble
         product: SwabbleKit
+      - package: WebRTC
       - sdk: AppIntents.framework
     preBuildScripts:
       - name: SwiftFormat (lint)

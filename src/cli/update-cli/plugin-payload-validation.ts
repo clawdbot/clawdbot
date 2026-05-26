@@ -129,6 +129,7 @@ export async function runPluginPayloadSmokeCheck(params: {
             : "package.json openclaw.extensions is empty"
         }`,
       });
+      continue;
     } else if (extensionResolution.status === "ok") {
       const extensionValidation = await validatePackageExtensionEntriesForInstall({
         packageDir: installPath,

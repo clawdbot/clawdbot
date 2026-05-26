@@ -355,7 +355,10 @@ export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionE
   };
 }
 
-export async function createCheckpointFixture(dir: string) {
+export async function createCheckpointFixture(
+  dir: string,
+  options: { legacyPreCompactionSnapshot?: boolean } = { legacyPreCompactionSnapshot: true },
+) {
   const { SessionManager } = await getSessionManagerModule();
   const session = SessionManager.create(dir, dir);
   const userMessage: UserMessage = {
@@ -396,12 +399,16 @@ export async function createCheckpointFixture(dir: string) {
   if (!sessionFile) {
     throw new Error("expected persisted session file");
   }
-  const preCompactionSessionFile = path.join(
-    dir,
-    `${path.parse(sessionFile).name}.checkpoint-test.jsonl`,
-  );
-  fsSync.copyFileSync(sessionFile, preCompactionSessionFile);
-  const preCompactionSession = SessionManager.open(preCompactionSessionFile, dir);
+  const legacyPreCompactionSnapshot = options.legacyPreCompactionSnapshot ?? true;
+  const preCompactionSessionFile = legacyPreCompactionSnapshot
+    ? path.join(dir, `${path.parse(sessionFile).name}.checkpoint-test.jsonl`)
+    : undefined;
+  if (preCompactionSessionFile) {
+    fsSync.copyFileSync(sessionFile, preCompactionSessionFile);
+  }
+  const preCompactionSession = preCompactionSessionFile
+    ? SessionManager.open(preCompactionSessionFile, dir)
+    : undefined;
   session.appendCompaction("checkpoint summary", preCompactionLeafId, 123, { ok: true });
   const postCompactionLeafId = session.getLeafId();
   if (!postCompactionLeafId) {

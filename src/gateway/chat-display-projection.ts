@@ -10,6 +10,9 @@ import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -215,7 +218,7 @@ function projectAssistantTextFromMixedToolContent(
 }
 
 function toFiniteNumber(x: unknown): number | undefined {
-  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
+  return asFiniteNumber(x);
 }
 
 function sanitizeCost(raw: unknown): { total?: number } | undefined {
@@ -446,24 +449,9 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
   return hasToolHistoryBlock && hasText;
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function normalizeToolHistoryType(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized ? normalized.replace(/_/g, "") : undefined;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {

@@ -174,6 +174,7 @@ describe("resolveSessionResetPolicy", () => {
     });
 
     expect(freshness.fresh).toBe(false);
+    expect(freshness.staleReason).toBe("daily");
   });
 
   it("uses lastInteractionAt, not updatedAt, for idle reset freshness", () => {
@@ -191,6 +192,7 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness.fresh).toBe(false);
     expect(freshness.idleExpiresAt).toBe(5 * 60_000);
+    expect(freshness.staleReason).toBe("idle");
   });
 
   it("falls back to sessionStartedAt, not updatedAt, for legacy idle freshness", () => {
@@ -208,6 +210,25 @@ describe("resolveSessionResetPolicy", () => {
 
     expect(freshness.fresh).toBe(false);
     expect(freshness.idleExpiresAt).toBe(5 * 60_000);
+    expect(freshness.staleReason).toBe("idle");
+  });
+
+  it("reports the first expired reset deadline when daily and idle are both stale", () => {
+    const now = new Date(2026, 3, 25, 12, 0, 0, 0).getTime();
+    const freshness = evaluateSessionFreshness({
+      updatedAt: now,
+      sessionStartedAt: new Date(2026, 3, 24, 23, 0, 0, 0).getTime(),
+      lastInteractionAt: new Date(2026, 3, 25, 11, 0, 0, 0).getTime(),
+      now,
+      policy: {
+        mode: "daily",
+        atHour: 4,
+        idleMinutes: 30,
+      },
+    });
+
+    expect(freshness.fresh).toBe(false);
+    expect(freshness.staleReason).toBe("daily");
   });
 
   it("does not let future legacy updatedAt values keep daily sessions fresh", () => {

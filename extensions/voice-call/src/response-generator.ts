@@ -5,7 +5,11 @@
 
 import crypto from "node:crypto";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveVoiceCallSessionKey, type VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
@@ -39,10 +43,6 @@ type VoiceResponsePayload = {
   isError?: boolean;
   isReasoning?: boolean;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readExplicitToolsAllow(value: unknown): string[] | undefined {
   if (!isRecord(value)) {
@@ -159,10 +159,7 @@ function sanitizePlainSpokenText(text: string): string | null {
     return null;
   }
 
-  const paragraphs = withoutCodeFences
-    .split(/\n\s*\n+/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
+  const paragraphs = normalizeStringEntries(withoutCodeFences.split(/\n\s*\n+/));
 
   while (paragraphs.length > 1 && isLikelyMetaReasoningParagraph(paragraphs[0])) {
     paragraphs.shift();

@@ -3,6 +3,7 @@ import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
@@ -181,9 +182,7 @@ export function resolveSendableOutboundReplyParts(
 ): SendableOutboundReplyParts {
   const text = options?.text ?? payload.text ?? "";
   const trimmedText = text.trim();
-  const mediaUrls = resolveOutboundMediaUrls(payload)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const mediaUrls = normalizeStringEntries(resolveOutboundMediaUrls(payload));
   const mediaCount = mediaUrls.length;
   const hasText = Boolean(trimmedText);
   const hasMedia = mediaCount > 0;

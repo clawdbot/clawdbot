@@ -7,6 +7,8 @@ import {
   resolveAgentIdFromSessionKey,
   toAgentStoreSessionKey,
 } from "../../routing/session-key.js";
+import { asOptionalRecord } from "../../shared/record-coerce.js";
+import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import {
   ErrorCodes,
@@ -53,16 +55,6 @@ function artifactError(type: string, message: string, details?: Record<string, u
       ...details,
     },
   });
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveRequesterSessionAgentId(
@@ -164,7 +156,7 @@ function mediaUrlValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return asNonEmptyString(value);
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   return asNonEmptyString(record?.url);
 }
 
@@ -201,18 +193,18 @@ function artifactId(parts: {
 }
 
 function resolveMessageSeq(message: Record<string, unknown>, fallback: number): number {
-  const meta = asRecord(message["__openclaw"]);
+  const meta = asOptionalRecord(message["__openclaw"]);
   const seq = meta?.seq;
   return typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : fallback;
 }
 
 function resolveMessageRunId(message: Record<string, unknown>): string | undefined {
-  const meta = asRecord(message["__openclaw"]);
+  const meta = asOptionalRecord(message["__openclaw"]);
   return asNonEmptyString(meta?.runId) ?? asNonEmptyString(message.runId);
 }
 
 function resolveMessageTaskId(message: Record<string, unknown>): string | undefined {
-  const meta = asRecord(message["__openclaw"]);
+  const meta = asOptionalRecord(message["__openclaw"]);
   return (
     asNonEmptyString(meta?.messageTaskId) ??
     asNonEmptyString(meta?.taskId) ??
@@ -233,7 +225,7 @@ function resolveBlockDownload(block: Record<string, unknown>): {
   const url = asNonEmptyString(block.url) ?? asNonEmptyString(block.openUrl);
   const imageUrl = mediaUrlValue(block.image_url);
   const audioUrl = asNonEmptyString(block.audio_url);
-  const source = asRecord(block.source);
+  const source = asOptionalRecord(block.source);
   const sourceData = asNonEmptyString(source?.data);
   const sourceUrl = asNonEmptyString(source?.url);
   const dataUrl = [url, sourceUrl, imageUrl, audioUrl, data, content, sourceData].find(
@@ -308,7 +300,7 @@ function collectArtifactsFromMessage(params: {
   runId?: string;
   taskId?: string;
 }): void {
-  const msg = asRecord(params.message);
+  const msg = asOptionalRecord(params.message);
   if (!msg) {
     return;
   }
@@ -323,7 +315,7 @@ function collectArtifactsFromMessage(params: {
   }
   const content = Array.isArray(msg.content) ? msg.content : [];
   for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
-    const block = asRecord(content[contentIndex]);
+    const block = asOptionalRecord(content[contentIndex]);
     if (!block || !isArtifactBlock(block)) {
       continue;
     }

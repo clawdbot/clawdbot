@@ -8,6 +8,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 
 export type AllowFromStore = {
@@ -111,17 +112,7 @@ export function resolveAllowFromFilePath(
 }
 
 export function dedupePreserveOrder(entries: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const entry of entries) {
-    const normalized = normalizeOptionalString(entry) ?? "";
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    out.push(normalized);
-  }
-  return out;
+  return normalizeUniqueStringEntries(entries);
 }
 
 export function shouldIncludeLegacyAllowFromEntries(normalizedAccountId: string): boolean {

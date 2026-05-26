@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
 import { resolveOpenClawPackageRoot, resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 
@@ -275,10 +276,7 @@ export type EnsureControlUiAssetsResult = {
 };
 
 function summarizeCommandOutput(text: string): string | undefined {
-  const lines = text
-    .split(/\r?\n/g)
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/g));
   if (!lines.length) {
     return undefined;
   }

@@ -7,17 +7,20 @@ const ssrfMocks = {
 };
 
 // Mock http and https modules before importing the client
-vi.mock("node:https", () => {
+vi.mock("node:https", async () => {
+  const actual = await vi.importActual<typeof import("node:https")>("node:https");
   const httpsRequest = vi.fn();
   const httpsGet = vi.fn();
-  const httpsModule = { request: httpsRequest, get: httpsGet };
-  return { default: httpsModule, request: httpsRequest, get: httpsGet };
+  const httpsModule = { ...actual, request: httpsRequest, get: httpsGet };
+  return { ...actual, default: httpsModule, request: httpsRequest, get: httpsGet };
 });
 
-vi.mock("node:http", () => {
+vi.mock("node:http", async () => {
+  const actual = await vi.importActual<typeof import("node:http")>("node:http");
   const httpRequest = vi.fn();
   const httpGet = vi.fn();
-  return { default: { request: httpRequest, get: httpGet }, request: httpRequest, get: httpGet };
+  const httpModule = { ...actual, request: httpRequest, get: httpGet };
+  return { ...actual, default: httpModule, request: httpRequest, get: httpGet };
 });
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
@@ -274,6 +277,10 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
     "https://nas.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test%22";
   const baseUrl2 =
     "https://nas2.example.com/webapi/entry.cgi?api=SYNO.Chat.External&method=chatbot&version=2&token=%22test-2%22";
+
+  beforeAll(async () => {
+    ({ resolveLegacyWebhookNameToChatUserId } = await import("./client.js"));
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

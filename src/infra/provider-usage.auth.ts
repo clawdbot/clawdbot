@@ -21,6 +21,7 @@ import {
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { resolveLegacyPiAgentAccessToken } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
@@ -109,7 +110,9 @@ function resolveProviderApiKeyFromConfigAndStore(params: {
   }
 
   const normalizedProviderIds = new Set(
-    params.providerIds.map((providerId) => normalizeProviderId(providerId)).filter(Boolean),
+    normalizeUniqueStringEntries(
+      params.providerIds.map((providerId) => normalizeProviderId(providerId)),
+    ),
   );
   const cred = [...normalizedProviderIds]
     .flatMap((providerId) =>

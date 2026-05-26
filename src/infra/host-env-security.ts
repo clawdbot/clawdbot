@@ -1,3 +1,4 @@
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
 import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
@@ -146,10 +147,6 @@ function listNormalizedEnvEntries(
   return entries;
 }
 
-function sortUnique(values: Iterable<string>): string[] {
-  return Array.from(new Set(values)).toSorted((a, b) => a.localeCompare(b));
-}
-
 function sanitizeHostEnvOverridesWithDiagnostics(params?: {
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
@@ -198,8 +195,8 @@ function sanitizeHostEnvOverridesWithDiagnostics(params?: {
 
   return {
     acceptedOverrides,
-    rejectedOverrideBlockedKeys: sortUnique(rejectedBlocked),
-    rejectedOverrideInvalidKeys: sortUnique(rejectedInvalid),
+    rejectedOverrideBlockedKeys: sortUniqueStrings(rejectedBlocked),
+    rejectedOverrideInvalidKeys: sortUniqueStrings(rejectedInvalid),
   };
 }
 

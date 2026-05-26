@@ -6,6 +6,7 @@ import {
 } from "../infra/node-commands.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
@@ -225,7 +226,7 @@ export function listDangerousPluginNodeCommands(): string[] {
       .filter((entry) => entry.policy.dangerous === true)
       .flatMap((entry) => entry.policy.commands),
   ];
-  return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+  return normalizeUniqueStringEntries(commands);
 }
 
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
@@ -240,7 +241,7 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
     const defaults = entry.policy.defaultPlatforms ?? [];
     return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  return [...new Set(commands.map((command) => command.trim()).filter(Boolean))];
+  return normalizeUniqueStringEntries(commands);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {

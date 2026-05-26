@@ -1,3 +1,5 @@
+import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export function deepMergeDefined(base: unknown, override: unknown): unknown {
@@ -16,8 +18,4 @@ export function deepMergeDefined(base: unknown, override: unknown): unknown {
   }
 
   return result;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

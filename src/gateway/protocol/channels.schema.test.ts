@@ -1,26 +1,24 @@
-import AjvPkg from "ajv";
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { ChannelsStatusResultSchema, WebLoginWaitParamsSchema } from "./schema/channels.js";
 
-const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
-
 describe("WebLoginWaitParamsSchema", () => {
-  const validate = new Ajv().compile(WebLoginWaitParamsSchema);
+  const validate = Compile(WebLoginWaitParamsSchema);
 
   it("bounds caller-provided QR data URLs", () => {
     expect(
-      validate({
+      validate.Check({
         currentQrDataUrl: "data:image/png;base64,qr",
       }),
     ).toBe(true);
 
     expect(
-      validate({
+      validate.Check({
         currentQrDataUrl: "x".repeat(16_385),
       }),
     ).toBe(false);
     expect(
-      validate({
+      validate.Check({
         currentQrDataUrl: "https://example.com/qr.png",
       }),
     ).toBe(false);
@@ -28,11 +26,11 @@ describe("WebLoginWaitParamsSchema", () => {
 });
 
 describe("ChannelsStatusResultSchema", () => {
-  const validate = new Ajv().compile(ChannelsStatusResultSchema);
+  const validate = Compile(ChannelsStatusResultSchema);
 
   it("accepts gateway event-loop diagnostics emitted by channels.status", () => {
     expect(
-      validate({
+      validate.Check({
         ts: Date.now(),
         channelOrder: ["discord"],
         channelLabels: { discord: "Discord" },

@@ -1,4 +1,5 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { sortUniqueStrings } from "../../shared/string-normalization.js";
 import type { ClientToolDefinition } from "./run/params.js";
 
 /**
@@ -57,5 +58,5 @@ export function collectCoreBuiltinToolNames(
 }
 
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
-  return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
+  return sortUniqueStrings(allowedToolNames);
 }

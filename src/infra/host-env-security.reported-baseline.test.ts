@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -79,9 +80,7 @@ function readBaselineAndPolicy(): {
 }
 
 function sortUniqueUpper(values: string[]): string[] {
-  return Array.from(new Set(values.map((value) => value.toUpperCase()))).toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  return sortUniqueStrings(values.map((value) => value.toUpperCase()));
 }
 
 describe("host env reported baseline coverage", () => {

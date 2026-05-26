@@ -1,4 +1,5 @@
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { asOptionalRecord } from "../shared/record-coerce.js";
 import {
   redactSupportString,
   type SupportRedactionContext,
@@ -25,13 +26,6 @@ function byteLength(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
 function createLogRecord(): Record<string, unknown> {
   return Object.create(null) as Record<string, unknown>;
 }
@@ -50,7 +44,7 @@ export function sanitizeSupportLogRecord(
     };
   }
 
-  const source = asRecord(parsed);
+  const source = asOptionalRecord(parsed);
   if (!source) {
     return {
       omitted: "non-object",
@@ -89,7 +83,7 @@ function addLogTapeMetaFields(
   source: Record<string, unknown>,
   redaction: SupportRedactionContext,
 ): void {
-  const meta = asRecord(source[LOGTAPE_META_FIELD]);
+  const meta = asOptionalRecord(source[LOGTAPE_META_FIELD]);
   if (!meta) {
     return;
   }
@@ -121,7 +115,7 @@ function addLogTapeArgFields(
     .toSorted(([left], [right]) => Number(left) - Number(right));
 
   for (const [, value] of args) {
-    const record = typeof value === "string" ? parseJsonRecord(value) : asRecord(value);
+    const record = typeof value === "string" ? parseJsonRecord(value) : asOptionalRecord(value);
     if (record) {
       addLogObjectFields(sanitized, record, redaction);
       continue;
@@ -163,7 +157,7 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
     return undefined;
   }
   try {
-    return asRecord(JSON.parse(trimmed));
+    return asOptionalRecord(JSON.parse(trimmed));
   } catch {
     return undefined;
   }

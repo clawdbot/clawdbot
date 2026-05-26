@@ -3,6 +3,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import {
   normalizeDeliveryChannelRoute,
   normalizeDeliveryContext,
@@ -46,11 +47,7 @@ export type LoadSessionStoreOptions = {
 const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+  return isRecord(value);
 }
 
 function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
@@ -451,6 +448,7 @@ export function loadSessionStore(
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
+      takeOwnership: serializedFromDisk !== undefined,
     });
   }
 
@@ -459,7 +457,8 @@ export function loadSessionStore(
 
 export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
   const currentFileStat = getFileStatSnapshot(storePath);
-  if (isSessionStoreCacheEnabled()) {
+  const cacheEnabled = isSessionStoreCacheEnabled();
+  if (cacheEnabled) {
     const cached = readSessionStoreSnapshotCache({
       storePath,
       mtimeMs: currentFileStat?.mtimeMs,
@@ -470,8 +469,8 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
     }
   }
 
-  const store = loadSessionStore(storePath);
-  if (!isSessionStoreCacheEnabled()) {
+  const store = loadSessionStore(storePath, { clone: false });
+  if (!cacheEnabled) {
     return cloneSessionStoreSnapshot(store);
   }
   return writeSessionStoreSnapshotCache({

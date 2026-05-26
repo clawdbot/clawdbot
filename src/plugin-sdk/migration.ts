@@ -8,6 +8,7 @@ import type {
   MigrationProviderPlugin,
   MigrationSummary,
 } from "../plugins/types.js";
+import { isRecord } from "../shared/record-coerce.js";
 
 export type {
   MigrationDetection,
@@ -90,10 +91,6 @@ function isSecretKey(key: string): boolean {
     return true;
   }
   return SECRET_KEY_MARKERS.some((marker) => normalized.includes(marker));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export type MigrationConfigPatchDetails = {

@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   resolveActiveEmbeddedRunHandleSessionId: vi.fn(),
   resolveEmbeddedSessionLane: vi.fn((key: string) => `session:${key}`),
   waitForEmbeddedPiRunEnd: vi.fn(),
+  getDiagnosticSessionActivitySnapshot: vi.fn(),
   diag: {
     debug: vi.fn(),
     warn: vi.fn(),
@@ -60,6 +61,10 @@ vi.mock("./diagnostic-runtime.js", () => ({
   diagnosticLogger: mocks.diag,
 }));
 
+vi.mock("./diagnostic-run-activity.js", () => ({
+  getDiagnosticSessionActivitySnapshot: mocks.getDiagnosticSessionActivitySnapshot,
+}));
+
 import {
   testing,
   recoverStuckDiagnosticSession,
@@ -85,6 +90,10 @@ function resetMocks() {
   mocks.resolveActiveEmbeddedRunHandleSessionId.mockReset();
   mocks.resolveEmbeddedSessionLane.mockClear();
   mocks.waitForEmbeddedPiRunEnd.mockReset();
+  mocks.getDiagnosticSessionActivitySnapshot.mockReset();
+  // Default: no progress signal, so the staleness gate stays off unless a test
+  // opts in by returning a stale lastProgressAgeMs.
+  mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({});
   mocks.diag.debug.mockReset();
   mocks.diag.warn.mockReset();
 }
@@ -119,6 +128,26 @@ describe("stuck session recovery", () => {
       "stuck session recovery skipped: sessionId=session-1 sessionKey=agent:main:main age=180s queueDepth=1 activeSessionId=session-1",
       "stuck session recovery outcome: status=skipped action=observe_only sessionId=session-1 sessionKey=agent:main:main activeSessionId=session-1 activeWorkKind=embedded_run reason=active_embedded_run",
     ]);
+  });
+
+  it("reclaims a stale active embedded run with queued work and no forward progress (#85639)", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-1");
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({
+      lastProgressAgeMs: 10 * 60_000,
+    });
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("session-1");
+    expect(outcome.status).toBe("aborted");
+    expect(warnLogMessages().some((m) => m.includes("reclaiming stale active run"))).toBe(true);
   });
 
   it("aborts an active embedded run when active abort recovery is enabled", async () => {
@@ -290,6 +319,107 @@ describe("stuck session recovery", () => {
     expect(warnLogMessages()).toEqual([
       "stuck session recovery outcome: status=skipped action=keep_lane sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run reason=active_reply_work",
     ]);
+  });
+
+  it("reclaims stale leaked reply work with queued work and no forward progress (#85639)", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
+    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    // The "active" run has made no forward progress for well past the staleness
+    // window — a leaked/dead handle, not genuine work.
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: 10 * 60_000 });
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    // Reclaimed (aborted) instead of skipping with active_reply_work.
+    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("queued-reply-session");
+    expect(outcome.status).not.toBe("skipped");
+    expect(warnLogMessages().some((m) => m.includes("reclaiming stale active reply work"))).toBe(
+      true,
+    );
+  });
+
+  it("honors an operator-raised stuck-session abort threshold for stale reclaim (#85639)", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
+    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+    // Operator raised the abort threshold to 20 min to protect slow active work.
+    const raisedAbortMs = 20 * 60_000;
+
+    // Below the raised threshold (10 min): keep the lane, do not reclaim.
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: 10 * 60_000 });
+    const kept = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+      staleActiveProgressAbortMs: raisedAbortMs,
+    });
+    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(kept.status).toBe("skipped");
+
+    // Past the raised threshold (25 min): reclaim.
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: 25 * 60_000 });
+    const reclaimed = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+      staleActiveProgressAbortMs: raisedAbortMs,
+    });
+    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("queued-reply-session");
+    expect(reclaimed.status).not.toBe("skipped");
+  });
+
+  it("keeps the lane when active reply work is still progressing", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
+    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    // Recent forward progress: a genuinely active run must not be reclaimed.
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: 5_000 });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("skipped");
+    expect(warnLogMessages().some((m) => m.includes("reason=active_reply_work"))).toBe(true);
+  });
+
+  it("does not reclaim stale reply work when no work is queued", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
+    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    mocks.getDiagnosticSessionActivitySnapshot.mockReturnValue({ lastProgressAgeMs: 10 * 60_000 });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 180_000,
+      queueDepth: 0,
+    });
+
+    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("skipped");
+    expect(warnLogMessages().some((m) => m.includes("reason=active_reply_work"))).toBe(true);
   });
 
   it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {

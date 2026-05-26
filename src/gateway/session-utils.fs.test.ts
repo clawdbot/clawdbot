@@ -1982,6 +1982,49 @@ describe("oversized transcript line guards", () => {
     expectUsageFields(usage, { modelProvider: "test-provider" });
   });
 
+  test("oversized line metadata extraction preserves id and parentId", async () => {
+    const sessionId = "test-oversized-metadata-extract";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const oversizedContent = "w".repeat(300 * 1024);
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: sessionId }),
+      JSON.stringify({
+        type: "message",
+        id: "root-msg",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "oversized-child",
+        parentId: "root-msg",
+        message: { role: "assistant", content: oversizedContent },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    // The oversized line's id and parentId are extracted by regex from the
+    // prefix bytes. parentId drives active-tree selection; id is attached
+    // to the __openclaw metadata. Both must be correct for the record to
+    // appear in the right position.
+    expect(out).toHaveLength(2); // root-msg + oversized-child
+    const oversized = out[1] as Record<string, unknown>;
+    expect(oversized.role).toBe("assistant");
+    // id is preserved in __openclaw transcript metadata
+    const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
+    expect(meta?.id).toBe("oversized-child");
+    // parentId extraction is proven by the record being included:
+    // if parentId was not extracted, the tree would orphan this node.
+
+    // The oversized content must NOT appear in the output.
+    const serialized = JSON.stringify(out);
+    expect(serialized).not.toContain(oversizedContent);
+  });
+
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
     const sessionId = "test-async-title-bounded";
     writeTranscript(

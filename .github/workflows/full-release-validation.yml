@@ -1471,6 +1471,7 @@ jobs:
           PLUGIN_PRERELEASE_RUN_ID: ${{ needs.plugin_prerelease.outputs.run_id }}
           RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
           NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
+          PERFORMANCE_RUN_ID: ${{ needs.performance.outputs.run_id }}
         run: |
           set -euo pipefail
           manifest_dir="${RUNNER_TEMP}/full-release-validation"

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { controlUiManualChunk, normalizeModuleId } from "../../build/chunking.ts";
+import { controlUiManualChunk, normalizeModuleId } from "../../config/control-ui-chunking.ts";
 
 describe("Control UI build chunking", () => {
   it("groups stable runtime dependencies into bounded chunks", () => {

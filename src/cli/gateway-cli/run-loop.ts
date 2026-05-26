@@ -12,8 +12,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
@@ -797,6 +797,7 @@ export async function runGatewayLoop(params: {
         resetGatewayRestartStateForInProcessRestart,
       } = await loadGatewayLifecycleRuntimeModule();
       resetAllLanes();
+      clearRuntimeConfigSnapshot();
       resetGatewayRestartStateForInProcessRestart();
       reloadTaskRegistryFromStore();
       markGatewayRestartTrace("restart.next-start");

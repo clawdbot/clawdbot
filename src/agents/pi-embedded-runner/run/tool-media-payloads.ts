@@ -3,6 +3,10 @@ import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
 } from "../../../auto-reply/reply-payload.js";
+import {
+  normalizeUniqueStringEntries,
+  uniqueStrings,
+} from "../../../shared/string-normalization.js";
 import type { EmbeddedPiRunResult } from "../types.js";
 
 type EmbeddedRunPayload = NonNullable<EmbeddedPiRunResult["payloads"]>[number];
@@ -14,9 +18,7 @@ export function mergeAttemptToolMediaPayloads(params: {
   toolTrustedLocalMedia?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): EmbeddedRunPayload[] | undefined {
-  const mediaUrls = Array.from(
-    new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
-  );
+  const mediaUrls = normalizeUniqueStringEntries(params.toolMediaUrls);
   if (mediaUrls.length === 0 && !params.toolAudioAsVoice && !params.toolTrustedLocalMedia) {
     return params.payloads;
   }
@@ -31,7 +33,7 @@ export function mergeAttemptToolMediaPayloads(params: {
     ) {
       return payloads;
     }
-    const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));
+    const mergedMediaUrls = uniqueStrings([...(payload.mediaUrls ?? []), ...mediaUrls]);
     payloads[payloadIndex] = copyReplyPayloadMetadata(payload, {
       ...payload,
       mediaUrls: mergedMediaUrls.length ? mergedMediaUrls : undefined,

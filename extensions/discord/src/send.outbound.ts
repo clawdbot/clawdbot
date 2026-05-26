@@ -11,7 +11,7 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { resolveDiscordAccount } from "./accounts.js";
 import { createChannelMessage, createThread, type RequestClient } from "./internal/discord.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
-import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { createDiscordSendResult, type DiscordReceiptResultSource } from "./send.receipt.js";
 import {
   buildDiscordMessageRequest,
@@ -140,7 +140,7 @@ async function resolveDiscordSendTarget(
 ): Promise<{ rest: RequestClient; request: DiscordClientRequest; channelId: string }> {
   const cfg = requireRuntimeConfig(opts.cfg, "Discord send target resolution");
   const { rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   return { rest, request, channelId };
 }
@@ -181,7 +181,7 @@ export async function sendMessageDiscord(
     mentionAliases: accountInfo.config.mentionAliases,
   });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.

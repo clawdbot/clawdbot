@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { listTaskAuditFindings, summarizeTaskAuditFindings } from "./task-registry.audit.js";
+import {
+  listTaskAuditFindings,
+  summarizeActionableTaskAuditFindings,
+  summarizeRetainedLostTaskAuditFindings,
+  summarizeTaskAuditFindings,
+} from "./task-registry.audit.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import { DEFAULT_TASK_RETENTION_MS, LOST_TASK_RETENTION_MS } from "./task-retention.js";
 
 function createTask(partial: Partial<TaskRecord>): TaskRecord {
   return {
@@ -113,6 +119,65 @@ describe("task-registry audit", () => {
       ["lost-expired", "lost", "error"],
       ["lost-retained", "lost", "warn"],
     ]);
+  });
+
+  it("summarizes future-retained lost tasks separately from actionable audit counts", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const nextCleanupAfter = now + 60_000;
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "lost-retained",
+          status: "lost",
+          endedAt: now - 60_000,
+          cleanupAfter: nextCleanupAfter,
+        }),
+        createTask({
+          taskId: "lost-expired",
+          status: "lost",
+          endedAt: now - 120_000,
+          cleanupAfter: now - 1,
+        }),
+      ],
+    });
+
+    expect(summarizeActionableTaskAuditFindings(findings, { now })).toEqual({
+      total: 1,
+      warnings: 0,
+      errors: 1,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 1,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+    expect(summarizeRetainedLostTaskAuditFindings(findings, { now })).toEqual({
+      count: 1,
+      nextCleanupAfter,
+    });
+  });
+
+  it("treats old seven-day lost cleanupAfter values as expired after the lost window", () => {
+    const now = Date.parse("2026-03-30T01:00:00.000Z");
+    const endedAt = now - LOST_TASK_RETENTION_MS - 1;
+    const findings = listTaskAuditFindings({
+      now,
+      tasks: [
+        createTask({
+          taskId: "lost-old-retention",
+          status: "lost",
+          endedAt,
+          cleanupAfter: endedAt + DEFAULT_TASK_RETENTION_MS,
+        }),
+      ],
+    });
+
+    expect(summarizeActionableTaskAuditFindings(findings, { now }).errors).toBe(1);
+    expect(summarizeRetainedLostTaskAuditFindings(findings, { now })).toEqual({ count: 0 });
   });
 
   it("does not double-report lost tasks as missing cleanup", () => {

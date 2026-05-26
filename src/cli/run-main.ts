@@ -397,7 +397,6 @@ async function resolveUnownedCliPrimary(params: {
   const invocation = resolveCliArgvInvocation(rewriteUpdateFlagArgv(params.argv));
   const { primary } = invocation;
   if (
-    invocation.hasHelpOrVersion ||
     !primary ||
     primary === "help" ||
     isReservedNonPluginCommandRoot(primary) ||
@@ -613,6 +612,19 @@ export async function runCli(argv: string[] = process.argv) {
         if (outputPrecomputedNodesHelpText()) {
           return;
         }
+      }
+    }
+
+    // Reject unowned command roots before help/version routing, so that
+    // `openclaw <typo> --help` surfaces the same Unknown command error as
+    // `openclaw <typo>` instead of silently showing generic top-level help.
+    // Runs after legitimate precomputed help fast paths so known help commands
+    // still dispatch normally. See #81077.
+    {
+      const config = await readBestEffortCliConfig();
+      const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
+      if (unownedPrimary) {
+        throw new Error(await resolveUnownedCliPrimaryMessage({ primary: unownedPrimary, config }));
       }
     }
 

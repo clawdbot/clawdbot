@@ -218,12 +218,13 @@ describe("current plugin metadata snapshot", () => {
     expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
   });
 
-  it("does not keep derived registry snapshots as the current snapshot", () => {
+  it("keeps derived registry snapshots as the current process snapshot", () => {
     const persisted = createSnapshot({ registrySource: "persisted" });
+    const derived = createSnapshot({ registrySource: "derived" });
     setCurrentPluginMetadataSnapshot(persisted);
-    setCurrentPluginMetadataSnapshot(createSnapshot({ registrySource: "derived" }));
+    setCurrentPluginMetadataSnapshot(derived);
 
-    expect(getCurrentPluginMetadataSnapshot()).toBeUndefined();
+    expect(getCurrentPluginMetadataSnapshot()).toBe(derived);
   });
 
   it("restores a captured current snapshot state", () => {

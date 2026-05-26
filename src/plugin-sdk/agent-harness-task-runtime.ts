@@ -14,6 +14,7 @@ import {
   resolveSubagentCompletionOrigin,
 } from "../agents/subagent-announce-delivery.js";
 import { resolveAnnounceOrigin } from "../agents/subagent-announce-origin.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   assertAgentHarnessTaskRuntimeScope,
   type AgentHarnessTaskRuntimeScope,
@@ -247,11 +248,6 @@ export function isDurableAgentHarnessCompletionDelivery(
   return phases.some(
     (phase) => phase.phase === "direct-primary" && phase.delivered && phase.path === "direct",
   );
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized || undefined;
 }
 
 function assertScopedRunId(runId: string, runIdPrefix: string | undefined): void {

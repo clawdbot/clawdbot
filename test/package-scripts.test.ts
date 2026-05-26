@@ -128,12 +128,6 @@ describe("package scripts", () => {
     );
   });
 
-  it("runs native opus installer coverage in Windows CI", () => {
-    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
-      "test/scripts/install-discord-native-opus.test.ts",
-    );
-  });
-
   it("runs env launcher coverage in Windows CI", () => {
     expect(readPackageJson().scripts["test:windows:ci"]).toContain(
       "test/scripts/run-with-env.test.ts",

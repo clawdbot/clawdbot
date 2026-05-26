@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient } from "./client.js";
@@ -162,10 +163,6 @@ type ResolvedWholeCommentTimelineEntry = {
   isBotAuthored: boolean;
   content: ParsedCommentContent;
 };
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 
 function safeJsonStringify(value: unknown): string {
   try {

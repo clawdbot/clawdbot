@@ -565,7 +565,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       toolName,
       mediaUrls ?? [],
       result,
-      params.builtinToolNames,
+      params.trustedLocalMediaToolNames,
     );
     if (
       params.sourceReplyDeliveryMode === "message_tool_only" &&
@@ -1010,6 +1010,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     blockChunker,
     hookRunner: params.hookRunner,
     builtinToolNames: params.builtinToolNames,
+    trustedLocalMediaToolNames: params.trustedLocalMediaToolNames,
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,

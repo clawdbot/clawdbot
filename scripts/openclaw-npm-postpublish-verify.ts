@@ -71,12 +71,12 @@ const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // lazy chunks from the plugin build even though dist/extensions/feishu is
   // externalized from the root package scan.
   "@larksuiteoapi/node-sdk",
+  // Discord remains an official external plugin. The root package can retain
+  // orphaned lazy chunks from the plugin build, but the plugin owns prism-media.
+  "prism-media",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "link-preview-js",
   "matrix-js-sdk",
-  // Discord voice decoder fallback. The root chunk catches missing decoders and the owning
-  // Discord plugin remains externalized from the root package.
-  "opusscript",
   // Public plugin SDK contract helpers are intentionally test-only entrypoints.
   // Consumers importing them run under their own Vitest dev dependency.
   "vitest",

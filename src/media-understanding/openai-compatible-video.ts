@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 
 export type OpenAiCompatibleVideoPayload = {
   choices?: Array<{
@@ -28,11 +29,7 @@ export function coerceOpenAiCompatibleVideoText(
     return message.content.trim();
   }
   if (Array.isArray(message.content)) {
-    const text = message.content
-      .map((part) => (typeof part.text === "string" ? part.text.trim() : ""))
-      .filter(Boolean)
-      .join("\n")
-      .trim();
+    const text = normalizeTrimmedStringList(message.content.map((part) => part.text)).join("\n");
     if (text) {
       return text;
     }

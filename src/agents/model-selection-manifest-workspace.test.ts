@@ -127,4 +127,234 @@ describe("configured model manifest workspace scope", () => {
     ]);
     expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
   });
+
+  it("does not load manifest metadata for empty configured model aliases", async () => {
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {} as unknown as OpenClawConfig;
+
+    const aliases = buildModelAliasIndex({ cfg, defaultProvider: "anthropic" });
+
+    expect(aliases.byAlias.size).toBe(0);
+    expect(aliases.byKey.size).toBe(0);
+    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load manifest metadata for wildcard-only configured model aliases", async () => {
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/*": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const aliases = buildModelAliasIndex({ cfg, defaultProvider: "anthropic" });
+
+    expect(aliases.byAlias.size).toBe(0);
+    expect(aliases.byKey.size).toBe(0);
+    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load manifest metadata for configured model entries without aliases", async () => {
+    const { buildModelAliasIndex } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/sonnet-4.6": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const aliases = buildModelAliasIndex({ cfg, defaultProvider: "anthropic" });
+
+    expect(aliases.byAlias.size).toBe(0);
+    expect(aliases.byKey.size).toBe(0);
+    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load manifest metadata for statically resolved primary models", async () => {
+    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+    const cases: Array<{ cfg: OpenClawConfig; expected: { provider: string; model: string } }> = [
+      {
+        cfg: {
+          agents: { defaults: { model: { primary: "sonnet-4.6" } } },
+        } as unknown as OpenClawConfig,
+        expected: { provider: "anthropic", model: "sonnet-4.6" },
+      },
+      {
+        cfg: {
+          agents: { defaults: { model: { primary: "gpt-5.5" } } },
+          models: { providers: { openai: { models: [{ id: "gpt-5.5" }] } } },
+        } as unknown as OpenClawConfig,
+        expected: { provider: "openai", model: "gpt-5.5" },
+      },
+    ];
+
+    for (const { cfg, expected } of cases) {
+      getCurrentPluginMetadataSnapshotMock.mockClear();
+      loadManifestMetadataSnapshotMock.mockClear();
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4-6",
+        }),
+      ).toEqual(expected);
+      expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+      expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not load manifest metadata for non-alias primary models with configured aliases", async () => {
+    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "haiku-4.6" },
+          models: {
+            "anthropic/sonnet-4.6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      }),
+    ).toEqual({ provider: "anthropic", model: "haiku-4.6" });
+    expect(getCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("uses manifest-normalized configured refs to infer providers for bare defaults", async () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          modelIdNormalization: {
+            providers: {
+              anthropic: {
+                aliases: {
+                  "sonnet-4.6": "claude-sonnet-4-6",
+                },
+              },
+            },
+          },
+        },
+      ],
+    });
+    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "claude-sonnet-4-6" },
+          models: {
+            "anthropic/sonnet-4.6": {},
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      }),
+    ).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses resolved manifest plugins while resolving configured model aliases", async () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          modelIdNormalization: {
+            providers: {
+              anthropic: {
+                aliases: {
+                  "sonnet-4.6": "claude-sonnet-4-6",
+                },
+              },
+              openrouter: {
+                prefixWhenBare: "openrouter",
+              },
+            },
+          },
+        },
+      ],
+    });
+    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "router-auto" },
+          models: {
+            "anthropic/sonnet-4.6": { alias: "sonnet" },
+            "openrouter:auto": { alias: "router-auto" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      }),
+    ).toEqual({ provider: "openrouter", model: "openrouter/auto" });
+    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses resolved manifest plugins while resolving direct primary models", async () => {
+    loadManifestMetadataSnapshotMock.mockReturnValue({
+      plugins: [
+        {
+          modelIdNormalization: {
+            providers: {
+              anthropic: {
+                aliases: {
+                  "sonnet-4.6": "claude-sonnet-4-6",
+                },
+              },
+              openrouter: {
+                prefixWhenBare: "openrouter",
+              },
+            },
+          },
+        },
+      ],
+    });
+    const { resolveConfiguredModelRef } = await import("./model-selection-shared.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openrouter:auto" },
+          models: {
+            "anthropic/sonnet-4.6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      }),
+    ).toEqual({ provider: "openrouter", model: "openrouter/auto" });
+    expect(loadManifestMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+  });
 });

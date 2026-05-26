@@ -5,6 +5,7 @@ import {
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   loadGatewayStartupPluginPlan,
@@ -92,7 +93,7 @@ function collectBundledChannelOwnerPluginIds(params: {
       }
     }
   }
-  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(pluginIds);
 }
 
 function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
@@ -118,7 +119,7 @@ function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
       ids.delete(pluginId);
     }
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
 }
 
 function collectSelectedContextEnginePluginIds(config: OpenClawConfig): string[] {
@@ -184,5 +185,5 @@ export function resolveEffectivePluginIds(params: {
   }).pluginIds) {
     ids.add(pluginId);
   }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(ids);
 }

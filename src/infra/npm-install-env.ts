@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 export type NpmProjectInstallEnvOptions = {
   cacheDir?: string;
@@ -138,7 +139,7 @@ function resolveNpmConfigFiles(
     resolveScopedGlobalNpmrc(scope),
     readNpmGlobalConfigPath(env, scope),
   ];
-  return [...new Set(files.filter((file): file is string => Boolean(file)))];
+  return uniqueStrings(files.filter((file): file is string => Boolean(file)));
 }
 
 function hasNpmrcConfigKey(filePath: string, key: string): boolean {

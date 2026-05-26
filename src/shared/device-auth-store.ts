@@ -4,16 +4,13 @@ import {
   normalizeDeviceAuthRole,
   normalizeDeviceAuthScopes,
 } from "./device-auth.js";
+import { isRecord } from "./record-coerce.js";
 export type { DeviceAuthEntry, DeviceAuthStore } from "./device-auth.js";
 
 export type DeviceAuthStoreAdapter = {
   readStore: () => DeviceAuthStore | null;
   writeStore: (store: DeviceAuthStore) => void;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function coerceDeviceAuthEntry(role: string, value: unknown): DeviceAuthEntry | null {
   if (!isRecord(value) || typeof value.token !== "string") {

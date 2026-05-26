@@ -11,7 +11,11 @@ import {
   type ImageDescriptionRequest,
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
-import { isOverloadedErrorMessage, isServerErrorMessage } from "../../plugin-sdk/test-env.js";
+import {
+  isBillingErrorMessage,
+  isOverloadedErrorMessage,
+  isServerErrorMessage,
+} from "../../plugin-sdk/test-env.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
 import { createImageTool, testing } from "./image-tool.js";
 
@@ -106,6 +110,7 @@ function formatLiveError(error: unknown): string {
 function isSkippableLiveError(error: unknown): boolean {
   const message = formatLiveError(error);
   return (
+    isBillingErrorMessage(message) ||
     isOverloadedErrorMessage(message) ||
     isServerErrorMessage(message) ||
     /timed out|operation was aborted/i.test(message)

@@ -11,6 +11,7 @@ import {
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
 } from "../cli/completion-runtime.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -83,6 +84,66 @@ export async function checkShellCompletionStatus(
     cachePath,
     usesSlowPattern,
   };
+}
+
+export function shellCompletionStatusToHealthFindings(
+  status: ShellCompletionStatus,
+): readonly HealthFinding[] {
+  const checkId = "core/doctor/shell-completion";
+  const path = `shellCompletion.${status.shell}`;
+  if (status.usesSlowPattern) {
+    return [
+      {
+        checkId,
+        severity: "info",
+        message: `Your ${status.shell} profile uses slow dynamic completion (source <(...)).`,
+        path,
+        fixHint: "Run `openclaw doctor --fix` to upgrade to cached completion.",
+      },
+    ];
+  }
+  if (status.profileInstalled && !status.cacheExists) {
+    return [
+      {
+        checkId,
+        severity: "info",
+        message: `Shell completion is configured in your ${status.shell} profile but the cache is missing.`,
+        path,
+        fixHint: `Run \`openclaw completion --write-state\` or \`openclaw doctor --fix\` to regenerate ${status.cachePath}.`,
+      },
+    ];
+  }
+  return [];
+}
+
+export function shellCompletionStatusToRepairEffects(
+  status: ShellCompletionStatus,
+): readonly HealthRepairEffect[] {
+  const effects: HealthRepairEffect[] = [];
+  if (status.usesSlowPattern && !status.cacheExists) {
+    effects.push({
+      kind: "state",
+      action: "would-generate-completion-cache",
+      target: status.cachePath,
+      dryRunSafe: true,
+    });
+  }
+  if (status.usesSlowPattern) {
+    effects.push({
+      kind: "file",
+      action: "would-upgrade-shell-profile-completion",
+      target: status.shell,
+      dryRunSafe: false,
+    });
+  } else if (status.profileInstalled && !status.cacheExists) {
+    effects.push({
+      kind: "state",
+      action: "would-regenerate-completion-cache",
+      target: status.cachePath,
+      dryRunSafe: true,
+    });
+  }
+  return effects;
 }
 
 export type DoctorCompletionOptions = {

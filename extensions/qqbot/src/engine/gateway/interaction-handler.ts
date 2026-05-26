@@ -12,6 +12,7 @@
  */
 
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { authorizeQQBotApprovalAction } from "../../exec-approvals.js";
 import { resolveQQBotEffectivePolicies } from "../access/resolve-policy.js";
 import { getPlatformAdapter } from "../adapter/index.js";
@@ -319,7 +320,7 @@ function resolveApprovalActorSenderIds(event: InteractionEvent): string[] {
     const normalized = typeof value === "string" ? value.trim() : "";
     return normalized ? [normalized] : [];
   });
-  return Array.from(new Set(ids));
+  return uniqueStrings(ids);
 }
 
 function resolveApprovalKind(approvalId: string): "exec" | "plugin" {

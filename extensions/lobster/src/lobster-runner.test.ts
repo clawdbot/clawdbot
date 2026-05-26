@@ -11,34 +11,45 @@ import {
 } from "./lobster-runner.js";
 
 const requireForTest = createRequire(import.meta.url);
+const ajvInternalCacheKey = "_cache";
 
-type AjvCacheOwner = {
-  _cache?: { size: number };
+type AjvInstance = {
+  compile: (schema: unknown) => unknown;
 };
+type AjvConstructor = new (opts?: object) => AjvInstance;
 
 function readAjvInternalCacheSize(ajv: unknown): number {
-  return (ajv as AjvCacheOwner)["_cache"]?.size ?? 0;
+  return (ajv as Record<string, { size: number } | undefined>)[ajvInternalCacheKey]?.size ?? 0;
+}
+
+async function importLobsterAjvConstructor(): Promise<AjvConstructor> {
+  const lobsterEntry = requireForTest.resolve("@clawdbot/lobster");
+  const lobsterRequire = createRequire(lobsterEntry);
+  const ajvPath = lobsterRequire.resolve("ajv");
+  const ajvModule = (await import(pathToFileURL(ajvPath).href)) as { default?: unknown };
+  return ajvModule.default as AjvConstructor;
 }
 
 function createRepeatedResponseSchema() {
   return {
     type: "object",
     properties: {
-      answer: { type: "string" },
+      ok: { type: "boolean" },
+      output: {
+        type: "array",
+        items: { type: "object" },
+      },
     },
-    required: ["answer"],
-    additionalProperties: false,
   };
 }
 
 function createUniqueResponseSchema(index: number) {
   return {
-    type: "object",
+    ...createRepeatedResponseSchema(),
     properties: {
-      [`answer${index}`]: { type: "string" },
+      ...createRepeatedResponseSchema().properties,
+      [`unique_${index}`]: { type: "string" },
     },
-    required: [`answer${index}`],
-    additionalProperties: false,
   };
 }
 
@@ -414,53 +425,6 @@ describe("createEmbeddedLobsterRunner", () => {
     expect(loadRuntime).toHaveBeenCalledTimes(1);
   });
 
-  it("installs an Ajv content cache before loading the embedded runtime", async () => {
-    const AjvModule = await import("ajv");
-    const AjvCtor = AjvModule.default as unknown as new (opts?: object) => import("ajv").default;
-    const ajv = new AjvCtor({ allErrors: true, strict: false, addUsedSchema: false });
-    const before = readAjvInternalCacheSize(ajv);
-
-    await loadEmbeddedToolRuntimeFromPackage({
-      importModule: async () => ({
-        runToolRequest: vi.fn(),
-        resumeToolRequest: vi.fn(),
-      }),
-    });
-
-    const first = ajv.compile(createRepeatedResponseSchema());
-    const second = ajv.compile(createRepeatedResponseSchema());
-    const afterRepeated = readAjvInternalCacheSize(ajv);
-
-    expect(second).toBe(first);
-    expect(afterRepeated - before).toBe(1);
-
-    for (let index = 0; index < 520; index += 1) {
-      ajv.compile(createUniqueResponseSchema(index));
-    }
-
-    expect(readAjvInternalCacheSize(ajv)).toBeLessThanOrEqual(before + 512);
-  });
-
-  it("deduplicates content-identical schema compilation in the installed Lobster runtime", async () => {
-    await loadEmbeddedToolRuntimeFromPackage();
-
-    const corePath = requireForTest.resolve("@clawdbot/lobster/core");
-    const validationPath = path.join(path.dirname(path.dirname(corePath)), "validation.js");
-    const validationModule = (await import(pathToFileURL(validationPath).href)) as {
-      sharedAjv: import("ajv").default;
-    };
-    const before = readAjvInternalCacheSize(validationModule.sharedAjv);
-
-    const first = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
-    for (let index = 0; index < 1000; index += 1) {
-      validationModule.sharedAjv.compile(createRepeatedResponseSchema());
-    }
-    const second = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
-
-    expect(second).toBe(first);
-    expect(readAjvInternalCacheSize(validationModule.sharedAjv) - before).toBe(1);
-  });
-
   it("falls back to the installed package core file when the core export is unavailable", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-package-"));
     const packageRoot = path.join(tempDir, "node_modules", "@clawdbot", "lobster");
@@ -513,6 +477,52 @@ describe("createEmbeddedLobsterRunner", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("installs an Ajv content cache before loading the embedded runtime", async () => {
+    const AjvCtor = await importLobsterAjvConstructor();
+    const ajv = new AjvCtor({ allErrors: true, strict: false, addUsedSchema: false });
+    const before = readAjvInternalCacheSize(ajv);
+
+    await loadEmbeddedToolRuntimeFromPackage({
+      importModule: async () => ({
+        runToolRequest: vi.fn(),
+        resumeToolRequest: vi.fn(),
+      }),
+    });
+
+    const first = ajv.compile(createRepeatedResponseSchema());
+    const second = ajv.compile(createRepeatedResponseSchema());
+    const afterRepeated = readAjvInternalCacheSize(ajv);
+
+    expect(second).toBe(first);
+    expect(afterRepeated - before).toBe(1);
+
+    for (let index = 0; index < 520; index += 1) {
+      ajv.compile(createUniqueResponseSchema(index));
+    }
+
+    expect(readAjvInternalCacheSize(ajv)).toBeLessThanOrEqual(before + 512);
+  });
+
+  it("deduplicates content-identical schema compilation in the installed Lobster runtime", async () => {
+    await loadEmbeddedToolRuntimeFromPackage();
+
+    const corePath = requireForTest.resolve("@clawdbot/lobster/core");
+    const validationPath = path.join(path.dirname(path.dirname(corePath)), "validation.js");
+    const validationModule = (await import(pathToFileURL(validationPath).href)) as {
+      sharedAjv: AjvInstance;
+    };
+    const before = readAjvInternalCacheSize(validationModule.sharedAjv);
+
+    const first = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    for (let index = 0; index < 1000; index += 1) {
+      validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+    }
+    const second = validationModule.sharedAjv.compile(createRepeatedResponseSchema());
+
+    expect(second).toBe(first);
+    expect(readAjvInternalCacheSize(validationModule.sharedAjv) - before).toBe(1);
   });
 
   it("requires a pipeline for run", async () => {

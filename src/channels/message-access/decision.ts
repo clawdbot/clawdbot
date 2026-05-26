@@ -1,3 +1,4 @@
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../command-gating.js";
 import { resolveInboundMentionDecision } from "../mention-gating.js";
 import { applyMutableIdentifierPolicy, redactedAllowlistDiagnostics } from "./allowlist.js";
@@ -114,7 +115,7 @@ function mergeCommandMatch(
   owner: RedactedIngressMatch,
   group: RedactedIngressMatch,
 ): RedactedIngressMatch {
-  const matchedEntryIds = Array.from(new Set([...owner.matchedEntryIds, ...group.matchedEntryIds]));
+  const matchedEntryIds = uniqueStrings([...owner.matchedEntryIds, ...group.matchedEntryIds]);
   return {
     matched: owner.matched || group.matched || matchedEntryIds.length > 0,
     matchedEntryIds,

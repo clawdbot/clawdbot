@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import net from "node:net";
+import { isRecord as isObjectRecord } from "../../shared/record-coerce.js";
 import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
 
@@ -33,10 +34,6 @@ type UnknownFunction = (...args: unknown[]) => unknown;
 const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
   allowH2: false as const,
 });
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function applyMissingConnectOptions(
   connect: Record<string, unknown>,

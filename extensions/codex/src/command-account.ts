@@ -10,6 +10,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
@@ -149,7 +150,7 @@ function resolveDisplayAuthOrder(params: {
     resolveOrder(params.store.order, OPENAI_CODEX_PROVIDER_ID) ??
     resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID);
   if (codexOrder && codexOrder.length > 0) {
-    return { order: dedupe(codexOrder), explicit: true };
+    return { order: normalizeUniqueStringEntries(codexOrder), explicit: true };
   }
   const order = resolveAuthProfileOrder({
     cfg: params.config,
@@ -572,18 +573,4 @@ function formatRelativeReset(untilMs: number, nowMs: number): string {
   }
   const days = Math.ceil(durationMs / dayMs);
   return `in ${days} ${days === 1 ? "day" : "days"}`;
-}
-
-function dedupe(values: string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    result.push(trimmed);
-  }
-  return result;
 }

@@ -1,4 +1,5 @@
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { escapeRegExp } from "../utils.js";
 
 export function extractModelDirective(
@@ -19,7 +20,7 @@ export function extractModelDirective(
     /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)*)?(?:\s+(?:--runtime|runtime=|harness=)\s*([A-Za-z0-9_.:-]+))?/i,
   );
 
-  const aliases = (options?.aliases ?? []).map((alias) => alias.trim()).filter(Boolean);
+  const aliases = normalizeStringEntries(options?.aliases);
   const aliasMatch =
     modelMatch || aliases.length === 0
       ? null

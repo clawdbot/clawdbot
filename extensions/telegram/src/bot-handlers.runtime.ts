@@ -39,6 +39,7 @@ import {
   resolveSessionStoreEntry,
   updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -278,12 +279,7 @@ export const registerTelegramHandlers = ({
     return latest;
   };
   const mergeDispatchDedupeKeys = (...groups: Array<readonly string[] | undefined>) => [
-    ...new Set(
-      groups
-        .flatMap((group) => group ?? [])
-        .map((key) => key.trim())
-        .filter(Boolean),
-    ),
+    ...new Set(normalizeStringEntries(groups.flatMap((group) => group ?? []))),
   ];
   const releaseDispatchDedupeKeys = (keys: readonly string[], error?: unknown) => {
     releaseTelegramMessageDispatchReplay({

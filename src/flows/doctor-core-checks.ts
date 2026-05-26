@@ -7,6 +7,11 @@ import {
   type LegacyClawdBrowserProfileResidue,
 } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
+import {
+  checkShellCompletionStatus,
+  shellCompletionStatusToHealthFindings,
+  shellCompletionStatusToRepairEffects,
+} from "../commands/doctor-completion.js";
 import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -715,6 +720,29 @@ const finalConfigValidationCheck: HealthCheck = {
   },
 };
 
+const shellCompletionCheck: HealthCheck = {
+  id: "core/doctor/shell-completion",
+  kind: "core",
+  description: "Shell completion uses the cached completion path when configured.",
+  source: "doctor",
+  async detect() {
+    return shellCompletionStatusToHealthFindings(await checkShellCompletionStatus());
+  },
+  async repair(ctx) {
+    const status = await checkShellCompletionStatus();
+    const effects = shellCompletionStatusToRepairEffects(status);
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor shell-completion repair owns real mutations",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
   return {
     id: "core/doctor/workspace-suggestions",
@@ -742,6 +770,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
+    shellCompletionCheck,
     gatewayPlatformNotesCheck,
     createSecurityCheck(deps),
     browserCheck,

@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueValues } from "../shared/string-normalization.js";
 import { normalizeCronRunDiagnostics } from "./run-diagnostics.js";
 import type {
   CronDeliveryStatus,
@@ -146,10 +147,7 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   }
 
   const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
-  const lines = raw
-    .split("\n")
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split("\n"));
   const kept = lines.slice(Math.max(0, lines.length - opts.keepLines));
   await privateFileStore(path.dirname(filePath)).writeText(
     path.basename(filePath),
@@ -241,7 +239,7 @@ function normalizeRunStatuses(opts?: {
         status === "ok" || status === "error" || status === "skipped",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   const status = normalizeRunStatusFilter(opts?.status);
@@ -264,7 +262,7 @@ function normalizeDeliveryStatuses(opts?: {
         status === "not-requested",
     );
     if (filtered.length > 0) {
-      return Array.from(new Set(filtered));
+      return uniqueValues(filtered);
     }
   }
   if (

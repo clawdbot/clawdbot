@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  readCodexModelListResponse,
+  readCodexTurn,
   assertCodexThreadStartResponse,
   assertCodexThreadResumeResponse,
 } from "./protocol-validators.js";
@@ -71,5 +73,69 @@ describe("assertCodexThreadResumeResponse", () => {
     const result = assertCodexThreadResumeResponse(response);
     expect(result.thread.id).toBe("thread-1");
     expect(result.thread.sessionId).toBe("thread-1");
+  });
+});
+
+describe("readCodexModelListResponse", () => {
+  it("applies defaults from generated schemas behind local refs", () => {
+    const response = readCodexModelListResponse({
+      data: [
+        {
+          id: "gpt-test",
+          model: "gpt-test",
+          displayName: "GPT Test",
+          description: "test model",
+          hidden: false,
+          isDefault: false,
+          defaultReasoningEffort: "medium",
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    const model = response?.data[0] as
+      | (NonNullable<ReturnType<typeof readCodexModelListResponse>>["data"][number] & {
+          serviceTiers?: unknown;
+          supportsPersonality?: unknown;
+        })
+      | undefined;
+    expect(model?.inputModalities).toEqual(["text", "image"]);
+    expect(model?.serviceTiers).toEqual([]);
+    expect(model?.supportsPersonality).toBe(false);
+  });
+});
+
+describe("readCodexTurn", () => {
+  it("does not merge defaults from unrelated thread item union branches", () => {
+    const turn = readCodexTurn({
+      id: "turn-1",
+      status: "completed",
+      items: [{ id: "item-1", type: "plan", text: "ship it" }],
+    });
+
+    expect(turn?.items[0]).toEqual({ id: "item-1", type: "plan", text: "ship it" });
+  });
+
+  it("accepts nullable arrays in generated dynamic tool call items", () => {
+    const turn = readCodexTurn({
+      id: "turn-1",
+      status: "completed",
+      items: [
+        {
+          arguments: {},
+          contentItems: null,
+          id: "item-1",
+          status: "completed",
+          tool: "render",
+          type: "dynamicToolCall",
+        },
+      ],
+    });
+
+    expect(turn?.items[0]).toMatchObject({
+      contentItems: null,
+      id: "item-1",
+      type: "dynamicToolCall",
+    });
   });
 });

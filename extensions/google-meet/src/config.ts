@@ -4,8 +4,10 @@ import {
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
+  asRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GoogleMeetTransport = "chrome" | "chrome-node" | "twilio";
@@ -260,12 +262,6 @@ const GOOGLE_MEET_PREVIEW_ACK_KEYS = [
   "GOOGLE_MEET_PREVIEW_ACK",
 ] as const;
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 function resolveBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
@@ -318,13 +314,7 @@ function readEnvNumber(env: NodeJS.ProcessEnv, keys: readonly string[]): number 
 }
 
 function resolveStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  return normalized.length > 0 ? normalized : undefined;
+  return normalizeOptionalTrimmedStringList(value);
 }
 
 function resolveProvidersConfig(value: unknown): Record<string, Record<string, unknown>> {

@@ -84,11 +84,15 @@ export async function createSanitizeSessionHistoryProviderRuntimeMock(
   };
 }
 
-export function createSanitizeSessionHistoryProviderHookRuntimeMock(
+export async function createSanitizeSessionHistoryProviderHookRuntimeMock(
   extra: Record<string, unknown> = {},
 ) {
   const clearProviderRuntimePluginCacheForTest = vi.fn();
+  const actual = await vi.importActual<typeof import("../plugins/provider-hook-runtime.js")>(
+    "../plugins/provider-hook-runtime.js",
+  );
   return {
+    ...actual,
     clearProviderRuntimePluginCacheForTest,
     resolveProviderRuntimePlugin: vi.fn(() => undefined),
     resolveProviderHookPlugin: vi.fn(() => undefined),

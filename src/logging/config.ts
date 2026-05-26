@@ -3,6 +3,7 @@ import JSON5 from "json5";
 import { getCommandPathWithRootOptions } from "../cli/argv.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
 
 type LoggingConfig = OpenClawConfig["logging"];
 
@@ -16,10 +17,6 @@ let cachedLoggingConfig:
 export function shouldSkipMutatingLoggingConfigRead(argv: string[] = process.argv): boolean {
   const [primary, secondary] = getCommandPathWithRootOptions(argv, 2);
   return primary === "config" && (secondary === "schema" || secondary === "validate");
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function readLoggingConfig(): LoggingConfig | undefined {

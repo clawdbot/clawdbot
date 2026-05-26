@@ -5,6 +5,7 @@ import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   getSerializedSessionStore,
   getSerializedSessionStoreCacheStatsForTest,
+  getSessionStoreSnapshotCacheStatsForTest,
   getSessionStoreStringInternStatsForTest,
   readSessionStoreCache,
   setSerializedSessionStore,
@@ -173,6 +174,16 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
+  it("keeps disk-loaded clone:false cache hits by reference", () => {
+    const testStore = createSingleSessionStore();
+    fs.writeFileSync(storePath, JSON.stringify(testStore), "utf8");
+
+    const loaded1 = loadSessionStore(storePath, { clone: false });
+    const loaded2 = loadSessionStore(storePath, { clone: false });
+
+    expect(loaded2["session:1"]).toBe(loaded1["session:1"]);
+  });
+
   it("does not cache pre-migration or pre-normalization disk JSON", () => {
     fs.writeFileSync(
       storePath,
@@ -235,7 +246,7 @@ describe("Session Store Cache", () => {
     structuredCloneSpy.mockRestore();
   });
 
-  it("does not parse serialized stores when writing the cache", () => {
+  it("does not parse serialized stores when writing or reading object-cache hits", () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
         origin: { provider: "openai" },
@@ -252,9 +263,58 @@ describe("Session Store Cache", () => {
     const cached = readSessionStoreCache({ storePath });
 
     expect(cached?.["session:1"].origin?.provider).toBe("openai");
-    expect(parseSpy).toHaveBeenCalledTimes(1);
+    expect(parseSpy).not.toHaveBeenCalled();
 
     parseSpy.mockRestore();
+  });
+
+  it("clones cached session records without invoking prototype setters", () => {
+    const testStore = JSON.parse(
+      `{"session:1":{"sessionId":"id-1","updatedAt":${Date.now()},"displayName":"Test Session 1","__proto__":{"polluted":true}}}`,
+    ) as Record<string, SessionEntry>;
+
+    writeSessionStoreCache({ storePath, store: testStore });
+    const cached = readSessionStoreCache({ storePath });
+    const entry = cached?.["session:1"] as (SessionEntry & { polluted?: boolean }) | undefined;
+
+    expect(entry).toBeDefined();
+    expect(entry?.polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(entry, "__proto__")).toBe(true);
+    expect(Object.prototype).not.toHaveProperty("polluted");
+  });
+
+  it("preserves own __proto__ plugin JSON fields without changing clone prototypes", () => {
+    const pluginState: { [key: string]: unknown } = { ok: true };
+    Object.defineProperty(pluginState, "__proto__", {
+      value: { polluted: true },
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        pluginExtensions: {
+          demo: {
+            pluginState: pluginState as never,
+          },
+        },
+      }),
+    );
+
+    writeSessionStoreCache({ storePath, store: testStore });
+
+    const cached = readSessionStoreCache({ storePath });
+    const cachedState = cached?.["session:1"].pluginExtensions?.demo?.pluginState as
+      | Record<string, unknown>
+      | undefined;
+
+    expect(cachedState).toBeTruthy();
+    expect(Object.hasOwn(cachedState ?? {}, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(cachedState, "__proto__")?.value).toEqual({
+      polluted: true,
+    });
+    expect(Object.getPrototypeOf(cachedState ?? {})).toBe(Object.prototype);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("clones disk-loaded stores from the raw serialized JSON", () => {
@@ -377,6 +437,29 @@ describe("Session Store Cache", () => {
     parseSpy.mockRestore();
   });
 
+  it("builds a snapshot from disk without reparsing the mutable clone", async () => {
+    const testStore = createSingleSessionStore(
+      createSessionEntry({
+        skillsSnapshot: {
+          prompt: "snapshot skill prompt ".repeat(200),
+          skills: [{ name: "alpha" }],
+        },
+      }),
+    );
+
+    await saveSessionStore(storePath, testStore);
+    clearSessionStoreCacheForTest();
+
+    const parseSpy = vi.spyOn(JSON, "parse");
+
+    const snapshot = readSessionStoreSnapshot(storePath);
+
+    expect(snapshot["session:1"].sessionId).toBe("id-1");
+    expect(parseSpy).toHaveBeenCalledTimes(1);
+
+    parseSpy.mockRestore();
+  });
+
   it("serves immutable session snapshots without cloning cache hits", async () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
@@ -470,6 +553,35 @@ describe("Session Store Cache", () => {
     expect(after).not.toBe(before);
     expect(before["session:1"].displayName).toBe("Test Session 1");
     expect(after["session:1"].displayName).toBe("Updated Session");
+  });
+
+  it("builds immutable session snapshots lazily after writes", async () => {
+    await saveSessionStore(storePath, createSingleSessionStore());
+
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
+
+    const first = readSessionStoreSnapshot(storePath);
+    const statsAfterRead = getSessionStoreSnapshotCacheStatsForTest();
+    const second = readSessionStoreSnapshot(storePath);
+
+    expect(first).toBe(second);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(statsAfterRead.entries).toBe(1);
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        store["session:1"] = {
+          ...store["session:1"],
+          displayName: "Updated lazily",
+          updatedAt: Date.now() + 1,
+        };
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(getSessionStoreSnapshotCacheStatsForTest().entries).toBe(0);
+    expect(readSessionStoreSnapshot(storePath)["session:1"].displayName).toBe("Updated lazily");
   });
 
   it("should refresh cache when store file changes on disk", async () => {

@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import path from "node:path";
 import { readRootJsonObjectSync } from "@openclaw/fs-safe/json";
+import { isRecord } from "../shared/record-coerce.js";
 
 export function expectedIntegrityForUpdate(
   spec: string | undefined,
@@ -22,10 +23,6 @@ export function expectedIntegrityForUpdate(
     return undefined;
   }
   return integrity;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readInstalledPackageManifest(dir: string): Record<string, unknown> | undefined {

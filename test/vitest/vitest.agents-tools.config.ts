@@ -5,6 +5,7 @@ export function createAgentsToolsVitestConfig(env?: Record<string, string | unde
   return createScopedVitestConfig(agentsToolsTestPatterns, {
     dir: "src/agents",
     env,
+    fileParallelism: false,
     name: "agents-tools",
   });
 }

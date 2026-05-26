@@ -672,6 +672,26 @@ describe("runCli exit behavior", () => {
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 
+  it("rejects unowned command roots even when --help is appended (regression for #81077)", async () => {
+    await expect(runCli(["node", "openclaw", "foo", "--help"])).rejects.toThrow(
+      'No built-in command or plugin CLI metadata owns "foo"',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unowned command roots even when --version is appended", async () => {
+    await expect(runCli(["node", "openclaw", "foo", "--version"])).rejects.toThrow(
+      'No built-in command or plugin CLI metadata owns "foo"',
+    );
+
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+  });
+
   it("does not suggest plugins.allow for unknown command roots before proxy startup", async () => {
     loadConfigMock.mockReturnValueOnce({
       plugins: {

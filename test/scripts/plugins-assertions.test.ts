@@ -65,4 +65,77 @@ describe("plugins Docker assertions", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  it("compares local plugin source paths by canonical path", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const sourceParent = path.join(root, "source");
+    const sourcePath = `${sourceParent}//plugin`;
+    const normalizedSourcePath = path.join(sourceParent, "plugin");
+    const installPath = path.join(home, ".openclaw", "extensions", "demo-plugin-dir");
+    mkdirSync(sourcePath, { recursive: true });
+    mkdirSync(installPath, { recursive: true });
+
+    try {
+      writeJson(path.join(scratchRoot, "plugins3.json"), {
+        plugins: [{ id: "demo-plugin-dir", status: "loaded" }],
+      });
+      writeJson(path.join(scratchRoot, "plugins3-inspect.json"), {
+        gatewayMethods: ["demo.dir"],
+      });
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {
+          "demo-plugin-dir": {
+            source: "path",
+            sourcePath: normalizedSourcePath,
+            installPath,
+          },
+        },
+      });
+
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-dir", sourcePath], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        },
+      });
+
+      expect(result.status).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("still requires archive managed install directories to be removed", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const installPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
+    mkdirSync(installPath, { recursive: true });
+
+    try {
+      writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
+      writeFileSync(path.join(scratchRoot, "plugins2-install-path.txt"), installPath, "utf8");
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {},
+      });
+
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: home,
+          OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        },
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("managed install path still exists after uninstall");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });

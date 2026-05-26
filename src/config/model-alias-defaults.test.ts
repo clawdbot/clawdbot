@@ -122,7 +122,7 @@ describe("applyModelDefaults", () => {
     expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
       "gemini-flash",
     );
-    expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite-preview"]?.alias).toBe(
+    expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite"]?.alias).toBe(
       "gemini-flash-lite",
     );
   });

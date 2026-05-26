@@ -99,7 +99,7 @@ OpenClaw ships with the pi-ai catalog. These providers require **no** `models.pr
 - Use `params.serviceTier` when you want an explicit tier instead of the shared `/fast` toggle
 - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`) apply only on native OpenAI traffic to `api.openai.com`, not generic OpenAI-compatible proxies
 - Native OpenAI routes also keep Responses `store`, prompt-cache hints, and OpenAI reasoning-compat payload shaping; proxy routes do not
-- `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because live OpenAI API requests reject it and the current Codex catalog does not expose it
+- `openai/gpt-5.3-codex-spark` is intentionally suppressed in OpenClaw because live OpenAI API requests reject it; use `openai-codex/gpt-5.3-codex-spark` only when the Codex catalog exposes it for your account
 
 ```json5
 {
@@ -150,6 +150,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 - For the common subscription plus native Codex runtime route, sign in with `openai-codex` auth but configure `openai/gpt-5.5`; OpenAI agent turns select Codex by default.
 - Use provider/model `agentRuntime.id: "pi"` only when you want a compatibility route through PI; otherwise keep `openai/gpt-5.5` on the default Codex harness.
 - `openai-codex/gpt-*` refs remain a legacy PI route. Prefer `openai/gpt-5.5` on the native Codex runtime for new agent config, and run `openclaw doctor --fix` when you want to migrate old `openai-codex/*` refs to canonical `openai/*` refs.
+- `openai-codex/gpt-5.3-codex-spark` remains available only through Codex catalog discovery when the signed-in account advertises it; direct `openai/*` and Azure refs for that model stay suppressed.
 
 ```json5
 {

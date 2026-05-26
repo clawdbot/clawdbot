@@ -10,6 +10,7 @@ import {
   runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
 import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
   isNonSecretApiKeyMarker,
@@ -84,15 +85,12 @@ function resolveProviderDiscoveryFilter(params: {
   const { config, workspaceDir, env } = params;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
   if (testRaw) {
-    const ids = testRaw
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean);
-    return ids.length > 0 ? [...new Set(ids)] : undefined;
+    const ids = normalizeStringEntries(testRaw.split(","));
+    return ids.length > 0 ? uniqueStrings(ids) : undefined;
   }
   const scopedProviderIds = params.providerIds
-    ?.map((value) => value.trim())
-    .filter((value) => value.length > 0);
+    ? normalizeStringEntries([...params.providerIds])
+    : undefined;
   if (scopedProviderIds) {
     return resolveProviderPluginScopeFromProviderIds({
       providerIds: scopedProviderIds,
@@ -114,10 +112,7 @@ function resolveProviderDiscoveryFilter(params: {
   if (rawValues.length === 0) {
     return undefined;
   }
-  const ids = rawValues
-    .flatMap((value) => value.split(","))
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const ids = normalizeStringEntries(rawValues.flatMap((value) => value.split(",")));
   if (ids.length === 0) {
     return undefined;
   }

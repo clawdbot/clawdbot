@@ -1,8 +1,9 @@
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import type { AuthProfileStore } from "./types.js";
 
 export function dedupeProfileIds(profileIds: string[]): string[] {
-  return [...new Set(profileIds)];
+  return uniqueStrings(profileIds);
 }
 
 export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {

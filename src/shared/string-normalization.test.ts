@@ -2,8 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   normalizeAtHashSlug,
   normalizeHyphenSlug,
+  normalizeSortedUniqueStringEntries,
+  normalizeSortedUniqueTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,
+  normalizeUniqueSingleOrTrimmedStringList,
+  normalizeUniqueStringEntries,
+  normalizeUniqueStringEntriesLower,
+  normalizeUniqueTrimmedStringList,
+  sortUniqueStrings,
+  uniqueStrings,
 } from "./string-normalization.js";
 
 describe("shared/string-normalization", () => {
@@ -19,6 +27,51 @@ describe("shared/string-normalization", () => {
 
   it("normalizes mixed allow-list entries to lowercase", () => {
     expect(normalizeStringEntriesLower([" A ", "MiXeD", 7])).toEqual(["a", "mixed", "7"]);
+  });
+
+  it("sorts unique string values", () => {
+    expect(sortUniqueStrings(["b", "a", "b"])).toEqual(["a", "b"]);
+  });
+
+  it("deduplicates string values while preserving first-seen order", () => {
+    expect(uniqueStrings(["b", "a", "b", "c", "a"])).toEqual(["b", "a", "c"]);
+  });
+
+  it("normalizes unique string entries", () => {
+    expect(normalizeUniqueStringEntries([" b ", "a", "b", "", 4, "a"])).toEqual(["b", "a", "4"]);
+  });
+
+  it("normalizes unique lowercase string entries", () => {
+    expect(normalizeUniqueStringEntriesLower([" A ", "a", "MiXeD", "", 7])).toEqual([
+      "a",
+      "mixed",
+      "7",
+    ]);
+  });
+
+  it("normalizes sorted unique string entries", () => {
+    expect(normalizeSortedUniqueStringEntries([" b ", "a", "b", "", 4])).toEqual(["4", "a", "b"]);
+  });
+
+  it("normalizes unique trimmed string lists", () => {
+    expect(normalizeUniqueTrimmedStringList([" b ", "a", "b", "", "a"])).toEqual(["b", "a"]);
+    expect(normalizeUniqueTrimmedStringList("b")).toEqual([]);
+  });
+
+  it("normalizes sorted unique trimmed string lists", () => {
+    expect(normalizeSortedUniqueTrimmedStringList([" b ", "a", "b", "", "a"])).toEqual(["a", "b"]);
+    expect(normalizeSortedUniqueTrimmedStringList(["z", 1, " a "] as unknown[])).toEqual([
+      "a",
+      "z",
+    ]);
+  });
+
+  it("normalizes unique single-or-list string values", () => {
+    expect(normalizeUniqueSingleOrTrimmedStringList([" b ", "a", "b", "", "a"])).toEqual([
+      "b",
+      "a",
+    ]);
+    expect(normalizeUniqueSingleOrTrimmedStringList(" b ")).toEqual(["b"]);
   });
 
   it("normalizes slug-like labels while preserving supported symbols", () => {

@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHeader } from "./http-headers.js";
 import type { WebhookContext } from "./types.js";
 
@@ -829,11 +832,9 @@ function validatePlivoV3Signature(params: {
   const expected = normalizeSignatureBase64(digest);
 
   // Header can contain multiple signatures separated by commas.
-  const provided = params.signatureHeader
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => normalizeSignatureBase64(s));
+  const provided = normalizeStringEntries(params.signatureHeader.split(",")).map((s) =>
+    normalizeSignatureBase64(s),
+  );
 
   for (const sig of provided) {
     if (timingSafeEqualString(expected, sig)) {

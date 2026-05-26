@@ -104,6 +104,18 @@ function writeNpmBeforePolicyFixture(path: string, argsLog: string) {
 describe("install-cli.sh", () => {
   const script = readFileSync(SCRIPT_PATH, "utf8");
 
+  it("rejects installer options with missing values", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      parse_args --prefix --no-onboard
+    `);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Missing value for --prefix");
+    expect(result.stdout + result.stderr).not.toContain("unbound variable");
+  });
+
   it("keeps HOME for default prefix while OPENCLAW_HOME controls git checkout paths", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-cli-home-"));
     const osHome = join(tmp, "os-home");
@@ -199,7 +211,7 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("branch=--no-frozen-lockfile");
     expect(result.stdout).toContain("tag=--frozen-lockfile");
     expect(script).toContain(
-      'CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+      'CI="${CI:-true}" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
     );
   });
 
@@ -250,6 +262,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `export PATH=${JSON.stringify(bin)}`,
           "os_detect() { printf 'linux\\n'; }",
           "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",
@@ -361,6 +374,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `export PATH=${JSON.stringify(`${nodePrefixBin}:${oldBin}:${bin}`)}`,
           "os_detect() { printf 'linux\\n'; }",
           "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",
@@ -442,6 +456,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `export PATH=${JSON.stringify(bin)}`,
           "os_detect() { printf 'linux\\n'; }",
           "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",
@@ -514,6 +529,7 @@ describe("install-cli.sh", () => {
           "set -euo pipefail",
           `cd ${JSON.stringify(process.cwd())}`,
           `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `export PATH=${JSON.stringify(bin)}`,
           "os_detect() { printf 'linux\\n'; }",
           "arch_detect() { printf 'x64\\n'; }",
           "is_musl_linux() { return 0; }",

@@ -14,6 +14,7 @@ vi.mock("../plugins/setup-registry.js", () => ({
 
 vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: () => ({
+    diagnostics: [],
     plugins: [
       {
         id: "brave",

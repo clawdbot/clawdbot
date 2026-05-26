@@ -31,6 +31,7 @@ import {
   normalizeIMessageAcpConversationId,
   resolveIMessageConversationIdFromTarget,
 } from "./conversation-id.js";
+import { imessageDoctor } from "./doctor.js";
 import {
   resolveIMessageGroupRequireMention,
   resolveIMessageGroupToolPolicy,
@@ -207,9 +208,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         resolveRequireMention: resolveIMessageGroupRequireMention,
         resolveToolPolicy: resolveIMessageGroupToolPolicy,
       },
-      doctor: {
-        groupAllowFromFallbackToAllowFrom: false,
-      },
+      doctor: imessageDoctor,
       conversationBindings: {
         supportsCurrentConversationBinding: true,
         createManager: ({ cfg, accountId }) =>

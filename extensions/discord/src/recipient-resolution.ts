@@ -37,3 +37,13 @@ export async function parseAndResolveRecipient(
   );
   return { kind: resolved.kind, id: resolved.id };
 }
+
+export async function parseAndResolveChannelRecipient(
+  raw: string,
+  cfg: OpenClawConfig,
+  accountId?: string,
+): Promise<DiscordRecipient> {
+  return await parseAndResolveRecipient(raw, cfg, accountId, {
+    defaultKind: "channel",
+  });
+}

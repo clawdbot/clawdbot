@@ -25,7 +25,14 @@ import { qaChannelStatus } from "./status.js";
 import type { CoreConfig, ResolvedQaChannelAccount } from "./types.js";
 
 const CHANNEL_ID = "qa-channel" as const;
-const meta = { ...getChatChannelMeta(CHANNEL_ID) };
+const meta = {
+  ...getChatChannelMeta(CHANNEL_ID),
+  id: CHANNEL_ID,
+  label: "QA Channel",
+  selectionLabel: "QA Channel",
+  docsPath: "/channels/qa-channel",
+  blurb: "Synthetic QA channel for OpenClaw QA runs.",
+};
 
 const qaChannelMessageAdapter = defineChannelMessageAdapter({
   id: CHANNEL_ID,

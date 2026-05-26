@@ -13,6 +13,7 @@ import {
 import {
   createRealtimeVoiceAgentTalkbackQueue,
   createRealtimeVoiceBridgeSession,
+  createRealtimeVoiceOutputActivityTracker,
   createTalkSessionController,
   convertPcmToMulaw8k,
   extendRealtimeVoiceOutputEchoSuppression,
@@ -30,6 +31,7 @@ import {
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeEventLogEntry,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceOutputActivityTracker,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
   type RealtimeVoiceTranscriptEntry,
@@ -161,6 +163,24 @@ export function extendGoogleMeetOutputEchoSuppression(params: {
     bytesPerMs,
     tailMs: GOOGLE_MEET_OUTPUT_ECHO_SUPPRESSION_TAIL_MS,
   });
+}
+
+export function recordGoogleMeetOutputActivity(params: {
+  tracker: RealtimeVoiceOutputActivityTracker;
+  audio: Buffer;
+  audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
+  nowMs: number;
+  lastOutputPlayableUntilMs: number;
+  suppressInputUntilMs: number;
+}): { lastOutputPlayableUntilMs: number; suppressInputUntilMs: number; durationMs: number } {
+  const suppression = extendGoogleMeetOutputEchoSuppression(params);
+  params.tracker.markPlaybackStarted();
+  params.tracker.markAudio({
+    audioMs: suppression.durationMs,
+    sourceAudioBytes: params.audio.byteLength,
+    sinkAudioBytes: params.audio.byteLength,
+  });
+  return suppression;
 }
 
 export function resolveGoogleMeetRealtimeAudioFormat(config: GoogleMeetConfig) {
@@ -477,7 +497,7 @@ export async function startCommandAgentAudioBridge(params: {
   let lastInputAt: string | undefined;
   let lastOutputAt: string | undefined;
   let lastInputBytes = 0;
-  let lastOutputBytes = 0;
+  const outputActivity = createRealtimeVoiceOutputActivityTracker();
   let suppressedInputBytes = 0;
   let lastSuppressedInputAt: string | undefined;
   let suppressInputUntil = 0;
@@ -606,7 +626,8 @@ export async function startCommandAgentAudioBridge(params: {
   });
 
   const writeOutputAudio = (audio: Buffer) => {
-    const suppression = extendGoogleMeetOutputEchoSuppression({
+    const suppression = recordGoogleMeetOutputActivity({
+      tracker: outputActivity,
       audio,
       audioFormat: params.config.chrome.audioFormat,
       nowMs: Date.now(),
@@ -616,7 +637,6 @@ export async function startCommandAgentAudioBridge(params: {
     suppressInputUntil = suppression.suppressInputUntilMs;
     lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
     lastOutputAt = new Date().toISOString();
-    lastOutputBytes += audio.byteLength;
     emitTalkEvent({
       type: "output.audio.delta",
       turnId: ensureTalkTurn(),
@@ -787,12 +807,12 @@ export async function startCommandAgentAudioBridge(params: {
       providerConnected: sttSession?.isConnected() ?? false,
       realtimeReady,
       audioInputActive: lastInputBytes > 0,
-      audioOutputActive: lastOutputBytes > 0,
+      audioOutputActive: outputActivity.isActive(),
       lastInputAt,
       lastOutputAt,
       lastSuppressedInputAt,
       lastInputBytes,
-      lastOutputBytes,
+      lastOutputBytes: outputActivity.snapshot().sinkAudioBytes,
       suppressedInputBytes,
       ...getGoogleMeetRealtimeTranscriptHealth(transcript),
       recentTalkEvents: summarizeGoogleMeetTalkEvents(recentTalkEvents),
@@ -833,19 +853,19 @@ export async function startCommandRealtimeAudioBridge(params: {
   let lastInputAt: string | undefined;
   let lastOutputAt: string | undefined;
   let lastInputBytes = 0;
-  let lastOutputBytes = 0;
+  const outputActivity = createRealtimeVoiceOutputActivityTracker();
   let lastClearAt: string | undefined;
   let clearCount = 0;
   let suppressedInputBytes = 0;
   let lastSuppressedInputAt: string | undefined;
   let suppressInputUntil = 0;
-  let lastOutputAtMs = 0;
   let lastOutputPlayableUntilMs = 0;
   let bargeInInputProcess: BridgeProcess | undefined;
   let agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined;
 
   const suppressInputForOutput = (audio: Buffer) => {
-    const suppression = extendGoogleMeetOutputEchoSuppression({
+    const suppression = recordGoogleMeetOutputActivity({
+      tracker: outputActivity,
       audio,
       audioFormat: params.config.chrome.audioFormat,
       nowMs: Date.now(),
@@ -970,12 +990,13 @@ export async function startCommandRealtimeAudioBridge(params: {
       stdio: ["ignore", "pipe", "pipe"],
     });
     bargeInInputProcess.stdout?.on("data", (chunk) => {
-      if (stopped || lastOutputAtMs === 0) {
+      if (stopped || !outputActivity.isInterruptible()) {
         return;
       }
       const now = Date.now();
       const playbackActive = now <= Math.max(lastOutputPlayableUntilMs, suppressInputUntil);
-      if (!playbackActive && now - lastOutputAtMs > 1000) {
+      const lastOutputAudioAt = outputActivity.snapshot().lastAudioAt;
+      if (!playbackActive && (lastOutputAudioAt === undefined || now - lastOutputAudioAt > 1_000)) {
         return;
       }
       if (now - lastBargeInAt < params.config.chrome.bargeInCooldownMs) {
@@ -1141,9 +1162,7 @@ export async function startCommandRealtimeAudioBridge(params: {
           turnId,
           payload: { byteLength: audio.byteLength },
         });
-        lastOutputAtMs = Date.now();
         lastOutputAt = new Date().toISOString();
-        lastOutputBytes += audio.byteLength;
         suppressInputForOutput(audio);
         writeOutputAudio(audio);
       },
@@ -1315,12 +1334,12 @@ export async function startCommandRealtimeAudioBridge(params: {
       providerConnected: bridge?.bridge.isConnected() ?? false,
       realtimeReady,
       audioInputActive: lastInputBytes > 0,
-      audioOutputActive: lastOutputBytes > 0,
+      audioOutputActive: outputActivity.isActive(),
       lastInputAt,
       lastOutputAt,
       lastSuppressedInputAt,
       lastInputBytes,
-      lastOutputBytes,
+      lastOutputBytes: outputActivity.snapshot().sinkAudioBytes,
       suppressedInputBytes,
       ...getGoogleMeetRealtimeTranscriptHealth(transcript),
       ...getGoogleMeetRealtimeEventHealth(realtimeEvents),

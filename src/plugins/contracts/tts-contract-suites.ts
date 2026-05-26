@@ -70,9 +70,12 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("@earendil-works/pi-ai", () => {
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   const getApiProvider = vi.fn(() => undefined);
   return {
+    ...actual,
     completeSimple: vi.fn(),
     createAssistantMessageEventStream: vi.fn(),
     getApiProvider,

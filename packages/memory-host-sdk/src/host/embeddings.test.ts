@@ -1,5 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLocalEmbeddingProvider, DEFAULT_LOCAL_MODEL } from "./embeddings.js";
+import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./embedding-worker-errors.js";
+import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
+import {
+  createLocalEmbeddingProvider,
+  createLocalEmbeddingProviderInProcess,
+  DEFAULT_LOCAL_MODEL,
+} from "./embeddings.js";
 
 const nodeLlamaMock = vi.hoisted(() => ({
   importNodeLlamaCpp: vi.fn(),
@@ -39,10 +48,11 @@ function mockLocalEmbeddingRuntime(vector = new Float32Array([2.35, 3.45, 0.63, 
     .fn()
     .mockResolvedValue({ getEmbeddingFor, dispose: disposeContext });
   const loadModel = vi.fn().mockResolvedValue({ createEmbeddingContext, dispose: disposeModel });
+  const getLlama = vi.fn(async () => ({ loadModel, dispose: disposeLlama }));
   const resolveModelFile = vi.fn(async (modelPath: string) => `/resolved/${modelPath}`);
 
   nodeLlamaMock.importNodeLlamaCpp.mockResolvedValue({
-    getLlama: async () => ({ loadModel, dispose: disposeLlama }),
+    getLlama,
     resolveModelFile,
     LlamaLogLevel: { error: 0 },
   } as never);
@@ -52,6 +62,7 @@ function mockLocalEmbeddingRuntime(vector = new Float32Array([2.35, 3.45, 0.63, 
     disposeContext,
     disposeLlama,
     disposeModel,
+    getLlama,
     getEmbeddingFor,
     loadModel,
     resolveModelFile,
@@ -62,7 +73,7 @@ describe("local embedding provider", () => {
   it("normalizes local embeddings and resolves the default local model", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -92,7 +103,7 @@ describe("local embedding provider", () => {
   it("passes default contextSize (4096) to createEmbeddingContext when not configured", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -109,7 +120,7 @@ describe("local embedding provider", () => {
   it("passes configured contextSize to createEmbeddingContext", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -127,7 +138,7 @@ describe("local embedding provider", () => {
   it('passes "auto" contextSize to createEmbeddingContext when explicitly set', async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -142,10 +153,43 @@ describe("local embedding provider", () => {
     );
   });
 
+  it("runs local batch embeddings sequentially", async () => {
+    const calls: string[] = [];
+    const firstGate = createDeferred<{ vector: Float32Array }>();
+    const secondGate = createDeferred<{ vector: Float32Array }>();
+    const getEmbeddingFor = vi.fn((text: string) => {
+      calls.push(text);
+      return text === "first" ? firstGate.promise : secondGate.promise;
+    });
+    nodeLlamaMock.importNodeLlamaCpp.mockResolvedValue({
+      getLlama: vi.fn(async () => ({
+        loadModel: vi.fn(async () => ({
+          createEmbeddingContext: vi.fn(async () => ({ getEmbeddingFor })),
+        })),
+      })),
+      resolveModelFile: vi.fn(async () => "/resolved/model.gguf"),
+      LlamaLogLevel: { error: 0 },
+    } as never);
+    const provider = await createLocalEmbeddingProviderInProcess({
+      config: {} as never,
+      provider: "local",
+      model: "",
+      fallback: "none",
+    });
+
+    const batchPromise = provider.embedBatch(["first", "second"]);
+    await expect.poll(() => calls.join(",")).toBe("first");
+    firstGate.resolve({ vector: new Float32Array([1, 0]) });
+    await expect.poll(() => calls.join(",")).toBe("first,second");
+    secondGate.resolve({ vector: new Float32Array([0, 1]) });
+
+    await expect(batchPromise).resolves.toHaveLength(2);
+  });
+
   it("trims explicit local model paths and cache directories", async () => {
     const runtime = mockLocalEmbeddingRuntime(new Float32Array([1, 0]));
 
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -172,7 +216,7 @@ describe("local embedding provider", () => {
   it("disposes cached local llama resources when closed", async () => {
     const runtime = mockLocalEmbeddingRuntime();
 
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -199,7 +243,7 @@ describe("local embedding provider", () => {
       resolveModelFile: vi.fn(async (modelPath: string) => `/resolved/${modelPath}`),
       LlamaLogLevel: { error: 0 },
     } as never);
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -235,7 +279,7 @@ describe("local embedding provider", () => {
       }),
       LlamaLogLevel: { error: 0 },
     } as never);
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -274,7 +318,7 @@ describe("local embedding provider", () => {
       resolveModelFile: vi.fn(async () => "/resolved/model.gguf"),
       LlamaLogLevel: { error: 0 },
     } as never);
-    const provider = await createLocalEmbeddingProvider({
+    const provider = await createLocalEmbeddingProviderInProcess({
       config: {} as never,
       provider: "local",
       model: "",
@@ -290,5 +334,227 @@ describe("local embedding provider", () => {
     expect(disposeLlama).toHaveBeenCalledTimes(1);
     createContextGate.reject(new Error("context create aborted"));
     await expect(embedPromise).rejects.toThrow("context create aborted");
+  });
+
+  it("uses a worker process for the public local provider", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  if (message.type === "embedQuery") {
+    process.send({ id: message.id, ok: true, value: [1, 0] });
+    return;
+  }
+  if (message.type === "embedBatch") {
+    process.send({ id: message.id, ok: true, value: message.texts.map(() => [0, 1]) });
+    return;
+  }
+  process.send({ id: message.id, ok: true });
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      {
+        config: {} as never,
+        provider: "local",
+        model: "",
+        fallback: "none",
+      },
+      { workerScriptPath: workerScript },
+    );
+
+    await expect(provider.embedQuery("hello")).resolves.toEqual([1, 0]);
+    await expect(provider.embedBatch(["a", "b"])).resolves.toEqual([
+      [0, 1],
+      [0, 1],
+    ]);
+    await expect(provider.close?.()).resolves.toBeUndefined();
+  });
+
+  it("terminates the worker when close runs behind a pending request", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    const embedStartedPath = path.join(tempDir, "embed-started");
+    await fs.writeFile(
+      workerScript,
+      `
+const fs = require("node:fs");
+const embedStartedPath = ${JSON.stringify(embedStartedPath)};
+let busy = false;
+
+process.on("message", (message) => {
+  if (busy) {
+    return;
+  }
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  if (message.type === "embedQuery") {
+    busy = true;
+    fs.writeFileSync(embedStartedPath, "1");
+  }
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      {
+        config: {} as never,
+        provider: "local",
+        model: "",
+        fallback: "none",
+      },
+      { workerScriptPath: workerScript },
+    );
+
+    const embedPromise = provider.embedQuery("stuck");
+    const embedError = embedPromise.then(
+      () => undefined,
+      (err) => err,
+    );
+    await expect
+      .poll(async () => {
+        try {
+          await fs.access(embedStartedPath);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(true);
+
+    const closePromise = provider.close?.() ?? Promise.resolve();
+    const closeResult = await Promise.race([
+      closePromise.then(() => "closed" as const),
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_000)),
+    ]);
+
+    expect(closeResult).toBe("closed");
+    await expect(embedError).resolves.toMatchObject({
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+    });
+  });
+
+  it("does not pass inline-source or inspector exec args to the file-backed worker", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "initialize" || message.type === "close") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  process.send({ id: message.id, ok: true, value: [process.execArgv.length] });
+});
+`,
+      "utf8",
+    );
+    const originalExecArgv = [...process.execArgv];
+    let provider: Awaited<ReturnType<typeof createLocalEmbeddingWorkerProvider>> | undefined;
+    try {
+      process.execArgv.splice(
+        0,
+        process.execArgv.length,
+        "--eval",
+        "setInterval(() => {}, 1000)",
+        "--print",
+        "1 + 1",
+        "--input-type=module",
+        "--inspect-brk=127.0.0.1:0",
+        "--inspect-port",
+        "0",
+      );
+      provider = await createLocalEmbeddingWorkerProvider(
+        {
+          config: {} as never,
+          provider: "local",
+          model: "",
+          fallback: "none",
+        },
+        { workerScriptPath: workerScript },
+      );
+      await expect(provider.embedQuery("hello")).resolves.toEqual([0]);
+    } finally {
+      process.execArgv.splice(0, process.execArgv.length, ...originalExecArgv);
+      await provider?.close?.();
+    }
+  });
+
+  it("reports worker initialization failures during provider creation", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  process.send({
+    id: message.id,
+    ok: false,
+    error: { message: "Cannot find package 'node-llama-cpp'", code: "ERR_MODULE_NOT_FOUND" },
+  });
+});
+`,
+      "utf8",
+    );
+
+    try {
+      await createLocalEmbeddingWorkerProvider(
+        {
+          config: {} as never,
+          provider: "local",
+          model: "",
+          fallback: "none",
+        },
+        { workerScriptPath: workerScript },
+      );
+      throw new Error("expected local embedding provider creation to fail");
+    } catch (err) {
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toBe("Cannot find package 'node-llama-cpp'");
+      expect((err as Error & { code?: string }).code).toBe("ERR_MODULE_NOT_FOUND");
+    }
+  });
+
+  it("reports worker exits with structured failure codes", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-local-embedding-worker-"));
+    const workerScript = path.join(tempDir, "worker.cjs");
+    await fs.writeFile(
+      workerScript,
+      `
+process.on("message", (message) => {
+  if (message.type === "initialize") {
+    process.send({ id: message.id, ok: true });
+    return;
+  }
+  process.exit(134);
+});
+`,
+      "utf8",
+    );
+    const provider = await createLocalEmbeddingWorkerProvider(
+      {
+        config: {} as never,
+        provider: "local",
+        model: "",
+        fallback: "none",
+      },
+      { workerScriptPath: workerScript },
+    );
+
+    await expect(provider.embedQuery("hello")).rejects.toMatchObject({
+      code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+      reason: "exit",
+      exitCode: 134,
+    });
   });
 });

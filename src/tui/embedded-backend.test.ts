@@ -3,6 +3,17 @@ import { isEmbeddedMode, setEmbeddedMode } from "../infra/embedded-mode.js";
 import { defaultRuntime } from "../runtime.js";
 
 const agentCommandFromIngressMock = vi.fn();
+const updateSessionStoreMock = vi.fn();
+const applySessionsPatchToStoreMock = vi.fn();
+const getRuntimeConfigMock = vi.fn(() => ({}));
+const loadGatewayModelCatalogMock = vi.fn(
+  (_params?: unknown): Array<{ id: string; name: string; provider: string }> => [],
+);
+const loadSessionEntryMock = vi.fn((sessionKey: string) => ({
+  cfg: {},
+  canonicalKey: sessionKey,
+  entry: {},
+}));
 let registeredListener: ((evt: unknown) => void) | undefined;
 const embeddedEventTimestamp = Date.parse("2026-05-09T07:26:00.000Z");
 
@@ -28,7 +39,7 @@ vi.mock("../cli/deps.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   resolveAgentMainSessionKey: () => "agent:main:main",
   resolveStorePath: () => "/tmp/openclaw-sessions.json",
-  updateSessionStore: vi.fn(),
+  updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -41,12 +52,22 @@ vi.mock("../agents/defaults.js", () => ({
 
 vi.mock("../agents/model-selection.js", () => ({
   buildAllowedModelSet: ({ catalog }: { catalog: unknown[] }) => ({ allowedCatalog: catalog }),
+  buildConfiguredModelCatalog: ({ cfg }: { cfg: { models?: { providers?: unknown } } }) =>
+    Object.entries(
+      (cfg.models?.providers as Record<string, { models?: Array<{ id: string }> }>) ?? {},
+    ).flatMap(([provider, entry]) =>
+      (entry.models ?? []).map((model) => ({
+        id: `${provider}/${model.id}`,
+        name: model.id,
+        provider,
+      })),
+    ),
   resolveThinkingDefault: () => undefined,
 }));
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({}),
-  loadConfig: () => ({}),
+  getRuntimeConfig: () => getRuntimeConfigMock(),
+  loadConfig: () => getRuntimeConfigMock(),
 }));
 
 vi.mock("../gateway/cli-session-history.js", () => ({
@@ -78,11 +99,7 @@ vi.mock("../gateway/session-utils.js", () => ({
     storePath: "/tmp/openclaw-sessions.json",
     store: {},
   }),
-  loadSessionEntry: (sessionKey: string) => ({
-    cfg: {},
-    canonicalKey: sessionKey,
-    entry: {},
-  }),
+  loadSessionEntry: (sessionKey: string) => loadSessionEntryMock(sessionKey),
   migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
   readSessionMessagesAsync: async () => [],
   resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
@@ -93,7 +110,7 @@ vi.mock("../gateway/session-utils.js", () => ({
 }));
 
 vi.mock("../gateway/server-model-catalog.js", () => ({
-  loadGatewayModelCatalog: () => [],
+  loadGatewayModelCatalog: (params?: unknown) => loadGatewayModelCatalogMock(params),
 }));
 
 vi.mock("../gateway/session-reset-service.js", () => ({
@@ -105,7 +122,7 @@ vi.mock("../gateway/session-utils.fs.js", () => ({
 }));
 
 vi.mock("../gateway/sessions-patch.js", () => ({
-  applySessionsPatchToStore: () => ({ entry: {} }),
+  applySessionsPatchToStore: (...args: unknown[]) => applySessionsPatchToStoreMock(...args),
 }));
 
 vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
@@ -139,6 +156,23 @@ describe("EmbeddedTuiBackend", () => {
     vi.useFakeTimers();
     vi.setSystemTime(embeddedEventTimestamp);
     agentCommandFromIngressMock.mockReset();
+    updateSessionStoreMock.mockReset();
+    updateSessionStoreMock.mockImplementation(
+      async (_storePath: string, update: (store: Record<string, unknown>) => unknown) =>
+        await update({}),
+    );
+    applySessionsPatchToStoreMock.mockReset();
+    applySessionsPatchToStoreMock.mockResolvedValue({ ok: true, entry: {} });
+    getRuntimeConfigMock.mockReset();
+    getRuntimeConfigMock.mockReturnValue({});
+    loadGatewayModelCatalogMock.mockReset();
+    loadGatewayModelCatalogMock.mockReturnValue([]);
+    loadSessionEntryMock.mockReset();
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => ({
+      cfg: {},
+      canonicalKey: sessionKey,
+      entry: {},
+    }));
     registeredListener = undefined;
     setEmbeddedMode(false);
     defaultRuntime.log = originalRuntimeLog;
@@ -238,6 +272,167 @@ describe("EmbeddedTuiBackend", () => {
         },
       },
     ]);
+  });
+
+  it("lists configured replace-mode models without loading the gateway catalog", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      models: {
+        mode: "replace",
+        providers: {
+          "tui-pty-mock": {
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "tui-pty-mock/gpt-5.5",
+        name: "gpt-5.5",
+        provider: "tui-pty-mock",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves empty configured replace-mode model catalogs", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      models: {
+        mode: "replace",
+        providers: {},
+      },
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([]);
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("loads the gateway catalog for replace-mode provider wildcard allowlists", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          models: {
+            "tui-pty-mock/*": {},
+          },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          "tui-pty-mock": {
+            models: [{ id: "configured" }],
+          },
+        },
+      },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      {
+        id: "discovered",
+        name: "discovered",
+        provider: "tui-pty-mock",
+      },
+    ]);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.listModels()).resolves.toEqual([
+      {
+        id: "discovered",
+        name: "discovered",
+        provider: "tui-pty-mock",
+        contextWindow: undefined,
+        reasoning: undefined,
+      },
+    ]);
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("patches wildcard replace-mode sessions against the same full catalog as model listing", async () => {
+    getRuntimeConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          models: {
+            "tui-pty-mock/*": {},
+          },
+        },
+      },
+      models: {
+        mode: "replace",
+        providers: {
+          "tui-pty-mock": {
+            models: [{ id: "configured" }],
+          },
+        },
+      },
+    });
+    loadGatewayModelCatalogMock.mockReturnValue([
+      {
+        id: "discovered",
+        name: "discovered",
+        provider: "tui-pty-mock",
+      },
+    ]);
+    applySessionsPatchToStoreMock.mockImplementation(
+      async ({
+        loadGatewayModelCatalog,
+      }: {
+        loadGatewayModelCatalog?: () => Promise<unknown[]>;
+      }) => {
+        await loadGatewayModelCatalog?.();
+        return { ok: true, entry: {} };
+      },
+    );
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(
+      backend.patchSession({
+        key: "agent:main:main",
+        model: "tui-pty-mock/discovered",
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      key: "agent:main:main",
+    });
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ readOnly: false });
+  });
+
+  it("loads history thinking defaults from configured replace-mode models", async () => {
+    loadSessionEntryMock.mockReturnValue({
+      cfg: {
+        models: {
+          mode: "replace",
+          providers: {
+            "tui-pty-mock": {
+              models: [{ id: "gpt-5.5" }],
+            },
+          },
+        },
+      },
+      canonicalKey: "agent:main:main",
+      entry: {},
+    });
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+
+    await expect(backend.loadHistory({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+      sessionKey: "agent:main:main",
+      messages: [],
+      thinkingLevel: undefined,
+    });
+    expect(loadGatewayModelCatalogMock).not.toHaveBeenCalled();
   });
 
   it("waits for local post-turn maintenance before emitting chat final", async () => {

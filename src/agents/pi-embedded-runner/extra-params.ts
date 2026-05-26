@@ -154,6 +154,9 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cachedContent?: string;
   topP?: number;
   responseFormat?: Record<string, unknown>;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  seed?: number;
 };
 export type SupportedTransport = AgentRuntimeTransport;
 
@@ -467,6 +470,30 @@ function createStreamFnWithExtraParams(
   if (typeof cachedContent === "string" && cachedContent.trim()) {
     streamParams.cachedContent = cachedContent.trim();
   }
+
+  // Resolve sampling / repetition params and add to streamParams
+  // so transport layers can filter by API type (e.g. openai-responses skips penalty params).
+  // Resolve aliased params: camelCase (runtime/request) checked first so
+  // per-request gateway overrides take priority over configured snake_case values.
+  const resolvedFrequencyPenalty = resolveAliasedParamValueFromKeys(
+    [extraParams],
+    ["frequencyPenalty", "frequency_penalty"],
+  );
+  const resolvedPresencePenalty = resolveAliasedParamValueFromKeys(
+    [extraParams],
+    ["presencePenalty", "presence_penalty"],
+  );
+  const resolvedSeed = extraParams.seed;
+  if (typeof resolvedFrequencyPenalty === "number") {
+    streamParams.frequencyPenalty = resolvedFrequencyPenalty;
+  }
+  if (typeof resolvedPresencePenalty === "number") {
+    streamParams.presencePenalty = resolvedPresencePenalty;
+  }
+  if (typeof resolvedSeed === "number") {
+    streamParams.seed = resolvedSeed;
+  }
+
   const initialCacheRetention = resolveCacheRetention(
     extraParams,
     provider,
@@ -488,9 +515,11 @@ function createStreamFnWithExtraParams(
       typeof callModel.api === "string" ? callModel.api : undefined,
       typeof callModel.id === "string" ? callModel.id : undefined,
     );
-    if (Object.keys(streamParams).length === 0 && !cacheRetention) {
+    const hasStreamParams = Object.keys(streamParams).length > 0 || cacheRetention;
+    if (!hasStreamParams) {
       return underlying(callModel, context, options);
     }
+
     return underlying(callModel, context, {
       ...streamParams,
       ...(cacheRetention ? { cacheRetention } : {}),

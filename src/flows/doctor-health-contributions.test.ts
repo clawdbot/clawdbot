@@ -8,6 +8,12 @@ import {
 
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
+  registerCoreHealthChecks: vi.fn(),
+  registerBundledHealthChecks: vi.fn(),
+  runDoctorHealthRepairs: vi.fn(),
+  listHealthChecks: vi.fn(),
+  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+  resolveDefaultAgentId: vi.fn(() => "default"),
   note: vi.fn(),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   readConfigFileSnapshot: vi.fn().mockResolvedValue({
@@ -24,6 +30,27 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
+}));
+
+vi.mock("./doctor-core-checks.js", () => ({
+  registerCoreHealthChecks: mocks.registerCoreHealthChecks,
+}));
+
+vi.mock("./bundled-health-checks.js", () => ({
+  registerBundledHealthChecks: mocks.registerBundledHealthChecks,
+}));
+
+vi.mock("./doctor-repair-flow.js", () => ({
+  runDoctorHealthRepairs: mocks.runDoctorHealthRepairs,
+}));
+
+vi.mock("./health-check-registry.js", () => ({
+  listHealthChecks: mocks.listHealthChecks,
+}));
+
+vi.mock("../agents/agent-scope.js", () => ({
+  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
+  resolveDefaultAgentId: mocks.resolveDefaultAgentId,
 }));
 
 vi.mock("../terminal/note.js", () => ({
@@ -86,6 +113,30 @@ function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
 describe("doctor health contributions", () => {
   beforeEach(() => {
     mocks.maybeRunConfiguredPluginInstallReleaseStep.mockReset();
+    mocks.registerCoreHealthChecks.mockReset();
+    mocks.registerBundledHealthChecks.mockReset();
+    mocks.runDoctorHealthRepairs.mockReset();
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: {},
+      findings: [],
+      remainingFindings: [],
+      changes: [],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 0,
+      checksRepaired: 0,
+      checksValidated: 0,
+    });
+    mocks.listHealthChecks.mockReset();
+    mocks.listHealthChecks.mockReturnValue([
+      { id: "core/doctor/shell-completion" },
+      { id: "core/doctor/unrelated" },
+    ]);
+    mocks.resolveAgentWorkspaceDir.mockReset();
+    mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
+    mocks.resolveDefaultAgentId.mockReset();
+    mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.note.mockReset();
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
@@ -208,6 +259,27 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:structured-health-repairs")).toBeLessThan(
       ids.indexOf("doctor:write-config"),
     );
+  });
+
+  it("keeps legacy positional shell completion out of the broad structured repair pass", async () => {
+    const contribution = requireDoctorContribution("doctor:structured-health-repairs");
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
+      checks: [{ id: "core/doctor/unrelated" }],
+    });
   });
 
   it("skips doctor config writes under legacy update parents", () => {

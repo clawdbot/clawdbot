@@ -5,6 +5,7 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
@@ -80,7 +81,7 @@ export function mergeFactoryPolicyList(
   ...lists: Array<string[] | undefined>
 ): string[] | undefined {
   const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
-  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+  return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
 function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): string[] | undefined {
@@ -95,7 +96,7 @@ function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): st
   const withoutDefaultPluginMarker = allowlist.filter(
     (entry) => typeof entry !== "string" || entry.trim() !== DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   );
-  return Array.from(new Set(["*", ...withoutDefaultPluginMarker]));
+  return uniqueStrings(["*", ...withoutDefaultPluginMarker]);
 }
 
 export function resolveImageToolFactoryAvailable(params: {

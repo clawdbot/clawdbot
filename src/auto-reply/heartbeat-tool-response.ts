@@ -1,3 +1,5 @@
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString as readString } from "../shared/string-coerce.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -28,14 +30,6 @@ export type HeartbeatToolResponse = {
 
 const OUTCOMES = new Set<string>(HEARTBEAT_TOOL_OUTCOMES);
 const PRIORITIES = new Set<string>(HEARTBEAT_TOOL_PRIORITIES);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readStringAlias(record: Record<string, unknown>, ...keys: string[]) {
   for (const key of keys) {

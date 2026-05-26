@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getHomeDir, getQQBotDataDir, isWindows } from "../../utils/platform.js";
 import type { SlashCommandResult } from "../slash-commands.js";
 
@@ -329,7 +330,7 @@ export function buildBotLogsResult(): SlashCommandResult {
   );
 
   const fileCount = recentFiles.length;
-  const topSources = Array.from(new Set(recentFiles.map((item) => item.sourceDir))).slice(0, 3);
+  const topSources = uniqueStrings(recentFiles.map((item) => item.sourceDir)).slice(0, 3);
   let summaryText = `共 ${fileCount} 个日志文件，包含 ${totalIncluded} 行内容`;
   if (truncatedCount > 0) {
     summaryText += `（其中 ${truncatedCount} 个文件已截断为最后 ${MAX_LINES_PER_FILE} 行，总计原始 ${totalOriginal} 行）`;

@@ -69,6 +69,34 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
+  it("filters bundled plugin build entries for bounded script lanes", () => {
+    const entries = listBundledPluginBuildEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "active-memory,acpx",
+      },
+    });
+    const entryKeys = Object.keys(entries);
+
+    expect(entryKeys).toEqual(expect.arrayContaining(["extensions/acpx/index"]));
+    expect(entryKeys.every((entry) => /^extensions\/(?:acpx|active-memory)\//u.test(entry))).toBe(
+      true,
+    );
+  });
+
+  it("rejects unknown bounded bundled plugin build ids", () => {
+    expect(() =>
+      listBundledPluginBuildEntries({
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "missing-plugin",
+        },
+      }),
+    ).toThrow(
+      "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS references unknown bundled plugin id(s): missing-plugin",
+    );
+  });
+
   it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
     const entries = listBundledPluginBuildEntries();
 

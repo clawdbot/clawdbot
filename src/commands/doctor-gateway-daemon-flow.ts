@@ -388,11 +388,26 @@ export async function maybeRepairGatewayDaemon(params: {
       note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
       return;
     }
+
+    // Check if the gateway was recently restarted (e.g., via SIGUSR1 after an update).
+    // If a restart handoff exists and the gateway reports healthy, skip the restart prompt
+    // to avoid racing with the system supervisor and causing a restart loop.
+    const recentRestart = readGatewayRestartHandoffSync(serviceEnv);
+    if (recentRestart) {
+      try {
+        await healthCommand({ json: false, timeoutMs: 10_000 }, params.runtime);
+        note("Gateway is healthy after recent restart; skipping restart prompt.", "Gateway");
+        return;
+      } catch {
+        // Health probe failed — fall through to the restart prompt below.
+      }
+    }
+
     const restart = await confirmDoctorServiceRepair(
       params.prompter,
       {
         message: "Restart gateway service now?",
-        initialValue: true,
+        initialValue: false,
       },
       serviceRepairPolicy,
     );

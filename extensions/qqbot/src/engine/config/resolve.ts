@@ -12,7 +12,7 @@ import { getPlatformAdapter } from "../adapter/index.js";
 import {
   asOptionalObjectRecord as asRecord,
   normalizeOptionalLowercaseString,
-  normalizeStringifiedOptionalString,
+  normalizeStringifiedEntries,
   readStringField as readString,
 } from "../utils/string-normalize.js";
 
@@ -275,9 +275,7 @@ export function describeAccount(account: AccountSnapshot | undefined) {
 
 /** Normalize allowFrom entries into uppercase strings without the qqbot: prefix. */
 export function formatAllowFrom(allowFrom: Array<string | number> | undefined | null): string[] {
-  return (allowFrom ?? [])
-    .map((entry) => normalizeStringifiedOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry))
+  return normalizeStringifiedEntries(allowFrom ?? [])
     .map((entry) => entry.replace(/^qqbot:/i, ""))
     .map((entry) => entry.toUpperCase());
 }

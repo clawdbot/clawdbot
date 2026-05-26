@@ -1,4 +1,5 @@
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export function buildSubagentSystemPrompt(params: {
@@ -24,8 +25,8 @@ export function buildSubagentSystemPrompt(params: {
       ? params.maxSpawnDepth
       : DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const acpEnabled = params.acpEnabled === true;
-  const nativeCommandGuidanceLines = Array.from(
-    new Set((params.nativeCommandGuidanceLines ?? []).map((line) => line.trim()).filter(Boolean)),
+  const nativeCommandGuidanceLines = normalizeUniqueStringEntries(
+    params.nativeCommandGuidanceLines,
   );
   const canSpawn = childDepth < maxSpawnDepth;
   const parentLabel = childDepth >= 2 ? "parent orchestrator" : "main agent";

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -52,6 +53,7 @@ type IMessageSendOpts = {
     },
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
+  runCliJson?: (args: readonly string[]) => Promise<Record<string, unknown>>;
 };
 
 export type IMessageSendResult = {
@@ -210,6 +212,217 @@ function resolveOutboundEchoScope(params: {
   return `${params.accountId}:imessage:${params.target.to}`;
 }
 
+function buildIMessageCliJsonArgs(args: readonly string[], dbPath?: string): string[] {
+  const trimmedDbPath = dbPath?.trim();
+  return [...args, ...(trimmedDbPath ? ["--db", trimmedDbPath] : []), "--json"];
+}
+
+function resolveIMessageCliFailure(result: Record<string, unknown>): string | null {
+  if (result.success !== false) {
+    return null;
+  }
+  return typeof result.error === "string" && result.error.trim()
+    ? result.error.trim()
+    : "iMessage action failed";
+}
+
+async function runIMessageCliJson(
+  cliPath: string,
+  dbPath: string | undefined,
+  args: readonly string[],
+  timeoutMs?: number,
+): Promise<Record<string, unknown>> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(cliPath, buildIMessageCliJsonArgs(args, dbPath), {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let killEscalation: ReturnType<typeof setTimeout> | null = null;
+    const timer =
+      timeoutMs && timeoutMs > 0
+        ? setTimeout(() => {
+            child.kill("SIGTERM");
+            killEscalation = setTimeout(() => {
+              try {
+                child.kill("SIGKILL");
+              } catch {
+                // best-effort
+              }
+            }, 2000);
+            reject(new Error(`iMessage action timed out after ${timeoutMs}ms`));
+          }, timeoutMs)
+        : null;
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation) {
+        clearTimeout(killEscalation);
+      }
+      reject(error);
+    });
+    child.on("close", (code) => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation) {
+        clearTimeout(killEscalation);
+      }
+      const lines = stdout
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      const last = lines.at(-1);
+      let parsed: Record<string, unknown> | null = null;
+      if (last) {
+        try {
+          const json = JSON.parse(last) as unknown;
+          if (json && typeof json === "object" && !Array.isArray(json)) {
+            parsed = json as Record<string, unknown>;
+          }
+        } catch {
+          // handled below
+        }
+      }
+      if (code === 0 && parsed) {
+        const failure = resolveIMessageCliFailure(parsed);
+        if (failure) {
+          reject(new Error(failure));
+          return;
+        }
+        resolve(parsed);
+        return;
+      }
+      if (parsed && typeof parsed.error === "string" && parsed.error.trim()) {
+        reject(new Error(parsed.error.trim()));
+        return;
+      }
+      const detail = stderr.trim() || stdout.trim() || `imsg exited with code ${code}`;
+      reject(new Error(detail));
+    });
+  });
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isAttachmentCommandFallbackError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
+    message,
+  );
+}
+
+async function resolveAttachmentChatGuid(params: {
+  target: ReturnType<typeof parseIMessageTarget>;
+  runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
+}): Promise<string | null> {
+  if (params.target.kind === "chat_guid") {
+    return params.target.chatGuid;
+  }
+  if (params.target.kind !== "chat_id") {
+    return null;
+  }
+  const result = await params.runCliJson(["group", "--chat-id", String(params.target.chatId)]);
+  return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
+}
+
+async function trySendAttachmentForExplicitChat(params: {
+  accountId: string;
+  target: ReturnType<typeof parseIMessageTarget>;
+  filePath: string;
+  echoText?: string;
+  runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
+}): Promise<IMessageSendResult | null> {
+  let attachmentChatGuid: string | null = null;
+  try {
+    attachmentChatGuid = await resolveAttachmentChatGuid({
+      target: params.target,
+      runCliJson: params.runCliJson,
+    });
+  } catch (error) {
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  if (!attachmentChatGuid) {
+    return null;
+  }
+
+  let result: Record<string, unknown>;
+  try {
+    result = await params.runCliJson([
+      "send-attachment",
+      "--chat",
+      attachmentChatGuid,
+      "--file",
+      params.filePath,
+      "--transport",
+      "auto",
+    ]);
+  } catch (error) {
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+  const failure = resolveIMessageCliFailure(result);
+  if (failure) {
+    const error = new Error(failure);
+    if (isAttachmentCommandFallbackError(error)) {
+      return null;
+    }
+    throw error;
+  }
+
+  const resolvedId = resolveMessageId(result);
+  const approvalBindingMessageId = resolveOutboundMessageGuid(result);
+  const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
+  const echoScope = resolveOutboundEchoScope({
+    accountId: params.accountId,
+    target: params.target,
+  });
+  if (echoScope) {
+    rememberPersistedIMessageEcho({
+      scope: echoScope,
+      text: params.echoText,
+      messageId: resolvedId ?? undefined,
+    });
+  }
+  if (resolvedId) {
+    rememberIMessageReplyCache({
+      accountId: params.accountId,
+      messageId: resolvedId,
+      chatGuid: params.target.kind === "chat_guid" ? params.target.chatGuid : attachmentChatGuid,
+      chatId: params.target.kind === "chat_id" ? params.target.chatId : undefined,
+      timestamp: Date.now(),
+      isFromMe: true,
+    });
+  }
+  return {
+    messageId,
+    ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
+    sentText: "",
+    ...(params.echoText ? { echoText: params.echoText } : {}),
+    receipt: createIMessageSendReceipt({
+      messageId,
+      target: params.target,
+      kind: "media",
+    }),
+  };
+}
+
 export async function sendMessageIMessage(
   to: string,
   text: string,
@@ -278,6 +491,22 @@ export async function sendMessageIMessage(
   }
   const echoText = resolveOutboundEchoText(message, filePath ? mediaContentType : undefined);
   const resolvedReplyToId = sanitizeReplyToId(opts.replyToId);
+  const runCliJson =
+    opts.runCliJson ??
+    ((args: readonly string[]) => runIMessageCliJson(cliPath, dbPath, args, opts.timeoutMs));
+
+  if (filePath && !message.trim() && !resolvedReplyToId) {
+    const attachmentResult = await trySendAttachmentForExplicitChat({
+      accountId: account.accountId,
+      target,
+      filePath,
+      echoText,
+      runCliJson,
+    });
+    if (attachmentResult) {
+      return attachmentResult;
+    }
+  }
   const params: Record<string, unknown> = {
     text: message,
     service: service || "auto",

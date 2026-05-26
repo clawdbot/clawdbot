@@ -10,7 +10,7 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_OPENROUTER_MUSIC_MODEL = "google/lyria-3-pro-preview";
@@ -30,10 +30,6 @@ type OpenRouterStreamDeadline = {
   deadlineAtMs: number;
   timeoutMs: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function resolveOpenRouterMusicModel(model: string | undefined): string {
   return normalizeOptionalString(model) ?? DEFAULT_OPENROUTER_MUSIC_MODEL;

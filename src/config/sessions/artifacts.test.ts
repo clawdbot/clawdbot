@@ -4,6 +4,7 @@ import {
   isCompactionCheckpointTranscriptFileName,
   isPrimarySessionTranscriptFileName,
   isSessionArchiveArtifactName,
+  isSessionStoreTempArtifactName,
   isTrajectoryPointerArtifactName,
   isTrajectoryRuntimeArtifactName,
   isTrajectorySessionArtifactName,
@@ -21,6 +22,30 @@ describe("session artifact helpers", () => {
     expect(isSessionArchiveArtifactName("sessions.json.bak.1737420882")).toBe(true);
     expect(isSessionArchiveArtifactName("keep.deleted.keep.jsonl")).toBe(false);
     expect(isSessionArchiveArtifactName("abc.jsonl")).toBe(false);
+  });
+
+  it("classifies orphaned session store atomic-write temp files", () => {
+    const uuid = "0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b";
+    const store = "sessions.json";
+    // sessions.json.<pid>.<uuid>.tmp (current) and legacy sessions.json.<uuid>.tmp
+    expect(isSessionStoreTempArtifactName(`sessions.json.12345.${uuid}.tmp`, store)).toBe(true);
+    expect(isSessionStoreTempArtifactName(`sessions.json.${uuid}.tmp`, store)).toBe(true);
+    // Never the live store, archives, transcripts, or unrelated temp files.
+    expect(isSessionStoreTempArtifactName("sessions.json", store)).toBe(false);
+    expect(isSessionStoreTempArtifactName("sessions.json.bak.1737420882", store)).toBe(false);
+    expect(isSessionStoreTempArtifactName(`${uuid}.jsonl`, store)).toBe(false);
+    expect(isSessionStoreTempArtifactName("sessions.json.tmp", store)).toBe(false);
+    expect(isSessionStoreTempArtifactName("other.json.12345.tmp", store)).toBe(false);
+    // Tracks a custom session.store filename (and only that store's temps); the
+    // basename is regex-escaped so its dots are literal, not wildcards.
+    expect(isSessionStoreTempArtifactName(`my-store.json.99.${uuid}.tmp`, "my-store.json")).toBe(
+      true,
+    );
+    expect(isSessionStoreTempArtifactName(`my-store.json.99.${uuid}.tmp`, store)).toBe(false);
+    expect(isSessionStoreTempArtifactName(`sessions.json.99.${uuid}.tmp`, "my-store.json")).toBe(
+      false,
+    );
+    expect(isSessionStoreTempArtifactName(`sessionsXjson.99.${uuid}.tmp`, store)).toBe(false);
   });
 
   it("classifies primary transcript files", () => {

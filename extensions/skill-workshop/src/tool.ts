@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { jsonResult, type OpenClawPluginApi } from "../api.js";
 import type { SkillWorkshopConfig } from "./config.js";
@@ -21,10 +22,6 @@ type ToolParams = {
   relativePath?: string;
   apply?: boolean;
 };
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function buildProposal(params: {
   workspaceDir: string;

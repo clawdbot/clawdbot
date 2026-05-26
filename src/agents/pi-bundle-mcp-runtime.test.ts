@@ -204,22 +204,278 @@ afterEach(async () => {
 
 describe("session MCP runtime", () => {
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
-    const validator = createBundleMcpJsonSchemaValidator().getValidator<{ url: string }>({
+    const validator = createBundleMcpJsonSchemaValidator().getValidator<{
+      format: string;
+      metadata: { format: string };
+      nullable: { x?: string } | null;
+      url: string;
+    }>({
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
-        url: { type: "string" },
+        format: { type: "string", enum: ["png"] },
+        metadata: { const: { format: "png" } },
+        nullable: {
+          type: ["object", "null"],
+          properties: { x: { type: "string" } },
+          additionalProperties: false,
+        },
+        url: { type: "string", format: "uri" },
       },
-      required: ["url"],
+      required: ["format", "metadata", "nullable", "url"],
       additionalProperties: false,
     });
 
-    expect(validator({ url: "https://example.com" })).toEqual({
+    expect(
+      validator({
+        format: "png",
+        metadata: { format: "png" },
+        nullable: null,
+        url: "not a uri",
+      }),
+    ).toEqual({
       valid: true,
-      data: { url: "https://example.com" },
+      data: {
+        format: "png",
+        metadata: { format: "png" },
+        nullable: null,
+        url: "not a uri",
+      },
       errorMessage: undefined,
     });
     expect(validator({ url: 42 }).valid).toBe(false);
+
+    const dependencyValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      dependencies: {
+        url: {
+          properties: {
+            url: {
+              type: "string",
+              format: "uri",
+            },
+          },
+          required: ["url"],
+        },
+      },
+    });
+    expect(dependencyValidator({ url: "not a uri" }).valid).toBe(true);
+
+    const mapValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      additionalProperties: {
+        type: "string",
+      },
+    });
+    expect(mapValidator({ foo: "bar" }).valid).toBe(true);
+    expect(mapValidator({ foo: 42 }).valid).toBe(false);
+  });
+
+  it("rejects invalid draft-2020-12 tool output schemas from external MCP catalogs", () => {
+    for (const schema of [
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "sting",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        required: "url",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "string",
+        minLength: "1",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        additionalProperties: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        allOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        anyOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        oneOf: [],
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $ref: "#/$defs/Missing",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $dynamicRef: 123,
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $dynamicRef: "#/$defs/Missing",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "string",
+        nullable: "yes",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        nullable: true,
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        $defs: {
+          Other: {
+            $id: "other",
+            $anchor: "value",
+            type: "string",
+          },
+        },
+        $ref: "#value",
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        dependencies: {
+          mode: 123,
+        },
+      },
+      {
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        dependencies: {
+          mode: [1],
+        },
+      },
+    ] as const) {
+      expect(() => createBundleMcpJsonSchemaValidator().getValidator(schema as never)).toThrow(
+        "Invalid MCP draft-2020-12 JSON Schema",
+      );
+    }
+  });
+
+  it("accepts draft-2020-12 local refs to boolean schemas and anchors", () => {
+    const neverValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Never: false,
+      },
+      $ref: "#/$defs/Never",
+    });
+    expect(neverValidator("anything").valid).toBe(false);
+
+    const anchorValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $anchor: "value",
+          type: "string",
+        },
+      },
+      $ref: "#value",
+    });
+    expect(anchorValidator("ok").valid).toBe(true);
+    expect(anchorValidator(1).valid).toBe(false);
+
+    const nestedAnchorValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Other: {
+          $id: "other",
+          $defs: {
+            Value: {
+              $anchor: "value",
+              type: "string",
+            },
+          },
+          $ref: "#value",
+        },
+      },
+      $ref: "#/$defs/Other",
+    });
+    expect(nestedAnchorValidator("ok").valid).toBe(true);
+    expect(nestedAnchorValidator(1).valid).toBe(false);
+
+    const absoluteRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "https://example.com/schema",
+      $defs: {
+        Value: {
+          type: "string",
+        },
+      },
+      $ref: "https://example.com/schema#/$defs/Value",
+    });
+    expect(absoluteRefValidator("ok").valid).toBe(true);
+    expect(absoluteRefValidator(1).valid).toBe(false);
+
+    const emptyIdRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $id: "",
+      $defs: {
+        Value: {
+          type: "string",
+        },
+      },
+      $ref: "#/$defs/Value",
+    });
+    expect(emptyIdRefValidator("ok").valid).toBe(true);
+    expect(emptyIdRefValidator(1).valid).toBe(false);
+
+    const dynamicRefValidator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      $defs: {
+        Value: {
+          $dynamicAnchor: "value",
+          type: "string",
+        },
+      },
+      $dynamicRef: "#value",
+    });
+    expect(dynamicRefValidator("ok").valid).toBe(true);
+    expect(dynamicRefValidator(1).valid).toBe(false);
+  });
+
+  it("accepts draft-2020-12 local refs into schema arrays", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      anyOf: [{ type: "string" }],
+      $ref: "#/anyOf/0",
+    });
+    expect(validator("ok").valid).toBe(true);
+    expect(validator(1).valid).toBe(false);
+  });
+
+  it("accepts draft-2020-12 local refs to anchors inside dependency schemas", () => {
+    const validator = createBundleMcpJsonSchemaValidator().getValidator({
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      dependencies: {
+        a: {
+          $defs: {
+            Target: {
+              $anchor: "target",
+              type: "object",
+            },
+          },
+        },
+        b: {
+          properties: {
+            b: {
+              $ref: "#target",
+            },
+          },
+          required: ["b"],
+        },
+      },
+    });
+    expect(validator({ a: {}, b: {} }).valid).toBe(true);
+    expect(validator({ a: {}, b: 1 }).valid).toBe(false);
   });
 
   it("keeps colliding sanitized tool definitions stable across catalog order changes", async () => {

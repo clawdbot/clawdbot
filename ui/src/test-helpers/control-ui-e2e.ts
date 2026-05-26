@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,6 +7,9 @@ import type { Page } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import { PROTOCOL_VERSION } from "../../../src/gateway/protocol/version.js";
+
+const require = createRequire(import.meta.url);
+const json5EsmPath = require.resolve("json5/dist/index.mjs");
 
 export type MockGatewayRequest = {
   id: string;
@@ -69,9 +73,14 @@ export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
     },
     logLevel: "error",
     optimizeDeps: {
-      include: ["lit/directives/repeat.js"],
+      include: ["ipaddr.js", "lit/directives/repeat.js", "markdown-it-task-lists"],
     },
     publicDir: path.join(uiRoot, "public"),
+    resolve: {
+      alias: {
+        json5: json5EsmPath,
+      },
+    },
     root: uiRoot,
     server: {
       host: "127.0.0.1",

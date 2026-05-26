@@ -1,26 +1,25 @@
 {
   "name": "@openclaw/lobster",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/lobster",
-      "version": "2026.5.24",
+      "version": "2026.5.26",
       "dependencies": {
-        "@clawdbot/lobster": "2026.4.6",
-        "ajv": "8.20.0",
+        "@clawdbot/lobster": "2026.5.22",
         "typebox": "1.1.38"
       }
     },
     "node_modules/@clawdbot/lobster": {
-      "version": "2026.4.6",
-      "resolved": "https://registry.npmjs.org/@clawdbot/lobster/-/lobster-2026.4.6.tgz",
-      "integrity": "sha512-v8QQHAykISyiSIVBtdBKDSQtfigZ4mUoPkUFYVZjvn2LRQGvtnX6uDvhgXu3QaxLF3MDSGMphgzDpkLrh1xnbw==",
+      "version": "2026.5.22",
+      "resolved": "https://registry.npmjs.org/@clawdbot/lobster/-/lobster-2026.5.22.tgz",
+      "integrity": "sha512-lrUnsLLmo4sVFDNd7oTQiEnt4whGhy1bDHe3s/sQoInbTLJSN55WKxlUCfberZbzwOq8GSNnBkP0ZhZ3mKSBwg==",
       "license": "MIT",
       "dependencies": {
-        "ajv": "^8.17.1",
-        "yaml": "^2.8.2"
+        "ajv": "^8.20.0",
+        "yaml": "^2.8.4"
       },
       "bin": {
         "clawd.invoke": "bin/clawd.invoke.js",

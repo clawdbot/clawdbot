@@ -1,4 +1,5 @@
 import path from "node:path";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 export function isTypeScriptPackageEntry(entryPath: string): boolean {
   return [".ts", ".mts", ".cts"].includes(path.extname(entryPath).toLowerCase());
@@ -23,5 +24,5 @@ export function listBuiltRuntimeEntryCandidates(entryPath: string): string[] {
     ...withJavaScriptExtensions(distWithoutExtension),
     ...withJavaScriptExtensions(withoutExtension),
   ];
-  return [...new Set(candidates)].filter((candidate) => candidate !== normalized);
+  return uniqueStrings(candidates).filter((candidate) => candidate !== normalized);
 }

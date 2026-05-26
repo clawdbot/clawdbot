@@ -4,6 +4,10 @@ import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, vi, type Mock } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import {
+  resetTopicNameCacheForTest,
+  setTelegramTopicNameStoreFactoryForTest,
+} from "./topic-name-cache.js";
 
 type TelegramBotRuntimeForTest = NonNullable<
   Parameters<typeof import("./bot.js").setTelegramBotRuntimeForTest>[0]
@@ -108,6 +112,32 @@ const apiStub: ApiStub = {
 
 const throttlerSpy = vi.fn(() => "throttler");
 
+type TopicNameStoreFactory = NonNullable<
+  Parameters<typeof setTelegramTopicNameStoreFactoryForTest>[0]
+>;
+type TopicNamePersistentStore = ReturnType<TopicNameStoreFactory>;
+type TopicNameEntry = Awaited<ReturnType<TopicNamePersistentStore["entries"]>>[number]["value"];
+
+const topicNameStoresForTest = new Map<string, Map<string, TopicNameEntry>>();
+
+setTelegramTopicNameStoreFactoryForTest((namespace) => {
+  let store = topicNameStoresForTest.get(namespace);
+  if (!store) {
+    store = new Map();
+    topicNameStoresForTest.set(namespace, store);
+  }
+  return {
+    register: async (key, value) => {
+      store.set(key, value);
+    },
+    entries: async () => [...store.entries()].map(([key, value]) => ({ key, value })),
+    delete: async (key) => store.delete(key),
+    clear: async () => {
+      store.clear();
+    },
+  };
+});
+
 export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
   Bot: class {
     api = apiStub;
@@ -172,6 +202,8 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
 
 beforeEach(() => {
   resetInboundDedupe();
+  topicNameStoresForTest.clear();
+  resetTopicNameCacheForTest();
   resetSaveMediaBufferMock();
   resetUndiciFetchMock();
   resetReadRemoteMediaBufferMock();
@@ -181,22 +213,26 @@ vi.doMock("./bot.runtime.js", () => ({
   ...telegramBotRuntimeForTest,
 }));
 
-vi.mock("undici", () => ({
-  Agent: vi.fn(function MockAgent(this: { options?: unknown }, options?: unknown) {
-    this.options = options;
-  }),
-  EnvHttpProxyAgent: vi.fn(function MockEnvHttpProxyAgent(
-    this: { options?: unknown },
-    options?: unknown,
-  ) {
-    this.options = options;
-  }),
-  ProxyAgent: vi.fn(function MockProxyAgent(this: { options?: unknown }, options?: unknown) {
-    this.options = options;
-  }),
-  fetch: (...args: Parameters<typeof undiciFetchSpy>) => undiciFetchSpy(...args),
-  setGlobalDispatcher: vi.fn(),
-}));
+vi.mock("undici", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("undici")>();
+  return {
+    ...actual,
+    Agent: vi.fn(function MockAgent(this: { options?: unknown }, options?: unknown) {
+      this.options = options;
+    }),
+    EnvHttpProxyAgent: vi.fn(function MockEnvHttpProxyAgent(
+      this: { options?: unknown },
+      options?: unknown,
+    ) {
+      this.options = options;
+    }),
+    ProxyAgent: vi.fn(function MockProxyAgent(this: { options?: unknown }, options?: unknown) {
+      this.options = options;
+    }),
+    fetch: (...args: Parameters<typeof undiciFetchSpy>) => undiciFetchSpy(...args),
+    setGlobalDispatcher: vi.fn(),
+  };
+});
 
 vi.mock("./telegram-media.runtime.js", () => ({
   readRemoteMediaBuffer: (...args: Parameters<typeof readRemoteMediaBufferSpy>) =>

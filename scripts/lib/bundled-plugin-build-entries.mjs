@@ -11,7 +11,21 @@ import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
 const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
+const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
 const toPosixPath = (value) => value.replaceAll("\\", "/");
+
+function parseBundledPluginBuildIdFilter(env = process.env) {
+  const raw = env[BUNDLED_PLUGIN_BUILD_IDS_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return null;
+  }
+  return new Set(
+    raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  );
+}
 
 function readBundledPluginPackageJson(packageJsonPath, options = {}) {
   if (!(options.hasPackageJson ?? fs.existsSync(packageJsonPath))) {
@@ -178,7 +192,8 @@ export function collectBundledPluginBuildEntries(params = {}) {
   for (const candidate of collectBundledPluginCandidates(cwd, extensionsRoot)) {
     const { dirName, pluginDir, relativeFiles, topLevelPublicSurfaceEntries } = candidate;
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-    const hasManifest = relativeFiles?.includes("openclaw.plugin.json") ?? fs.existsSync(manifestPath);
+    const hasManifest =
+      relativeFiles?.includes("openclaw.plugin.json") ?? fs.existsSync(manifestPath);
     const packageJsonPath = path.join(pluginDir, "package.json");
     const packageJson = readBundledPluginPackageJson(packageJsonPath, {
       hasPackageJson: relativeFiles?.includes("package.json"),
@@ -217,7 +232,20 @@ export function collectBundledPluginBuildEntries(params = {}) {
     });
   }
 
-  return entries;
+  const filteredBuildIds = parseBundledPluginBuildIdFilter(env);
+  if (!filteredBuildIds) {
+    return entries;
+  }
+  const buildableIds = new Set(entries.map((entry) => entry.id));
+  const missingIds = [...filteredBuildIds].filter((id) => !buildableIds.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(
+      `${BUNDLED_PLUGIN_BUILD_IDS_ENV} references unknown bundled plugin id(s): ${missingIds
+        .toSorted((left, right) => left.localeCompare(right))
+        .join(", ")}`,
+    );
+  }
+  return entries.filter((entry) => filteredBuildIds.has(entry.id));
 }
 
 export function listBundledPluginBuildEntries(params = {}) {

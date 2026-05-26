@@ -2,6 +2,7 @@ import path from "node:path";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import { formatError } from "./session-errors.js";
@@ -90,7 +91,7 @@ export function resolveWhatsAppOutboundMediaUrls(
   const orderedMediaUrls = [primaryMediaUrl, ...mediaUrls].filter((entry): entry is string =>
     Boolean(entry),
   );
-  return Array.from(new Set(orderedMediaUrls));
+  return uniqueStrings(orderedMediaUrls);
 }
 
 // Keep new WhatsApp outbound-media behavior in this helper so payload, gateway, and auto-reply paths stay aligned.

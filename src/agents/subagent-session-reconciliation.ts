@@ -6,6 +6,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -23,7 +24,7 @@ export type SubagentSessionCompletion = {
 };
 
 function finiteTimestamp(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function terminalSessionTimestamp(sessionEntry: SessionEntry | undefined): number | undefined {

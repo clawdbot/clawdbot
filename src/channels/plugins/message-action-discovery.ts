@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { normalizeAnyChannelId } from "../registry.js";
 import { getChannelPlugin, getLoadedChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -382,7 +383,7 @@ export function resolveChannelMessageToolMediaSourceParamKeys(
     action: params.action,
     includeSchema: false,
   });
-  return Array.from(new Set(described.mediaSourceParams));
+  return uniqueStrings(described.mediaSourceParams);
 }
 
 export function channelSupportsMessageCapability(

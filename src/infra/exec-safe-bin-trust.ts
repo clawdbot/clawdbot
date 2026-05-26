@@ -1,5 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeSortedUniqueStringEntries,
+  sortUniqueStrings,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
@@ -84,14 +89,14 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
     return [];
   }
   const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  return Array.from(new Set(normalized));
+  return uniqueStrings(normalized);
 }
 
 function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = true): string[] {
   const resolved = entries
     .map((entry) => normalizeTrustedDir(entry, forComparison))
     .filter((entry): entry is string => Boolean(entry));
-  return Array.from(new Set(resolved)).toSorted();
+  return sortUniqueStrings(resolved);
 }
 
 function hasPathSelector(value: string): boolean {
@@ -146,7 +151,7 @@ function resolveTrustedSafeBinTargetDirs(
       }
     }
   }
-  return Array.from(new Set(dirs)).toSorted();
+  return sortUniqueStrings(dirs);
 }
 
 function buildTrustedSafeBinCacheKey(
@@ -155,9 +160,7 @@ function buildTrustedSafeBinCacheKey(
   targetDirs: readonly string[],
 ): string {
   const dirsKey = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries)).join("\u0001");
-  const binsKey = Array.from(new Set(safeBins.map((entry) => entry.trim()).filter(Boolean)))
-    .toSorted()
-    .join("\u0001");
+  const binsKey = normalizeSortedUniqueStringEntries(safeBins).join("\u0001");
   const targetDirsKey = targetDirs.join("\u0001");
   return `${dirsKey}\u0002${binsKey}\u0002${targetDirsKey}`;
 }

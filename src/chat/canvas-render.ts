@@ -1,4 +1,6 @@
 import { parseFenceSpans } from "../markdown/fences.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import { asOptionalRecord } from "../shared/record-coerce.js";
 
 type CanvasSurface = "assistant_message";
 
@@ -20,9 +22,7 @@ function tryParseJsonRecord(value: string | undefined): Record<string, unknown> 
   }
   try {
     const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
+    return asOptionalRecord(parsed);
   } catch {
     return undefined;
   }
@@ -41,7 +41,7 @@ function getRecordNumberField(
   key: string,
 ): number | undefined {
   const value = record?.[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function getNestedRecord(
@@ -49,9 +49,7 @@ function getNestedRecord(
   key: string,
 ): Record<string, unknown> | undefined {
   const value = record?.[key];
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return asOptionalRecord(value);
 }
 
 function normalizeSurface(value: string | undefined): CanvasSurface | undefined {

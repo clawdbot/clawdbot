@@ -30,6 +30,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { normalizeUniqueTrimmedStringList } from "../../shared/string-normalization.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
   isForegroundRestrictedPluginNodeCommand,
@@ -1030,11 +1031,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
     }
-    const ackIds = Array.from(
-      new Set(
-        (params.ids ?? []).map((value) => normalizeOptionalString(value) ?? "").filter(Boolean),
-      ),
-    );
+    const ackIds = normalizeUniqueTrimmedStringList(params.ids);
     const remaining = ackPendingNodeActions(trimmedNodeId, ackIds);
     respond(
       true,

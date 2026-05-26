@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { hasExplicitPluginConfig } from "./config-policy.js";
 import { normalizePluginId } from "./config-state.js";
 
@@ -15,7 +16,7 @@ export function withBundledPluginAllowlistCompat(params: {
     return params.config;
   }
 
-  const allowSet = new Set(allow.map((entry) => entry.trim()).filter(Boolean));
+  const allowSet = new Set(normalizeUniqueStringEntries(allow));
   let changed = false;
   for (const pluginId of params.pluginIds) {
     if (!allowSet.has(pluginId)) {
@@ -47,7 +48,7 @@ export function withBundledPluginEnablementCompat(params: {
   const allow = params.config?.plugins?.allow;
   const allowSet =
     !useCompatDiscovery && Array.isArray(allow) && allow.length > 0
-      ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
+      ? new Set(normalizeUniqueStringEntries(allow.map((pluginId) => normalizePluginId(pluginId))))
       : undefined;
   let hasEligiblePlugin = false;
   let changed = false;

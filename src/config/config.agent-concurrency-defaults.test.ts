@@ -6,6 +6,7 @@ import {
   resolveAgentMaxConcurrent,
   resolveSubagentMaxConcurrent,
 } from "./agent-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS, resolveCronMaxConcurrentRuns } from "./cron-limits.js";
 import { applyAgentDefaults } from "./defaults.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -13,6 +14,7 @@ describe("agent concurrency defaults", () => {
   it("resolves defaults when unset", () => {
     expect(resolveAgentMaxConcurrent({})).toBe(DEFAULT_AGENT_MAX_CONCURRENT);
     expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
+    expect(resolveCronMaxConcurrentRuns()).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
   });
 
   it("clamps invalid values to at least 1", () => {
@@ -26,6 +28,7 @@ describe("agent concurrency defaults", () => {
     };
     expect(resolveAgentMaxConcurrent(cfg)).toBe(1);
     expect(resolveSubagentMaxConcurrent(cfg)).toBe(1);
+    expect(resolveCronMaxConcurrentRuns({ maxConcurrentRuns: 0 })).toBe(1);
   });
 
   it("accepts subagent spawn depth and per-agent child limits", () => {

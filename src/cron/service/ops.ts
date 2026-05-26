@@ -36,6 +36,7 @@ import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState, CronWakeMode } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
+import { CRON_TASK_RUNNING_PROGRESS_SUMMARY } from "./task-ledger.js";
 import {
   applyJobResult,
   armTimer,
@@ -582,6 +583,7 @@ function tryCreateManualTaskRun(params: {
       notifyPolicy: "silent",
       startedAt: params.startedAt,
       lastEventAt: params.startedAt,
+      progressSummary: CRON_TASK_RUNNING_PROGRESS_SUMMARY,
     });
     return runId;
   } catch (error) {

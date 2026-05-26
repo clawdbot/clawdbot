@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertAgentReplyContainsMarker,
+  assertOpenAiRequestLogUsed,
+} from "../agent-turn-output.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
@@ -60,10 +64,8 @@ function assertAgentTurn() {
   const marker = process.argv[3];
   const outputPath = process.argv[4];
   const requestLogPath = process.argv[5];
-  const output = fs.readFileSync(outputPath, "utf8");
-  assert(output.includes(marker), `agent output did not contain ${marker}. Output: ${output}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(/\/v1\/(responses|chat\/completions)/u.test(requestLog), "mock OpenAI was not used");
+  assertAgentReplyContainsMarker(marker, outputPath);
+  assertOpenAiRequestLogUsed(requestLogPath, "mock OpenAI");
 }
 
 function assertFileContains() {
@@ -71,6 +73,20 @@ function assertFileContains() {
   const needle = process.argv[4];
   const raw = fs.readFileSync(file, "utf8");
   assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+}
+
+function assertPackageVersion() {
+  const packageRoot = process.argv[3];
+  const expectedVersion = process.argv[4];
+  const label = process.argv[5] ?? "package";
+  assert(packageRoot, "missing package root");
+  assert(expectedVersion, "missing expected package version");
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const packageJson = readJson(packageJsonPath);
+  assert(
+    packageJson.version === expectedVersion,
+    `${label} package version mismatch: expected ${expectedVersion}, got ${packageJson.version}`,
+  );
 }
 
 function assertImageDescribe() {
@@ -136,6 +152,7 @@ const commands = {
   "assert-openai-env-ref": assertOpenAiEnvRef,
   "assert-agent-turn": assertAgentTurn,
   "assert-file-contains": assertFileContains,
+  "assert-package-version": assertPackageVersion,
   "assert-image-describe": assertImageDescribe,
   "assert-image-generate": assertImageGenerate,
   "assert-memory-search": assertMemorySearch,

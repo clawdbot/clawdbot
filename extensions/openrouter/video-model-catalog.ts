@@ -8,7 +8,10 @@ import {
   assertOkOrThrowHttpError,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   VideoGenerationModelCapabilitiesContext,
   VideoGenerationProviderCapabilities,
@@ -49,11 +52,7 @@ export type OpenRouterVideoModelCatalogCapabilities = VideoGenerationProviderCap
 };
 
 function normalizeStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value
-        .map((entry) => normalizeOptionalString(entry))
-        .filter((entry): entry is string => Boolean(entry))
-    : [];
+  return normalizeTrimmedStringList(value);
 }
 
 function normalizeNumberArray(value: unknown): number[] {

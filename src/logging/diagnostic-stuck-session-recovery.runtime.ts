@@ -7,6 +7,7 @@ import {
   resolveActiveEmbeddedRunHandleSessionId,
 } from "../agents/pi-embedded-runner/runs.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
+import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
   formatStoppedCronSessionDiagnosticFields,
@@ -20,6 +21,42 @@ import {
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
+// Default no-forward-progress age used only when the caller does not carry a
+// resolved `diagnostics.stuckSessionAbortMs`. A run flagged "active" that has made
+// no forward progress (tool/model/chunk events) for at least the resolved window,
+// while queued work waits, is treated as a leaked/dead handle and reclaimed even
+// without an explicit active-abort grant. `lastProgressAgeMs` tracks real progress
+// (not incoming queued messages), so it keeps growing while a lane is wedged.
+const STUCK_SESSION_PROGRESS_STALE_MS = 5 * 60_000;
+
+function resolveStaleActiveProgressAbortMs(params: StuckSessionRecoveryParams): number {
+  const configured = params.staleActiveProgressAbortMs;
+  // Honor the resolved `diagnostics.stuckSessionAbortMs` as-is — an operator can
+  // raise it to protect slow active work (it is the same threshold the existing
+  // `session.stalled` abort uses). It is floored at the warn threshold upstream,
+  // not necessarily 5 min, so we only apply the 5-min default when no value is
+  // carried (e.g. direct callers).
+  return typeof configured === "number" && configured > 0
+    ? configured
+    : STUCK_SESSION_PROGRESS_STALE_MS;
+}
+
+function isActiveRunProgressStale(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  queueDepth?: number;
+  staleAbortMs: number;
+}): boolean {
+  if ((params.queueDepth ?? 0) <= 0) {
+    return false;
+  }
+  const activity = getDiagnosticSessionActivitySnapshot({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
+  const lastProgressAgeMs = activity.lastProgressAgeMs;
+  return typeof lastProgressAgeMs === "number" && lastProgressAgeMs >= params.staleAbortMs;
+}
 const recoveriesInFlight = new Set<string>();
 
 export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
@@ -100,9 +137,18 @@ export async function recoverStuckDiagnosticSession(
     let aborted = false;
     let drained = true;
     let forceCleared = false;
+    const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
 
     if (activeSessionId) {
-      if (params.allowActiveAbort !== true) {
+      const reclaimStaleActiveRun =
+        params.allowActiveAbort !== true &&
+        isActiveRunProgressStale({
+          sessionId: activeSessionId,
+          sessionKey: params.sessionKey,
+          queueDepth: params.queueDepth,
+          staleAbortMs: staleActiveProgressAbortMs,
+        });
+      if (params.allowActiveAbort !== true && !reclaimStaleActiveRun) {
         const outcome: StuckSessionRecoveryOutcome = {
           status: "skipped",
           action: "observe_only",
@@ -118,6 +164,11 @@ export async function recoverStuckDiagnosticSession(
         diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
         return outcome;
       }
+      if (reclaimStaleActiveRun) {
+        diag.warn(
+          `stuck session recovery reclaiming stale active run: ${formatRecoveryContext(params, { activeSessionId })}`,
+        );
+      }
       const result = await abortAndDrainEmbeddedPiRun({
         sessionId: activeSessionId,
         sessionKey: params.sessionKey,
@@ -131,7 +182,23 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {
-      if (params.allowActiveAbort === true) {
+      const reclaimStaleReplyWork =
+        params.allowActiveAbort !== true &&
+        isActiveRunProgressStale({
+          sessionId: activeWorkSessionId,
+          sessionKey: params.sessionKey,
+          queueDepth: params.queueDepth,
+          staleAbortMs: staleActiveProgressAbortMs,
+        });
+      if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
+        if (reclaimStaleReplyWork) {
+          diag.warn(
+            `stuck session recovery reclaiming stale active reply work: ${formatRecoveryContext(
+              params,
+              { activeSessionId: activeWorkSessionId },
+            )}`,
+          );
+        }
         const result = await abortAndDrainEmbeddedPiRun({
           sessionId: activeWorkSessionId,
           sessionKey: params.sessionKey,

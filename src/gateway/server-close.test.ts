@@ -450,7 +450,7 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
-  it("aborts active chat runs when restart reply drain times out", async () => {
+  it("aborts active runs when restart reply drain times out", async () => {
     vi.useFakeTimers();
     const controller = new AbortController();
     const agentController = new AbortController();
@@ -509,9 +509,9 @@ describe("createGatewayCloseHandler", () => {
 
     expect(result.warnings).toContain("restart-reply-drain");
     expect(controller.signal.aborted).toBe(true);
-    expect(agentController.signal.aborted).toBe(false);
+    expect(agentController.signal.aborted).toBe(true);
     expect(chatAbortControllers.has("run-1")).toBe(false);
-    expect(chatAbortControllers.has("agent-run-1")).toBe(true);
+    expect(chatAbortControllers.has("agent-run-1")).toBe(false);
     expect(chatRunState.buffers.has("run-1")).toBe(false);
     expect(chatRunState.deltaSentAt.has("run-1")).toBe(false);
     expect(chatRunState.deltaLastBroadcastLen.has("run-1")).toBe(false);
@@ -521,13 +521,13 @@ describe("createGatewayCloseHandler", () => {
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes(
-          "restart reply drain timed out after 100ms with 1 active chat run(s) still active",
+          "restart reply drain timed out after 100ms with 2 active run(s) still active",
         ),
       ),
     ).toBe(true);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("aborted 1 active chat run(s) during restart shutdown"),
+        String(message).includes("aborted 2 active run(s) during restart shutdown"),
       ),
     ).toBe(true);
     expect(broadcast).toHaveBeenCalledWith(
@@ -539,9 +539,26 @@ describe("createGatewayCloseHandler", () => {
       "chat",
       expect.objectContaining({ runId: "run-1", state: "aborted", stopReason: "restart" }),
     );
+    expect(broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        runId: "agent-run-1",
+        state: "aborted",
+        stopReason: "restart",
+      }),
+    );
+    expect(nodeSendToSession).toHaveBeenCalledWith(
+      "session-1",
+      "chat",
+      expect.objectContaining({
+        runId: "agent-run-1",
+        state: "aborted",
+        stopReason: "restart",
+      }),
+    );
   });
 
-  it("does not drain or abort active chat runs for normal shutdown", async () => {
+  it("does not drain or abort active runs for normal shutdown", async () => {
     const controller = new AbortController();
     const chatAbortControllers = new Map([
       [
@@ -568,7 +585,7 @@ describe("createGatewayCloseHandler", () => {
     expect(chatAbortControllers.size).toBe(1);
   });
 
-  it("aborts active chat runs immediately when restart drain budget is exhausted", async () => {
+  it("aborts active runs immediately when restart drain budget is exhausted", async () => {
     const controller = new AbortController();
     const chatAbortControllers = new Map([
       [

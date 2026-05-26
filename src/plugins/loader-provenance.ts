@@ -1,5 +1,5 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import type { PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
@@ -82,9 +82,7 @@ export function buildProvenanceIndex(params: {
       trackedWithoutPaths: false,
       matcher: createPathMatcher(),
     };
-    const trackedPaths = [install.installPath, install.sourcePath]
-      .map((entry) => normalizeOptionalString(entry))
-      .filter((entry): entry is string => Boolean(entry));
+    const trackedPaths = normalizeTrimmedStringList([install.installPath, install.sourcePath]);
     if (trackedPaths.length === 0) {
       rule.trackedWithoutPaths = true;
     } else {

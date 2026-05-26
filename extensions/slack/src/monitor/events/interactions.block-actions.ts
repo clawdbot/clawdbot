@@ -4,7 +4,10 @@ import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
@@ -136,20 +139,7 @@ function readOptionLabels(options: unknown): string[] | undefined {
 }
 
 function uniqueNonEmptyStrings(values: string[]): string[] {
-  const unique: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of values) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    unique.push(trimmed);
-  }
-  return unique;
+  return normalizeUniqueTrimmedStringList(values);
 }
 
 function collectRichTextFragments(value: unknown, out: string[]): void {

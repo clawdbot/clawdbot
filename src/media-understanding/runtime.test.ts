@@ -28,6 +28,7 @@ const mocks = vi.hoisted(() => {
     getMediaUnderstandingProvider: vi.fn(),
     readLocalFileSafely: vi.fn(async () => ({ buffer: Buffer.from("image") })),
     describeImageWithModel: vi.fn(async () => ({ text: "generic image ok", model: "vision" })),
+    convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
     runCapability: vi.fn(),
     cleanup,
     getBuffer,
@@ -55,6 +56,10 @@ vi.mock("./image-runtime.js", () => ({
   describeImageWithModel: mocks.describeImageWithModel,
 }));
 
+vi.mock("../media/media-services.js", () => ({
+  convertHeicToJpeg: mocks.convertHeicToJpeg,
+}));
+
 function requireRunCapabilityRequest(): unknown {
   const [call] = mocks.runCapability.mock.calls;
   if (!call) {
@@ -79,6 +84,8 @@ describe("media-understanding runtime", () => {
     mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("image") });
     mocks.describeImageWithModel.mockReset();
     mocks.describeImageWithModel.mockResolvedValue({ text: "generic image ok", model: "vision" });
+    mocks.convertHeicToJpeg.mockReset();
+    mocks.convertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mocks.runCapability.mockReset();
     mocks.cleanup.mockReset();
     mocks.cleanup.mockResolvedValue(undefined);
@@ -463,6 +470,29 @@ describe("media-understanding runtime", () => {
       cfg: {},
       agentDir: "/tmp/agent",
     });
+  });
+
+  it("normalizes local HEIC explicit image descriptions before provider execution", async () => {
+    mocks.readLocalFileSafely.mockResolvedValue({ buffer: Buffer.from("heic-source") });
+
+    await describeImageFileWithModel({
+      filePath: "/tmp/sample.bin",
+      mime: "image/heic; charset=binary",
+      provider: "zai",
+      model: "glm-4.6v",
+      prompt: "Describe it",
+      cfg: {} as OpenClawConfig,
+      agentDir: "/tmp/agent",
+    });
+
+    expect(mocks.convertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("jpeg-normalized"),
+        fileName: "sample.bin",
+        mime: "image/jpeg",
+      }),
+    );
   });
 
   it("preserves fetched metadata for explicit model URL inputs", async () => {

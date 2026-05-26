@@ -7,6 +7,7 @@ import { deliverInboundReplyWithMessageSendContext } from "openclaw/plugin-sdk/c
 import { hasVisibleInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   type DeliverableWhatsAppOutboundPayload,
   normalizeWhatsAppOutboundPayload,
@@ -175,12 +176,10 @@ function resolveWhatsAppDeliverablePayload(
 
 function getWhatsAppPayloadMediaUrls(payload: ReplyPayload): Set<string> {
   return new Set(
-    [
+    normalizeStringEntries([
       ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
       ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-    ]
-      .map((url) => url.trim())
-      .filter(Boolean),
+    ]),
   );
 }
 

@@ -1,9 +1,9 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { streamSimple } from "@earendil-works/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createPlainTextToolCallPromotionWrapper } from "openclaw/plugin-sdk/provider-stream-runtime-internal";
 import {
   composeProviderStreamWrappers,
+  createPlainTextToolCallCompatWrapper,
   createToolStreamWrapper,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 
@@ -355,7 +355,7 @@ export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamF
       wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
     }
     wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
-    wrappedStreamFn = createPlainTextToolCallPromotionWrapper(wrappedStreamFn);
+    wrappedStreamFn = createPlainTextToolCallCompatWrapper(wrappedStreamFn);
     return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
   });
 }

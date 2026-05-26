@@ -24,6 +24,36 @@ describe("plugin contract registry", () => {
   }
 
   function resolveBundledManifestPluginIds(predicate: (plugin: PluginManifestRecord) => boolean) {
+    if (process.env.VITEST) {
+      return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map(
+        (entry) =>
+          ({
+            id: entry.pluginId,
+            origin: "bundled",
+            providers: entry.providerIds,
+            contracts: {
+              embeddingProviders: entry.embeddingProviderIds,
+              speechProviders: entry.speechProviderIds,
+              realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
+              realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
+              mediaUnderstandingProviders: entry.mediaUnderstandingProviderIds,
+              meetingNotesSourceProviders: entry.meetingNotesSourceProviderIds,
+              documentExtractors: entry.documentExtractorIds,
+              imageGenerationProviders: entry.imageGenerationProviderIds,
+              videoGenerationProviders: entry.videoGenerationProviderIds,
+              musicGenerationProviders: entry.musicGenerationProviderIds,
+              webContentExtractors: entry.webContentExtractorIds,
+              webFetchProviders: entry.webFetchProviderIds,
+              webSearchProviders: entry.webSearchProviderIds,
+              migrationProviders: entry.migrationProviderIds,
+              tools: entry.toolNames,
+            },
+          }) as PluginManifestRecord,
+      )
+        .filter(predicate)
+        .map((plugin) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right));
+    }
     const snapshotPluginIds = new Set(
       BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
     );

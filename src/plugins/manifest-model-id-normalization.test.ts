@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   resolvePluginMetadataControlPlaneFingerprint,
@@ -11,6 +12,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -87,8 +89,10 @@ function createCurrentSnapshot(params: {
   manifestHash: string;
   prefix: string;
   workspaceDir?: string;
+  config?: OpenClawConfig;
 }): PluginMetadataSnapshot {
-  const policyHash = resolveInstalledPluginIndexPolicyHash({});
+  const config = params.config ?? {};
+  const policyHash = resolveInstalledPluginIndexPolicyHash(config);
   const index: InstalledPluginIndex = {
     version: 1,
     hostContractVersion: "test-host",
@@ -119,15 +123,12 @@ function createCurrentSnapshot(params: {
   };
   return {
     policyHash,
-    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(
-      {},
-      {
-        env: process.env,
-        index,
-        policyHash,
-        workspaceDir: params.workspaceDir,
-      },
-    ),
+    configFingerprint: resolvePluginMetadataControlPlaneFingerprint(config, {
+      env: process.env,
+      index,
+      policyHash,
+      workspaceDir: params.workspaceDir,
+    }),
     workspaceDir: params.workspaceDir,
     index,
     registryDiagnostics: [],
@@ -153,14 +154,27 @@ function normalizeDemoModel(modelId = "demo-model"): string | undefined {
   });
 }
 
+function normalizeDemoModelWithEnv(
+  env: NodeJS.ProcessEnv,
+  modelId = "demo-model",
+): string | undefined {
+  return normalizeProviderModelIdWithManifest({
+    provider: "demo",
+    env,
+    context: { provider: "demo", modelId },
+  });
+}
+
 describe("manifest model id normalization", () => {
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
+    clearPluginMetadataLifecycleCaches();
   });
 
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
     resetPluginRuntimeStateForTest();
+    clearPluginMetadataLifecycleCaches();
     restoreEnv();
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -234,7 +248,46 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
   });
 
-  it("reflects manifest edits and state-dir changes on the next lookup", () => {
+  it("reuses current metadata when callers omit config", () => {
+    const config: OpenClawConfig = { plugins: { allow: ["normalizer"] } };
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        prefix: "alpha",
+        config,
+      }),
+      { config, env: process.env },
+    );
+
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+  });
+
+  it("validates explicit env before reusing current metadata", () => {
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        prefix: "alpha",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "normalizer");
+    writeInstallIndex({ stateDir, pluginDir });
+    writeNormalizerManifest({ pluginDir, prefix: "bravo" });
+
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_HOME: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+    };
+
+    expect(normalizeDemoModelWithEnv(env)).toBe("bravo/demo-model");
+  });
+
+  it("keeps process metadata stable across manifest edits and reflects state-dir changes", () => {
     const stateDirA = makeTempDir();
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
@@ -248,7 +301,7 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo-local" });
-    expect(normalizeDemoModel()).toBe("bravo-local/demo-model");
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     const stateDirB = makeTempDir();
     const pluginDirB = path.join(stateDirB, "extensions", "normalizer");
@@ -256,6 +309,7 @@ describe("manifest model id normalization", () => {
     writeNormalizerManifest({ pluginDir: pluginDirB, prefix: "charlie" });
 
     process.env.OPENCLAW_STATE_DIR = stateDirB;
+    clearPluginMetadataLifecycleCaches();
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
   });
 

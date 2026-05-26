@@ -419,7 +419,7 @@ candidate contains redacted secret placeholders such as `***`.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
+        maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",
@@ -461,7 +461,7 @@ candidate contains redacted secret placeholders such as `***`.
 
     Security note:
     - Treat all hook/webhook payload content as untrusted input.
-    - Use a dedicated `hooks.token`; do not reuse the shared Gateway token.
+    - Use a dedicated `hooks.token`; do not reuse active Gateway auth secrets (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`).
     - Hook auth is header-only (`Authorization: Bearer ...` or `x-openclaw-token`); query-string tokens are rejected.
     - `hooks.path` cannot be `/`; keep webhook ingress on a dedicated subpath such as `/hooks`.
     - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.

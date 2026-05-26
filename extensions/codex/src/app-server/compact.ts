@@ -3,6 +3,7 @@ import {
   type CompactEmbeddedPiSessionParams,
   type EmbeddedPiCompactResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
@@ -10,7 +11,7 @@ import {
 import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject } from "./protocol.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
-import { clearCodexAppServerBinding, readCodexAppServerBinding } from "./session-binding.js";
+import { readCodexAppServerBinding } from "./session-binding.js";
 
 const warnedIgnoredCompactionOverrides = new Set<string>();
 
@@ -117,12 +118,6 @@ function readAgentIdFromSessionKey(sessionKey: string | undefined): string | und
   return parts[1]?.trim() || undefined;
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
@@ -170,7 +165,6 @@ async function compactCodexNativeThread(
     });
   } catch (error) {
     if (isCodexThreadNotFoundError(error)) {
-      await clearCodexAppServerBinding(params.sessionFile, { config: params.config });
       return failedCodexThreadBindingCompactionResult(params, {
         threadId: binding.threadId,
         reason: formatCompactionError(error),

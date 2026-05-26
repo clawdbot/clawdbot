@@ -6,6 +6,8 @@ import {
 } from "../../agents/run-timeout-attribution.js";
 import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
+import { asFiniteNumber } from "../../shared/number-coercion.js";
+import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
 
@@ -31,16 +33,6 @@ function parseRunIdFromDedupeKey(key: string): string | null {
     return key.slice("chat:".length) || null;
   }
   return null;
-}
-
-function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function asString(value: unknown): string | undefined {
@@ -109,7 +101,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
 
   const startedAt = asFiniteNumber(payload?.startedAt);
   const endedAt = asFiniteNumber(payload?.endedAt) ?? entry.ts;
-  const resultMeta = asRecord(asRecord(payload?.result)?.meta);
+  const resultMeta = asOptionalRecord(asOptionalRecord(payload?.result)?.meta);
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
   const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
   const yielded = payload?.yielded === true || resultMeta?.yielded === true;

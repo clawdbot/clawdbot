@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
 import { t } from "../../i18n/index.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
 import type {
   SkillStatusEntry,
   SkillStatusReport,
@@ -684,7 +684,7 @@ export function renderAgentSkills(params: {
   const editable = Boolean(params.configForm) && !params.configLoading && !params.configSaving;
   const config = resolveAgentConfig(params.configForm, params.agentId);
   const allowlist = Array.isArray(config.entry?.skills) ? config.entry?.skills : undefined;
-  const allowSet = new Set((allowlist ?? []).map((name) => name.trim()).filter(Boolean));
+  const allowSet = new Set(normalizeStringEntries(allowlist ?? []));
   const usingAllowlist = allowlist !== undefined;
   const reportReady = Boolean(params.report && params.activeAgentId === params.agentId);
   const rawSkills = reportReady ? (params.report?.skills ?? []) : [];

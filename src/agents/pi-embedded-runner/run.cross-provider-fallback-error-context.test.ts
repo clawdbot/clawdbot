@@ -17,16 +17,20 @@ import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 const DEEPSEEK_ERROR_MESSAGE = "429 deepseek rate limit";
+type CurrentAttemptAssistantWithError = NonNullable<
+  EmbeddedRunAttemptResult["currentAttemptAssistant"]
+> & { errorMessage: string };
 
 function isCurrentAttemptAssistant(
   value: unknown,
-): value is NonNullable<EmbeddedRunAttemptResult["currentAttemptAssistant"]> {
+): value is CurrentAttemptAssistantWithError {
   return (
     typeof value === "object" &&
     value !== null &&
     "provider" in value &&
     "model" in value &&
-    "errorMessage" in value
+    "errorMessage" in value &&
+    typeof value.errorMessage === "string"
   );
 }
 
@@ -130,16 +134,24 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
   });
 
   it("falls back to the session assistant when compaction removes the current attempt slice", async () => {
-    setupDeepseekFallbackErrorMatchers();
     const getLastFormattedAssistant = captureFormattedAssistant();
+    const sameCandidateErrorMessage = "429 current candidate rate limit";
+    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
+    });
+    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "anthropic";
+    });
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: makeAssistantMessageFixture({
           stopReason: "error",
-          errorMessage: DEEPSEEK_ERROR_MESSAGE,
-          provider: "deepseek",
-          model: "deepseek-chat",
+          errorMessage: sameCandidateErrorMessage,
+          provider: "anthropic",
+          model: "test-model",
           content: [],
         }),
         currentAttemptAssistant: undefined,
@@ -152,6 +164,119 @@ describe("runEmbeddedPiAgent cross-provider fallback error handling", () => {
       config: makeCrossProviderFallbackConfig(),
     });
 
-    await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow(`anthropic/test-model: ${sameCandidateErrorMessage}`);
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
+    expect(getLastFormattedAssistant()).toMatchObject({
+      provider: "anthropic",
+      model: "test-model",
+      errorMessage: sameCandidateErrorMessage,
+    });
+  });
+
+  it("keeps PI-stamped session assistant errors for the current candidate after compaction", async () => {
+    const getLastFormattedAssistant = captureFormattedAssistant();
+    const sameCandidateErrorMessage = "429 current PI-stamped candidate rate limit";
+    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "pi";
+    });
+    mockedIsRateLimitAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.provider === "pi";
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: sameCandidateErrorMessage,
+          provider: "pi",
+          model: "pi",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-compaction-pi-stamped-fallback-error-context",
+      config: makeCrossProviderFallbackConfig(),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow(sameCandidateErrorMessage);
+    expect(mockedIsRateLimitAssistantError).toHaveBeenCalledTimes(1);
+    const rateLimitCalls = mockedIsRateLimitAssistantError.mock.calls as unknown[][];
+    expect(rateLimitCalls.at(-1)?.[0]).toMatchObject({
+      provider: "pi",
+      model: "pi",
+      errorMessage: sameCandidateErrorMessage,
+    });
+    expect(getLastFormattedAssistant()).toMatchObject({
+      provider: "pi",
+      model: "pi",
+      errorMessage: sameCandidateErrorMessage,
+    });
+  });
+
+  it("does not reuse a prior provider session assistant when the current candidate times out", async () => {
+    const getLastFormattedAssistant = captureFormattedAssistant();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "You exceeded your current OpenAI quota.",
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    const promise = runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-stale-session-assistant-timeout",
+      config: makeCrossProviderFallbackConfig(),
+    });
+
+    await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
+    await expect(promise).rejects.toThrow("LLM request timed out.");
+    await expect(promise).rejects.not.toThrow("OpenAI quota");
+    expect(getLastFormattedAssistant()).toBeUndefined();
+  });
+
+  it("does not reuse a prior provider session assistant for non-timeout failover", async () => {
+    mockedIsFailoverAssistantError.mockImplementation((...args: unknown[]) => {
+      const assistant = args[0];
+      return isCurrentAttemptAssistant(assistant) && assistant.errorMessage.includes("quota");
+    });
+    const getLastFormattedAssistant = captureFormattedAssistant();
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: makeAssistantMessageFixture({
+          stopReason: "error",
+          errorMessage: "You exceeded your current OpenAI quota.",
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          content: [],
+        }),
+        currentAttemptAssistant: undefined,
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      runId: "run-stale-session-assistant-non-timeout",
+      config: makeCrossProviderFallbackConfig(),
+    });
+
+    expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);
+    expect(getLastFormattedAssistant()).toBeUndefined();
   });
 });

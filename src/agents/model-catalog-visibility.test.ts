@@ -1,9 +1,20 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: (params: unknown) =>
+    normalizeProviderModelIdWithRuntimeMock(params),
+}));
+
 describe("resolveVisibleModelCatalog", () => {
+  beforeEach(() => {
+    normalizeProviderModelIdWithRuntimeMock.mockReset();
+  });
+
   it("can use static auth checks for gateway read-only model lists", async () => {
     const authChecker = vi.fn((provider: string) => provider === "openai");
     const catalog: ModelCatalogEntry[] = [
@@ -64,6 +75,7 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });
 
   it("does not broaden visibility when selected providers have no catalog rows", async () => {

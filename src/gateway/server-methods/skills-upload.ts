@@ -1,4 +1,3 @@
-import type { ValidateFunction } from "ajv";
 import {
   installSkillArchiveFromPath,
   type SkillArchiveInstallFailureKind,
@@ -10,6 +9,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  type ProtocolValidator,
   validateSkillsUploadBeginParams,
   validateSkillsUploadChunkParams,
   validateSkillsUploadCommitParams,
@@ -90,7 +90,7 @@ export const skillsUploadHandlers: GatewayRequestHandlers = {
 
 function makeUploadHandler<P, R>(
   name: string,
-  validator: ValidateFunction<P>,
+  validator: ProtocolValidator<P>,
   action: (params: P) => Promise<R>,
 ): GatewayRequestHandlers[string] {
   return async ({ params, respond, context }) => {

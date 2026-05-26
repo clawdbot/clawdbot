@@ -5,7 +5,7 @@ import type {
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
 } from "../api.js";
-import { redactSensitiveText } from "../api.js";
+import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 
 type LabelSet = Record<string, string>;
 
@@ -46,10 +46,10 @@ const BYTE_BUCKETS = [
   1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 268435456, 1073741824,
   4294967296, 17179869184,
 ];
+const RATIO_BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1, 2, 4, 8, 16];
 const LOW_CARDINALITY_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 const MAX_PROMETHEUS_SERIES = 2048;
 const DROPPED_SERIES_COUNTER_NAME = "openclaw_prometheus_series_dropped_total";
-
 function lowCardinalityLabel(value: string | undefined, fallback = "unknown"): string {
   if (!value) {
     return fallback;
@@ -233,6 +233,10 @@ function safeErrorMessage(err: unknown): string {
     .slice(0, 500);
 }
 
+function shouldRecordDiagnosticEvent(metadata: DiagnosticEventMetadata): boolean {
+  return metadata.trusted || isInternalDiagnosticEventMetadata(metadata);
+}
+
 function renderPrometheusMetrics(store: PrometheusMetricStore): string {
   const snapshot = store.snapshot();
   const lines: string[] = [];
@@ -330,6 +334,18 @@ function modelCallLabels(evt: {
   };
 }
 
+function modelFailoverLabels(evt: Extract<DiagnosticEventPayload, { type: "model.failover" }>): LabelSet {
+  return {
+    from_model: lowCardinalityLabel(evt.fromModel),
+    from_provider: lowCardinalityLabel(evt.fromProvider),
+    lane: lowCardinalityQueueLaneLabel(evt.lane),
+    reason: lowCardinalityLabel(evt.reason, "other"),
+    suspended: evt.suspended === undefined ? "unknown" : String(evt.suspended),
+    to_model: lowCardinalityLabel(evt.toModel),
+    to_provider: lowCardinalityLabel(evt.toProvider),
+  };
+}
+
 function toolExecutionLabels(evt: {
   errorCategory?: string;
   paramsSummary?: { kind: string };
@@ -344,6 +360,18 @@ function toolExecutionLabels(evt: {
         ? lowCardinalityLabel(evt.errorCategory, "other")
         : "none",
     outcome: evt.type === "tool.execution.error" ? "error" : "completed",
+    params_kind: lowCardinalityLabel(evt.paramsSummary?.kind),
+    tool: lowCardinalityLabel(evt.toolName, "tool"),
+    tool_owner: lowCardinalityLabel(evt.toolOwner, "none"),
+    tool_source: lowCardinalityLabel(evt.toolSource, "core"),
+  };
+}
+
+function toolExecutionBlockedLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "tool.execution.blocked" }>,
+): LabelSet {
+  return {
+    denied_reason: lowCardinalityLabel(evt.deniedReason, "other"),
     params_kind: lowCardinalityLabel(evt.paramsSummary?.kind),
     tool: lowCardinalityLabel(evt.toolName, "tool"),
     tool_owner: lowCardinalityLabel(evt.toolOwner, "none"),
@@ -389,6 +417,25 @@ function harnessLabels(evt: {
   };
 }
 
+function webhookLabels(
+  evt: Extract<
+    DiagnosticEventPayload,
+    { type: "webhook.received" | "webhook.processed" | "webhook.error" }
+  >,
+): LabelSet {
+  return {
+    channel: lowCardinalityLabel(evt.channel),
+    webhook: lowCardinalityLabel(evt.updateType),
+  };
+}
+
+function sessionStuckLabels(evt: Extract<DiagnosticEventPayload, { type: "session.stuck" }>): LabelSet {
+  return {
+    reason: lowCardinalityLabel(evt.reason, "none"),
+    state: evt.state,
+  };
+}
+
 function sessionRecoveryLabels(
   evt: Extract<
     DiagnosticEventPayload,
@@ -405,6 +452,24 @@ function sessionRecoveryLabels(
     active_work_kind: lowCardinalityLabel(evt.activeWorkKind, "none"),
     state: evt.state,
     status: evt.type === "session.recovery.completed" ? evt.status : "requested",
+  };
+}
+
+function livenessLabels(
+  evt: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
+): LabelSet {
+  return {
+    reason: lowCardinalityLabel(evt.reasons.join(":"), "unknown"),
+  };
+}
+
+function payloadLargeLabels(evt: Extract<DiagnosticEventPayload, { type: "payload.large" }>): LabelSet {
+  return {
+    action: evt.action,
+    channel: lowCardinalityLabel(evt.channel, "none"),
+    plugin: lowCardinalityLabel(evt.pluginId, "none"),
+    reason: lowCardinalityLabel(evt.reason, "none"),
+    surface: lowCardinalityLabel(evt.surface, "unknown"),
   };
 }
 
@@ -484,7 +549,7 @@ function recordDiagnosticEvent(
   evt: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
 ): void {
-  if (!metadata.trusted) {
+  if (!shouldRecordDiagnosticEvent(metadata)) {
     return;
   }
 
@@ -519,6 +584,13 @@ function recordDiagnosticEvent(
         modelCallLabels(evt),
       );
       return;
+    case "model.failover":
+      store.counter(
+        "openclaw_model_failover_total",
+        "Model failovers by source, destination, lane, and reason.",
+        modelFailoverLabels(evt),
+      );
+      return;
     case "tool.execution.completed":
     case "tool.execution.error":
       store.histogram(
@@ -531,6 +603,13 @@ function recordDiagnosticEvent(
         "openclaw_tool_execution_total",
         "Tool executions completed by outcome.",
         toolExecutionLabels(evt),
+      );
+      return;
+    case "tool.execution.blocked":
+      store.counter(
+        "openclaw_tool_execution_blocked_total",
+        "Tool executions blocked by policy or sandbox diagnostics.",
+        toolExecutionBlockedLabels(evt),
       );
       return;
     case "skill.used":
@@ -565,6 +644,28 @@ function recordDiagnosticEvent(
           reason: lowCardinalityLabel(evt.reason, "none"),
         },
         seconds(evt.durationMs),
+      );
+      return;
+    case "webhook.received":
+      store.counter(
+        "openclaw_webhook_received_total",
+        "Webhook requests received by channel and update type.",
+        webhookLabels(evt),
+      );
+      return;
+    case "webhook.processed":
+      store.histogram(
+        "openclaw_webhook_duration_seconds",
+        "Webhook processing duration in seconds.",
+        webhookLabels(evt),
+        seconds(evt.durationMs),
+      );
+      return;
+    case "webhook.error":
+      store.counter(
+        "openclaw_webhook_error_total",
+        "Webhook processing errors by channel and update type.",
+        webhookLabels(evt),
       );
       return;
     case "message.delivery.started":
@@ -711,6 +812,19 @@ function recordDiagnosticEvent(
         );
       }
       return;
+    case "session.stuck":
+      store.counter(
+        "openclaw_session_stuck_total",
+        "Stale session bookkeeping observations with no active work.",
+        sessionStuckLabels(evt),
+      );
+      store.histogram(
+        "openclaw_session_stuck_age_seconds",
+        "Age of stale session bookkeeping observations in seconds.",
+        sessionStuckLabels(evt),
+        seconds(evt.ageMs),
+      );
+      return;
     case "session.turn.created":
       store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
         agent: lowCardinalityLabel(evt.agentId),
@@ -755,6 +869,57 @@ function recordDiagnosticEvent(
         },
       );
       return;
+    case "diagnostic.liveness.warning":
+      store.counter(
+        "openclaw_liveness_warning_total",
+        "Diagnostic liveness warning events.",
+        livenessLabels(evt),
+      );
+      store.gauge(
+        "openclaw_liveness_sessions",
+        "Latest session counts reported with diagnostic liveness warnings.",
+        { state: "active" },
+        numericValue(evt.active),
+      );
+      store.gauge(
+        "openclaw_liveness_sessions",
+        "Latest session counts reported with diagnostic liveness warnings.",
+        { state: "waiting" },
+        numericValue(evt.waiting),
+      );
+      store.gauge(
+        "openclaw_liveness_sessions",
+        "Latest session counts reported with diagnostic liveness warnings.",
+        { state: "queued" },
+        numericValue(evt.queued),
+      );
+      store.histogram(
+        "openclaw_liveness_event_loop_delay_p99_seconds",
+        "P99 event-loop delay reported by diagnostic liveness warnings in seconds.",
+        livenessLabels(evt),
+        seconds(evt.eventLoopDelayP99Ms),
+      );
+      store.histogram(
+        "openclaw_liveness_event_loop_delay_max_seconds",
+        "Maximum event-loop delay reported by diagnostic liveness warnings in seconds.",
+        livenessLabels(evt),
+        seconds(evt.eventLoopDelayMaxMs),
+      );
+      store.histogram(
+        "openclaw_liveness_event_loop_utilization_ratio",
+        "Event-loop utilization reported by diagnostic liveness warnings.",
+        livenessLabels(evt),
+        numericValue(evt.eventLoopUtilization),
+        RATIO_BUCKETS,
+      );
+      store.histogram(
+        "openclaw_liveness_cpu_core_ratio",
+        "CPU core ratio reported by diagnostic liveness warnings.",
+        livenessLabels(evt),
+        numericValue(evt.cpuCoreRatio),
+        RATIO_BUCKETS,
+      );
+      return;
     case "diagnostic.async_queue.dropped":
       store.counter(
         "openclaw_diagnostic_async_queue_dropped_total",
@@ -794,7 +959,6 @@ function recordDiagnosticEvent(
       );
       return;
     case "diagnostic.heartbeat":
-    case "diagnostic.liveness.warning":
       return;
     case "telemetry.exporter":
       store.counter("openclaw_telemetry_exporter_total", "Telemetry exporter lifecycle events.", {
@@ -803,6 +967,20 @@ function recordDiagnosticEvent(
         signal: evt.signal,
         status: evt.status,
       });
+      return;
+    case "payload.large":
+      store.counter(
+        "openclaw_payload_large_total",
+        "Oversized payload diagnostics by surface and action.",
+        payloadLargeLabels(evt),
+      );
+      store.histogram(
+        "openclaw_payload_large_bytes",
+        "Oversized payload byte sizes by surface and action.",
+        payloadLargeLabels(evt),
+        numericValue(evt.bytes),
+        BYTE_BUCKETS,
+      );
       return;
     default:
       return;

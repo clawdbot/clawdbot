@@ -23,6 +23,7 @@ import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
 import {
   normalizeLowercaseStringOrEmpty,
   readStringValue,
+  uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
@@ -330,7 +331,7 @@ function withDefaultCodexContextMetadata(params: {
         : params.contextTokens;
   const input = params.model.input?.includes("image")
     ? params.model.input
-    : ([...new Set([...(params.model.input ?? ["text"]), "image"])] as ("text" | "image")[]);
+    : uniqueValues<"text" | "image">([...(params.model.input ?? ["text"]), "image"]);
   return {
     ...params.model,
     input,

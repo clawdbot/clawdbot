@@ -132,6 +132,7 @@ export type EmbeddedPiSubscribeContext = {
   blockChunker: EmbeddedBlockChunker | null;
   hookRunner?: HookRunner;
   builtinToolNames?: ReadonlySet<string>;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
   noteLastAssistant: (msg: AgentMessage) => void;
 
   shouldEmitToolResult: () => boolean;
@@ -198,6 +199,7 @@ type ToolHandlerParams = Pick<
   | "onBlockReplyFlush"
   | "onAgentEvent"
   | "onExecutionPhase"
+  | "onHeartbeatToolResponse"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"
@@ -243,6 +245,7 @@ export type ToolHandlerContext = {
   log: EmbeddedSubscribeLogger;
   hookRunner?: HookRunner;
   builtinToolNames?: ReadonlySet<string>;
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
   flushBlockReplyBuffer: () => void | Promise<void>;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;

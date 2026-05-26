@@ -7,7 +7,10 @@ import {
   postJsonRequest,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber as coerceProviderNumber,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -79,14 +82,6 @@ function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
   };
 }
 
-function coerceProviderNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function coerceProviderString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function resolveDurationSeconds(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
@@ -115,11 +110,12 @@ function buildDeepInfraVideoBody(
     body.seed = seed;
   }
   const negativePrompt =
-    coerceProviderString(options.negative_prompt) ?? coerceProviderString(options.negativePrompt);
+    normalizeOptionalString(options.negative_prompt) ??
+    normalizeOptionalString(options.negativePrompt);
   if (negativePrompt) {
     body.negative_prompt = negativePrompt;
   }
-  const style = coerceProviderString(options.style);
+  const style = normalizeOptionalString(options.style);
   if (style) {
     body.style = style;
   }

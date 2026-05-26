@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PluginRuntime, RuntimeLogger } from "../../runtime-api.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -113,14 +113,15 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
       }
 
       warningEmitted = true;
-      const rooms = [...new Set(observations.map((entry) => entry.roomId))].slice(
+      const rooms = uniqueStrings(observations.map((entry) => entry.roomId)).slice(
         0,
         MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT,
       );
-      const senders = [...new Set(observations.map((entry) => entry.sender).filter(Boolean))].slice(
-        0,
-        MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT,
-      );
+      const senders = uniqueStrings(
+        observations
+          .map((entry) => entry.sender)
+          .filter((sender): sender is string => Boolean(sender)),
+      ).slice(0, MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT);
       const eventIds = observations
         .slice(-MATRIX_POST_HEALTHY_SYNC_DECRYPT_FAILURE_SAMPLE_LIMIT)
         .map((entry) => entry.eventId);

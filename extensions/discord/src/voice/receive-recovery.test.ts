@@ -20,6 +20,15 @@ describe("voice receive recovery", () => {
     });
   });
 
+  it("treats WASM bounds traps as recoverable receive failures", () => {
+    expect(analyzeVoiceReceiveError(new Error("memory access out of bounds"))).toEqual({
+      message: "memory access out of bounds",
+      isAbortLike: false,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: true,
+    });
+  });
+
   it("gates recovery after repeated decrypt failures in the same window", () => {
     const state = createVoiceReceiveRecoveryState();
 

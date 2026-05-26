@@ -6,6 +6,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -293,7 +294,7 @@ function inferRisk(title: string, sampleText: string): ChatGptRiskAssessment {
     (rule) => rule.label,
   );
   if (reasons.length > 0) {
-    return { level: "high", reasons: [...new Set(reasons)] };
+    return { level: "high", reasons: uniqueStrings(reasons) };
   }
   if (/\b(career|job|salary|interview|offer|resume|cover letter)\b/i.test(blob)) {
     return { level: "medium", reasons: ["work_career"] };

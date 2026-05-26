@@ -1,4 +1,5 @@
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 const MANAGED_SERVICE_ENV_KEYS_VAR = "OPENCLAW_SERVICE_MANAGED_ENV_KEYS";
@@ -155,5 +156,5 @@ export function collectInlineManagedServiceEnvKeys(
     }
     inlineKeys.push(normalized);
   }
-  return [...new Set(inlineKeys)].toSorted();
+  return sortUniqueStrings(inlineKeys);
 }

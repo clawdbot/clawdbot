@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
-import { getLoadedRuntimePluginRegistry } from "../active-runtime-registry.js";
+import {
+  getLoadedRuntimePluginRegistry,
+  registryContainsRuntimePluginIds,
+} from "../active-runtime-registry.js";
 import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
@@ -13,7 +16,7 @@ import {
   hasNonEmptyPluginIdScope,
   normalizePluginIdScope,
 } from "../plugin-scope.js";
-import { getActivePluginRegistry } from "../runtime.js";
+import { getActivePluginRegistry, getActivePluginRegistryWorkspaceDir } from "../runtime.js";
 import {
   buildPluginRuntimeLoadOptionsFromValues,
   resolvePluginRuntimeLoadContext,
@@ -42,18 +45,17 @@ function activeRegistrySatisfiesScope(
   active: ReturnType<typeof getActivePluginRegistry>,
   expectedChannelPluginIds: readonly string[],
   requestedPluginIds: readonly string[] | undefined,
+  requestedWorkspaceDir: string | undefined,
 ): boolean {
   if (!active) {
     return false;
   }
   if (requestedPluginIds !== undefined) {
-    if (requestedPluginIds.length === 0) {
+    const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
+    if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
       return false;
     }
-    const activePluginIds = new Set(
-      active.plugins.filter((plugin) => plugin.status === "loaded").map((plugin) => plugin.id),
-    );
-    return requestedPluginIds.every((pluginId) => activePluginIds.has(pluginId));
+    return registryContainsRuntimePluginIds(active, requestedPluginIds);
   }
   const activeChannelPluginIds = new Set(active.channels.map((entry) => entry.plugin.id));
   switch (scope) {
@@ -155,17 +157,30 @@ export function ensurePluginRegistryLoaded(options?: {
     ? (requestedPluginIds ?? [])
     : resolveScopePluginIds({ scope, context });
   const active = getActivePluginRegistry();
-  const requestedPluginIdsForScope = scope === "all" ? expectedPluginIds : undefined;
+  const requestedPluginIdsForScope =
+    scope === "all" && expectedPluginIds.length === 0 ? expectedPluginIds : undefined;
   if (
     !scopedLoad &&
     scopeRank(pluginRegistryLoaded) >= scopeRank(scope) &&
-    activeRegistrySatisfiesScope(scope, active, expectedPluginIds, requestedPluginIdsForScope)
+    activeRegistrySatisfiesScope(
+      scope,
+      active,
+      expectedPluginIds,
+      requestedPluginIdsForScope,
+      context.workspaceDir,
+    )
   ) {
     return;
   }
   if (
     (pluginRegistryLoaded === "none" || scopedLoad) &&
-    activeRegistrySatisfiesScope(scope, active, expectedPluginIds, requestedPluginIds)
+    activeRegistrySatisfiesScope(
+      scope,
+      active,
+      expectedPluginIds,
+      requestedPluginIds,
+      context.workspaceDir,
+    )
   ) {
     if (!scopedLoad) {
       pluginRegistryLoaded = scope;

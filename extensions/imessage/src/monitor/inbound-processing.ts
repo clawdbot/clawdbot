@@ -24,6 +24,7 @@ import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-s
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveIMessageConversationRoute } from "../conversation-route.js";
@@ -37,6 +38,7 @@ import {
   normalizeIMessageHandle,
   parseIMessageAllowTarget,
 } from "../targets.js";
+import type { IMessageDmHistoryContext } from "./dm-history.js";
 import {
   type IMessageReactionContext,
   resolveIMessageReactionContext,
@@ -94,7 +96,7 @@ function mergeIMessageGroupAllowFromWithLegacyChatTargets(params: {
   if (legacyChatTargets.length === 0) {
     return params.groupAllowFrom;
   }
-  return Array.from(new Set([...params.groupAllowFrom, ...legacyChatTargets]));
+  return uniqueStrings([...params.groupAllowFrom, ...legacyChatTargets]);
 }
 
 const imessageIngressIdentity = defineStableChannelIngressIdentity({
@@ -807,6 +809,7 @@ export function buildIMessageInboundContext(params: {
   };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
+  dmHistory?: IMessageDmHistoryContext;
 }): {
   ctxPayload: ReturnType<typeof finalizeInboundContext>;
   fromLabel: string;
@@ -866,6 +869,9 @@ export function buildIMessageInboundContext(params: {
   });
 
   let combinedBody = body;
+  if (!decision.isGroup && params.dmHistory?.body) {
+    combinedBody = `${params.dmHistory.body}\n\n${combinedBody}`;
+  }
   if (decision.isGroup && decision.historyKey) {
     const channelHistory = createChannelHistoryWindow({ historyMap: params.groupHistories });
     combinedBody = channelHistory.buildPendingContext({
@@ -887,12 +893,14 @@ export function buildIMessageInboundContext(params: {
 
   const imessageTo = (decision.isGroup ? chatTarget : undefined) || `imessage:${decision.sender}`;
   const inboundHistory =
-    decision.isGroup && decision.historyKey && params.historyLimit > 0
-      ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
-          historyKey: decision.historyKey,
-          limit: params.historyLimit,
-        })
-      : undefined;
+    !decision.isGroup && params.dmHistory?.inboundHistory
+      ? params.dmHistory.inboundHistory
+      : decision.isGroup && decision.historyKey && params.historyLimit > 0
+        ? createChannelHistoryWindow({ historyMap: params.groupHistories }).buildInboundHistory({
+            historyKey: decision.historyKey,
+            limit: params.historyLimit,
+          })
+        : undefined;
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,

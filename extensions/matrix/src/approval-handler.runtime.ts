@@ -20,6 +20,7 @@ import {
   listMessageReceiptPlatformIds,
   resolveMessageReceiptPrimaryId,
 } from "openclaw/plugin-sdk/channel-message";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildMatrixApprovalReactionHint,
   listMatrixApprovalReactionBindings,
@@ -155,9 +156,7 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
 }
 
 function normalizePendingMessageIds(entry: PendingMessage): string[] {
-  return Array.from(
-    new Set(entry.platformMessageIds.map((messageId) => messageId.trim()).filter(Boolean)),
-  );
+  return normalizeUniqueStringEntries(entry.platformMessageIds);
 }
 
 function normalizeReactionTargetRef(params: ReactionTargetRef): ReactionTargetRef | null {

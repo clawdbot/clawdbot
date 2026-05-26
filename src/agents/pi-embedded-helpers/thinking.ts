@@ -1,4 +1,5 @@
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { isReasoningConstraintErrorMessage } from "./errors.js";
 
 function extractSupportedValues(raw: string): string[] {
@@ -12,12 +13,11 @@ function extractSupportedValues(raw: string): string[] {
     entry[1]?.trim(),
   );
   if (quoted.length > 0) {
-    return quoted.filter((entry): entry is string => Boolean(entry));
+    return normalizeStringEntries(quoted.filter((entry): entry is string => Boolean(entry)));
   }
-  return fragment
-    .split(/,|\band\b/gi)
-    .map((entry) => entry.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "").trim())
-    .filter(Boolean);
+  return normalizeStringEntries(
+    fragment.split(/,|\band\b/gi).map((entry) => entry.replace(/^[^a-zA-Z]+|[^a-zA-Z]+$/g, "")),
+  );
 }
 
 export function pickFallbackThinkingLevel(params: {

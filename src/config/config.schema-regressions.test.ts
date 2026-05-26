@@ -56,6 +56,23 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("rejects local memorySearch GPU policy", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: {
+              gpu: "cpu",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts memorySearch.qmd.extraCollections", () => {
     const res = validateConfigObject({
       agents: {

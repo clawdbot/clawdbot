@@ -18,6 +18,7 @@ import { getContextEngineFactory, resolveContextEngine } from "../../../context-
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { ensurePluginRegistryLoaded } from "../../../plugins/runtime/runtime-registry-loader.js";
 import { defaultSlotIdForKey } from "../../../plugins/slots.js";
+import { uniqueStrings } from "../../../shared/string-normalization.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
 export type HostCandidate = {
@@ -326,7 +327,7 @@ function collectHostCompatibilityIssues(params: {
 }
 
 function formatPaths(paths: string[]): string {
-  const unique = [...new Set(paths)];
+  const unique = uniqueStrings(paths);
   if (unique.length <= 2) {
     return unique.join(", ");
   }

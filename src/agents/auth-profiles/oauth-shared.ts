@@ -169,15 +169,29 @@ export function shouldBootstrapFromExternalCliCredential(params: {
 export function overlayRuntimeExternalOAuthProfiles(
   store: AuthProfileStore,
   profiles: Iterable<RuntimeExternalOAuthProfile>,
+  options?: { runtimeExternalProfileIdsAuthoritative?: boolean },
 ): AuthProfileStore {
   const externalProfiles = Array.from(profiles);
-  if (externalProfiles.length === 0) {
-    return store;
-  }
   const next = cloneAuthProfileStore(store);
   for (const profile of externalProfiles) {
     next.profiles[profile.profileId] = profile.credential;
   }
+  const runtimeOnlyProfileIds = new Set(
+    externalProfiles
+      .filter((profile) => profile.persistence !== "persisted")
+      .map((profile) => profile.profileId),
+  );
+  for (const profileId of store.runtimeExternalProfileIds ?? []) {
+    if (next.profiles[profileId]) {
+      runtimeOnlyProfileIds.add(profileId);
+    }
+  }
+  next.runtimeExternalProfileIds =
+    runtimeOnlyProfileIds.size > 0 || options?.runtimeExternalProfileIdsAuthoritative === true
+      ? [...runtimeOnlyProfileIds].toSorted()
+      : undefined;
+  next.runtimeExternalProfileIdsAuthoritative =
+    options?.runtimeExternalProfileIdsAuthoritative === true ? true : undefined;
   return next;
 }
 

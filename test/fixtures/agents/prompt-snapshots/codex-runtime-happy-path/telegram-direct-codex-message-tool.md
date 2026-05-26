@@ -103,6 +103,7 @@
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "serviceName": "OpenClaw"
 }
@@ -121,6 +122,7 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "threadId": "thread-telegram-direct-codex-message-tool"
 }
@@ -150,6 +152,7 @@
     }
   ],
   "model": "gpt-5.5",
+  "personality": "none",
   "sandboxPolicy": {
     "type": "dangerFullAccess"
   },
@@ -218,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 40061,
-    "roughTokens": 10016
+    "chars": 39998,
+    "roughTokens": 10000
   },
   "openClawDeveloperInstructions": {
     "chars": 1822,
@@ -230,8 +233,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6509
   },
   "totalWithDynamicToolsJson": {
-    "chars": 66097,
-    "roughTokens": 16525
+    "chars": 66034,
+    "roughTokens": 16509
   },
   "userInputText": {
     "chars": 1129,
@@ -610,9 +613,6 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
             "type": "object"
           },
           "type": "array"
-        },
-        "bestEffort": {
-          "type": "boolean"
         },
         "buffer": {
           "description": "Base64 attachment payload; data URL ok.",

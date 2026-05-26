@@ -18,4 +18,17 @@ describe("provider model id normalization", () => {
     expect(normalizeGooglePreviewModelId("gemini-3.1-pro-preview")).toBe("gemini-3.1-pro-preview");
     expect(normalizeGooglePreviewModelId("gemini-2.5-flash")).toBe("gemini-2.5-flash");
   });
+
+  it("maps deprecated flash-lite-preview to GA flash-lite", () => {
+    expect(normalizeGooglePreviewModelId("gemini-3.1-flash-lite-preview")).toBe(
+      "gemini-3.1-flash-lite",
+    );
+    expect(normalizeGooglePreviewModelId("google/gemini-3.1-flash-lite-preview")).toBe(
+      "google/gemini-3.1-flash-lite",
+    );
+  });
+
+  it("does not rewrite stable GA flash-lite", () => {
+    expect(normalizeGooglePreviewModelId("gemini-3.1-flash-lite")).toBe("gemini-3.1-flash-lite");
+  });
 });

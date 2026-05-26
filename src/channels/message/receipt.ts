@@ -1,3 +1,4 @@
+import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import type {
   MessageReceipt,
   MessageReceiptPartKind,
@@ -108,9 +109,7 @@ export function createMessageReceiptFromOutboundResults(params: {
 }
 
 export function listMessageReceiptPlatformIds(receipt: MessageReceipt): string[] {
-  return Array.from(
-    new Set(receipt.platformMessageIds.map((messageId) => messageId.trim()).filter(Boolean)),
-  );
+  return normalizeUniqueStringEntries(receipt.platformMessageIds);
 }
 
 export function resolveMessageReceiptPrimaryId(receipt: MessageReceipt): string | undefined {

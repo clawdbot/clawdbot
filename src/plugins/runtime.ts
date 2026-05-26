@@ -4,6 +4,7 @@ import {
   clearPluginHostRuntimeState,
   dispatchPluginAgentEventSubscriptions,
 } from "./host-hook-runtime.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -378,4 +379,5 @@ export function resetPluginRuntimeStateForTest(): void {
   // Otherwise per-test bleed-over of those globals can cause flaky behavior
   // since this helper is widely used across plugin/agent tests.
   clearPluginHostRuntimeState();
+  clearPluginMetadataLifecycleCaches();
 }

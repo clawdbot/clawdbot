@@ -12,7 +12,11 @@ import {
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import { normalizeNullableString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeNullableString,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../runtime-api.js";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
 import { FileBackedMatrixSyncStore } from "./client/file-sync-store.js";
@@ -1840,7 +1844,7 @@ export class MatrixClient {
   }
 
   async deleteOwnDevices(deviceIds: string[]): Promise<MatrixOwnDeviceDeleteResult> {
-    const uniqueDeviceIds = [...new Set(deviceIds.map((value) => value.trim()).filter(Boolean))];
+    const uniqueDeviceIds = uniqueStrings(normalizeStringEntries(deviceIds));
     const currentDeviceId = this.client.getDeviceId()?.trim() || null;
     const protectedDeviceIds = uniqueDeviceIds.filter((deviceId) => deviceId === currentDeviceId);
     if (protectedDeviceIds.length > 0) {

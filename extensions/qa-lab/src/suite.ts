@@ -5,6 +5,7 @@ import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harne
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { startQaGatewayChild, type QaCliBackendAuthMode } from "./gateway-child.js";
 import type {
   QaLabLatestReport,
@@ -1024,7 +1025,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
   const enabledPluginIds = [
     ...new Set([
       ...collectQaSuitePluginIds(selectedCatalogScenarios),
-      ...(params?.enabledPluginIds ?? []).map((pluginId) => pluginId.trim()).filter(Boolean),
+      ...normalizeStringEntries(params?.enabledPluginIds ?? []),
       ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
     ]),
   ];

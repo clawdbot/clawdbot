@@ -12,6 +12,9 @@ import {
 import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
+const markdownRenderMock = vi.hoisted(() =>
+  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
+);
 
 vi.mock("../../local-storage.ts", () => ({
   getSafeLocalStorage: () => ({
@@ -22,7 +25,7 @@ vi.mock("../../local-storage.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
-  toSanitizedMarkdownHtml: (value: string) => value,
+  toSanitizedMarkdownHtml: markdownRenderMock,
 }));
 
 vi.mock("../icons.ts", () => ({
@@ -494,6 +497,7 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
 }
 
 afterEach(() => {
+  markdownRenderMock.mockClear();
   document.querySelectorAll("[data-delete-confirm-fixture]").forEach((element) => {
     element.remove();
   });
@@ -564,6 +568,36 @@ describe("grouped chat rendering", () => {
     const userBubble = expectElement(container, ".chat-group.user .chat-bubble", HTMLElement);
     expect(userBubble.classList.contains("has-copy")).toBe(false);
     expect(userBubble.querySelector(".chat-bubble-actions")).toBeNull();
+  });
+
+  it("renders user markdown without code-block copy chrome", () => {
+    const container = document.createElement("div");
+    const markdown = "```bash\npython3 - <<'PY'\nprint('ok')\nPY\n```";
+
+    renderGroupedMessage(
+      container,
+      {
+        role: "user",
+        content: markdown,
+        timestamp: 1001,
+      },
+      "user",
+    );
+
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: "none" });
+  });
+
+  it("keeps assistant markdown code-block copy chrome enabled", () => {
+    const container = document.createElement("div");
+    const markdown = "```bash\necho ok\n```";
+
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content: markdown,
+      timestamp: 1000,
+    });
+
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, undefined);
   });
 
   it("positions delete confirm by message side", () => {

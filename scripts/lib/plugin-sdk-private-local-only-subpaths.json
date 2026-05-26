@@ -1,6 +1,5 @@
 [
   "codex-native-task-runtime",
-  "provider-stream-runtime-internal",
   "qa-channel",
   "qa-channel-protocol",
   "qa-lab",

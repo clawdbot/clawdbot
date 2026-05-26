@@ -22,7 +22,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_PERPLEXITY_BASE_URL,
   inferPerplexityBaseUrlFromApiKey,
@@ -174,7 +174,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
     Boolean(normalizeOptionalString(url)),
   );
   if (topLevel.length > 0) {
-    return [...new Set(topLevel)];
+    return uniqueStrings(topLevel);
   }
   const citations: string[] = [];
   for (const choice of data.choices ?? []) {
@@ -194,7 +194,7 @@ function extractPerplexityCitations(data: PerplexitySearchResponse): string[] {
       }
     }
   }
-  return [...new Set(citations)];
+  return uniqueStrings(citations);
 }
 
 async function runPerplexitySearchApi(params: {

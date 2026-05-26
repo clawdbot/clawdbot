@@ -437,6 +437,74 @@ describe("gateway startup config secret preflight", () => {
     expect(typeof preflightInput.config).toBe("object");
   });
 
+  it("emits one-shot degraded and recovered events during secret reload transitions", async () => {
+    const missingSecretError = new Error(
+      'Environment variable "OPENAI_API_KEY" is missing or empty.',
+    );
+    let shouldResolve = false;
+    const sourceConfig = gatewayTokenConfig({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+            models: [],
+          },
+        },
+      },
+    });
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => {
+      if (!shouldResolve) {
+        throw missingSecretError;
+      }
+      return preparedSnapshot(config);
+    });
+    const emitStateEvent = vi.fn();
+    const logSecrets = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    const activateRuntimeSecrets = createRuntimeSecretsActivator({
+      logSecrets,
+      emitStateEvent,
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot: vi.fn(),
+    });
+
+    await expect(
+      activateRuntimeSecrets(sourceConfig, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).rejects.toThrow(missingSecretError.message);
+    await expect(
+      activateRuntimeSecrets(sourceConfig, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).rejects.toThrow(missingSecretError.message);
+    shouldResolve = true;
+    await expect(
+      activateRuntimeSecrets(sourceConfig, {
+        reason: "reload",
+        activate: true,
+      }),
+    ).resolves.toMatchObject({ config: sourceConfig });
+
+    expect(emitStateEvent.mock.calls.map((call) => call[0])).toEqual([
+      "SECRETS_RELOADER_DEGRADED",
+      "SECRETS_RELOADER_RECOVERED",
+    ]);
+    expect(logSecrets.error).toHaveBeenCalledTimes(1);
+    expect(logSecrets.warn).toHaveBeenCalledWith(
+      `[SECRETS_RELOADER_DEGRADED] Error: ${missingSecretError.message}`,
+    );
+    expect(logSecrets.info).toHaveBeenCalledWith(
+      "[SECRETS_RELOADER_RECOVERED] Secret resolution recovered; runtime remained on last-known-good during the outage.",
+    );
+  });
+
   it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
     "rejects known weak gateway tokens resolved during secret activation: %s",
     async (token) => {

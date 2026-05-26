@@ -20,6 +20,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
@@ -176,8 +177,8 @@ export async function applyCodexMigrationPlan(params: {
     reportDir,
   };
   if (items.some(isCodexPluginLoadWarningItem)) {
-    result.warnings = [...new Set([...(result.warnings ?? []), CODEX_PLUGIN_LOAD_WARNING])];
-    result.nextSteps = [...new Set([CODEX_PLUGIN_LOAD_WARNING, ...(result.nextSteps ?? [])])];
+    result.warnings = uniqueStrings([...(result.warnings ?? []), CODEX_PLUGIN_LOAD_WARNING]);
+    result.nextSteps = uniqueStrings([CODEX_PLUGIN_LOAD_WARNING, ...(result.nextSteps ?? [])]);
   }
   await writeMigrationReport(result, { title: "Codex Migration Report" });
   return result;

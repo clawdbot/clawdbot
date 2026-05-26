@@ -27,6 +27,7 @@ import {
   COPILOT_INTEGRATION_ID,
   resolveCopilotApiToken,
 } from "../plugin-sdk/provider-auth.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
@@ -44,10 +45,6 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
     return requestedMaxTokens;
   }
   return Math.min(requestedMaxTokens, modelMaxTokens);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isNativeResponsesReasoningPayload(model: Model<Api>): boolean {

@@ -1,3 +1,4 @@
+import { uniqueStrings } from "../shared/string-normalization.js";
 import type { RealtimeVoiceBridgeEvent, RealtimeVoiceRole } from "./provider-types.js";
 
 export type RealtimeVoiceTranscriptEntry = {
@@ -92,7 +93,7 @@ function hasMeaningfulEchoOverlap(userTokens: string[], assistantTokens: string[
   if (userTokens.length < 4 || assistantTokens.length < 4) {
     return false;
   }
-  const uniqueUserTokens = [...new Set(userTokens)];
+  const uniqueUserTokens = uniqueStrings(userTokens);
   if (uniqueUserTokens.length < 4) {
     return false;
   }

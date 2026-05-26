@@ -7,6 +7,7 @@ import {
   type JsonSchemaValidationError,
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import {
@@ -20,10 +21,6 @@ import {
 import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
   return errors.map((error) => error.text).join("; ");

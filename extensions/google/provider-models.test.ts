@@ -64,7 +64,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
         provider: "google-gemini-cli",
         modelId: "gemini-2.5-flash-lite",
         models: [
-          createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite-preview", {
+          createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite", {
             contextWindow: 1_048_576,
             api: "google-gemini-cli",
             baseUrl: "https://cloudcode-pa.googleapis.com",
@@ -286,7 +286,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
     const models = [
       createTemplateModel("google", "gemini-3-pro-preview", { reasoning: true }),
       createTemplateModel("google", "gemini-3-flash-preview", { reasoning: true }),
-      createTemplateModel("google", "gemini-3.1-flash-lite-preview", { reasoning: true }),
+      createTemplateModel("google", "gemini-3.1-flash-lite", { reasoning: true }),
     ];
 
     expectModelFields(
@@ -409,13 +409,13 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
         providerId: "google-antigravity",
         ctx: createContext({
           provider: "google-antigravity",
-          modelId: "gemini-3.1-flash-lite-preview",
+          modelId: "gemini-3.1-flash-lite",
           models,
         }),
       }),
       {
         provider: "google-antigravity",
-        id: "gemini-3.1-flash-lite-preview",
+        id: "gemini-3.1-flash-lite",
         api: "openai-completions",
         contextWindow: 1_048_576,
       },
@@ -440,12 +440,12 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
       providerId: "google-vertex",
       ctx: createContext({
         provider: "google-vertex",
-        modelId: "gemini-3.1-flash-lite-preview",
+        modelId: "gemini-3.1-flash-lite",
         models: [
           createTemplateModel("google-gemini-cli", "gemini-3-flash-preview", {
             contextWindow: 128_000,
           }),
-          createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite-preview", {
+          createTemplateModel("google-gemini-cli", "gemini-3.1-flash-lite", {
             contextWindow: 1_048_576,
           }),
         ],
@@ -454,7 +454,7 @@ describe("resolveGoogleGeminiForwardCompatModel", () => {
 
     expectModelFields(model, {
       provider: "google-vertex",
-      id: "gemini-3.1-flash-lite-preview",
+      id: "gemini-3.1-flash-lite",
       contextWindow: 1_048_576,
       reasoning: false,
     });

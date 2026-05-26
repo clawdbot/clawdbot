@@ -45,6 +45,18 @@ async function isAllowedAdditionalDirectoryPath(
   return true;
 }
 
+function isFileDisappearedDuringReadError(err: unknown): boolean {
+  return (
+    isFileMissingError(err) ||
+    Boolean(
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "path-mismatch",
+    )
+  );
+}
+
 export async function readMemoryFile(params: {
   workspaceDir: string;
   extraPaths?: string[];
@@ -116,7 +128,7 @@ export async function readMemoryFile(params: {
   try {
     content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
   } catch (err) {
-    if (isFileMissingError(err)) {
+    if (isFileDisappearedDuringReadError(err)) {
       return { text: "", path: relPath };
     }
     throw err;

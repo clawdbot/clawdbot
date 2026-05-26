@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { isPassThroughRemoteMediaSource } from "./media-source-url.js";
 
@@ -96,7 +97,7 @@ export function appendLocalMediaParentRoots(
   roots: readonly string[],
   mediaSources?: readonly string[],
 ): string[] {
-  const appended = Array.from(new Set(roots.map((root) => path.resolve(root))));
+  const appended = uniqueStrings(roots.map((root) => path.resolve(root)));
   for (const source of mediaSources ?? []) {
     const localPath = resolveLocalMediaPath(source);
     if (!localPath) {

@@ -492,6 +492,7 @@ export async function handleSlackAction(
             placeholder: downloaded.placeholder,
             media: {
               mediaUrl: downloaded.path,
+              outbound: false,
               ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
             },
           });
@@ -504,6 +505,7 @@ export async function handleSlackAction(
             fileId,
             path: downloaded.path,
             ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+            media: { outbound: false },
           },
         });
       }

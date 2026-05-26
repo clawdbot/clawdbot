@@ -1,3 +1,5 @@
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 const DATA_URL_PREFIX = "data:";
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 const IMAGE_SIGNATURES: Array<{
@@ -105,8 +107,7 @@ function parseImageDataUrl(value: string):
 
 function metadataAllowsImageBase64(metadata: string[]): boolean {
   const [mimeType, ...options] = metadata;
-  const isImageMimeType =
-    mimeType !== undefined && mimeType.toLowerCase().startsWith("image/");
+  const isImageMimeType = mimeType !== undefined && mimeType.toLowerCase().startsWith("image/");
   return isImageMimeType && options.some((part) => part.toLowerCase() === "base64");
 }
 
@@ -135,10 +136,6 @@ export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined
 
 export function invalidInlineImageText(label: string): string {
   return `[${label}] ${IMAGE_OMITTED_TEXT}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function sanitizeImageContentRecord(

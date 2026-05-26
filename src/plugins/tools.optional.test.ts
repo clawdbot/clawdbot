@@ -1364,8 +1364,11 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(first, ["other_tool", "optional_tool"]);
     expectResolvedToolNames(second, ["other_tool", "optional_tool"]);
     expect(getPluginToolMeta(first[0])?.optional).toBe(false);
+    expect(getPluginToolMeta(first[0])?.trustedLocalMedia).toBe(true);
     expect(getPluginToolMeta(first[1])?.optional).toBe(true);
+    expect(getPluginToolMeta(first[1])?.trustedLocalMedia).toBe(true);
     expect(getPluginToolMeta(second[1])?.optional).toBe(true);
+    expect(getPluginToolMeta(second[1])?.trustedLocalMedia).toBe(true);
     expect(factory).toHaveBeenCalledTimes(1);
   });
 

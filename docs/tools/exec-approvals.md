@@ -207,13 +207,15 @@ YOLO is the default host behavior unless you tighten it explicitly:
 
 CLI-backed providers that expose their own noninteractive permission mode
 can follow this policy. Claude CLI adds
-`--permission-mode bypassPermissions` when OpenClaw's requested exec
-policy is YOLO. Override that backend behavior with explicit Claude args
-under `agents.defaults.cliBackends.claude-cli.args` / `resumeArgs` -
-for example `--permission-mode default`, `acceptEdits`, or
-`bypassPermissions`.
+`--permission-mode bypassPermissions` when OpenClaw's effective exec
+policy is YOLO. For OpenClaw-managed Claude live sessions, OpenClaw's
+effective exec policy is authoritative over Claude's native permission mode:
+YOLO normalizes live launches to `--permission-mode bypassPermissions`, and
+restrictive effective exec policy normalizes live launches to
+`--permission-mode default`, even if raw Claude backend args specify another
+mode.
 
-If you want a more conservative setup, tighten either layer back to
+If you want a more conservative setup, tighten OpenClaw exec policy back to
 `allowlist` / `on-miss` or `deny`.
 
 ### Persistent gateway-host "never prompt" setup

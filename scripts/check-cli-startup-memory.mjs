@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -18,6 +18,46 @@ const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
 const rssHookPath = path.join(tmpHome, "measure-rss.mjs");
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+
+function parseArgs(argv) {
+  const options = {
+    jsonPath:
+      process.env.OPENCLAW_STARTUP_MEMORY_JSON_PATH ||
+      path.join(repoRoot, ".artifacts", "startup-memory", "startup-memory.json"),
+    summaryPath:
+      process.env.OPENCLAW_STARTUP_MEMORY_SUMMARY_PATH ||
+      path.join(repoRoot, ".artifacts", "startup-memory", "summary.md"),
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--json") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("--json requires a path");
+      }
+      options.jsonPath = path.resolve(value);
+      index += 1;
+      continue;
+    }
+    if (arg === "--summary") {
+      const value = argv[index + 1];
+      if (!value) {
+        throw new Error("--summary requires a path");
+      }
+      options.summaryPath = path.resolve(value);
+      index += 1;
+      continue;
+    }
+    if (arg === "--help") {
+      console.log(
+        "Usage: node scripts/check-cli-startup-memory.mjs [--json <path>] [--summary <path>]",
+      );
+      process.exit(0);
+    }
+    throw new Error(`Unknown option: ${arg}`);
+  }
+  return options;
+}
 
 writeFileSync(
   rssHookPath,
@@ -97,6 +137,14 @@ function parseMaxRssMb(stderr) {
   return Number(lastMatch[1]) / 1024;
 }
 
+function formatMb(value) {
+  return typeof value === "number" && Number.isFinite(value) ? `${value.toFixed(1)} MB` : "n/a";
+}
+
+function formatCaseCommand(testCase) {
+  return `node ${testCase.args.join(" ")}`;
+}
+
 function buildBenchEnv() {
   const env = {
     HOME: tmpHome,
@@ -143,42 +191,104 @@ function runCase(testCase) {
   const stderr = result.stderr ?? "";
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
+  const report = {
+    id: testCase.id,
+    label: testCase.label,
+    command: formatCaseCommand(testCase),
+    limitMb: testCase.limitMb,
+    maxRssMb,
+    status: "pass",
+    exitCode: result.status,
+    error: null,
+  };
 
   if (result.status !== 0) {
-    throw new Error(
-      formatFailure(
-        testCase,
-        `${testCase.label} exited with ${String(result.status)}`,
-        stderr.trim() || result.stdout || "",
-      ),
-    );
+    report.status = "fail";
+    report.error = `${testCase.label} exited with ${String(result.status)}`;
+    return Object.assign(report, {
+      failureMessage: formatFailure(testCase, report.error, stderr.trim() || result.stdout || ""),
+    });
   }
   if (maxRssMb == null) {
-    throw new Error(formatFailure(testCase, `${testCase.label} did not report max RSS`, stderr));
+    report.status = "fail";
+    report.error = `${testCase.label} did not report max RSS`;
+    return Object.assign(report, {
+      failureMessage: formatFailure(testCase, report.error, stderr),
+    });
   }
   if (matrixBootstrapWarning) {
-    throw new Error(
-      formatFailure(testCase, `${testCase.label} triggered Matrix crypto bootstrap during startup`),
-    );
+    report.status = "fail";
+    report.error = `${testCase.label} triggered Matrix crypto bootstrap during startup`;
+    return Object.assign(report, {
+      failureMessage: formatFailure(testCase, report.error),
+    });
   }
   if (maxRssMb > testCase.limitMb) {
-    throw new Error(
-      formatFailure(
-        testCase,
-        `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
-      ),
-    );
+    report.status = "fail";
+    report.error = `${testCase.label} used ${maxRssMb.toFixed(1)} MB RSS (limit ${
+      testCase.limitMb
+    } MB)`;
+    return Object.assign(report, {
+      failureMessage: formatFailure(testCase, report.error),
+    });
   }
 
   console.log(
     `[startup-memory] ${testCase.label}: ${maxRssMb.toFixed(1)} MB RSS (limit ${testCase.limitMb} MB)`,
   );
+  return report;
 }
 
+function writeReport(options, results) {
+  const failed = results.filter((result) => result.status !== "pass");
+  const report = {
+    generatedAt: new Date().toISOString(),
+    platform: process.platform,
+    repoRoot,
+    status: failed.length === 0 ? "pass" : "fail",
+    results: results.map(({ failureMessage: _failureMessage, ...result }) => result),
+  };
+  const lines = [
+    "# OpenClaw Startup Memory",
+    "",
+    `Generated: ${report.generatedAt}`,
+    "",
+    `Status: ${report.status}`,
+    "",
+    ...results.map(
+      (result) =>
+        `- ${result.label}: ${result.status} RSS ${formatMb(result.maxRssMb)} / ${formatMb(
+          result.limitMb,
+        )}`,
+    ),
+    "",
+  ];
+  if (failed.length > 0) {
+    lines.push(
+      "## Failures",
+      "",
+      ...failed.map((result) => `- ${result.label}: ${result.error ?? "unknown failure"}`),
+      "",
+    );
+  }
+  mkdirSync(path.dirname(options.jsonPath), { recursive: true });
+  mkdirSync(path.dirname(options.summaryPath), { recursive: true });
+  writeFileSync(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  writeFileSync(options.summaryPath, `${lines.join("\n")}\n`, "utf8");
+}
+
+const options = parseArgs(process.argv.slice(2));
+const results = [];
 try {
   for (const testCase of cases) {
-    runCase(testCase);
+    results.push(runCase(testCase));
   }
 } finally {
+  writeReport(options, results);
   rmSync(tmpHome, { recursive: true, force: true });
+}
+
+const failure = results.find((result) => result.status !== "pass");
+if (failure?.failureMessage) {
+  throw new Error(failure.failureMessage);
 }

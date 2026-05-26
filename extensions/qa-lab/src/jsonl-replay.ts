@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -49,14 +53,6 @@ export type JsonlReplayMarkdownReport = {
   runtimePair: JsonlReplayInput["runtimePair"];
   transcripts: JsonlReplayResult["transcripts"];
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
 
 function readReplayMessage(record: Record<string, unknown>): Record<string, unknown> | undefined {
   if (isRecord(record.message)) {

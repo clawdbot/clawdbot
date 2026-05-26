@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSystemBin } from "../infra/resolve-system-bin.js";
+import { createGrayscaleAlphaPngBuffer } from "../../test/helpers/image-fixtures.js";
 import {
   convertHeicToJpeg,
   getImageMetadata,
@@ -11,7 +11,10 @@ import {
   ImageProcessorUnavailableError,
   isImageProcessorUnavailableError,
   MAX_IMAGE_INPUT_PIXELS,
+  normalizeExifOrientation,
   resizeToJpeg,
+  resizeToPng,
+  testing,
 } from "./image-ops.js";
 import { createPngBufferWithDimensions } from "./test-helpers.js";
 
@@ -41,6 +44,32 @@ function createHeifLikeBuffer(...sizes: Array<{ width: number; height: number }>
   return Buffer.concat([isoBox("ftyp", ftypPayload), meta]);
 }
 
+function createBmpHeaderBuffer(width: number, height: number): Buffer {
+  const buffer = Buffer.alloc(26);
+  buffer.write("BM", 0, "ascii");
+  buffer.writeUInt32LE(40, 14);
+  buffer.writeInt32LE(width, 18);
+  buffer.writeInt32LE(height, 22);
+  return buffer;
+}
+
+function createTiffHeaderBuffer(width: number, height: number): Buffer {
+  const buffer = Buffer.alloc(38);
+  buffer.write("II", 0, "ascii");
+  buffer.writeUInt16LE(42, 2);
+  buffer.writeUInt32LE(8, 4);
+  buffer.writeUInt16LE(2, 8);
+  buffer.writeUInt16LE(256, 10);
+  buffer.writeUInt16LE(4, 12);
+  buffer.writeUInt32LE(1, 14);
+  buffer.writeUInt32LE(width, 18);
+  buffer.writeUInt16LE(257, 22);
+  buffer.writeUInt16LE(4, 24);
+  buffer.writeUInt32LE(1, 26);
+  buffer.writeUInt32LE(height, 30);
+  return buffer;
+}
+
 describe("image input pixel guard", () => {
   const oversizedPng = createPngBufferWithDimensions({ width: 8_000, height: 4_000 });
   const overflowedPng = createPngBufferWithDimensions({
@@ -63,6 +92,16 @@ describe("image input pixel guard", () => {
     ).rejects.toThrow(/pixel input limit/i);
   });
 
+  it("rejects oversized images before EXIF normalization returns unchanged bytes", async () => {
+    await expect(normalizeExifOrientation(oversizedPng)).rejects.toThrow(/pixel input limit/i);
+  });
+
+  it("rejects unreadable images before EXIF normalization returns unchanged bytes", async () => {
+    await expect(normalizeExifOrientation(Buffer.from("not-an-image"))).rejects.toThrow(
+      /unable to determine image dimensions/i,
+    );
+  });
+
   it("rejects overflowed pixel counts before resize work starts", async () => {
     await expect(
       resizeToJpeg({
@@ -79,6 +118,17 @@ describe("image input pixel guard", () => {
     ).resolves.toEqual({
       width: 640,
       height: 480,
+    });
+  });
+
+  it("reads BMP and TIFF dimensions before selecting an image backend", async () => {
+    await expect(getImageMetadata(createBmpHeaderBuffer(640, 480))).resolves.toEqual({
+      width: 640,
+      height: 480,
+    });
+    await expect(getImageMetadata(createTiffHeaderBuffer(320, 240))).resolves.toEqual({
+      width: 320,
+      height: 240,
     });
   });
 
@@ -123,7 +173,7 @@ describe("image input pixel guard", () => {
     ).toBe(true);
     expect(
       isImageProcessorUnavailableError(
-        new Error("Optional dependency sharp is required for image attachment processing"),
+        new Error("Photon did not expose the required image processor API"),
       ),
     ).toBe(true);
   });
@@ -137,27 +187,56 @@ describe("image input pixel guard", () => {
     await expect(hasAlphaChannel(opaquePng)).resolves.toBe(false);
   });
 
-  const itIfFfmpeg = resolveSystemBin("ffmpeg", { trust: "standard" }) ? it : it.skip;
+  it("returns opaque when header-unknown alpha cannot be decoded", async () => {
+    await expect(hasAlphaChannel(createHeifLikeBuffer({ width: 1, height: 1 }))).resolves.toBe(
+      false,
+    );
+  });
 
-  itIfFfmpeg("honors enlargement when the ffmpeg fallback is selected", async () => {
-    const previousBackend = process.env.OPENCLAW_IMAGE_BACKEND;
-    process.env.OPENCLAW_IMAGE_BACKEND = "ffmpeg";
-    try {
-      const out = await resizeToJpeg({
-        buffer: Buffer.from(PNG_1X1_BASE64, "base64"),
-        maxSide: 4,
-        quality: 90,
-        withoutEnlargement: false,
-      });
+  it("rejects oversized alpha checks before returning a safe default", async () => {
+    await expect(hasAlphaChannel(oversizedPng)).rejects.toThrow(/pixel input limit/i);
+  });
 
-      await expect(getImageMetadata(out)).resolves.toEqual({ width: 4, height: 4 });
-    } finally {
-      if (previousBackend === undefined) {
-        delete process.env.OPENCLAW_IMAGE_BACKEND;
-      } else {
-        process.env.OPENCLAW_IMAGE_BACKEND = previousBackend;
-      }
-    }
+  it("resizes grayscale alpha PNGs through the Photon backend", async () => {
+    const source = createGrayscaleAlphaPngBuffer(64, 32);
+
+    await expect(hasAlphaChannel(source)).resolves.toBe(true);
+    const jpeg = await resizeToJpeg({
+      buffer: source,
+      maxSide: 16,
+      quality: 80,
+      withoutEnlargement: true,
+    });
+
+    await expect(getImageMetadata(jpeg)).resolves.toEqual({ width: 16, height: 8 });
+  });
+
+  it("honors PNG compression levels in the Photon backend", async () => {
+    const source = createGrayscaleAlphaPngBuffer(128, 128);
+    const uncompressed = await resizeToPng({
+      buffer: source,
+      maxSide: 128,
+      compressionLevel: 0,
+      withoutEnlargement: true,
+    });
+    const compressed = await resizeToPng({
+      buffer: source,
+      maxSide: 128,
+      compressionLevel: 9,
+      withoutEnlargement: true,
+    });
+
+    expect(compressed.length).toBeLessThan(uncompressed.length);
+    await expect(getImageMetadata(compressed)).resolves.toEqual({ width: 128, height: 128 });
+  });
+
+  it("allows enlargement when building the ffmpeg resize filter", () => {
+    expect(testing.buildFfmpegResizeFilter(4, false)).toBe(
+      "scale=w=4:h=4:force_original_aspect_ratio=decrease",
+    );
+    expect(testing.buildFfmpegResizeFilter(4, true)).toBe(
+      "scale=w='min(4,iw)':h='min(4,ih)':force_original_aspect_ratio=decrease",
+    );
   });
 
   const itIfMac = process.platform === "darwin" ? it : it.skip;

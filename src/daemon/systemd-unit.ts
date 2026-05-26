@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
@@ -39,13 +40,10 @@ function renderEnvironmentFileLines(environmentFiles: string[] | undefined): str
   if (!environmentFiles) {
     return [];
   }
-  return environmentFiles
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-      return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
-    });
+  return normalizeStringEntries(environmentFiles).map((entry) => {
+    assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
+    return `EnvironmentFile=-${systemdEscapeArg(entry)}`;
+  });
 }
 
 export function buildSystemdUnit({

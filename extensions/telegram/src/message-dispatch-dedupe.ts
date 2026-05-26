@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Message } from "grammy/types";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_MESSAGE_DISPATCH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const TELEGRAM_MESSAGE_DISPATCH_MEMORY_MAX = 5000;
@@ -81,7 +82,7 @@ export async function claimTelegramMessageDispatchReplay(params: {
 }
 
 function normalizeReplayKeys(keys?: readonly string[]): string[] {
-  return [...new Set((keys ?? []).map((key) => key.trim()).filter(Boolean))];
+  return uniqueStrings(normalizeStringEntries(keys ?? []));
 }
 
 export async function commitTelegramMessageDispatchReplay(params: {

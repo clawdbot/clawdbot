@@ -89,11 +89,11 @@ Reject:
    - if unwritable or wrong shape, create own PR and preserve useful contributor credit
    - if no PR exists, create one
    - add regression test when it fits
-   - changelog for user-facing fixes; thank credited human reporter/contributor
+   - release-note context for user-facing fixes in PR body or commit message; credit human reporter/contributor when known
 6. Review, refresh, and publish:
    - rebase or otherwise refresh the PR branch on current `origin/main`
    - resolve drift, including newly exposed CI failures, rather than counting the PR as ready
-   - changelog-only conflicts are routine on busy `main`; resolve them mechanically when already refreshing, but do not treat them as a real code conflict, a reason to reject the PR, or evidence that the branch needs extra fixup beyond the changelog entry order
+   - do not add `CHANGELOG.md` during normal sweep PRs; release automation generates it from PRs and commits
    - left-test the rebased head with the smallest meaningful local/Testbox/live command that proves the bug
    - run `$autoreview` until no accepted/actionable findings remain before creating, updating, or presenting the PR URL
    - create/update PR with real body and proof fields

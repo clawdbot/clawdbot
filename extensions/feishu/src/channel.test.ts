@@ -395,7 +395,7 @@ describe("feishuPlugin actions", () => {
     expect(details.chatId).toBe("oc_group_1");
   });
 
-  it("renders presentation button labels into the card fallback", async () => {
+  it("renders presentation buttons as native Feishu card buttons", async () => {
     sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
 
     await feishuPlugin.actions?.handleAction?.({
@@ -421,10 +421,97 @@ describe("feishuPlugin actions", () => {
       "send card args",
     );
     const card = requireRecord(sendCardArgs.card, "card");
+    const elements = requireArray(requireRecord(card.body, "card body").elements, "card elements");
+    expect(elements).toEqual([
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Run help" },
+        type: "default",
+        behaviors: [
+          {
+            type: "callback",
+            value: {
+              oc: "ocf1",
+              k: "quick",
+              a: "feishu.payload.button",
+              q: "feishu.quick_actions.help",
+            },
+          },
+        ],
+      },
+    ]);
+    expect(
+      elements.some((element) => requireRecord(element, "card element").tag === "action"),
+    ).toBe(false);
+  });
+
+  it("renders legacy web_app presentation buttons as native Feishu link buttons", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Open app", web_app: { url: "https://example.com/app" } }],
+            },
+          ],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    const elements = requireArray(requireRecord(card.body, "card body").elements, "card elements");
+    expect(elements).toEqual([
+      {
+        tag: "button",
+        text: { tag: "plain_text", content: "Open app" },
+        type: "default",
+        behaviors: [{ type: "open_url", default_url: "https://example.com/app" }],
+      },
+    ]);
+  });
+
+  it("does not duplicate title-only presentation cards in the body fallback", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          title: "Status",
+          blocks: [],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Status" },
+      template: "blue",
+    });
     expect(requireRecord(card.body, "card body").elements).toEqual([
       {
         tag: "markdown",
-        content: "- Run help",
+        content: "",
       },
     ]);
   });

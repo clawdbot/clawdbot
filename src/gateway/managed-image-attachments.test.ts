@@ -4,6 +4,10 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createNoisyPngBuffer as createNoisyPngFixtureBuffer,
+  createSolidPngBuffer,
+} from "../../test/helpers/image-fixtures.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { setMediaStoreNetworkDepsForTest } from "../media/store.js";
 
@@ -43,33 +47,12 @@ const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=";
 
 async function createPngDataUrl(width: number, height: number): Promise<string> {
-  const sharp = (await import("sharp")).default;
-  const buffer = await sharp({
-    create: {
-      width,
-      height,
-      channels: 4,
-      background: { r: 24, g: 64, b: 128, alpha: 1 },
-    },
-  })
-    .png()
-    .toBuffer();
+  const buffer = createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
 async function createNoisyPngBuffer(width: number, height: number): Promise<Buffer> {
-  const sharp = (await import("sharp")).default;
-  const pixels = Buffer.alloc(width * height * 4);
-  for (let i = 0; i < pixels.length; i += 4) {
-    const seed = i / 4;
-    pixels[i] = seed % 251;
-    pixels[i + 1] = (seed * 17) % 253;
-    pixels[i + 2] = (seed * 29) % 255;
-    pixels[i + 3] = 255;
-  }
-  return sharp(pixels, { raw: { width, height, channels: 4 } })
-    .png({ compressionLevel: 0 })
-    .toBuffer();
+  return createNoisyPngFixtureBuffer(width, height);
 }
 
 function requireAttachmentIdFromUrl(url: unknown): string {

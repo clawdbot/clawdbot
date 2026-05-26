@@ -25,10 +25,7 @@ import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
-import {
-  normalizeMessagePresentation,
-  renderMessagePresentationFallbackText,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
@@ -70,6 +67,7 @@ import {
 import { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
+import { buildFeishuPresentationCard } from "./presentation-card.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { collectFeishuSecurityAuditFindings } from "./security-audit.js";
 import { createFeishuSendReceipt } from "./send-result.js";
@@ -116,6 +114,15 @@ function containsLegacyFeishuCardCommandValue(node: unknown): boolean {
   }
 
   if (node.tag === "button" && hasLegacyFeishuCardCommandValue(node.value)) {
+    return true;
+  }
+  if (
+    node.tag === "button" &&
+    Array.isArray(node.behaviors) &&
+    node.behaviors.some(
+      (behavior) => isRecord(behavior) && hasLegacyFeishuCardCommandValue(behavior.value),
+    )
+  ) {
     return true;
   }
 
@@ -182,41 +189,6 @@ const feishuMessageAdapter = defineChannelMessageAdapter({
     },
   },
 });
-
-function buildFeishuPresentationCard(params: {
-  presentation: NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
-  fallbackText?: string;
-}): Record<string, unknown> {
-  const fallbackPresentation: NonNullable<ReturnType<typeof normalizeMessagePresentation>> = {
-    ...(params.presentation.tone ? { tone: params.presentation.tone } : {}),
-    blocks: params.presentation.blocks,
-  };
-  return {
-    schema: "2.0",
-    config: {
-      width_mode: "fill",
-    },
-    ...(params.presentation.title
-      ? {
-          header: {
-            title: { tag: "plain_text", content: params.presentation.title },
-            template: "blue",
-          },
-        }
-      : {}),
-    body: {
-      elements: [
-        {
-          tag: "markdown",
-          content: renderMessagePresentationFallbackText({
-            text: params.fallbackText,
-            presentation: fallbackPresentation,
-          }),
-        },
-      ],
-    },
-  };
-}
 
 async function createFeishuActionClient(account: ResolvedFeishuAccount) {
   const { createFeishuClient } = await import("./client.js");

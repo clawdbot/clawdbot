@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import type { ActivityEntry, ActivityStatus } from "../activity-model.ts";
 import { icons } from "../icons.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../string-coerce.ts";
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
@@ -96,9 +96,7 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
 }
 
 function resolveToolNames(entries: ActivityEntry[]): string[] {
-  return Array.from(new Set(entries.map((entry) => entry.toolName))).toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  return sortUniqueStrings(entries.map((entry) => entry.toolName));
 }
 
 function filterEntries(props: ActivityProps): ActivityEntry[] {

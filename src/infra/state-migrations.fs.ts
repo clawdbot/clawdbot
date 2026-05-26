@@ -50,6 +50,18 @@ export function readSessionStoreJson5(storePath: string): {
 } {
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
+    return parseSessionStoreJson5(raw);
+  } catch {
+    // ignore
+  }
+  return { store: {}, ok: false };
+}
+
+export function parseSessionStoreJson5(raw: string): {
+  store: Record<string, SessionEntryLike>;
+  ok: boolean;
+} {
+  try {
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return { store: parsed as Record<string, SessionEntryLike>, ok: true };

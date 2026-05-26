@@ -117,7 +117,13 @@ export type AuthProfileStateStore = {
   version: number;
 } & AuthProfileState;
 
-export type AuthProfileStore = AuthProfileSecretsStore & AuthProfileState;
+export type AuthProfileStore = AuthProfileSecretsStore &
+  AuthProfileState & {
+    /** Runtime-only provenance for external OAuth profiles overlaid onto this store. */
+    runtimeExternalProfileIds?: string[];
+    /** True when the runtime external profile set was freshly resolved, even if empty. */
+    runtimeExternalProfileIdsAuthoritative?: boolean;
+  };
 
 export type AuthProfileIdRepairResult = {
   config: OpenClawConfig;

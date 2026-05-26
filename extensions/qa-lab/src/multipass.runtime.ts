@@ -5,6 +5,7 @@ import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import type { QaProviderMode } from "./model-selection.js";
 import { resolveQaForwardedLiveEnv, resolveQaLiveProviderConfigPath } from "./providers/env.js";
@@ -249,7 +250,7 @@ export function createQaMultipassPlan(params: {
   disk?: string;
 }) {
   const outputDir = params.outputDir ?? createQaMultipassOutputDir(params.repoRoot);
-  const scenarioIds = [...new Set(params.scenarioIds ?? [])];
+  const scenarioIds = uniqueStrings(params.scenarioIds ?? []);
   const transportId = params.transportId?.trim() || "qa-channel";
   const providerMode = params.providerMode ?? DEFAULT_QA_LIVE_PROVIDER_MODE;
   const provider = getQaProvider(providerMode);

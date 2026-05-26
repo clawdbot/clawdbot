@@ -146,6 +146,16 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts agents.defaults.agentRuntime", () => {
+    expect(() =>
+      AgentDefaultsSchema.parse({
+        agentRuntime: {
+          id: "claude-cli",
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts experimental.localModelLean", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {

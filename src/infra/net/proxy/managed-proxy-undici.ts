@@ -1,4 +1,5 @@
 import type { EnvHttpProxyAgent } from "undici";
+import { isRecord as isProxyTlsRecord } from "../../../shared/record-coerce.js";
 import { resolveEnvHttpProxyAgentOptions, resolveEnvHttpProxyUrl } from "../proxy-env.js";
 import { getActiveManagedProxyTlsOptions, getActiveManagedProxyUrl } from "./active-proxy-state.js";
 import {
@@ -8,10 +9,6 @@ import {
 } from "./proxy-tls.js";
 
 export type ManagedEnvHttpProxyAgentOptions = ConstructorParameters<typeof EnvHttpProxyAgent>[0];
-
-function isProxyTlsRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function readProxyTlsRecord(options: object | undefined): Record<string, unknown> | undefined {
   if (!options || !("proxyTls" in options)) {

@@ -1,4 +1,8 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import {
+  asOptionalRecord as readRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type DiscordInboundEventDeliveryEnd = () => void;
 
@@ -75,16 +79,6 @@ export function notifyDiscordInboundEventOutboundSuccess(params: {
   }
   registry.delete(key);
   event.markInboundEventDelivered();
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 export function withDiscordInboundEventDeliveryMetadata(

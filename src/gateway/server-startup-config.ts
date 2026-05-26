@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { formatInvalidConfigRecoveryHint } from "../cli/config-recovery-hints.js";
+import {
+  formatInvalidConfigRecoveryHint,
+  formatPluginPackagingRuntimeOutputRecoveryHint,
+} from "../cli/config-recovery-hints.js";
 import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
   readConfigFileSnapshotWithPluginMetadata,
@@ -7,6 +10,7 @@ import {
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { isNixMode } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { GatewayAuthConfig, GatewayTailscaleConfig } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -387,8 +391,13 @@ export function assertValidGatewayStartupConfigSnapshot(
     snapshot.issues.length > 0
       ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
       : "Unknown validation issue.";
-  const doctorHint = options.includeDoctorHint ? `\n${formatInvalidConfigRecoveryHint()}` : "";
-  throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${doctorHint}`);
+  const recoveryHint =
+    options.includeDoctorHint && isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+      ? `\n${formatPluginPackagingRuntimeOutputRecoveryHint()}`
+      : options.includeDoctorHint
+        ? `\n${formatInvalidConfigRecoveryHint()}`
+        : "";
+  throw new Error(`Invalid config at ${snapshot.path}.\n${issues}${recoveryHint}`);
 }
 
 export async function prepareGatewayStartupConfig(params: {

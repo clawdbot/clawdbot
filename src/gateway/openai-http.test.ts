@@ -112,8 +112,11 @@ type FirstAgentCommandOptions = {
   model?: string;
   sessionKey?: string;
   streamParams?: {
+    frequencyPenalty?: number;
     maxTokens?: number;
+    presencePenalty?: number;
     responseFormat?: Record<string, unknown>;
+    seed?: number;
     temperature?: number;
     topP?: number;
   };
@@ -1398,6 +1401,46 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       const json = (await res.json()) as { error?: { type?: string; message?: string } };
       expect(json.error?.type).toBe("invalid_request_error");
       expect(json.error?.message).toMatch(/top_p/);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+    }
+  });
+
+  it("forwards inbound penalty and seed params into streamParams", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        frequency_penalty: -0.5,
+        presence_penalty: 1.25,
+        seed: 12345,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({
+        frequencyPenalty: -0.5,
+        presencePenalty: 1.25,
+        seed: 12345,
+      });
+      await res.text();
+    }
+
+    for (const body of [{ frequency_penalty: 3 }, { presence_penalty: -3 }, { seed: 1.5 }]) {
+      agentCommand.mockClear();
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        ...body,
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
       expect(agentCommand).toHaveBeenCalledTimes(0);
     }
   });

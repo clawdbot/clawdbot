@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "./string-coerce.ts";
+import { normalizeOptionalString, uniqueStrings } from "./string-coerce.ts";
 
 type ControlUiAuthSource = {
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
@@ -39,18 +39,11 @@ export function resolveControlUiAuthHeader(source: ControlUiAuthSource): string 
 // when the first returns 401 — for example, recovering from a stale
 // `settings.token` when the live session is authenticated via `password`.
 export function resolveControlUiAuthCandidates(source: ControlUiAuthSource): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const raw of [
-    normalizeOptionalString(source.hello?.auth?.deviceToken),
-    normalizeOptionalString(source.settings?.token),
-    normalizeOptionalString(source.password),
-  ]) {
-    const sanitized = sanitizeHeaderToken(raw ?? null);
-    if (sanitized && !seen.has(sanitized)) {
-      seen.add(sanitized);
-      out.push(sanitized);
-    }
-  }
-  return out;
+  return uniqueStrings(
+    [
+      normalizeOptionalString(source.hello?.auth?.deviceToken),
+      normalizeOptionalString(source.settings?.token),
+      normalizeOptionalString(source.password),
+    ].flatMap((raw) => sanitizeHeaderToken(raw ?? null) ?? []),
+  );
 }

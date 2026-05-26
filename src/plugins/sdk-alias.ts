@@ -793,6 +793,7 @@ const aliasMapCache = new PluginLruCache<Record<string, string>>(
 const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
+const normalizedJitiAliasMapByInput = new WeakMap<Record<string, string>, Record<string, string>>();
 const pluginLoaderModuleConfigCache = new PluginLruCache<{
   tryNative: boolean;
   aliasMap: Record<string, string>;
@@ -815,9 +816,14 @@ function normalizePluginLoaderAliasMapForJiti(
   if (hasJitiNormalizedAliasMarker(aliasMap)) {
     return aliasMap;
   }
+  const cachedByInput = normalizedJitiAliasMapByInput.get(aliasMap);
+  if (cachedByInput) {
+    return cachedByInput;
+  }
   const cacheKey = createJitiAliasContentCacheKey(aliasMap);
   const cached = normalizedJitiAliasMapCache.get(cacheKey);
   if (cached) {
+    normalizedJitiAliasMapByInput.set(aliasMap, cached);
     return cached;
   }
   const normalizedAliasMap = Object.fromEntries(
@@ -844,6 +850,7 @@ function normalizePluginLoaderAliasMapForJiti(
     enumerable: false,
   });
   normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
+  normalizedJitiAliasMapByInput.set(aliasMap, normalizedAliasMap);
   return normalizedAliasMap;
 }
 

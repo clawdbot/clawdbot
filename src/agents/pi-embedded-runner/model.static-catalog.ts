@@ -2,10 +2,8 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planManifestModelCatalogRows } from "../../model-catalog/manifest-planner.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/types.js";
-import {
-  isManifestPluginAvailableForControlPlane,
-  loadManifestMetadataSnapshot,
-} from "../../plugins/manifest-contract-eligibility.js";
+import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metadata-scan.js";
+import { loadPluginManifest } from "../../plugins/manifest.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { normalizeProviderId } from "../provider-id.js";
 
@@ -43,6 +41,53 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): Model<Api> {
   } as Model<Api>;
 }
 
+type StaticCatalogPlugin = Parameters<
+  typeof planManifestModelCatalogRows
+>[0]["registry"]["plugins"][number];
+
+function listBundledStaticCatalogPlugins(env: NodeJS.ProcessEnv): StaticCatalogPlugin[] {
+  return listOpenClawPluginManifestMetadata(env).flatMap((record): StaticCatalogPlugin[] => {
+    if (record.origin !== "bundled") {
+      return [];
+    }
+    const loaded = loadPluginManifest(record.pluginDir);
+    if (!loaded.ok || !loaded.manifest.modelCatalog) {
+      return [];
+    }
+    return [
+      {
+        id: loaded.manifest.id,
+        providers: loaded.manifest.providers,
+        modelCatalog: loaded.manifest.modelCatalog,
+      },
+    ];
+  });
+}
+
+export function bundledStaticCatalogProviderUsesRuntimeAugment(params: {
+  provider: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  if (!provider) {
+    return false;
+  }
+  return listBundledStaticCatalogPlugins(params.env ?? process.env).some((plugin) => {
+    const catalog = plugin.modelCatalog;
+    if (catalog?.runtimeAugment !== true) {
+      return false;
+    }
+    return (
+      Object.keys(catalog.providers ?? {}).some(
+        (candidate) => normalizeProviderId(candidate) === provider,
+      ) ||
+      Object.keys(catalog.aliases ?? {}).some(
+        (candidate) => normalizeProviderId(candidate) === provider,
+      )
+    );
+  });
+}
+
 export function resolveBundledStaticCatalogModel(params: {
   provider: string;
   modelId: string;
@@ -54,22 +99,7 @@ export function resolveBundledStaticCatalogModel(params: {
   if (!provider || !params.modelId.trim()) {
     return undefined;
   }
-  const config = params.cfg ?? {};
-  const snapshot = loadManifestMetadataSnapshot({
-    config,
-    env: params.env ?? process.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  const bundledStaticPlugins = snapshot.plugins.filter(
-    (plugin) =>
-      plugin.origin === "bundled" &&
-      plugin.modelCatalog &&
-      isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config,
-      }),
-  );
+  const bundledStaticPlugins = listBundledStaticCatalogPlugins(params.env ?? process.env);
   if (bundledStaticPlugins.length === 0) {
     return undefined;
   }

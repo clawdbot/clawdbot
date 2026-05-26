@@ -75,6 +75,363 @@ struct HomeToolbar: View {
     }
 }
 
+struct TalkToolbarTray: View {
+    var brighten: Bool
+    var tint: Color
+    var statusText: String
+    var agentName: String
+    var micLevel: Double
+    var isListening: Bool
+    var isSpeaking: Bool
+    var isUserSpeechDetected: Bool
+    var permissionState: TalkGatewayPermissionState
+    var onEnableTalk: () -> Void
+    var onStopTalk: () -> Void
+
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    private var state: TalkToolbarTrayState {
+        TalkToolbarTrayState(
+            statusText: self.statusText,
+            isListening: self.isListening,
+            isSpeaking: self.isSpeaking,
+            isUserSpeechDetected: self.isUserSpeechDetected,
+            permissionState: self.permissionState)
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(self.tint.opacity(self.state.iconFillOpacity))
+                    .frame(width: 36, height: 36)
+                Image(systemName: self.state.systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(self.state.iconColor(tint: self.tint))
+            }
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(self.state.title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    if self.state.showsProgress {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    TalkWaveformView(
+                        mode: self.state.waveformMode(micLevel: self.micLevel),
+                        tint: self.state.waveformTint(tint: self.tint))
+                        .frame(width: 84, height: 18)
+                        .accessibilityHidden(true)
+
+                    Text(self.subtitle)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 0)
+
+            switch self.state.action {
+            case .enable:
+                Button(action: self.onEnableTalk) {
+                    Label("Enable Talk", systemImage: "key.fill")
+                        .labelStyle(.titleAndIcon)
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            case .stop:
+                Button(action: self.onStopTalk) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .background {
+                    Circle()
+                        .fill(Color.black.opacity(self.brighten ? 0.10 : 0.18))
+                        .overlay {
+                            Circle()
+                                .strokeBorder(
+                                    .white.opacity(self.contrast == .increased ? 0.42 : 0.16),
+                                    lineWidth: self.contrast == .increased ? 1.0 : 0.6)
+                        }
+                }
+                .accessibilityLabel("Stop Talk")
+            case .none:
+                EmptyView()
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(.white.opacity(self.contrast == .increased ? 0.46 : (self.brighten ? 0.18 : 0.12)))
+                .frame(height: self.contrast == .increased ? 1.0 : 0.6)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottom) {
+            LinearGradient(
+                colors: [
+                    self.tint.opacity(self.brighten ? 0.12 : 0.16),
+                    .clear,
+                ],
+                startPoint: .leading,
+                endPoint: .trailing)
+                .frame(height: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Talk Mode")
+        .accessibilityValue("\(self.state.title), \(self.subtitle)")
+    }
+
+    private var subtitle: String {
+        let trimmedAgent = self.agentName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if self.state.prefersPermissionCopy {
+            return "Gateway approval needed"
+        }
+        if !trimmedAgent.isEmpty {
+            return trimmedAgent
+        }
+        return "OpenClaw"
+    }
+}
+
+private enum TalkToolbarTrayAction {
+    case none
+    case enable
+    case stop
+}
+
+private enum TalkWaveformMode: Equatable {
+    case level(Double)
+    case inputSpeech
+    case speaking
+    case indeterminate
+    case still
+}
+
+private struct TalkToolbarTrayState: Equatable {
+    let statusText: String
+    let isListening: Bool
+    let isSpeaking: Bool
+    let isUserSpeechDetected: Bool
+    let permissionState: TalkGatewayPermissionState
+
+    private var normalizedStatus: String {
+        self.statusText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    var title: String {
+        switch self.permissionState {
+        case .missingScope, .requestFailed:
+            return "Gateway permission required"
+        case .requestingUpgrade:
+            return "Requesting approval"
+        case .upgradeRequested:
+            return "Approval requested"
+        default:
+            break
+        }
+
+        if self.isSpeaking { return "Speaking" }
+        if self.isListening { return "Listening" }
+        if self.normalizedStatus.contains("connecting") { return "Connecting" }
+        if self.normalizedStatus.contains("thinking") { return "Asking OpenClaw" }
+        if self.normalizedStatus == "ready" { return "Ready to talk" }
+        if self.normalizedStatus.isEmpty || self.normalizedStatus == "off" { return "Talk" }
+        return self.statusText
+    }
+
+    var systemImage: String {
+        switch self.permissionState {
+        case .missingScope, .requestFailed:
+            return "key.fill"
+        case .requestingUpgrade:
+            return "paperplane.fill"
+        case .upgradeRequested:
+            return "hourglass"
+        default:
+            break
+        }
+
+        if self.isSpeaking { return "speaker.wave.2.fill" }
+        if self.isListening { return "mic.fill" }
+        if self.normalizedStatus.contains("thinking") { return "sparkles" }
+        if self.normalizedStatus.contains("connecting") { return "dot.radiowaves.left.and.right" }
+        return "waveform"
+    }
+
+    var action: TalkToolbarTrayAction {
+        switch self.permissionState {
+        case .missingScope, .requestFailed:
+            .enable
+        case .requestingUpgrade, .upgradeRequested:
+            .none
+        default:
+            .stop
+        }
+    }
+
+    var showsProgress: Bool {
+        switch self.permissionState {
+        case .requestingUpgrade, .upgradeRequested:
+            true
+        default:
+            self.normalizedStatus.contains("connecting") || self.normalizedStatus.contains("thinking")
+        }
+    }
+
+    var prefersPermissionCopy: Bool {
+        switch self.permissionState {
+        case .missingScope, .requestingUpgrade, .upgradeRequested, .requestFailed:
+            true
+        default:
+            false
+        }
+    }
+
+    var iconFillOpacity: Double {
+        self.prefersPermissionCopy ? 0.18 : 0.24
+    }
+
+    func iconColor(tint: Color) -> Color {
+        switch self.permissionState {
+        case .requestFailed:
+            .red
+        case .missingScope, .requestingUpgrade, .upgradeRequested:
+            .orange
+        default:
+            tint
+        }
+    }
+
+    func waveformTint(tint: Color) -> Color {
+        switch self.permissionState {
+        case .requestFailed:
+            .red
+        case .missingScope, .requestingUpgrade, .upgradeRequested:
+            .orange
+        default:
+            tint
+        }
+    }
+
+    func waveformMode(micLevel: Double) -> TalkWaveformMode {
+        switch self.permissionState {
+        case .requestingUpgrade, .upgradeRequested:
+            return .indeterminate
+        case .missingScope, .requestFailed:
+            return .still
+        default:
+            break
+        }
+
+        if self.isSpeaking {
+            return .speaking
+        }
+        if self.isListening, self.isUserSpeechDetected {
+            return .inputSpeech
+        }
+        if self.isListening {
+            return .level(micLevel)
+        }
+        if self.normalizedStatus.contains("connecting") || self.normalizedStatus.contains("thinking") {
+            return .indeterminate
+        }
+        return .still
+    }
+}
+
+private struct TalkWaveformView: View {
+    var mode: TalkWaveformMode
+    var tint: Color
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let barCount = 14
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1.0 / 24.0)) { timeline in
+            HStack(alignment: .center, spacing: 3) {
+                ForEach(0..<self.barCount, id: \.self) { index in
+                    Capsule(style: .continuous)
+                        .fill(self.tint.opacity(self.opacity(for: index)))
+                        .frame(width: 3, height: self.height(for: index, date: timeline.date))
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+
+    private func height(for index: Int, date: Date) -> CGFloat {
+        let minimum: Double = 4
+        let maximum: Double = 18
+        let amplitude = self.amplitude(for: index, date: date)
+        return CGFloat(minimum + ((maximum - minimum) * amplitude))
+    }
+
+    private func opacity(for index: Int) -> Double {
+        switch self.mode {
+        case .still:
+            index == self.barCount / 2 ? 0.64 : 0.32
+        default:
+            0.78
+        }
+    }
+
+    private func amplitude(for index: Int, date: Date) -> Double {
+        if self.reduceMotion {
+            switch self.mode {
+            case let .level(level):
+                return min(max(level, 0.10), 1.0)
+            case .inputSpeech:
+                return 0.72
+            case .speaking:
+                return 0.62
+            case .indeterminate:
+                return 0.34
+            case .still:
+                return 0.18
+            }
+        }
+
+        let t = date.timeIntervalSinceReferenceDate
+        let phase = Double(index) * 0.52
+        switch self.mode {
+        case let .level(level):
+            let clamped = min(max(level, 0), 1)
+            let shaped = 0.12 + (0.88 * clamped)
+            let variation = 0.72 + (0.28 * sin((t * 12.0) + phase))
+            return min(max(shaped * variation, 0.10), 1.0)
+        case .inputSpeech:
+            let primary = 0.5 + (0.5 * sin((t * 14.0) + phase))
+            let secondary = 0.5 + (0.5 * sin((t * 5.0) + (phase * 1.35)))
+            return min(max(0.16 + (0.60 * primary) + (0.24 * secondary), 0.14), 1.0)
+        case .speaking:
+            let wave = 0.5 + (0.5 * sin((t * 7.5) + phase))
+            let secondary = 0.5 + (0.5 * sin((t * 3.0) + (phase * 0.7)))
+            return min(max(0.18 + (0.58 * wave) + (0.24 * secondary), 0.12), 1.0)
+        case .indeterminate:
+            let center = (sin((t * 3.2) + phase) + 1) / 2
+            return 0.16 + (0.42 * center)
+        case .still:
+            return index == self.barCount / 2 ? 0.32 : 0.16
+        }
+    }
+}
+
 private struct HomeToolbarStatusButton: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

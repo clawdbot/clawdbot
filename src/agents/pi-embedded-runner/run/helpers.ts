@@ -101,6 +101,20 @@ export function resolveActiveErrorContext(params: {
   return resolveReportedModelRef(params);
 }
 
+export function isAssistantForModelRef(
+  assistant: { provider?: string; model?: string } | undefined,
+  ref: { provider: string; model: string },
+): boolean {
+  if (!assistant) {
+    return false;
+  }
+  const resolved = resolveReportedModelRef({
+    ...ref,
+    assistant,
+  });
+  return resolved.provider === ref.provider && resolved.model === ref.model;
+}
+
 function isEmbeddedHarnessProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "pi";
 }

@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
+  hasNonEmptyString as hasNonEmptyStringField,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readStringValue,
@@ -56,10 +57,6 @@ function hasToolCallInput(block: RawToolCallBlock): boolean {
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
   return hasInput || hasArguments;
-}
-
-function hasNonEmptyStringField(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasToolCallId(block: RawToolCallBlock): boolean {

@@ -231,6 +231,74 @@ describe("gateway node pairing authorization", () => {
     });
   });
 
+  describe("rpc approval scopes", () => {
+    let started: Awaited<ReturnType<typeof startServerWithClient>>;
+
+    beforeAll(async () => {
+      started = await startServerWithClient("secret");
+    });
+
+    afterAll(async () => {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    });
+
+    test("rejects system.run node pairing approval without admin scope through rpc", async () => {
+      const ws = await openTrackedWs(started.port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.pairing"],
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/operator-pairing.json`,
+        });
+        const request = await requestNodePairing({
+          nodeId: "node-rpc-approve-reject-admin",
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: ["system.run"],
+        });
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+
+        expect(approve.ok).toBe(false);
+        expect(approve.error?.message).toContain("missing scope: operator.admin");
+        await expect(getPairedNode("node-rpc-approve-reject-admin")).resolves.toBeNull();
+      } finally {
+        ws.close();
+      }
+    });
+
+    test("rejects node pairing approval without pairing scope through rpc", async () => {
+      const ws = await openTrackedWs(started.port);
+      try {
+        await connectOk(ws, {
+          token: "secret",
+          scopes: ["operator.write"],
+          deviceIdentityPath: `${await makeNodePairingStateDir()}/operator-write.json`,
+        });
+        const request = await requestNodePairing({
+          nodeId: "node-rpc-approve-reject-pairing",
+          platform: "macos",
+          deviceFamily: "Mac",
+          commands: ["system.run"],
+        });
+
+        const approve = await rpcReq(ws, "node.pair.approve", {
+          requestId: request.request.requestId,
+        });
+
+        expect(approve.ok).toBe(false);
+        expect(approve.error?.message).toContain("operator.pairing");
+        await expect(getPairedNode("node-rpc-approve-reject-pairing")).resolves.toBeNull();
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
   describe("paired node reconnects", () => {
     let started: Awaited<ReturnType<typeof startServerWithClient>>;
 

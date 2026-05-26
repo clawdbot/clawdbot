@@ -18,6 +18,7 @@ import { listActiveProcessSessionReferences } from "../../bash-process-reference
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
+import { hasOpenAICompatibleConversationTurn } from "../../openai-compatible-conversation-turn.js";
 import { resolveProcessToolScopeKey } from "../../pi-tools.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../../tool-fs-policy.js";
@@ -251,7 +252,9 @@ export function resolvePromptSubmissionSkipReason(params: {
   if (params.prompt.trim().length > 0 || params.imageCount > 0) {
     return null;
   }
-  return params.messages.length > 0 ? "blank_user_prompt" : "empty_prompt_history_images";
+  return hasOpenAICompatibleConversationTurn(params.messages)
+    ? "blank_user_prompt"
+    : "empty_prompt_history_images";
 }
 
 const QUEUED_USER_MESSAGE_MARKER =

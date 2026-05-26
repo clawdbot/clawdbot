@@ -20,7 +20,10 @@ import {
   resolveMemoryDreamingWorkspaces,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { writeDeepDreamingReport } from "./dreaming-markdown.js";
 import {
@@ -371,7 +374,7 @@ function resolveDreamingTriggerSessionKeys(sessionKey?: string): string[] {
     }
   }
 
-  return Array.from(new Set(keys));
+  return uniqueStrings(keys);
 }
 
 function hasPendingManagedDreamingCronEvent(sessionKey?: string): boolean {

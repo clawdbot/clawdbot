@@ -18,6 +18,7 @@ import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.j
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
@@ -306,10 +307,7 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (!shellPath) {
     return;
   }
-  const entries = shellPath
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const entries = normalizeStringEntries(shellPath.split(path.delimiter));
   if (entries.length === 0) {
     return;
   }

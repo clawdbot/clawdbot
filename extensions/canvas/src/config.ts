@@ -5,6 +5,11 @@ import {
   resolvePluginConfigObject,
 } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  readStringValue as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type CanvasHostConfig = {
   enabled?: boolean;
@@ -21,18 +26,6 @@ type CanvasPluginConfigSchema = {
   parse: (value: unknown) => CanvasPluginConfig;
   uiHints: Record<string, { label: string; help?: string; advanced?: boolean }>;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
 
 function readPositiveInteger(value: unknown): number | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;

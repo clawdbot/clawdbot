@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -20,10 +21,6 @@ const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
 
 function loadChannelDoctorModule(): Promise<ChannelDoctorModule> {
   return channelDoctorModuleLoader.load();
-}
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {

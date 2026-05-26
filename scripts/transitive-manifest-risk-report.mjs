@@ -15,6 +15,8 @@ const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.
 const EXACT_NPM_ALIAS_PATTERN =
   /^npm:(?:@[^/\s]+\/)?[^@\s]+@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
 const PINNED_GIT_PATTERN = /(?:#|\/commit\/)[0-9a-f]{40}$/iu;
+const PINNED_GITHUB_TARBALL_PATTERN =
+  /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
 const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
 
@@ -30,6 +32,9 @@ function isAllowedPinnedSpec(spec) {
   }
   if (/^(?:git\+|github:|gitlab:|bitbucket:)/u.test(spec)) {
     return PINNED_GIT_PATTERN.test(spec);
+  }
+  if (PINNED_GITHUB_TARBALL_PATTERN.test(spec)) {
+    return true;
   }
   return false;
 }

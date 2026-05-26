@@ -43,6 +43,7 @@ openclaw_find_toolcache_node() {
     "${RUNNER_TOOL_CACHE:-}" \
     "${AGENT_TOOLSDIRECTORY:-}" \
     "${ACTIONS_RUNNER_TOOL_CACHE:-}" \
+    "${OPENCLAW_CONTAINER_TOOL_CACHE:-/__t}" \
     "/opt/hostedtoolcache" \
     "/home/runner/_work/_tool" \
     "/Users/runner/hostedtoolcache" \

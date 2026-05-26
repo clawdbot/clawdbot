@@ -3,6 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asFiniteNumber as readFiniteNumber,
+  isRecord as isMessageRecord,
+  normalizeOptionalString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
   scanDirectReplyTranscriptSentinels,
   scanGatewayLogSentinels,
   type GatewayLogSentinelFinding,
@@ -133,14 +138,6 @@ function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-function readFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -162,10 +159,6 @@ function normalizeForStableHash(value: unknown): unknown {
 
 function stableHash(value: unknown) {
   return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
-}
-
-function isMessageRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function readUsageTotals(raw: unknown): RuntimeParityUsage {

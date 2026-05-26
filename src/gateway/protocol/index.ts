@@ -1,4 +1,5 @@
-import AjvPkg, { type AnySchema, type ErrorObject, type ValidateFunction } from "ajv";
+import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { SessionsPatchResult } from "../session-utils.types.js";
 import {
   type AgentEvent,
@@ -425,73 +426,48 @@ import {
   WizardStepSchema,
 } from "./schema.js";
 
-type AjvInstance = import("ajv").default;
-type ValidationContext = Parameters<ValidateFunction>[1];
+export type ValidationError = {
+  keyword?: string;
+  instancePath?: string;
+  schemaPath?: string;
+  params?: Record<string, unknown>;
+  message?: string;
+};
 
-const AjvCtor = AjvPkg as unknown as new (opts?: object) => AjvInstance;
+export type ProtocolValidator<T = unknown> = ((data: unknown) => data is T) & {
+  errors: ValidationError[] | null;
+  schema: unknown;
+};
 
-let ajv: AjvInstance | undefined;
-
-function getAjv() {
-  ajv ??= new AjvCtor({
-    allErrors: true,
-    strict: false,
-    removeAdditional: false,
-  });
-  return ajv;
-}
-
-function lazyCompile<T = unknown>(schema: AnySchema): ValidateFunction<T> {
-  let compiled: ValidateFunction<T> | undefined;
+function lazyCompile<T = unknown>(schema: unknown): ProtocolValidator<T> {
+  let compiled: TypeBoxValidator | undefined;
+  let errors: ValidationError[] | null = null;
 
   const getCompiled = () => {
-    compiled ??= getAjv().compile<T>(schema);
+    compiled ??= Compile(schema as never);
     return compiled;
   };
 
-  const validate = ((data: unknown, dataCxt?: ValidationContext) => {
+  const validate = ((data: unknown): data is T => {
     const current = getCompiled();
-    const valid = current(data, dataCxt);
-    validate.errors = current.errors;
-    validate.evaluated = current.evaluated;
+    const valid = current.Check(data);
+    errors = valid ? null : ([...current.Errors(data)] as ValidationError[]);
     return valid;
-  }) as ValidateFunction<T>;
+  }) as ProtocolValidator<T>;
 
   Object.defineProperties(validate, {
     errors: {
       configurable: true,
       enumerable: true,
-      get: () => compiled?.errors ?? null,
-      set: (errors: ErrorObject[] | null | undefined) => {
-        if (compiled) {
-          compiled.errors = errors ?? null;
-        }
-      },
-    },
-    evaluated: {
-      configurable: true,
-      enumerable: true,
-      get: () => compiled?.evaluated,
-      set: (evaluated: ValidateFunction<T>["evaluated"]) => {
-        if (compiled) {
-          compiled.evaluated = evaluated;
-        }
+      get: () => errors,
+      set: (nextErrors: ValidationError[] | null | undefined) => {
+        errors = nextErrors ?? null;
       },
     },
     schema: {
       configurable: true,
       enumerable: true,
-      get: () => compiled?.schema ?? schema,
-    },
-    schemaEnv: {
-      configurable: true,
-      enumerable: true,
-      get: () => getCompiled().schemaEnv,
-    },
-    source: {
-      configurable: true,
-      enumerable: true,
-      get: () => compiled?.source,
+      get: () => schema,
     },
   });
 
@@ -828,7 +804,19 @@ export const validateWebLoginStartParams =
   lazyCompile<WebLoginStartParams>(WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = lazyCompile<WebLoginWaitParams>(WebLoginWaitParamsSchema);
 
-export function formatValidationErrors(errors: ErrorObject[] | null | undefined) {
+function firstStringParam(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.find(
+      (entry): entry is string => typeof entry === "string" && entry.trim().length > 0,
+    );
+  }
+  return undefined;
+}
+
+export function formatValidationErrors(errors: ValidationError[] | null | undefined) {
   if (!errors?.length) {
     return "unknown validation error";
   }
@@ -840,26 +828,42 @@ export function formatValidationErrors(errors: ErrorObject[] | null | undefined)
     const instancePath = typeof err?.instancePath === "string" ? err.instancePath : "";
 
     if (keyword === "additionalProperties") {
-      const params = err?.params as { additionalProperty?: unknown } | undefined;
-      const additionalProperty = params?.additionalProperty;
-      if (typeof additionalProperty === "string" && additionalProperty.trim()) {
+      const additionalProperty =
+        firstStringParam(err?.params?.additionalProperty) ??
+        firstStringParam(err?.params?.additionalProperties);
+      if (additionalProperty) {
         const where = instancePath ? `at ${instancePath}` : "at root";
         parts.push(`${where}: unexpected property '${additionalProperty}'`);
         continue;
       }
     }
+    if (keyword === "required") {
+      const missingProperty =
+        firstStringParam(err?.params?.missingProperty) ??
+        firstStringParam(err?.params?.requiredProperties);
+      if (missingProperty) {
+        const where = instancePath ? `at ${instancePath}: ` : "";
+        parts.push(`${where}must have required property '${missingProperty}'`);
+        continue;
+      }
+    }
 
+    const failingKeyword =
+      typeof err?.params?.failingKeyword === "string" ? err.params.failingKeyword : "";
     const message =
-      typeof err?.message === "string" && err.message.trim() ? err.message : "validation error";
+      keyword === "then" || (keyword === "if" && failingKeyword === "then")
+        ? "must have required conditional properties"
+        : typeof err?.message === "string" && err.message.trim()
+          ? err.message
+          : "validation error";
     const where = instancePath ? `at ${instancePath}: ` : "";
     parts.push(`${where}${message}`);
   }
 
   // De-dupe while preserving order.
-  const unique = Array.from(new Set(parts.filter((part) => part.trim())));
+  const unique = uniqueStrings(parts.filter((part) => part.trim()));
   if (!unique.length) {
-    const fallback = getAjv().errorsText(errors, { separator: "; " });
-    return fallback || "unknown validation error";
+    return "unknown validation error";
   }
   return unique.join("; ");
 }

@@ -1,47 +1,77 @@
 import { Readable } from "node:stream";
-import { describe, expect, it } from "vitest";
-import { decodeOpusStream, resolveOpusDecoderPreference } from "./audio.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createDiscordOpusEncodeStream,
+  decodeOpusStream,
+  decodeOpusStreamChunks,
+} from "./audio.js";
 
-describe("discord voice opus decoder selection", () => {
-  it("defaults to the pure-JS opusscript decoder", async () => {
+async function collectBuffers(stream: Readable): Promise<Buffer[]> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of stream) {
+    chunks.push(Buffer.from(chunk as Buffer));
+  }
+  return chunks;
+}
+
+describe("discord voice opus codec", () => {
+  it("defaults to libopus-wasm for receive decoding", async () => {
     const verbose: string[] = [];
     const warnings: string[] = [];
-    const previousPreference = process.env.OPENCLAW_DISCORD_OPUS_DECODER;
-    delete process.env.OPENCLAW_DISCORD_OPUS_DECODER;
 
-    try {
-      const decoded = await decodeOpusStream(Readable.from([]), {
-        onVerbose: (message) => verbose.push(message),
-        onWarn: (message) => warnings.push(message),
-      });
+    const decoded = await decodeOpusStream(Readable.from([]), {
+      onVerbose: (message) => verbose.push(message),
+      onWarn: (message) => warnings.push(message),
+    });
 
-      expect(decoded.length).toBe(0);
-      expect(verbose).toContain("opus decoder: opusscript");
-      expect(warnings).toEqual([]);
-    } finally {
-      if (previousPreference === undefined) {
-        delete process.env.OPENCLAW_DISCORD_OPUS_DECODER;
-      } else {
-        process.env.OPENCLAW_DISCORD_OPUS_DECODER = previousPreference;
-      }
-    }
+    expect(decoded.length).toBe(0);
+    expect(verbose).toContain("opus decoder: libopus-wasm");
+    expect(warnings).toEqual([]);
   });
 
-  it("requires an explicit preference for native opus", () => {
-    const previousPreference = process.env.OPENCLAW_DISCORD_OPUS_DECODER;
-    delete process.env.OPENCLAW_DISCORD_OPUS_DECODER;
+  it("encodes raw Discord PCM into Opus packets for realtime playback", async () => {
+    const encoder = createDiscordOpusEncodeStream();
+    const packetsPromise = collectBuffers(encoder);
 
-    try {
-      expect(resolveOpusDecoderPreference()).toBe("opusscript");
-      expect(resolveOpusDecoderPreference("opusscript")).toBe("opusscript");
-      expect(resolveOpusDecoderPreference("native")).toBe("native");
-      expect(resolveOpusDecoderPreference("@discordjs/opus")).toBe("native");
-    } finally {
-      if (previousPreference === undefined) {
-        delete process.env.OPENCLAW_DISCORD_OPUS_DECODER;
-      } else {
-        process.env.OPENCLAW_DISCORD_OPUS_DECODER = previousPreference;
-      }
-    }
+    encoder.end(Buffer.alloc(960 * 2 * 2));
+    const packets = await packetsPromise;
+
+    expect(packets).toHaveLength(1);
+    expect(packets[0]?.length).toBeGreaterThan(0);
+
+    const decoded = await decodeOpusStream(Readable.from(packets), {
+      onVerbose: vi.fn(),
+      onWarn: vi.fn(),
+    });
+    expect(decoded.length).toBe(960 * 2 * 2);
+  });
+
+  it("pads final partial PCM frames before encoding", async () => {
+    const encoder = createDiscordOpusEncodeStream();
+    const packetsPromise = collectBuffers(encoder);
+
+    encoder.end(Buffer.alloc((960 * 2 * 2) / 2));
+    const packets = await packetsPromise;
+
+    expect(packets).toHaveLength(1);
+  });
+
+  it("surfaces chunk decode stream failures to callers", async () => {
+    const err = new Error("memory access out of bounds");
+    const onError = vi.fn();
+    const stream = new Readable({
+      read() {
+        this.destroy(err);
+      },
+    });
+
+    await decodeOpusStreamChunks(stream, {
+      onChunk: vi.fn(),
+      onError,
+      onVerbose: vi.fn(),
+      onWarn: vi.fn(),
+    });
+
+    expect(onError).toHaveBeenCalledWith(err);
   });
 });

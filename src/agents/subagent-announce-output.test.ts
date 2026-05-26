@@ -235,6 +235,41 @@ describe("buildChildCompletionFindings", () => {
     expect(findings).toContain("ANNOUNCE_SKIP");
   });
 
+  it("uses frozen child completion text when normalized completion is absent", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        frozenResultText: "final child output",
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("final child output");
+    expect(findings).not.toContain("(no output)");
+  });
+
+  it("uses pending delivery payload text when completion text has been cleared", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:child",
+        task: "child task",
+        createdAt: 1,
+        completion: { resultText: null },
+        delivery: {
+          payload: {
+            frozenResultText: "delivery payload output",
+          },
+        },
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain("delivery payload output");
+    expect(findings).not.toContain("(no output)");
+  });
+
   it("numbers findings contiguously after skipped silent completions", () => {
     const findings = buildChildCompletionFindings([
       {

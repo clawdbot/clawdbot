@@ -13,8 +13,10 @@ import {
   resolveExtensionBatchPlan,
   resolveExtensionTestPlan,
 } from "../../scripts/lib/extension-test-plan.mjs";
+import { buildVitestBatchPnpmArgs } from "../../scripts/lib/vitest-batch-runner.mjs";
 import {
   parseExtensionIds,
+  parseExactVitestExcludePaths,
   resolveExtensionBatchParallelism,
   runExtensionBatchPlan,
 } from "../../scripts/test-extension-batch.mjs";
@@ -604,6 +606,65 @@ describe("scripts/test-extension.mjs", () => {
       extensionIds: ["telegram"],
       passthroughArgs: ["--coverage", "extensions/telegram/src/index.test.ts", "--run"],
     });
+  });
+
+  it("places Vitest passthrough options before batch target roots", () => {
+    expect(
+      buildVitestBatchPnpmArgs({
+        args: ["--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+        config: "test/vitest/vitest.extensions.config.ts",
+        targets: ["extensions/codex"],
+      }),
+    ).toEqual([
+      "exec",
+      "vitest",
+      "run",
+      "--config",
+      "test/vitest/vitest.extensions.config.ts",
+      "--exclude",
+      "extensions/codex/src/app-server/run-attempt.test.ts",
+      "extensions/codex",
+    ]);
+  });
+
+  it("expands extension batch roots before applying exact Vitest excludes", async () => {
+    const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    await runExtensionBatchPlan(
+      {
+        extensionCount: 1,
+        extensionIds: ["codex"],
+        estimatedCost: 1,
+        hasTests: true,
+        planGroups: [
+          {
+            config: "test/vitest/vitest.extensions.config.ts",
+            estimatedCost: 1,
+            extensionIds: ["codex"],
+            roots: [bundledPluginRoot("codex")],
+            testFileCount: 1,
+          },
+        ],
+        testFileCount: 1,
+      },
+      {
+        runGroup,
+        vitestArgs: ["--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"],
+      },
+    );
+
+    const runParams = requireFirstMockArg<RunGroupParams>(runGroup);
+    expect(runParams.targets).not.toContain("extensions/codex/src/app-server/run-attempt.test.ts");
+    expect(runParams.targets).toContain("extensions/codex/src/app-server/client.test.ts");
+  });
+
+  it("detects exact Vitest excludes in extension batch args", () => {
+    expect([
+      ...parseExactVitestExcludePaths([
+        "--exclude",
+        "extensions/codex/src/app-server/run-attempt.test.ts",
+      ]),
+    ]).toEqual(["extensions/codex/src/app-server/run-attempt.test.ts"]);
+    expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
   });
 
   it("treats extensions without tests as a no-op by default", () => {

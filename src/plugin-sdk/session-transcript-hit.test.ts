@@ -217,6 +217,23 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     ).toEqual(["agent:main:s1"]);
   });
 
+  it("ignores store entries without session ids during QMD-slugified fallback", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:non-session": {
+        updatedAt: 1,
+      } as SessionEntry,
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar-v1",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:s1"]);
+  });
+
   it("does not use QMD-slugified fallback unless requested", () => {
     const store: Record<string, SessionEntry> = {
       "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),

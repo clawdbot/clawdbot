@@ -39,6 +39,12 @@ export function normalizeStringifiedOptionalString(value: unknown): string | und
   return undefined;
 }
 
+export function normalizeStringifiedEntries(values?: ReadonlyArray<unknown>): string[] {
+  return (values ?? [])
+    .map((entry) => normalizeStringifiedOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
 /** Return the trimmed lowercase string or `undefined`. */
 export function normalizeOptionalLowercaseString(value: unknown): string | undefined {
   return normalizeOptionalString(value)?.toLowerCase();

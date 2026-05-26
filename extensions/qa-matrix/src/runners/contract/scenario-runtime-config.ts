@@ -1,9 +1,8 @@
 import { readFile } from "node:fs/promises";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord as isMatrixQaPlainRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export function isMatrixQaPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+export { isMatrixQaPlainRecord };
 
 function requireMatrixQaGatewayConfigObject(config: unknown): Record<string, unknown> {
   if (!isMatrixQaPlainRecord(config)) {

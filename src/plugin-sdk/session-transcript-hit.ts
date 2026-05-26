@@ -3,6 +3,7 @@ import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artif
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 
@@ -135,7 +136,7 @@ export function resolveTranscriptStemToSessionKeys(params: {
       matches.push(sessionKey);
     }
   }
-  const deduped = [...new Set(matches)];
+  const deduped = uniqueStrings(matches);
   if (deduped.length > 0) {
     return deduped;
   }
@@ -151,12 +152,13 @@ export function resolveTranscriptStemToSessionKeys(params: {
           continue;
         }
       }
-      if (normalizeQmdSessionStem(entry.sessionId) === normalizedStem) {
+      const entrySessionId = normalizeOptionalString(entry.sessionId);
+      if (entrySessionId && normalizeQmdSessionStem(entrySessionId) === normalizedStem) {
         matches.push(sessionKey);
       }
     }
   }
-  const normalizedDeduped = [...new Set(matches)];
+  const normalizedDeduped = uniqueStrings(matches);
   if (normalizedDeduped.length > 0) {
     return normalizedDeduped.length === 1 ? normalizedDeduped : [];
   }

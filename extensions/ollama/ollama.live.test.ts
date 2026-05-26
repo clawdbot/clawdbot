@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { isLocalOllamaBaseUrl } from "./src/discovery-shared.js";
 import { createOllamaEmbeddingProvider } from "./src/embedding-provider.js";
 import { createOllamaStreamFn } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
@@ -16,6 +17,38 @@ const EMBEDDING_MODEL =
   process.env.OPENCLAW_LIVE_OLLAMA_EMBED_MODEL?.trim() || "embeddinggemma:latest";
 const PROVIDER_ID = process.env.OPENCLAW_LIVE_OLLAMA_PROVIDER_ID?.trim() || "ollama-live-custom";
 const RUN_WEB_SEARCH = process.env.OPENCLAW_LIVE_OLLAMA_WEB_SEARCH !== "0";
+const RUN_EMBEDDINGS =
+  process.env.OPENCLAW_LIVE_OLLAMA_EMBEDDINGS === "1" ||
+  (process.env.OPENCLAW_LIVE_OLLAMA_EMBEDDINGS !== "0" && !isOllamaCloudBaseUrl(OLLAMA_BASE_URL));
+const OLLAMA_CONFIG_API_KEY = isLocalOllamaBaseUrl(OLLAMA_BASE_URL)
+  ? "ollama-local"
+  : "OLLAMA_API_KEY";
+
+function isOllamaCloudBaseUrl(baseUrl: string): boolean {
+  try {
+    const parsed = new URL(baseUrl);
+    return parsed.protocol === "https:" && parsed.hostname === "ollama.com";
+  } catch {
+    return false;
+  }
+}
+
+function requireOllamaRuntimeApiKey(): string | undefined {
+  if (OLLAMA_CONFIG_API_KEY !== "OLLAMA_API_KEY") {
+    return undefined;
+  }
+  const apiKey = process.env.OLLAMA_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error(
+      "OPENCLAW_LIVE_OLLAMA_BASE_URL points at a remote Ollama host; set OLLAMA_API_KEY.",
+    );
+  }
+  return apiKey;
+}
+
+function resolveOllamaDirectApiKey(): string {
+  return requireOllamaRuntimeApiKey() ?? "ollama-local";
+}
 
 async function collectStreamEvents<T>(stream: AsyncIterable<T>): Promise<T[]> {
   const events: T[] = [];
@@ -37,7 +70,7 @@ async function withTempOpenClawState<T>(run: (paths: { root: string }) => Promis
               ollama: {
                 api: "ollama",
                 baseUrl: OLLAMA_BASE_URL,
-                apiKey: "ollama-local",
+                apiKey: OLLAMA_CONFIG_API_KEY,
                 models: [],
               },
             },
@@ -54,6 +87,13 @@ async function withTempOpenClawState<T>(run: (paths: { root: string }) => Promis
 }
 
 async function runOpenClawCli(args: string[], env: NodeJS.ProcessEnv) {
+  const hasBuiltEntry = ["entry.js", "entry.mjs"].some((entry) =>
+    fsSync.existsSync(path.join(process.cwd(), "dist", entry)),
+  );
+  const sourceRunnerAvailable = !hasBuiltEntry;
+  const commandArgs = sourceRunnerAvailable
+    ? ["scripts/run-node.mjs", ...args]
+    : ["openclaw.mjs", ...args];
   const outputRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-ollama-cli-output-"));
   const stdoutPath = path.join(outputRoot, "stdout.txt");
   const stderrPath = path.join(outputRoot, "stderr.txt");
@@ -62,10 +102,10 @@ async function runOpenClawCli(args: string[], env: NodeJS.ProcessEnv) {
   let stdoutClosed = false;
   let stderrClosed = false;
   try {
-    const result = spawnSync(process.execPath, ["openclaw.mjs", ...args], {
+    const result = spawnSync(process.execPath, commandArgs, {
       cwd: process.cwd(),
       env,
-      timeout: 90_000,
+      timeout: sourceRunnerAvailable ? 180_000 : 90_000,
       stdio: ["ignore", stdoutFd, stderrFd],
     });
     fsSync.closeSync(stdoutFd);
@@ -96,6 +136,7 @@ function parseJsonEnvelope(stdout: string): Record<string, unknown> {
 }
 
 function buildCliEnv(root: string): NodeJS.ProcessEnv {
+  const apiKey = requireOllamaRuntimeApiKey();
   return {
     PATH: process.env.PATH,
     HOME: process.env.HOME,
@@ -110,7 +151,9 @@ function buildCliEnv(root: string): NodeJS.ProcessEnv {
     OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
-    OLLAMA_API_KEY: "ollama-local",
+    PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+    pnpm_config_verify_deps_before_run: "false",
+    OLLAMA_API_KEY: apiKey ?? "ollama-local",
   };
 }
 
@@ -204,6 +247,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
         onPayload: (body: unknown) => {
           payload = body as NonNullable<typeof payload>;
         },
+        apiKey: requireOllamaRuntimeApiKey(),
       } as never,
     );
 
@@ -223,31 +267,35 @@ describe.skipIf(!LIVE)("ollama live", () => {
     expect(properties?.options?.type).toBe("object");
   }, 60_000);
 
-  it("embeds a batch through the current Ollama endpoint for custom providers", async () => {
-    const { client } = await createOllamaEmbeddingProvider({
-      config: {
-        models: {
-          providers: {
-            [PROVIDER_ID]: {
-              api: "ollama",
-              baseUrl: OLLAMA_BASE_URL,
-              apiKey: "ollama-local",
+  it.skipIf(!RUN_EMBEDDINGS)(
+    "embeds a batch through the current Ollama endpoint for custom providers",
+    async () => {
+      const { client } = await createOllamaEmbeddingProvider({
+        config: {
+          models: {
+            providers: {
+              [PROVIDER_ID]: {
+                api: "ollama",
+                baseUrl: OLLAMA_BASE_URL,
+                apiKey: resolveOllamaDirectApiKey(),
+              },
             },
           },
         },
-      },
-      provider: PROVIDER_ID,
-      model: `${PROVIDER_ID}/${EMBEDDING_MODEL}`,
-    } as never);
+        provider: PROVIDER_ID,
+        model: `${PROVIDER_ID}/${EMBEDDING_MODEL}`,
+      } as never);
 
-    const embeddings = await client.embedBatch(["hello", "world"]);
+      const embeddings = await client.embedBatch(["hello", "world"]);
 
-    expect(embeddings).toHaveLength(2);
-    expect(embeddings[0]?.length ?? 0).toBeGreaterThan(0);
-    expect(embeddings[1]?.length).toBe(embeddings[0]?.length);
-    expect(Math.hypot(...embeddings[0])).toBeGreaterThan(0.99);
-    expect(Math.hypot(...embeddings[0])).toBeLessThan(1.01);
-  }, 45_000);
+      expect(embeddings).toHaveLength(2);
+      expect(embeddings[0]?.length ?? 0).toBeGreaterThan(0);
+      expect(embeddings[1]?.length).toBe(embeddings[0]?.length);
+      expect(Math.hypot(...embeddings[0])).toBeGreaterThan(0.99);
+      expect(Math.hypot(...embeddings[0])).toBeLessThan(1.01);
+    },
+    45_000,
+  );
 
   it.skipIf(!RUN_WEB_SEARCH)(
     "searches through Ollama web search fallback endpoints",
@@ -260,7 +308,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
               ollama: {
                 api: "ollama",
                 baseUrl: OLLAMA_BASE_URL,
-                apiKey: "ollama-local",
+                apiKey: resolveOllamaDirectApiKey(),
               },
             },
           },

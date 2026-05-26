@@ -9,6 +9,7 @@ const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelsJsonMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
+const resolveModelAsyncMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
 const getApiKeyForModelMock = vi.fn();
 const requireApiKeyMock = vi.fn();
@@ -55,6 +56,7 @@ vi.mock("./pi-model-discovery.js", () => ({
 }));
 
 vi.mock("./pi-embedded-runner/model.js", () => ({
+  resolveModelAsync: (...args: unknown[]) => resolveModelAsyncMock(...args),
   resolveModelWithRegistry: (...args: unknown[]) => resolveModelWithRegistryMock(...args),
 }));
 

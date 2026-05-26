@@ -180,6 +180,20 @@ INSTALL_SCRIPT_DOCKER_ARGS=(
   -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro"
   -v "$ROOT_DIR/scripts/install-cli.sh:/tmp/openclaw-install-cli.sh:ro"
 )
+SMOKE_RUNNER_ENV_ARGS=()
+
+for env_name in \
+  OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING \
+  OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION \
+  OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT \
+  OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL \
+  OPENCLAW_INSTALL_SMOKE_PREVIOUS \
+  OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS; do
+  env_value="${!env_name:-}"
+  if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
+    SMOKE_RUNNER_ENV_ARGS+=(-e "$env_name")
+  fi
+done
 
 remove_owned_npm_cache() {
   if [[ "$NPM_CACHE_OWNED" != "1" || -z "$NPM_CACHE_DIR" || ! -d "$NPM_CACHE_DIR" ]]; then
@@ -406,6 +420,7 @@ else
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
     "${NPM_CACHE_DOCKER_ARGS[@]}" \
     "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
+    "${SMOKE_RUNNER_ENV_ARGS[@]}" \
     -v "${LATEST_DIR}:/out" \
     -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
@@ -428,6 +443,7 @@ else
     --platform "$SMOKE_PLATFORM" \
     ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
     "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    "${SMOKE_RUNNER_ENV_ARGS[@]}" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=update \
     -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -447,6 +463,7 @@ else
       --platform "$SMOKE_PLATFORM" \
       ${UPDATE_DOCKER_HOST_ARGS[@]+"${UPDATE_DOCKER_HOST_ARGS[@]}"} \
       "${NPM_CACHE_DOCKER_ARGS[@]}" \
+      "${SMOKE_RUNNER_ENV_ARGS[@]}" \
       -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
       -e OPENCLAW_INSTALL_SMOKE_MODE=npm-global \
       -e OPENCLAW_INSTALL_UPDATE_BASELINE="$UPDATE_BASELINE_VERSION" \
@@ -469,6 +486,7 @@ else
     --platform "$SMOKE_PLATFORM" \
     "${NPM_CACHE_DOCKER_ARGS[@]}" \
     "${INSTALL_SCRIPT_DOCKER_ARGS[@]}" \
+    "${SMOKE_RUNNER_ENV_ARGS[@]}" \
     -e OPENCLAW_INSTALL_URL="$FRESHNESS_INSTALL_URL" \
     -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
     -e OPENCLAW_INSTALL_SMOKE_MODE=freshness \

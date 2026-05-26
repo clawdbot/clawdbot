@@ -1,3 +1,4 @@
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 
 export function withAllowedHostname(
@@ -6,6 +7,6 @@ export function withAllowedHostname(
 ): SsrFPolicy {
   return {
     ...ssrfPolicy,
-    allowedHostnames: Array.from(new Set([...(ssrfPolicy?.allowedHostnames ?? []), hostname])),
+    allowedHostnames: uniqueStrings([...(ssrfPolicy?.allowedHostnames ?? []), hostname]),
   };
 }

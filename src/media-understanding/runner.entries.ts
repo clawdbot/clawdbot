@@ -23,7 +23,11 @@ import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+} from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { MediaAttachmentCache } from "./attachments.js";
 import {
   CLI_OUTPUT_MAX_BUFFER,
@@ -32,6 +36,7 @@ import {
 } from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
+import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { extractGeminiResponse } from "./output-extract.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
@@ -64,8 +69,7 @@ function resolveLiteralProviderApiKey(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | null {
-  const value = params.cfg.models?.providers?.[params.providerId]?.apiKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return normalizeNullableString(params.cfg.models?.providers?.[params.providerId]?.apiKey);
 }
 
 function sanitizeProviderHeaders(
@@ -127,10 +131,7 @@ function extractSherpaOnnxText(raw: string): { matched: boolean; text: string } 
     return direct;
   }
 
-  const lines = raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split("\n"));
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const parsed = tryParse(lines[i] ?? "");
     if (parsed.matched) {
@@ -594,12 +595,18 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const requestOverrides = resolveMediaRequestOverrides(params.config);
-    const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
-    const imageInput = {
+    const normalizedMedia = await normalizeImageDescriptionInput({
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
+      maxBytes,
+    });
+    const requestOverrides = resolveMediaRequestOverrides(params.config);
+    const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
+    const imageInput = {
+      buffer: normalizedMedia.buffer,
+      fileName: media.fileName,
+      mime: normalizedMedia.mime,
       model: modelId,
       provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,

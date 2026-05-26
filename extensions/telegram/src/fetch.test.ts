@@ -65,13 +65,17 @@ vi.mock("node:net", async () => {
   };
 });
 
-vi.mock("undici", () => ({
-  Agent: AgentCtor,
-  EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
-  ProxyAgent: ProxyAgentCtor,
-  fetch: undiciFetch,
-  setGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    Agent: AgentCtor,
+    EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+    ProxyAgent: ProxyAgentCtor,
+    fetch: undiciFetch,
+    setGlobalDispatcher,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({

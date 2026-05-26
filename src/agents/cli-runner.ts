@@ -718,6 +718,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
   return {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sessionEntry: params.sessionEntry,
     agentId: params.agentId,
     trigger: params.trigger,
     sessionFile: params.sessionFile,

@@ -1,8 +1,9 @@
+import { asFiniteNumber } from "../../../shared/number-coercion.js";
 import type { HookHandler } from "../../hooks.js";
 
 function readOptionalNumber(context: Record<string, unknown>, key: string): number | undefined {
   const value = context[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 const handler: HookHandler = async (event) => {

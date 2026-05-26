@@ -9,6 +9,7 @@ import {
   createRealtimeVoiceAgentTalkbackQueue,
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
+  createRealtimeVoiceOutputActivityTracker,
   recordTalkObservabilityEvent,
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeSession,
@@ -27,7 +28,7 @@ import {
   getGoogleMeetRealtimeTranscriptHealth,
   buildGoogleMeetSpeakExactUserMessage,
   GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-  extendGoogleMeetOutputEchoSuppression,
+  recordGoogleMeetOutputActivity,
   getGoogleMeetRealtimeEventHealth,
   recordGoogleMeetRealtimeTranscript,
   recordGoogleMeetRealtimeEvent,
@@ -97,7 +98,7 @@ export async function startNodeAgentAudioBridge(params: {
   let lastInputAt: string | undefined;
   let lastOutputAt: string | undefined;
   let lastInputBytes = 0;
-  let lastOutputBytes = 0;
+  const outputActivity = createRealtimeVoiceOutputActivityTracker();
   let suppressedInputBytes = 0;
   let lastSuppressedInputAt: string | undefined;
   let suppressInputUntil = 0;
@@ -148,7 +149,8 @@ export async function startNodeAgentAudioBridge(params: {
   };
 
   const pushOutputAudio = async (audio: Buffer) => {
-    const suppression = extendGoogleMeetOutputEchoSuppression({
+    const suppression = recordGoogleMeetOutputActivity({
+      tracker: outputActivity,
       audio,
       audioFormat: params.config.chrome.audioFormat,
       nowMs: Date.now(),
@@ -158,7 +160,6 @@ export async function startNodeAgentAudioBridge(params: {
     suppressInputUntil = suppression.suppressInputUntilMs;
     lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
     lastOutputAt = new Date().toISOString();
-    lastOutputBytes += audio.byteLength;
     await params.runtime.nodes.invoke({
       nodeId: params.nodeId,
       command: "googlemeet.chrome",
@@ -317,12 +318,12 @@ export async function startNodeAgentAudioBridge(params: {
       providerConnected: sttSession?.isConnected() ?? false,
       realtimeReady,
       audioInputActive: lastInputBytes > 0,
-      audioOutputActive: lastOutputBytes > 0,
+      audioOutputActive: outputActivity.isActive(),
       lastInputAt,
       lastOutputAt,
       lastSuppressedInputAt,
       lastInputBytes,
-      lastOutputBytes,
+      lastOutputBytes: outputActivity.snapshot().sinkAudioBytes,
       suppressedInputBytes,
       ...getGoogleMeetRealtimeTranscriptHealth(transcript),
       consecutiveInputErrors,
@@ -351,7 +352,7 @@ export async function startNodeRealtimeAudioBridge(params: {
   let lastOutputAt: string | undefined;
   let lastClearAt: string | undefined;
   let lastInputBytes = 0;
-  let lastOutputBytes = 0;
+  const outputActivity = createRealtimeVoiceOutputActivityTracker();
   let suppressedInputBytes = 0;
   let lastSuppressedInputAt: string | undefined;
   let suppressInputUntil = 0;
@@ -505,7 +506,8 @@ export async function startNodeRealtimeAudioBridge(params: {
           turnId,
           payload: { byteLength: audio.byteLength },
         });
-        const suppression = extendGoogleMeetOutputEchoSuppression({
+        const suppression = recordGoogleMeetOutputActivity({
+          tracker: outputActivity,
           audio,
           audioFormat: params.config.chrome.audioFormat,
           nowMs: Date.now(),
@@ -515,7 +517,6 @@ export async function startNodeRealtimeAudioBridge(params: {
         suppressInputUntil = suppression.suppressInputUntilMs;
         lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
         lastOutputAt = new Date().toISOString();
-        lastOutputBytes += audio.byteLength;
         void params.runtime.nodes
           .invoke({
             nodeId: params.nodeId,
@@ -759,13 +760,13 @@ export async function startNodeRealtimeAudioBridge(params: {
       providerConnected: bridge?.bridge.isConnected() ?? false,
       realtimeReady,
       audioInputActive: lastInputBytes > 0,
-      audioOutputActive: lastOutputBytes > 0,
+      audioOutputActive: outputActivity.isActive(),
       lastInputAt,
       lastOutputAt,
       lastSuppressedInputAt,
       lastClearAt,
       lastInputBytes,
-      lastOutputBytes,
+      lastOutputBytes: outputActivity.snapshot().sinkAudioBytes,
       suppressedInputBytes,
       ...getGoogleMeetRealtimeTranscriptHealth(transcript),
       ...getGoogleMeetRealtimeEventHealth(realtimeEvents),

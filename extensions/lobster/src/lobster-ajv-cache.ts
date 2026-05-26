@@ -1,33 +1,30 @@
 import { createHash } from "node:crypto";
-import AjvPkg, { type AnySchema, type ValidateFunction } from "ajv";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 
 const installedSymbol = Symbol.for("openclaw.lobster.ajv-compile-cache.installed");
 const cacheSymbol = Symbol.for("openclaw.lobster.ajv-compile-cache.entries");
 const maxEntries = 512;
 
-type AjvInstance = import("ajv").default;
-
-type CompileCacheEntry = {
-  schema: AnySchema;
-  validate: ValidateFunction;
+type ValidateFunction = (value: unknown) => boolean;
+type AjvInstance = {
+  compile: (schema: unknown) => ValidateFunction;
+  removeSchema: (schemaKeyRef?: unknown) => AjvInstance;
 };
-
-const AjvCtor = AjvPkg as unknown as {
+type AjvConstructor = {
   new (opts?: object): AjvInstance;
   prototype: AjvInstance;
 };
-
 type AjvWithCompileCache = AjvInstance & {
   [cacheSymbol]?: Map<string, CompileCacheEntry>;
 };
-
-type AjvPrototypePatch = {
+type AjvPrototypePatch = AjvInstance & {
   [installedSymbol]?: boolean;
-  compile: (schema: AnySchema) => ValidateFunction;
-  removeSchema: (schemaKeyRef?: Parameters<AjvInstance["removeSchema"]>[0]) => AjvInstance;
 };
-
-type JsonLike = null | boolean | number | string | JsonLike[] | { [key: string]: JsonLike };
+type CompileCacheEntry = {
+  schema: unknown;
+  validate: ValidateFunction;
+};
 
 function stableJsonStringify(value: unknown, seen = new WeakSet<object>()): string {
   if (value === null || typeof value !== "object") {
@@ -75,8 +72,8 @@ function rememberCompiledValidator(params: {
   cache: Map<string, CompileCacheEntry>;
   instance: AjvWithCompileCache;
   key: string;
-  removeSchema: AjvPrototypePatch["removeSchema"];
-  schema: AnySchema;
+  removeSchema: AjvInstance["removeSchema"];
+  schema: unknown;
   validate: ValidateFunction;
 }) {
   const { cache, instance, key, removeSchema, schema, validate } = params;
@@ -93,8 +90,21 @@ function rememberCompiledValidator(params: {
   cache.set(key, { schema, validate });
 }
 
-export function installLobsterAjvCompileCache() {
-  const proto = AjvCtor.prototype as unknown as AjvPrototypePatch;
+async function resolveLobsterAjvConstructor(packageEntryPath: string): Promise<AjvConstructor> {
+  const lobsterRequire = createRequire(packageEntryPath);
+  const ajvPath = lobsterRequire.resolve("ajv");
+  const ajvModule = (await import(pathToFileURL(ajvPath).href)) as { default?: unknown };
+  return (ajvModule.default ?? ajvModule) as AjvConstructor;
+}
+
+export async function installLobsterAjvCompileCache(packageEntryPath: string) {
+  let AjvCtor: AjvConstructor;
+  try {
+    AjvCtor = await resolveLobsterAjvConstructor(packageEntryPath);
+  } catch {
+    return;
+  }
+  const proto = AjvCtor.prototype as AjvPrototypePatch;
   if (proto[installedSymbol]) {
     return;
   }
@@ -109,18 +119,18 @@ export function installLobsterAjvCompileCache() {
 
   proto.compile = function compileWithContentCache(
     this: AjvWithCompileCache,
-    schema: AnySchema,
-  ): ValidateFunction<JsonLike> {
+    schema: unknown,
+  ): ValidateFunction {
     const key = compileCacheKey(schema);
     if (!key) {
-      return originalCompile.call(this, schema) as ValidateFunction<JsonLike>;
+      return originalCompile.call(this, schema);
     }
     const cache = readCompileCache(this);
     const cached = cache.get(key);
     if (cached) {
-      return cached.validate as ValidateFunction<JsonLike>;
+      return cached.validate;
     }
-    const validate = originalCompile.call(this, schema) as ValidateFunction<JsonLike>;
+    const validate = originalCompile.call(this, schema);
     rememberCompiledValidator({
       cache,
       instance: this,
@@ -134,7 +144,7 @@ export function installLobsterAjvCompileCache() {
 
   proto.removeSchema = function removeSchemaAndClearContentCache(
     this: AjvWithCompileCache,
-    schemaKeyRef?: Parameters<AjvInstance["removeSchema"]>[0],
+    schemaKeyRef?: unknown,
   ) {
     this[cacheSymbol]?.clear();
     return originalRemoveSchema.call(this, schemaKeyRef);

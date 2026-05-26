@@ -85,6 +85,32 @@ export function createBlockReplyCoalescer(params: {
     await onFlush(payload);
   };
 
+  const canMergeBufferedTextWithMedia = (payload: ReplyPayload) =>
+    Boolean(bufferText) &&
+    !flushOnEnqueue &&
+    !bufferAudioAsVoice &&
+    !payload.audioAsVoice &&
+    !payload.isReasoning &&
+    !isReplyPayloadStatusNotice(payload) &&
+    !bufferIsReasoning &&
+    !isReplyPayloadStatusNotice({
+      isCompactionNotice: bufferIsCompactionNotice,
+      isFallbackNotice: bufferIsFallbackNotice,
+      isStatusNotice: bufferIsStatusNotice,
+    }) &&
+    (!payload.replyToId || bufferReplyToId === payload.replyToId);
+
+  const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
+    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const mergedPayload: ReplyPayload = {
+      ...payload,
+      text: mergedText,
+      replyToId: payload.replyToId ?? bufferReplyToId,
+    };
+    resetBuffer();
+    return mergedPayload;
+  };
+
   const enqueue = (payload: ReplyPayload) => {
     if (shouldAbort()) {
       return;
@@ -94,6 +120,10 @@ export function createBlockReplyCoalescer(params: {
     const text = reply.text;
     const hasText = reply.hasText;
     if (hasMedia) {
+      if (canMergeBufferedTextWithMedia(payload)) {
+        void onFlush(mergeBufferedTextWithMedia(payload, text));
+        return;
+      }
       void flush({ force: true });
       void onFlush(payload);
       return;

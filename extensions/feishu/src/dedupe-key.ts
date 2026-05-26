@@ -1,14 +1,9 @@
+import { asNullableRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parsePostContent } from "./post.js";
 
 type FeishuMessageDedupeInput = Pick<FeishuMessageEvent, "message">;
-
-function readRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
 
 function readExternalKey(value: unknown): string | undefined {
   return normalizeFeishuExternalKey(typeof value === "string" ? value : "");

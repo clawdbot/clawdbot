@@ -1,3 +1,5 @@
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type SkillWorkshopConfig = {
   enabled: boolean;
   autoCapture: boolean;
@@ -10,12 +12,6 @@ export type SkillWorkshopConfig = {
   maxSkillBytes: number;
 };
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
 function readBoolean(value: unknown, fallback: boolean): boolean {
   return typeof value === "boolean" ? value : fallback;
 }
@@ -27,7 +23,7 @@ function readInteger(value: unknown, fallback: number, min: number, max: number)
 }
 
 export function resolveConfig(raw: unknown): SkillWorkshopConfig {
-  const cfg = asRecord(raw);
+  const cfg = asNullableRecord(raw) ?? {};
   const approvalPolicy = cfg.approvalPolicy === "auto" ? "auto" : "pending";
   const reviewMode =
     cfg.reviewMode === "off" ||

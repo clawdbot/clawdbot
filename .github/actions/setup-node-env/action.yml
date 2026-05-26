@@ -26,6 +26,15 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Normalize container toolcache
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -d /__t && ! -e /opt/hostedtoolcache ]]; then
+          mkdir -p /opt
+          ln -s /__t /opt/hostedtoolcache
+        fi
+
     - name: Setup Node.js
       uses: actions/setup-node@v6
       with:

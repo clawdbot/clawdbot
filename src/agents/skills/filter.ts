@@ -1,4 +1,4 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries, sortUniqueStrings } from "../../shared/string-normalization.js";
 
 export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
   if (skillFilter === undefined) {
@@ -14,7 +14,7 @@ export function normalizeSkillFilterForComparison(
   if (normalized === undefined) {
     return undefined;
   }
-  return Array.from(new Set(normalized)).toSorted();
+  return sortUniqueStrings(normalized);
 }
 
 export function matchesSkillFilter(

@@ -50,6 +50,7 @@ import {
   type DeviceBootstrapProfile,
 } from "../../../shared/device-bootstrap-profile.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
+import { uniqueStrings } from "../../../shared/string-normalization.js";
 import {
   isBrowserOperatorUiClient,
   isGatewayCliClient,
@@ -1112,7 +1113,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             // setup-code profile; admin/pairing scopes still require an explicit
             // owner flow.
             const bootstrapPairingRoles = allowSilentBootstrapPairing
-              ? Array.from(new Set([role, ...boundBootstrapProfile.roles]))
+              ? uniqueStrings([role, ...boundBootstrapProfile.roles])
               : undefined;
             const bootstrapPairingScopes =
               allowSilentBootstrapPairing && bootstrapPairingRoles

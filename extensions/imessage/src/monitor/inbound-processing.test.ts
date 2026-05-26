@@ -794,6 +794,62 @@ describe("buildIMessageInboundContext", () => {
     expect(ctxPayload.MessageSid).toBe("1");
     expect(ctxPayload.MessageSidFull).toBe("p:0/GUID-current");
   });
+
+  it("prepends direct-message history when supplied", async () => {
+    const decision = await resolveIMessageInboundDecision({
+      cfg: {} as OpenClawConfig,
+      accountId: "default",
+      message: {
+        id: 12346,
+        guid: "p:0/GUID-current-history",
+        sender: "+15555550123",
+        text: "current",
+        is_from_me: false,
+        is_group: false,
+      },
+      opts: undefined,
+      messageText: "current",
+      bodyText: "current",
+      allowFrom: ["*"],
+      groupAllowFrom: [],
+      groupPolicy: "open",
+      dmPolicy: "open",
+      storeAllowFrom: [],
+      historyLimit: 0,
+      groupHistories: new Map(),
+      echoCache: undefined,
+      selfChatCache: undefined,
+      logVerbose: undefined,
+    });
+    expect(decision.kind).toBe("dispatch");
+    if (decision.kind !== "dispatch") {
+      return;
+    }
+
+    const { ctxPayload, inboundHistory } = buildIMessageInboundContext({
+      cfg: {} as OpenClawConfig,
+      decision,
+      message: {
+        id: 12346,
+        guid: "p:0/GUID-current-history",
+        sender: "+15555550123",
+        text: "current",
+        is_from_me: false,
+        is_group: false,
+      },
+      historyLimit: 0,
+      groupHistories: new Map(),
+      dmHistory: {
+        body: "[iMessage from +15555550123]\nprevious\n[/iMessage]",
+        inboundHistory: [{ sender: "+15555550123", body: "previous" }],
+      },
+    });
+
+    expect(ctxPayload.Body).toContain("previous");
+    expect(ctxPayload.Body).toContain("current");
+    expect(ctxPayload.InboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
+    expect(inboundHistory).toEqual([{ sender: "+15555550123", body: "previous" }]);
+  });
 });
 
 describe("resolveIMessageInboundDecision command auth", () => {

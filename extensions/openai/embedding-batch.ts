@@ -17,6 +17,7 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAiEmbeddingClient } from "./embedding-provider.js";
 
 type EmbeddingBatchExecutionParams = {
@@ -126,17 +127,13 @@ export function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line) as OpenAiBatchOutputLine;
-      } catch {
-        throw new Error("OpenAI embedding batch output contained malformed JSONL");
-      }
-    });
+  return normalizeStringEntries(text.split("\n")).map((line) => {
+    try {
+      return JSON.parse(line) as OpenAiBatchOutputLine;
+    } catch {
+      throw new Error("OpenAI embedding batch output contained malformed JSONL");
+    }
+  });
 }
 
 async function readOpenAiBatchError(params: {

@@ -12,7 +12,8 @@ function hasFinding(
     | "tools.exec.allowlist_interpreter_without_strict_inline_eval"
     | "security.exposure.open_channels_with_exec"
     | "tools.exec.security_full_configured"
-    | "tools.exec.fs_tools_disabled_but_exec_enabled",
+    | "tools.exec.fs_tools_disabled_but_exec_enabled"
+    | "agents.claude_cli.permission_mode_overridden_by_yolo",
   severity: "warn" | "critical",
   findings: ReturnType<typeof collectExecRuntimeFindings>,
 ) {
@@ -97,6 +98,138 @@ describe("security audit exec surface findings", () => {
     expect(
       hasFinding("tools.exec.auto_allow_skills_enabled", "warn", collectExecRuntimeFindings({})),
     ).toBe(true);
+  });
+
+  it("warns when YOLO exec overrides restrictive Claude permission mode", () => {
+    const findings = collectExecRuntimeFindings({
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+              resumeArgs: ["-p", "--permission-mode=acceptEdits", "--resume", "{sessionId}"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    const finding = findings.find(
+      (entry) => entry.checkId === "agents.claude_cli.permission_mode_overridden_by_yolo",
+    );
+    expect(finding).toEqual(
+      expect.objectContaining({
+        severity: "warn",
+        detail: expect.stringContaining("args=default"),
+        remediation: expect.stringContaining("tools.exec.security"),
+      }),
+    );
+    expect(finding?.detail).toContain("resumeArgs=acceptEdits");
+    expect(finding?.detail).toContain("OpenClaw exec is YOLO");
+  });
+
+  it("warns for normalized Claude backend keys", () => {
+    const findings = collectExecRuntimeFindings({
+      agents: {
+        defaults: {
+          cliBackends: {
+            "Anthropic-CLI": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    expect(
+      hasFinding("agents.claude_cli.permission_mode_overridden_by_yolo", "warn", findings),
+    ).toBe(true);
+  });
+
+  it("prefers exact Claude backend config over duplicate normalized aliases", () => {
+    const findings = collectExecRuntimeFindings({
+      agents: {
+        defaults: {
+          cliBackends: {
+            "Anthropic-CLI": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+            },
+            "claude-cli": {
+              command: "claude",
+              args: ["-p"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    expect(
+      hasFinding("agents.claude_cli.permission_mode_overridden_by_yolo", "warn", findings),
+    ).toBe(false);
+  });
+
+  it("does not warn for restrictive Claude permission mode when OpenClaw exec is restrictive", () => {
+    const findings = collectExecRuntimeFindings({
+      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    expect(
+      hasFinding("agents.claude_cli.permission_mode_overridden_by_yolo", "warn", findings),
+    ).toBe(false);
+  });
+
+  it("does not warn when sandbox host defaults make exec restrictive", () => {
+    const findings = collectExecRuntimeFindings({
+      tools: { exec: { host: "sandbox" } },
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              args: ["-p", "--permission-mode", "default"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    expect(
+      hasFinding("agents.claude_cli.permission_mode_overridden_by_yolo", "warn", findings),
+    ).toBe(false);
+  });
+
+  it("does not warn for restrictive Claude permission mode on non-live backend configs", () => {
+    const findings = collectExecRuntimeFindings({
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": {
+              command: "claude",
+              output: "json",
+              input: "arg",
+              args: ["--permission-mode", "default"],
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+
+    expect(
+      hasFinding("agents.claude_cli.permission_mode_overridden_by_yolo", "warn", findings),
+    ).toBe(false);
   });
 
   it("warns when interpreter allowlists are present without strictInlineEval", () => {

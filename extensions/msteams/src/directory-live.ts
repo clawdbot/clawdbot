@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelDirectoryEntry } from "../runtime-api.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
@@ -53,10 +56,7 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   const token = await resolveGraphToken(params.cfg);
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
-    ? rawQuery
-        .split("/", 2)
-        .map((part) => part.trim())
-        .filter(Boolean)
+    ? normalizeStringEntries(rawQuery.split("/", 2))
     : [rawQuery, null];
 
   const teams = await listTeamsByName(token, teamQuery);

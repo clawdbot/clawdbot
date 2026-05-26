@@ -1,6 +1,7 @@
 import {
   isRecord as sharedIsRecord,
   normalizeOptionalString,
+  normalizeStringEntries,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { FEISHU_COMMENT_FILE_TYPES, type CommentFileType } from "./comment-target.js";
@@ -237,10 +238,7 @@ function parseCommentLinkedDocumentPath(pathname: string): {
   urlKind: ParsedCommentResolvedDocumentType | "wiki";
   token: string;
 } | null {
-  const segments = pathname
-    .split("/")
-    .map((segment) => segment.trim())
-    .filter(Boolean);
+  const segments = normalizeStringEntries(pathname.split("/"));
   const offset = segments[0]?.toLowerCase() === "space" ? 1 : 0;
   const kind = COMMENT_LINK_KIND_ALIASES.get(segments[offset]?.toLowerCase() ?? "");
   const token = normalizeString(segments[offset + 1]);

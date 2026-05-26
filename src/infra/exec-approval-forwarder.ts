@@ -18,6 +18,7 @@ import {
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -239,10 +240,9 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   if (warningText) {
     lines.push("", warningText);
   }
-  const analysisWarningLines = request.request.commandAnalysis?.warningLines
-    .map((line) => sanitizeExecApprovalWarningText(line).trim())
-    .filter(Boolean)
-    .slice(0, 5);
+  const analysisWarningLines = normalizeStringEntries(
+    request.request.commandAnalysis?.warningLines.map(sanitizeExecApprovalWarningText),
+  ).slice(0, 5);
   if (analysisWarningLines && analysisWarningLines.length > 0) {
     lines.push("", "Command analysis:");
     for (const line of analysisWarningLines) {

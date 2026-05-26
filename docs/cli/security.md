@@ -32,7 +32,19 @@ This is for cooperative/shared inbox hardening. A single Gateway shared by mutua
 It also emits `security.trust_model.multi_user_heuristic` when config suggests likely shared-user ingress (for example open DM/group policy, configured group targets, or wildcard sender rules), and reminds you that OpenClaw is a personal-assistant trust model by default.
 For intentional shared-user setups, the audit guidance is to sandbox all sessions, keep filesystem access workspace-scoped, and keep personal/private identities or credentials off that runtime.
 It also warns when small models (`<=300B`) are used without sandboxing and with web/browser tools enabled.
-For webhook ingress, it warns when `hooks.token` reuses the Gateway token, when `hooks.token` is short, when `hooks.path="/"`, when `hooks.defaultSessionKey` is unset, when `hooks.allowedAgentIds` is unrestricted, when request `sessionKey` overrides are enabled, and when overrides are enabled without `hooks.allowedSessionKeyPrefixes`.
+For webhook ingress, it warns when:
+
+- `hooks.token` reuses an active Gateway shared-secret auth value (`gateway.auth.token` / `OPENCLAW_GATEWAY_TOKEN` or `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`)
+- `hooks.token` is short
+- `hooks.path="/"`
+- `hooks.defaultSessionKey` is unset
+- `hooks.allowedAgentIds` is unrestricted
+- request `sessionKey` overrides are enabled
+- overrides are enabled without `hooks.allowedSessionKeyPrefixes`
+
+If Gateway password auth is supplied only at startup, pass the same value to `openclaw security audit --auth password --password <password>` so the audit can check it against `hooks.token`.
+Password-mode reuse is an audit finding for compatibility; rotate one of the secrets instead of expecting Gateway startup to reject that configuration.
+
 It also warns when sandbox Docker settings are configured while sandbox mode is off, when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries (exact node command-name matching only, not shell-text filtering), when `gateway.nodes.allowCommands` explicitly enables dangerous node commands, when global `tools.profile="minimal"` is overridden by agent tool profiles, when write/edit tools are disabled but `exec` is still available without a constraining sandbox filesystem boundary, when open groups expose runtime/filesystem tools without sandbox/workspace guards, and when installed plugin tools may be reachable under permissive tool policy.
 It also flags `gateway.allowRealIpFallback=true` (header-spoofing risk if proxies are misconfigured) and `discovery.mdns.mode="full"` (metadata leakage via mDNS TXT records).
 It also warns when sandbox browser uses Docker `bridge` network without `sandbox.browser.cdpSourceRange`.

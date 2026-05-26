@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertAgentReplyContainsMarker,
+  assertOpenAiRequestLogUsed,
+} from "../agent-turn-output.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
@@ -83,14 +87,8 @@ function assertStatusSurfaces() {
 function assertAgentTurn() {
   const marker = process.argv[3];
   const logPath = process.argv[4];
-  const output = fs.readFileSync("/tmp/openclaw-agent.combined", "utf8");
-  if (!output.includes(marker)) {
-    throw new Error(`agent JSON did not contain success marker. Output: ${output}`);
-  }
-  const requestLog = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  if (!/\/v1\/(responses|chat\/completions)/u.test(requestLog)) {
-    throw new Error(`mock OpenAI server was not used. Requests: ${requestLog}`);
-  }
+  assertAgentReplyContainsMarker(marker, "/tmp/openclaw-agent.combined");
+  assertOpenAiRequestLogUsed(logPath);
 }
 
 const commands = {

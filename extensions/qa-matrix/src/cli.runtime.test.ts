@@ -9,11 +9,15 @@ const closeGlobalDispatcher = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("./runners/contract/runtime.js", () => ({
   runMatrixQaLive,
 }));
-vi.mock("undici", () => ({
-  getGlobalDispatcher: () => ({
-    close: closeGlobalDispatcher,
-  }),
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    getGlobalDispatcher: () => ({
+      close: closeGlobalDispatcher,
+    }),
+  };
+});
 
 import { runQaMatrixCommand } from "./cli.runtime.js";
 

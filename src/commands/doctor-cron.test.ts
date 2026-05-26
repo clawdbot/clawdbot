@@ -566,6 +566,29 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoteContaining("managed dreaming job", "Cron");
     expectNoteContaining("Rewrote 1 managed dreaming job", "Doctor changes");
   });
+
+  it("warns and continues when the cron job store cannot be read", async () => {
+    const storePath = await makeTempStorePath();
+    // Force loadCronStore to throw a non-ENOENT read error by placing a
+    // directory where the cron job store file would be. This mirrors the
+    // Docker-on-root permission failure reported in #86102 without depending
+    // on the test runner's effective uid (root bypasses chmod gates).
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.mkdir(storePath);
+    const prompter = makePrompter(true);
+
+    await expect(
+      maybeRepairLegacyCronStore({
+        cfg: { cron: { store: storePath } },
+        options: {},
+        prompter,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expectNoteContaining("Unable to read cron job store at", "Cron");
+    expectNoteContaining("later health checks will continue", "Cron");
+  });
 });
 
 describe("legacy WhatsApp crontab health check", () => {

@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 vi.mock("../logging/subsystem.js", () => {
   const createMockLogger = () => ({
@@ -255,7 +256,7 @@ vi.mock("../agents/skills/refresh-state.js", () => ({
 
 vi.mock("../agents/skills/filter.js", () => ({
   normalizeSkillFilter: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
-    skillFilter?.map((entry) => String(entry).trim()).filter(Boolean),
+    skillFilter ? normalizeStringEntries(skillFilter) : undefined,
   ),
   normalizeSkillFilterForComparison: vi.fn((skillFilter?: ReadonlyArray<unknown>) =>
     skillFilter

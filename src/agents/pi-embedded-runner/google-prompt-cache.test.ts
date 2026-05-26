@@ -179,7 +179,7 @@ describe("google prompt cache", () => {
             },
           ],
         } as never,
-        { temperature: 0.2 } as never,
+        { temperature: 0.2, toolChoice: "auto" } as never,
       ),
     );
 
@@ -200,11 +200,28 @@ describe("google prompt cache", () => {
       systemInstruction: {
         parts: [{ text: "Follow policy." }],
       },
+      tools: [
+        {
+          functionDeclarations: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parametersJsonSchema: { type: "object" },
+            },
+          ],
+        },
+      ],
+      toolConfig: {
+        functionCallingConfig: {
+          mode: "AUTO",
+        },
+      },
     });
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
     expect(streamContext(innerStreamFn).systemPrompt).toBeUndefined();
-    expect(Array.isArray(streamContext(innerStreamFn).tools)).toBe(true);
+    expect(streamContext(innerStreamFn).tools).toBeUndefined();
     expect(streamOptions(innerStreamFn).temperature).toBe(0.2);
+    expect(streamOptions(innerStreamFn).toolChoice).toBe("auto");
     expect(getCapturedPayload()?.cachedContent).toBe("cachedContents/system-cache-1");
     expect(entries).toEqual([
       {
@@ -221,6 +238,7 @@ describe("google prompt cache", () => {
           modelApi: "google-generative-ai",
           baseUrl: "https://generativelanguage.googleapis.com/v1beta",
           systemPromptDigest,
+          cacheConfigDigest: expect.any(String),
           cacheRetention: "long",
           cachedContent: "cachedContents/system-cache-1",
           expireTime,

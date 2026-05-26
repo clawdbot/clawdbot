@@ -1,26 +1,20 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
 import type { ChannelIngressAdapter, ResolveChannelMessageIngressParams } from "./runtime-types.js";
 import type { AccessGroupMembershipFact, ChannelIngressChannelId } from "./types.js";
 
-function uniqueValues<T extends string | number>(values: readonly T[]): T[] {
-  return Array.from(new Set(values));
-}
-
 function accessGroupNames(entries: readonly (string | number)[]): string[] {
-  return Array.from(
-    new Set(
-      entries
-        .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
-        .filter((entry): entry is string => entry != null),
-    ),
+  return uniqueStrings(
+    entries
+      .map((entry) => parseAccessGroupAllowFromEntry(String(entry)))
+      .filter((entry): entry is string => entry != null),
   );
 }
 
 export function allReferencedAccessGroupNames(
   entries: Array<readonly (string | number)[]>,
 ): string[] {
-  return Array.from(new Set(entries.flatMap((entryGroup) => accessGroupNames(entryGroup))));
+  return uniqueStrings(entries.flatMap((entryGroup) => accessGroupNames(entryGroup)));
 }
 
 export async function normalizeEffectiveEntries(params: {
@@ -42,7 +36,10 @@ export async function normalizeEffectiveEntries(params: {
     context: params.context,
     accountId: params.accountId,
   });
-  return uniqueValues([...accessGroupEntries, ...normalized.matchable.map((entry) => entry.value)]);
+  return uniqueStrings([
+    ...accessGroupEntries,
+    ...normalized.matchable.map((entry) => entry.value),
+  ]);
 }
 
 export async function resolveRuntimeAccessGroupMembershipFacts(params: {

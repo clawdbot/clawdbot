@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/twitch",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "description": "OpenClaw Twitch channel plugin",
   "repository": {
     "type": "git",
@@ -27,10 +27,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.5.24"
+      "pluginApi": ">=2026.5.26"
     },
     "build": {
-      "openclawVersion": "2026.5.24"
+      "openclawVersion": "2026.5.26"
     },
     "channel": {
       "id": "twitch",

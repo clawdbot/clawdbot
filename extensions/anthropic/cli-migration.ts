@@ -3,7 +3,10 @@ import {
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
 import {
   readClaudeCliCredentialsForSetup,
@@ -29,10 +32,6 @@ function toAnthropicRuntimeRefs(raw: string): string[] {
 function toAnthropicSelectedModelRef(raw: string): string | undefined {
   const resolved = resolveClaudeCliAnthropicModelRefs(raw);
   return resolved?.rewriteRef ?? resolved?.selectedRef;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function rewriteModelSelection(model: AgentDefaultsModel): {

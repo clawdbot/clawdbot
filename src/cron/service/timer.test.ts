@@ -8,6 +8,7 @@ import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-timer-seam",
@@ -223,6 +224,51 @@ describe("cron service timer seam coverage", () => {
     expect(task.childSessionKey).toBe("agent:finn:cron:isolated-agent-job");
     expect(task.status).toBe("succeeded");
     expect(task.terminalSummary).toBe("done");
+  });
+
+  it("seeds active scheduled cron task progress for status surfaces", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
+    const runIsolatedAgentJob = vi.fn(
+      () =>
+        new Promise<{ status: "ok"; summary: string }>((resolve) => {
+          resolveRun = resolve;
+        }),
+    );
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedAgentJob({ now })],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob,
+    });
+
+    const timerRun = onTimer(state);
+    await vi.waitFor(() => {
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+    });
+
+    const task = findTaskByRunId(`cron:isolated-agent-job:${now}`);
+    if (!task) {
+      throw new Error("expected active cron task ledger record");
+    }
+    expect(task.status).toBe("running");
+    expect(task.progressSummary).toBe("Running cron job.");
+    expect(formatTaskStatusDetail(task)).toBe("Running cron job.");
+
+    resolveRun?.({ status: "ok", summary: "done" });
+    await timerRun;
   });
 
   it("keeps scheduler progress when task ledger creation fails", async () => {

@@ -371,6 +371,7 @@ describeLive("subagent announce live", () => {
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `CHILD_STEERED_${nonce}`;
       const parentToken = `PARENT_SAW_${childToken}`;
+      const parentStartedToken = `PARENT_READY_${nonce}`;
       const steerToken = `STEER_${nonce}`;
       const childTask = [
         `Immediately call sessions_yield with message="waiting for ${steerToken}".`,
@@ -464,9 +465,9 @@ describeLive("subagent announce live", () => {
               runTimeoutSeconds: 300,
             })}.`,
             'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
-            `Step 3: call sessions_yield with message="waiting for ${childToken}" and wait for the child completion event.`,
-            `Step 4: after the completion event arrives, reply exactly ${parentToken}.`,
-            "Do not reply with the parent token until the child completion event is visible.",
+            `Step 3: reply exactly ${parentStartedToken}.`,
+            `In a future continuation after the child completion event arrives, reply exactly ${parentToken}.`,
+            `Do not reply with ${parentToken} before the child completion event is visible.`,
           ].join("\n"),
         },
         { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
@@ -483,6 +484,9 @@ describeLive("subagent announce live", () => {
           (run) => run.taskName === "steered_child" && !run.endedAt,
         );
       });
+      const initialResponse = await initialRequest;
+      expect(extractPayloadText(initialResponse.result)).toContain(parentStartedToken);
+
       const cfg = getRuntimeConfig();
       const steerResult = await steerControlledSubagentRun({
         cfg,
@@ -515,12 +519,16 @@ describeLive("subagent announce live", () => {
           : undefined;
       });
 
-      const completedDispatch = inProcessAgentDispatches.find(
-        (entry) => entry.phase === "completed",
+      const completedDispatch = await waitFor(
+        "in-process subagent completion agent dispatch",
+        () => {
+          if (initialError) {
+            throw initialError;
+          }
+          return inProcessAgentDispatches.find((entry) => entry.phase === "completed");
+        },
       );
-      if (completedDispatch) {
-        expect(completedDispatch.resultText).toContain(childToken);
-      }
+      expect(completedDispatch.resultText).toContain(parentToken);
       expect(
         inProcessAgentDispatches.some((entry) => {
           if (initialError) {

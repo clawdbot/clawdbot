@@ -1,6 +1,7 @@
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { OpenClawConfig } from "./config.js";
 import type { SlackCapabilitiesConfig } from "./types.slack.js";
 import type { TelegramCapabilitiesConfig } from "./types.telegram.js";
@@ -16,7 +17,7 @@ function normalizeCapabilities(capabilities: CapabilitiesConfig | undefined): st
   if (!isStringArray(capabilities)) {
     return undefined;
   }
-  const normalized = capabilities.map((entry) => entry.trim()).filter(Boolean);
+  const normalized = normalizeStringEntries(capabilities);
   return normalized.length > 0 ? normalized : undefined;
 }
 

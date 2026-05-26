@@ -54,7 +54,7 @@ describe("resolveTsdownBuildInvocation", () => {
         stdio: ["ignore", "pipe", "pipe"],
         shell: false,
         windowsVerbatimArguments: undefined,
-        env: { NODE_OPTIONS: "--max-old-space-size=6144" },
+        env: { NODE_OPTIONS: "--max-old-space-size=8192" },
       },
     });
   });
@@ -76,7 +76,7 @@ describe("resolveTsdownBuildInvocation", () => {
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6144");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
   it("raises split inherited low tsdown heap settings to the build floor", () => {
@@ -86,7 +86,7 @@ describe("resolveTsdownBuildInvocation", () => {
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6144");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
   it("can run tsdown without invoking pnpm", () => {
@@ -110,7 +110,7 @@ describe("resolveTsdownBuildInvocation", () => {
         shell: false,
         windowsVerbatimArguments: undefined,
         env: {
-          NODE_OPTIONS: "--max-old-space-size=6144",
+          NODE_OPTIONS: "--max-old-space-size=8192",
           OPENCLAW_BUILD_ALL_NO_PNPM: "1",
         },
       },
@@ -250,6 +250,9 @@ describe("createTsdownOutputScanner", () => {
 
     scanner.append("[UNRESOLVED_IMPORT] extensions/telegram/src/index.ts\n");
     scanner.append("[UNRESOLVED_IMPORT] node_modules/example/index.js\n");
+    scanner.append(
+      "[UNRESOLVED_IMPORT] ../../../../tmp/openclaw-pnpm-node-modules/baileys/lib/Utils/messages-media.js\n",
+    );
 
     expect(scanner.finish().fatalUnresolvedImport).toBeNull();
   });

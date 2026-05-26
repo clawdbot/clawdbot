@@ -1,4 +1,4 @@
-import AjvPkg from "ajv";
+import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "../config/validation.js";
 import { SecretRefSchema as GatewaySecretRefSchema } from "../gateway/protocol/schema/primitives.js";
@@ -21,9 +21,7 @@ import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpe
 import { listSecretTargetRegistryEntries } from "./target-registry.js";
 
 describe("exec SecretRef id parity", () => {
-  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
-  const ajv = new Ajv({ allErrors: true, strict: false });
-  const validateGatewaySecretRef = ajv.compile(GatewaySecretRefSchema);
+  const validateGatewaySecretRef = Compile(GatewaySecretRefSchema);
   const pluginSdkSecretInput = buildSecretInputSchema();
 
   function configAcceptsExecRef(id: string): boolean {
@@ -78,7 +76,9 @@ describe("exec SecretRef id parity", () => {
     it(`keeps config/gateway/plugin parity for file id "${id}"`, () => {
       const expected = isValidFileSecretRefId(id);
       expect(configAcceptsFileRef(id)).toBe(expected);
-      expect(validateGatewaySecretRef({ source: "file", provider: "default", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "file", provider: "default", id })).toBe(
+        expected,
+      );
       expect(
         pluginSdkSecretInput.safeParse({ source: "file", provider: "default", id }).success,
       ).toBe(expected);
@@ -90,7 +90,9 @@ describe("exec SecretRef id parity", () => {
       const expected = isValidExecSecretRefId(id);
       expect(configAcceptsExecRef(id)).toBe(expected);
       expect(planAcceptsExecRef(id)).toBe(expected);
-      expect(validateGatewaySecretRef({ source: "exec", provider: "vault", id })).toBe(expected);
+      expect(validateGatewaySecretRef.Check({ source: "exec", provider: "vault", id })).toBe(
+        expected,
+      );
       expect(
         pluginSdkSecretInput.safeParse({ source: "exec", provider: "vault", id }).success,
       ).toBe(expected);

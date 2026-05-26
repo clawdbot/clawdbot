@@ -1,4 +1,5 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue, v2 } from "./protocol.js";
 
 export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
@@ -258,10 +259,6 @@ function fingerprintInventoryCacheKey(key: string): string {
     hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
   }
   return hash.toString(16).padStart(8, "0");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {

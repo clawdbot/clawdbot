@@ -1,19 +1,14 @@
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 
 export type ChannelAccessPolicy = "allowlist" | "open" | "disabled";
 
 export function parseAllowlistEntries(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
 export function formatAllowlistEntries(entries: string[]): string {
-  return entries
-    .map((entry) => entry.trim())
-    .filter(Boolean)
-    .join(", ");
+  return normalizeStringEntries(entries).join(", ");
 }
 
 export async function promptChannelAccessPolicy(params: {

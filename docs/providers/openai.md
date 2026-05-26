@@ -193,7 +193,7 @@ Choose your preferred auth method and follow the setup steps.
     model.
 
     <Warning>
-    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that model, and the current Codex catalog does not expose it either.
+    OpenClaw does **not** expose `openai/gpt-5.3-codex-spark`. Live OpenAI API requests reject that direct provider route. Use `openai-codex/gpt-5.3-codex-spark` only when the Codex catalog exposes it for your signed-in account.
     </Warning>
 
   </Tab>
@@ -251,7 +251,9 @@ Choose your preferred auth method and follow the setup steps.
     Prefer `openai/gpt-5.5` for new subscription-backed agent config. Older
     `openai-codex/gpt-*` refs are legacy PI routes, not the native Codex runtime
     path; run `openclaw doctor --fix` when you want to migrate them to canonical
-    `openai/*` refs.
+    `openai/*` refs. `openai-codex/gpt-5.3-codex-spark` is the exception for
+    accounts whose Codex catalog advertises that model; direct `openai/*` and
+    Azure refs for it remain suppressed.
     </Warning>
 
     <Note>
@@ -549,7 +551,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs on OpenClaw-assembled prompt surfaces. It applies by model id, so PI/provider routes such as legacy pre-repair refs (`openai-codex/gpt-5.5`), `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
-The bundled native Codex harness does not receive this OpenClaw GPT-5 overlay through Codex app-server developer instructions. Native Codex keeps Codex-owned base, model, personality, and project-doc behavior; OpenClaw contributes only runtime context such as channel delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and OpenClaw skills.
+The bundled native Codex harness does not receive this OpenClaw GPT-5 overlay through Codex app-server developer instructions. Native Codex keeps Codex-owned base, model, and project-doc behavior, while OpenClaw disables Codex's built-in personality for native threads so agent workspace personality files stay authoritative. OpenClaw contributes only runtime context such as channel delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and OpenClaw skills.
 
 The GPT-5 contribution adds a tagged behavior contract for persona persistence, execution safety, tool discipline, output shape, completion checks, and verification on matching OpenClaw-assembled prompts. Channel-specific reply and silent-message behavior stays in the shared OpenClaw system prompt and outbound delivery policy. The friendly interaction-style layer is separate and configurable.
 

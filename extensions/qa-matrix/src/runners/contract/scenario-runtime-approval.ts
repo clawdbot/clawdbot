@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
+import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { MATRIX_QA_DRIVER_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-catalog.js";
 import {
@@ -177,9 +178,7 @@ async function waitForObservedApprovalEvent(params: {
   timeoutMs: number;
 }) {
   const client = createMatrixQaDriverScenarioClient(params.context);
-  const roomIds = Array.from(
-    new Set(params.roomIds.map((roomId) => roomId.trim()).filter(Boolean)),
-  );
+  const roomIds = normalizeUniqueStringEntries(params.roomIds);
   const primaryRoomId = roomIds[0];
   if (!primaryRoomId) {
     throw new Error("Matrix approval wait requires at least one candidate room");

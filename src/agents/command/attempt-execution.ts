@@ -518,6 +518,7 @@ export function runAgentAttempt(params: {
       runCliAgent({
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        sessionEntry: params.sessionEntry,
         agentId: params.sessionAgentId,
         trigger: "user",
         sessionFile: params.sessionFile,

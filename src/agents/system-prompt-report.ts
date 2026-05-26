@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
@@ -9,8 +10,46 @@ type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 const toolReportEntryCache = new WeakMap<AgentTool, ToolReportEntry>();
 const toolSchemaStatsCache = new WeakMap<
   object,
-  Pick<ToolReportEntry, "propertiesCount" | "schemaChars">
+  Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
 >();
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeForStableHash(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === "bigint") {
+    return `${value.toString()}n`;
+  }
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    if (Array.isArray(value)) {
+      const normalized = value.map((entry) => normalizeForStableHash(entry, seen));
+      seen.delete(value);
+      return normalized;
+    }
+    const record = value as Record<string, unknown>;
+    const normalized = Object.fromEntries(
+      Object.keys(record)
+        .toSorted((left, right) => left.localeCompare(right))
+        .map((key) => [key, normalizeForStableHash(record[key], seen)]),
+    );
+    seen.delete(value);
+    return normalized;
+  }
+  return value;
+}
+
+function stableJsonHash(value: unknown): string {
+  try {
+    return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
+  } catch {
+    return sha256("[unserializable]");
+  }
+}
 
 function extractBetween(input: string, startMarker: string, endMarker: string): string {
   const start = input.indexOf(startMarker);
@@ -39,9 +78,9 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 
 function buildToolSchemaStats(
   parameters: AgentTool["parameters"],
-): Pick<ToolReportEntry, "propertiesCount" | "schemaChars"> {
+): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
-    return { schemaChars: 0, propertiesCount: null };
+    return { schemaChars: 0, schemaHash: stableJsonHash(null), propertiesCount: null };
   }
   const cached = toolSchemaStatsCache.get(parameters);
   if (cached) {
@@ -55,6 +94,7 @@ function buildToolSchemaStats(
         return 0;
       }
     })(),
+    schemaHash: stableJsonHash(parameters),
     propertiesCount: (() => {
       const schema = parameters as Record<string, unknown>;
       const props = typeof schema.properties === "object" ? schema.properties : null;
@@ -78,7 +118,7 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
     const schemaStats = buildToolSchemaStats(tool.parameters);
-    const entry = { name, summaryChars, ...schemaStats };
+    const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
     toolReportEntryCache.set(tool, entry);
     return entry;
   });
@@ -129,6 +169,7 @@ export function buildSystemPromptReport(params: {
       chars: systemPromptChars,
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
+      hash: sha256(params.systemPrompt),
     },
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
     injectedWorkspaceFiles: buildBootstrapInjectionStats({
@@ -137,6 +178,7 @@ export function buildSystemPromptReport(params: {
     }),
     skills: {
       promptChars: params.skillsPrompt.length,
+      hash: sha256(params.skillsPrompt),
       entries: skillsEntries,
     },
     tools: {

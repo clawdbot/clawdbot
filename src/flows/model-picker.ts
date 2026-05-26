@@ -32,6 +32,7 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
@@ -390,9 +391,7 @@ async function promptManualModel(params: {
 function buildModelProviderFilterOptions(
   models: Array<{ provider: string }>,
 ): Array<{ value: string; label: string; hint: string }> {
-  const providerIds = Array.from(new Set(models.map((entry) => entry.provider))).toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  const providerIds = sortUniqueStrings(models.map((entry) => entry.provider));
   return providerIds.map((provider) => {
     const count = models.filter((entry) => entry.provider === provider).length;
     return {
@@ -418,9 +417,7 @@ async function maybeFilterModelsByProvider(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<typeof params.models> {
   let next = params.models.filter((entry) => isModelPickerVisibleProvider(entry.provider));
-  const providerIds = Array.from(new Set(next.map((entry) => entry.provider))).toSorted((a, b) =>
-    a.localeCompare(b),
-  );
+  const providerIds = sortUniqueStrings(next.map((entry) => entry.provider));
   const hasPreferredProvider = !!params.preferredProvider;
   const shouldPromptProvider =
     !hasPreferredProvider && providerIds.length > 1 && next.length > PROVIDER_FILTER_THRESHOLD;

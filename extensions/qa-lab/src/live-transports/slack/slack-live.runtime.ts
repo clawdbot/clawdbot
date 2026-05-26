@@ -5,6 +5,7 @@ import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/ap
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
@@ -200,6 +201,12 @@ type SlackQaScenarioResult = {
   requestStartedAt?: string;
   responseObservedAt?: string;
   rttMs?: number;
+  rttMeasurement?: {
+    finalMatchedReplyRttMs: number;
+    requestStartedAt: string;
+    responseObservedAt: string;
+    source: "approval-request-to-resolution" | "request-to-observed-message";
+  };
   status: "fail" | "pass";
   title: string;
 };
@@ -580,7 +587,7 @@ function buildSlackQaConfig(
     sutBotToken: string;
   },
 ): OpenClawConfig {
-  const pluginAllow = [...new Set([...(baseCfg.plugins?.allow ?? []), "slack"])];
+  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "slack"]);
   const approvalOverrides = params.overrides?.approvals;
   const approvalForwardingConfig =
     approvalOverrides?.exec || approvalOverrides?.plugin
@@ -1859,6 +1866,12 @@ export async function runSlackQaLive(params: {
               rttMs: approval.rttMs,
               requestStartedAt: approval.requestStartedAt.toISOString(),
               responseObservedAt: approval.responseObservedAt.toISOString(),
+              rttMeasurement: {
+                finalMatchedReplyRttMs: approval.rttMs,
+                requestStartedAt: approval.requestStartedAt.toISOString(),
+                responseObservedAt: approval.responseObservedAt.toISOString(),
+                source: "approval-request-to-resolution",
+              },
             });
             break;
           }
@@ -1911,6 +1924,12 @@ export async function runSlackQaLive(params: {
               rttMs,
               requestStartedAt: requestStartedAt.toISOString(),
               responseObservedAt: responseObservedAt.toISOString(),
+              rttMeasurement: {
+                finalMatchedReplyRttMs: rttMs,
+                requestStartedAt: requestStartedAt.toISOString(),
+                responseObservedAt: responseObservedAt.toISOString(),
+                source: "request-to-observed-message",
+              },
             });
           } else {
             await waitForSlackNoReply({

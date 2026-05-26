@@ -15,13 +15,17 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
 async function writeSingleJobStore(storePath: string, job: Record<string, unknown>) {
+  await writeJobStore(storePath, [job]);
+}
+
+async function writeJobStore(storePath: string, jobs: Array<Record<string, unknown>>) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(
     storePath,
     JSON.stringify(
       {
         version: 1,
-        jobs: [job],
+        jobs,
       },
       null,
       2,
@@ -130,6 +134,171 @@ describe("cron service store seam coverage", () => {
     expect((state.storeFileMtimeMs ?? 0) >= (firstMtime ?? 0)).toBe(true);
   });
 
+  it("preserves unsupported payload-kind rows across full persistence without loading them", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeJobStore(storePath, [
+      {
+        id: "valid-job",
+        name: "valid job",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+      {
+        id: "legacy-command",
+        name: "legacy command",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "command", command: "echo daily" },
+        state: { lastRunAtMs: STORE_TEST_NOW - 3_600_000 },
+      },
+      {
+        id: "legacy-agentmessage",
+        name: "legacy agentmessage",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentmessage", message: "summarize" },
+        metadata: { preserve: { nested: true } },
+      },
+    ]);
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual(["valid-job"]);
+    expect(() => findJobOrThrow(state, "legacy-command")).toThrow(/unknown cron job id/);
+    expect(() => findJobOrThrow(state, "legacy-agentmessage")).toThrow(/unknown cron job id/);
+
+    const valid = findJobOrThrow(state, "valid-job");
+    valid.name = "valid job renamed";
+    await persist(state);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(config.jobs.map((job) => job.id)).toEqual([
+      "valid-job",
+      "legacy-command",
+      "legacy-agentmessage",
+    ]);
+    expect(config.jobs[0]?.name).toBe("valid job renamed");
+    expect(config.jobs[1]).toMatchObject({
+      id: "legacy-command",
+      payload: { kind: "command", command: "echo daily" },
+      state: { lastRunAtMs: STORE_TEST_NOW - 3_600_000 },
+    });
+    expect(config.jobs[2]).toMatchObject({
+      id: "legacy-agentmessage",
+      payload: { kind: "agentmessage", message: "summarize" },
+      metadata: { preserve: { nested: true } },
+    });
+    expect(config.jobs[2]).not.toHaveProperty("state");
+    expect(config.jobs[2]).not.toHaveProperty("updatedAtMs");
+
+    const stateFile = JSON.parse(
+      await fs.readFile(storePath.replace(/\.json$/, "-state.json"), "utf8"),
+    ) as { jobs: Record<string, unknown> };
+    expect(Object.keys(stateFile.jobs)).toEqual(["valid-job"]);
+
+    const invalidPayloadWarns = logger.warn.mock.calls.filter((call) => {
+      const msg = typeof call[1] === "string" ? call[1] : "";
+      return msg.includes("skipped invalid persisted job");
+    });
+    expect(invalidPayloadWarns.map((call) => (call[0] as { jobId?: string }).jobId)).toEqual([
+      "legacy-command",
+      "legacy-agentmessage",
+    ]);
+  });
+
+  it("skips preserved unsupported rows that collide with supported jobs by canonical id", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeJobStore(storePath, [
+      {
+        id: "trimmed-collision",
+        name: "supported trimmed collision",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+      {
+        id: "  trimmed-collision  ",
+        name: "stale unsupported padded id",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "command", command: "echo stale" },
+      },
+      {
+        id: "legacy-jobid-collision",
+        name: "supported legacy jobId collision",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 120_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick legacy" },
+        state: {},
+      },
+      {
+        jobId: "  legacy-jobid-collision  ",
+        name: "stale unsupported legacy jobId",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "agentmessage", message: "summarize stale" },
+      },
+    ]);
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([
+      "trimmed-collision",
+      "legacy-jobid-collision",
+    ]);
+
+    await persist(state);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(config.jobs.map((job) => job.id)).toEqual([
+      "trimmed-collision",
+      "legacy-jobid-collision",
+    ]);
+    expect(config.jobs.map((job) => job.name)).toEqual([
+      "supported trimmed collision",
+      "supported legacy jobId collision",
+    ]);
+    expect(config.jobs.some((job) => job.jobId === "  legacy-jobid-collision  ")).toBe(false);
+    expect(config.jobs.some((job) => job.name === "stale unsupported padded id")).toBe(false);
+    expect(config.jobs.some((job) => job.name === "stale unsupported legacy jobId")).toBe(false);
+  });
+
   it("normalizes jobId-only jobs in memory so scheduler lookups resolve by stable id", async () => {
     const { storePath } = await makeStorePath();
 
@@ -191,17 +360,18 @@ describe("cron service store seam coverage", () => {
     expect(after).toBe(before);
   });
 
-  it("loads persisted jobs with unsafe custom session ids so run paths can fail closed", async () => {
+  it("loads persisted jobs with opaque custom session ids containing separators", async () => {
     const { storePath } = await makeStorePath();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
 
     await writeSingleJobStore(storePath, {
-      id: "unsafe-session-target-job",
-      name: "unsafe session target job",
+      id: "opaque-session-target-job",
+      name: "opaque session target job",
       enabled: true,
       createdAtMs: STORE_TEST_NOW - 60_000,
       updatedAtMs: STORE_TEST_NOW - 60_000,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "session:../../outside",
+      sessionTarget,
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "ping" },
       state: {},
@@ -211,13 +381,18 @@ describe("cron service store seam coverage", () => {
 
     await ensureLoaded(state, { skipRecompute: true });
 
-    const job = findJobOrThrow(state, "unsafe-session-target-job");
-    expect(job.sessionTarget).toBe("session:../../outside");
-    expectWarnedJob({
-      storePath,
-      jobId: "unsafe-session-target-job",
-      message: "invalid persisted sessionTarget",
-    });
+    const job = findJobOrThrow(state, "opaque-session-target-job");
+    expect(job.sessionTarget).toBe(sessionTarget);
+    const warnCalls = logger.warn.mock.calls as unknown as Array<
+      [{ storePath?: string; jobId?: string }, string]
+    >;
+    expect(
+      warnCalls.some(
+        ([metadata, message]) =>
+          metadata.jobId === "opaque-session-target-job" &&
+          message.includes("invalid persisted sessionTarget"),
+      ),
+    ).toBe(false);
   });
 
   it("clears stale nextRunAtMs after force reload when cron schedule expression changes", async () => {

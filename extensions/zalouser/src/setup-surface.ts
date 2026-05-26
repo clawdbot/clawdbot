@@ -13,6 +13,7 @@ import {
   type DmPolicy,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   checkZcaAuthenticated,
   listZalouserAccountIds,
@@ -38,10 +39,7 @@ const ZALOUSER_ALLOWLIST_TITLE = t("wizard.zalouser.allowlistTitle");
 const ZALOUSER_GROUPS_TITLE = t("wizard.zalouser.groupsTitle");
 
 function parseZalouserEntries(raw: string): string[] {
-  return raw
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(raw.split(/[\n,;]+/g));
 }
 
 function setZalouserAccountScopedConfig(
@@ -450,7 +448,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           .filter((entry) => entry.resolved && entry.id)
           .map((entry) => entry.id as string);
         const unresolved = resolved.filter((entry) => !entry.resolved).map((entry) => entry.input);
-        const keys = [...resolvedIds, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
+        const keys = [...resolvedIds, ...normalizeStringEntries(unresolved)];
         const resolution = formatResolvedUnresolvedNote({
           resolved: resolvedIds,
           unresolved,
@@ -464,7 +462,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
           t("wizard.zalouser.groupLookupFailed", { error: String(err) }),
           ZALOUSER_GROUPS_TITLE,
         );
-        return entries.map((entry) => entry.trim()).filter(Boolean);
+        return normalizeStringEntries(entries);
       }
     },
     applyAllowlist: ({ cfg, accountId, resolved }) =>

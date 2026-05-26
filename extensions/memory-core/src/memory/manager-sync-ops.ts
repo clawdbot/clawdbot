@@ -42,9 +42,12 @@ import {
 } from "./embeddings.js";
 import { runMemoryAtomicReindex } from "./manager-atomic-reindex.js";
 import { closeMemoryDatabase, openMemoryDatabaseAtPath } from "./manager-db.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   applyMemoryFallbackProviderState,
   resolveMemoryFallbackProviderRequest,
+  resolveFallbackCurrentProviderId,
+  type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import {
   resolveConfiguredScopeHash,
@@ -170,6 +173,8 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
   protected fallbackFrom?: EmbeddingProviderId;
+  protected abstract providerUnavailableReason?: string;
+  protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
   protected abstract batch: {
     enabled: boolean;
@@ -230,6 +235,7 @@ export abstract class MemoryManagerSyncOps {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(): void;
+  protected abstract resetProviderInitializationForRetry(): void;
   protected abstract indexFile(
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
@@ -1088,12 +1094,39 @@ export abstract class MemoryManagerSyncOps {
     return state;
   }
 
+  private assertFtsOnlySyncAllowed(): void {
+    if (this.provider) {
+      return;
+    }
+    const existingMeta = this.readMeta();
+    if (
+      !existingMeta ||
+      existingMeta.model === "fts-only" ||
+      !this.settings.provider ||
+      this.settings.provider === "none"
+    ) {
+      return;
+    }
+    this.resetProviderInitializationForRetry();
+    throw new Error(
+      `Memory sync aborted: embedding provider "${this.settings.provider}" is configured but unavailable. ` +
+        `Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: ${existingMeta.model}).`,
+    );
+  }
+
   protected async runSync(params?: {
     reason?: string;
     force?: boolean;
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) {
+    // Guard: if an embedding provider is configured but currently unavailable,
+    // abort sync to prevent silently degrading an existing semantic vector index
+    // to fts-only and wiping existing semantic vectors.
+    // This only protects existing semantic indexes; fresh or already-fts-only
+    // indexes can safely sync without an embedding provider.
+    this.assertFtsOnlySyncAllowed();
+
     const progress = params?.progress ? this.createSyncProgress(params.progress) : undefined;
     if (progress) {
       progress.report({
@@ -1131,7 +1164,7 @@ export abstract class MemoryManagerSyncOps {
       syncSessionFiles: async (targetedParams) => {
         await this.syncSessionFiles(targetedParams);
       },
-      shouldFallbackOnError: (message) => this.shouldFallbackOnError(message),
+      shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
       activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
       runSafeReindex: async (reindexParams) => {
         await this.runSafeReindex(reindexParams);
@@ -1205,10 +1238,19 @@ export abstract class MemoryManagerSyncOps {
     } catch (err) {
       const reason = formatErrorMessage(err);
       const activated =
-        this.shouldFallbackOnError(reason) && (await this.activateFallbackProvider(reason));
+        this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
         await this.runSafeReindex({
           reason: params?.reason ?? "fallback",
+          force: true,
+          progress: progress ?? undefined,
+        });
+        return;
+      }
+      if (!this.provider && this.fts.enabled && this.shouldFallbackOnError(err)) {
+        log.warn(`memory embeddings unavailable; rebuilding lexical memory index only: ${reason}`);
+        await this.runSafeReindex({
+          reason: params?.reason ?? "embedding-degraded",
           force: true,
           progress: progress ?? undefined,
         });
@@ -1218,8 +1260,8 @@ export abstract class MemoryManagerSyncOps {
     }
   }
 
-  private shouldFallbackOnError(message: string): boolean {
-    return /embedding|embeddings|batch/i.test(message);
+  protected shouldFallbackOnError(err: unknown): boolean {
+    return isMemoryEmbeddingOperationError(err);
   }
 
   protected resolveBatchConfig(): {
@@ -1240,19 +1282,22 @@ export abstract class MemoryManagerSyncOps {
     };
   }
 
-  private async activateFallbackProvider(reason: string): Promise<boolean> {
+  protected async activateFallbackProvider(reason: string): Promise<boolean> {
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
     const fallbackRequest = resolveMemoryFallbackProviderRequest({
       cfg: this.cfg,
       settings: this.settings,
-      currentProviderId: this.provider?.id ?? null,
+      currentProviderId,
     });
-    if (!fallbackRequest || !this.provider) {
+    if (!fallbackRequest || !currentProviderId) {
       return false;
     }
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id;
 
     const fallbackResult = await createEmbeddingProvider({
       config: this.cfg,
@@ -1267,8 +1312,9 @@ export abstract class MemoryManagerSyncOps {
         fallbackReason: this.fallbackReason,
         providerUnavailableReason: undefined,
         providerRuntime: this.providerRuntime,
+        lifecycle: this.providerLifecycle,
       },
-      fallbackFrom,
+      fallbackFrom: currentProviderId,
       reason,
       result: fallbackResult,
     });
@@ -1276,6 +1322,8 @@ export abstract class MemoryManagerSyncOps {
     this.fallbackReason = fallbackState.fallbackReason;
     this.provider = fallbackState.provider;
     this.providerRuntime = fallbackState.providerRuntime;
+    this.providerUnavailableReason = fallbackState.providerUnavailableReason;
+    this.providerLifecycle = fallbackState.lifecycle;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallbackRequest.provider})`, {
@@ -1284,11 +1332,13 @@ export abstract class MemoryManagerSyncOps {
     return true;
   }
 
-  private async runSafeReindex(params: {
+  protected async runSafeReindex(params: {
     reason?: string;
     force?: boolean;
     progress?: MemorySyncProgressState;
   }): Promise<void> {
+    this.assertFtsOnlySyncAllowed();
+
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
     const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);

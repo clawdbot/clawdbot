@@ -199,4 +199,48 @@ describe("irc inbound behavior", () => {
     ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
+
+  it("uses channel:# prefix for group channel From and OriginatingTo fields", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({
+        target: "#ops",
+        isGroup: true,
+        senderNick: "alice",
+        senderUser: "ident",
+        senderHost: "example.com",
+        text: "hello",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "open",
+          groupAllowFrom: [],
+          groups: {
+            "#ops": { enabled: true, requireMention: false },
+          },
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    const ctx = (
+      coreRuntime.channel.reply.finalizeInboundContext as unknown as {
+        mock: { calls: unknown[][] };
+      }
+    ).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(
+      (coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }).mock
+        .calls.length,
+    ).toBe(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(ctx?.From).toBe("channel:#ops");
+    expect(ctx?.OriginatingTo).toBe("channel:#ops");
+  });
 });

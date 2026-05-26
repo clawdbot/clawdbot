@@ -70,6 +70,134 @@ describe("kilocode provider plugin", () => {
     expect(capturedPayload).not.toHaveProperty("reasoning");
   });
 
+  it("normalizes string stop to array in plugin-owned stream hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = { stop: "\n" };
+      options?.onPayload?.(payload as never, model as never);
+      payloads.push(payload);
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payloads[0]?.stop).toEqual(["\n"]);
+  });
+
+  it("normalizes string stop after caller payload hooks", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      payloads.push(payload);
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {
+        onPayload: (payload) => {
+          (payload as Record<string, unknown>).stop = "\n";
+        },
+      },
+    );
+
+    expect(payloads[0]?.stop).toEqual(["\n"]);
+  });
+
+  it("leaves array stop unchanged in plugin-owned stream hook", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = { stop: ["\n", "END"] };
+      options?.onPayload?.(payload as never, model as never);
+      payloads.push(payload);
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payloads[0]?.stop).toEqual(["\n", "END"]);
+  });
+
+  it("keeps Kilo feature headers case-insensitively provider-owned", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    let capturedHeaders: Record<string, string> | undefined;
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      capturedHeaders = options?.headers;
+      return {} as never;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "kilocode",
+      modelId: "deepseek/deepseek-v4-flash",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "kilocode",
+        id: "deepseek/deepseek-v4-flash",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {
+        headers: {
+          "x-kilocode-feature": "spoofed",
+          "X-Custom": "1",
+        },
+      },
+    );
+
+    const featureHeaderKeys = Object.keys(capturedHeaders ?? {}).filter(
+      (key) => key.toLowerCase() === "x-kilocode-feature",
+    );
+    expect(featureHeaderKeys).toEqual(["X-KILOCODE-FEATURE"]);
+    expect(capturedHeaders?.["X-KILOCODE-FEATURE"]).toBe("openclaw");
+    expect(capturedHeaders?.["X-Custom"]).toBe("1");
+  });
+
   it("publishes configured Kilo models through plugin-owned catalog augmentation", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

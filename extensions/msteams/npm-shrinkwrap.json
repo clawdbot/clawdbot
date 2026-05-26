@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/msteams",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/msteams",
-      "version": "2026.5.24",
+      "version": "2026.5.26",
       "dependencies": {
         "@azure/identity": "4.13.1",
         "@microsoft/teams.api": "2.0.11",
@@ -17,7 +17,7 @@
         "typebox": "1.1.38"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.24"
+        "openclaw": ">=2026.5.26"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -1422,9 +1422,9 @@
       }
     },
     "node_modules/qs": {
-      "version": "6.14.2",
-      "resolved": "https://registry.npmjs.org/qs/-/qs-6.14.2.tgz",
-      "integrity": "sha512-V/yCWTTF7VJ9hIh18Ugr2zhJMP01MY7c5kh4J870L7imm6/DIzBsNLTXzMwUA3yZ5b/KBqLx8Kp3uRvd7xSe3Q==",
+      "version": "6.15.2",
+      "resolved": "https://registry.npmjs.org/qs/-/qs-6.15.2.tgz",
+      "integrity": "sha512-Rzq0KEyX/w/tEybncDgdkZrJgVUsUMk3xjh3t5bv3S1HTAtg+uOYt72+ZfwiQwKdysThkTBdL/rTi6HDmX9Ddw==",
       "license": "BSD-3-Clause",
       "dependencies": {
         "side-channel": "^1.1.0"

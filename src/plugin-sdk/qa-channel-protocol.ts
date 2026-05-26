@@ -1,3 +1,5 @@
+import { isRecord } from "../shared/record-coerce.js";
+
 export type QaBusConversationKind = "direct" | "channel" | "group";
 
 export type QaBusConversation = {
@@ -170,10 +172,6 @@ const QA_BUS_TOOL_CALL_REDACTED = "[redacted]";
 
 const QA_BUS_TOOL_CALL_SENSITIVE_KEY_RE =
   /authorization|cookie|credential|password|secret|token|api[-_]?key|access[-_]?key|private[-_]?key/iu;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function sanitizeQaBusToolCallValue(value: unknown, depth: number, key?: string): unknown {
   if (key && QA_BUS_TOOL_CALL_SENSITIVE_KEY_RE.test(key)) {

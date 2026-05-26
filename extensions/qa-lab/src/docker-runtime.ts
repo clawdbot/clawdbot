@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createServer } from "node:net";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type RunCommand = (
   command: string,
@@ -189,11 +190,9 @@ function parseDockerComposePsRows(stdout: string) {
     }
     return [parsed];
   } catch {
-    return trimmed
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((line) => JSON.parse(line) as { Health?: string; State?: string });
+    return normalizeStringEntries(trimmed.split("\n")).map(
+      (line) => JSON.parse(line) as { Health?: string; State?: string },
+    );
   }
 }
 

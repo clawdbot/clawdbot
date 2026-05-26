@@ -173,6 +173,23 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
     });
   });
 
+  it("adds a workspace-safe temp hint when rejecting paths outside the workspace", async () => {
+    const { execute, tool } = createToolHarness();
+    const wrapped = wrapToolWorkspaceRootGuardWithOptions(tool, root, {
+      containerWorkdir: "/workspace",
+    });
+    mocks.assertSandboxPath.mockImplementationOnce(async () => {
+      throw new Error("Path escapes sandbox root (/tmp/root): /tmp/repo_meta.jsonl");
+    });
+
+    await expect(
+      wrapped.execute("tc-outside-temp", { path: "/tmp/repo_meta.jsonl" }),
+    ).rejects.toThrow(
+      /Path escapes sandbox root .* Use a relative path under `.openclaw\/tmp\/` inside the workspace/,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("maps additional container mounts to their own guarded host roots", async () => {
     const { tool } = createToolHarness();
     const agentRoot = "/tmp/agent-root";

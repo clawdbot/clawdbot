@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # Shared in-container lifecycle helpers for Docker/Bash E2E lanes.
-openclaw_e2e_eval_test_state_from_b64() { eval "$(printf '%s' "${1:?missing OpenClaw test-state script}" | base64 -d)"; }
+openclaw_e2e_eval_test_state_from_b64() {
+  local encoded="${1:?missing OpenClaw test-state script}"
+  local decoded
+  if ! decoded="$(printf '%s' "$encoded" | base64 -d)"; then
+    echo "Invalid OpenClaw test-state base64 payload" >&2
+    return 1
+  fi
+  if [ -z "${decoded//[[:space:]]/}" ]; then
+    echo "OpenClaw test-state base64 payload decoded to an empty script" >&2
+    return 1
+  fi
+  eval "$decoded"
+}
 openclaw_e2e_resolve_entrypoint() {
   local entry
   for entry in dist/index.mjs dist/index.js; do
@@ -111,6 +123,8 @@ openclaw_e2e_run_script_with_pty() {
   local log_path="$2"
   if script --version >/dev/null 2>&1; then
     script -q -f -c "$command" "$log_path"
+  elif node -e 'import("@lydell/node-pty")' >/dev/null 2>&1; then
+    node scripts/e2e/lib/run-with-pty.mjs "$log_path" /bin/bash -lc "$command"
   else
     script -q -F "$log_path" /bin/bash -lc "$command"
   fi

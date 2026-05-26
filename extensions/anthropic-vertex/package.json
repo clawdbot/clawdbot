@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/anthropic-vertex-provider",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "description": "OpenClaw Anthropic Vertex provider plugin",
   "repository": {
     "type": "git",
@@ -9,8 +9,8 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/vertex-sdk": "0.16.1",
-    "@earendil-works/pi-agent-core": "0.75.4",
-    "@earendil-works/pi-ai": "0.75.4"
+    "@earendil-works/pi-agent-core": "0.75.5",
+    "@earendil-works/pi-ai": "0.75.5"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -25,10 +25,10 @@
       "minHostVersion": ">=2026.5.12-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.5.24"
+      "pluginApi": ">=2026.5.26"
     },
     "build": {
-      "openclawVersion": "2026.5.24",
+      "openclawVersion": "2026.5.26",
       "bundledDist": false
     },
     "release": {

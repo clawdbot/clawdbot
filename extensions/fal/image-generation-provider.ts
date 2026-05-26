@@ -21,6 +21,7 @@ import {
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -60,10 +61,6 @@ function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): bool
   const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
   const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function parseFalImageGenerationResponse(payload: unknown): {

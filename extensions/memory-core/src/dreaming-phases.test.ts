@@ -2995,3 +2995,74 @@ describe("previewRemHarness", () => {
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });
+
+describe("dedupeEntries — CJK-aware snippet similarity (#80613)", () => {
+  // Reuse the same makeEntry helper shape used elsewhere in this file, but
+  // local here so we can vary `snippet` while keeping the rest stable.
+  function makeRecall(key: string, snippet: string): ShortTermRecallEntry {
+    return {
+      key,
+      path: "memory/2026-04-12.md",
+      startLine: 1,
+      endLine: 5,
+      source: "memory",
+      snippet,
+      recallCount: 1,
+      dailyCount: 0,
+      groundedCount: 0,
+      totalScore: 1,
+      maxScore: 1,
+      firstRecalledAt: "2026-04-12T08:00:00.000Z",
+      lastRecalledAt: "2026-04-12T08:00:00.000Z",
+      queryHashes: [],
+      recallDays: ["2026-04-12"],
+      conceptTags: [],
+    };
+  }
+
+  it("merges similar pure-CJK snippets at the same path (was missed by the ASCII-only tokenizer)", () => {
+    // Two close paraphrases of the same Chinese fact. The previous tokenizer
+    // produced empty sets for both, falling back to exact-string match and
+    // returning similarity 0, so both ended up as separate candidates.
+    const a = makeRecall("cjk-a", "教训：配置中实验开关字段是叫做规则");
+    const b = makeRecall("cjk-b", "教训：配置里实验开关的字段叫做规则");
+
+    const deduped = testing.dedupeEntries([a, b], 0.5);
+    expect(deduped).toHaveLength(1);
+    // First entry survives; recall counts merge in.
+    expect(deduped[0]?.key).toBe("cjk-a");
+  });
+
+  it("keeps distinct CJK snippets that only share ASCII tokens (was wrongly merged by the ASCII-only tokenizer)", () => {
+    // Both snippets have ASCII tokens {plan, exrule} but talk about wholly
+    // different facts in the CJK content. The previous tokenizer only saw
+    // those ASCII tokens, returned similarity 1.0, and silently dropped one
+    // of the two distinct memories. The CJK-aware tokenizer keeps them apart.
+    const a = makeRecall("mixed-a", "Plan 实验开关字段叫做 exRule");
+    const b = makeRecall("mixed-b", "Plan 整个产品体系彻底重构 exRule");
+
+    const deduped = testing.dedupeEntries([a, b], 0.7);
+    expect(deduped).toHaveLength(2);
+    expect(deduped.map((entry) => entry.key).toSorted()).toStrictEqual(["mixed-a", "mixed-b"]);
+  });
+
+  it("preserves the existing ASCII paraphrase dedupe behavior", () => {
+    // Sanity check: close English paraphrases at the same path still dedupe,
+    // so the fix does not regress the Latin-script behavior the prior tests
+    // relied on.
+    const a = makeRecall("en-a", "Plan config experiment toggle field is named exRule");
+    const b = makeRecall("en-b", "Plan configuration uses experiment toggle field named exRule");
+
+    const deduped = testing.dedupeEntries([a, b], 0.4);
+    expect(deduped).toHaveLength(1);
+    expect(deduped[0]?.key).toBe("en-a");
+  });
+
+  it("keeps unrelated short snippets separate (does not over-collapse)", () => {
+    const a = makeRecall("short-a", "weather: sunny");
+    const b = makeRecall("short-b", "deploy: blocked");
+
+    const deduped = testing.dedupeEntries([a, b], 0.5);
+    expect(deduped).toHaveLength(2);
+  });
+});

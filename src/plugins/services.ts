@@ -1,8 +1,8 @@
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  emitTrustedDiagnosticEvent,
-  onInternalDiagnosticEvent,
+  emitTrustedDiagnosticEventWithPrivateData,
+  onTrustedInternalDiagnosticEvent,
 } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
@@ -51,8 +51,8 @@ function createServiceContext(params: {
     ...(grantsInternalDiagnostics
       ? {
           internalDiagnostics: {
-            emit: emitTrustedDiagnosticEvent,
-            onEvent: onInternalDiagnosticEvent,
+            emit: emitTrustedDiagnosticEventWithPrivateData,
+            onEvent: onTrustedInternalDiagnosticEvent,
           },
         }
       : {}),

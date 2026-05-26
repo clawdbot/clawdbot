@@ -144,22 +144,8 @@ function resolveSessionDefaultAccountId(params: {
 function resolveStaleSessionEndReason(params: {
   entry: SessionEntry | undefined;
   freshness?: SessionFreshness;
-  now: number;
 }): ReplySessionEndReason | undefined {
-  if (!params.entry || !params.freshness) {
-    return undefined;
-  }
-  const staleDaily =
-    params.freshness.dailyResetAt != null && params.entry.updatedAt < params.freshness.dailyResetAt;
-  const staleIdle =
-    params.freshness.idleExpiresAt != null && params.now > params.freshness.idleExpiresAt;
-  if (staleIdle) {
-    return "idle";
-  }
-  if (staleDaily) {
-    return "daily";
-  }
-  return undefined;
+  return params.entry ? params.freshness?.staleReason : undefined;
 }
 
 function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
@@ -493,7 +479,6 @@ export async function initSessionState(params: {
     : resolveStaleSessionEndReason({
         entry,
         freshness: entryFreshness,
-        now,
       });
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,

@@ -40,11 +40,11 @@ import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import {
-  clearCurrentPluginMetadataSnapshot,
   getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   pinActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
@@ -56,6 +56,7 @@ import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
 } from "../secrets/runtime-state.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
@@ -730,7 +731,7 @@ export async function startGatewayServer(
     return methods;
   };
   const listActiveGatewayMethods = (nextBaseGatewayMethods: string[]) =>
-    Array.from(new Set([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]));
+    uniqueStrings([...nextBaseGatewayMethods, ...listStartupChannelGatewayMethods()]);
   const runtimeConfig = await startupTrace.measure("runtime.config", async () => {
     const { resolveGatewayRuntimeConfig } = await import("./server-runtime-config.js");
     return resolveGatewayRuntimeConfig({
@@ -969,7 +970,7 @@ export async function startGatewayServer(
   };
   const runClosePrelude = async () => {
     markClosePreludeStarted();
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     const { runGatewayClosePrelude } = await loadGatewayCloseModule();
     await runGatewayClosePrelude({
       ...(diagnosticsEnabled ? { stopDiagnostics: stopDiagnosticHeartbeat } : {}),
@@ -1197,7 +1198,7 @@ export async function startGatewayServer(
     const listAttachedGatewayMethods = () => {
       const methods = attachedGatewayMethodRegistry.listAdvertisedMethods();
       methods.push(...listStartupChannelGatewayMethods());
-      return Array.from(new Set(methods));
+      return uniqueStrings(methods);
     };
     runtimeState.gatewayMethods.splice(
       0,

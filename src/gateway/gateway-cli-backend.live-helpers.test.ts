@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 const gatewayClientState = vi.hoisted(() => ({
@@ -23,6 +23,12 @@ vi.mock("./client.js", () => ({
 }));
 
 describe("gateway cli backend live helpers", () => {
+  let liveHelpers: typeof import("./gateway-cli-backend.live-helpers.js");
+
+  beforeAll(async () => {
+    liveHelpers = await import("./gateway-cli-backend.live-helpers.js");
+  });
+
   afterEach(() => {
     gatewayClientState.lastOptions = undefined;
     delete process.env.OPENCLAW_SKIP_CHANNELS;
@@ -39,7 +45,7 @@ describe("gateway cli backend live helpers", () => {
 
   it("applies and restores live env including minimal gateway mode", async () => {
     const { applyCliBackendLiveEnv, restoreCliBackendLiveEnv, snapshotCliBackendLiveEnv } =
-      await import("./gateway-cli-backend.live-helpers.js");
+      liveHelpers;
 
     process.env.OPENCLAW_SKIP_CHANNELS = "old-channels";
     process.env.OPENCLAW_SKIP_PROVIDERS = "old-providers";

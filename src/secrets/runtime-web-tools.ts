@@ -15,6 +15,7 @@ import {
 import { sortWebSearchProvidersForAutoDetect } from "../plugins/web-search-providers.shared.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues } from "./resolve.js";
@@ -380,7 +381,7 @@ async function resolveBundledWebSearchProviders(params: {
     params.configuredBundledPluginId !== undefined
       ? [params.configuredBundledPluginId]
       : params.onlyPluginIds && params.onlyPluginIds.length > 0
-        ? [...new Set(params.onlyPluginIds)].toSorted((left, right) => left.localeCompare(right))
+        ? sortUniqueStrings(params.onlyPluginIds)
         : undefined;
   if (onlyPluginIds && onlyPluginIds.length > 0) {
     const bundled = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({ onlyPluginIds });

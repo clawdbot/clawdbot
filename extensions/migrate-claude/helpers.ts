@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/migration";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import { appendRegularFile, pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord as sharedIsRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export function resolveHomePath(input: string): string {
   const trimmed = input.trim();
@@ -62,9 +63,7 @@ export async function readJsonObject(
   }
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+export const isRecord = sharedIsRecord;
 
 export function childRecord(
   root: Record<string, unknown> | undefined,

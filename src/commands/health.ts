@@ -154,7 +154,7 @@ function formatEventLoopHealthLine(summary: HealthSummary): string | null {
   }`;
 }
 
-function formatModelPricingHealthLine(summary: HealthSummary): string | null {
+export function formatModelPricingHealthLine(summary: HealthSummary): string | null {
   const modelPricing = summary.modelPricing;
   if (!modelPricing || modelPricing.state === "disabled") {
     return null;

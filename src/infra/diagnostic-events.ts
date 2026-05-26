@@ -702,7 +702,19 @@ export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
   : never;
 
 export type DiagnosticEventMetadata = Readonly<{
+  internal?: boolean;
   trusted: boolean;
+}>;
+
+export type DiagnosticModelCallContent = Readonly<{
+  inputMessages?: unknown;
+  outputMessages?: unknown;
+  systemPrompt?: string;
+  toolDefinitions?: unknown;
+}>;
+
+export type DiagnosticEventPrivateData = Readonly<{
+  modelContent?: DiagnosticModelCallContent;
 }>;
 
 type DiagnosticEventListener = (
@@ -710,9 +722,16 @@ type DiagnosticEventListener = (
   metadata: DiagnosticEventMetadata,
 ) => void;
 
+type TrustedDiagnosticEventListener = (
+  evt: DiagnosticEventPayload,
+  metadata: DiagnosticEventMetadata,
+  privateData: DiagnosticEventPrivateData,
+) => void;
+
 type QueuedDiagnosticEvent = {
   event: DiagnosticEventPayload;
   metadata: DiagnosticEventMetadata;
+  privateData?: DiagnosticEventPrivateData;
 };
 
 type DiagnosticEventsGlobalState = {
@@ -720,6 +739,7 @@ type DiagnosticEventsGlobalState = {
   enabled: boolean;
   seq: number;
   listeners: Set<DiagnosticEventListener>;
+  trustedListeners: Set<TrustedDiagnosticEventListener>;
   dispatchDepth: number;
   asyncQueue: QueuedDiagnosticEvent[];
   asyncDrainScheduled: boolean;
@@ -766,6 +786,7 @@ function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
     enabled: true,
     seq: 0,
     listeners: new Set<DiagnosticEventListener>(),
+    trustedListeners: new Set<TrustedDiagnosticEventListener>(),
     dispatchDepth: 0,
     asyncQueue: [],
     asyncDrainScheduled: false,
@@ -786,6 +807,7 @@ function isDiagnosticEventsState(value: unknown): value is DiagnosticEventsGloba
     typeof candidate.enabled === "boolean" &&
     typeof candidate.seq === "number" &&
     candidate.listeners instanceof Set &&
+    (candidate.trustedListeners === undefined || candidate.trustedListeners instanceof Set) &&
     typeof candidate.dispatchDepth === "number" &&
     Array.isArray(candidate.asyncQueue) &&
     typeof candidate.asyncDrainScheduled === "boolean"
@@ -800,6 +822,7 @@ function getDiagnosticEventsState(): DiagnosticEventsGlobalState {
     existing.asyncDroppedTrustedEvents ??= 0;
     existing.asyncDroppedUntrustedEvents ??= 0;
     existing.asyncDroppedPriorityEvents ??= 0;
+    existing.trustedListeners ??= new Set<TrustedDiagnosticEventListener>();
     return existing;
   }
   const state = createDiagnosticEventsState();
@@ -828,6 +851,7 @@ function dispatchDiagnosticEvent(
   state: DiagnosticEventsGlobalState,
   enriched: DiagnosticEventPayload,
   metadata: DiagnosticEventMetadata,
+  privateData?: DiagnosticEventPrivateData,
 ): void {
   if (state.dispatchDepth > 100) {
     console.error(
@@ -857,6 +881,26 @@ function dispatchDiagnosticEvent(
         // Ignore listener failures.
       }
     }
+    for (const listener of state.trustedListeners) {
+      try {
+        listener(
+          cloneDiagnosticEventForListener(enriched),
+          createDiagnosticMetadataForListener(metadata),
+          cloneDiagnosticPrivateDataForListener(privateData),
+        );
+      } catch (err) {
+        const errorMessage =
+          err instanceof Error
+            ? (err.stack ?? err.message)
+            : typeof err === "string"
+              ? err
+              : String(err);
+        console.error(
+          `[diagnostic-events] trusted listener error type=${enriched.type} seq=${enriched.seq}: ${errorMessage}`,
+        );
+        // Ignore listener failures.
+      }
+    }
   } finally {
     state.dispatchDepth -= 1;
   }
@@ -874,6 +918,15 @@ function createDiagnosticMetadataForListener(
 
 function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): DiagnosticEventPayload {
   return deepFreezeDiagnosticValue(structuredClone(event)) as DiagnosticEventPayload;
+}
+
+function cloneDiagnosticPrivateDataForListener(
+  privateData: DiagnosticEventPrivateData | undefined,
+): DiagnosticEventPrivateData {
+  if (!privateData) {
+    return Object.freeze({});
+  }
+  return deepFreezeDiagnosticValue(structuredClone(privateData)) as DiagnosticEventPrivateData;
 }
 
 function isPriorityAsyncDiagnosticEvent(entry: QueuedDiagnosticEvent): boolean {
@@ -936,7 +989,7 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
     state.asyncDrainScheduled = false;
     const batch = state.asyncQueue.splice(0, MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN);
     for (const entry of batch) {
-      dispatchDiagnosticEvent(state, entry.event, entry.metadata);
+      dispatchDiagnosticEvent(state, entry.event, entry.metadata, entry.privateData);
     }
     if (state.asyncQueue.length > 0) {
       scheduleAsyncDiagnosticDrain(state);
@@ -968,7 +1021,7 @@ function dispatchAsyncDiagnosticDropSummary(state: DiagnosticEventsGlobalState):
     maxQueueLength: MAX_ASYNC_DIAGNOSTIC_EVENTS,
     drainBatchSize: MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN,
   });
-  dispatchDiagnosticEvent(state, event, { trusted: false });
+  dispatchDiagnosticEvent(state, event, createInternalDiagnosticMetadata(false));
 }
 
 export async function waitForDiagnosticEventsDrained(): Promise<void> {
@@ -996,19 +1049,33 @@ function enrichDiagnosticEvent(
   return enriched;
 }
 
-function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: boolean) {
+function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMetadata {
+  return { internal: true, trusted };
+}
+
+type EmitDiagnosticEventOptions = {
+  internal?: boolean;
+  privateData?: DiagnosticEventPrivateData;
+};
+
+function emitDiagnosticEventWithTrust(
+  event: DiagnosticEventInput,
+  trusted: boolean,
+  options: EmitDiagnosticEventOptions = {},
+) {
   const state = getDiagnosticEventsState();
   if (!state.enabled) {
     return;
   }
 
   const enriched = enrichDiagnosticEvent(state, event);
-  const metadata: DiagnosticEventMetadata = { trusted };
+  const { internal = false, privateData } = options;
+  const metadata = internal ? createInternalDiagnosticMetadata(trusted) : { trusted };
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
       if (!trusted || !PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
-        noteAsyncDiagnosticDrop(state, { event: enriched, metadata });
+        noteAsyncDiagnosticDrop(state, { event: enriched, metadata, privateData });
         return;
       }
       const droppedEntry = makeRoomForPriorityAsyncDiagnosticEvent(state);
@@ -1016,20 +1083,31 @@ function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: bool
         noteAsyncDiagnosticDrop(state, droppedEntry);
       }
     }
-    state.asyncQueue.push({ event: enriched, metadata });
+    state.asyncQueue.push({ event: enriched, metadata, privateData });
     scheduleAsyncDiagnosticDrain(state);
     return;
   }
 
-  dispatchDiagnosticEvent(state, enriched, metadata);
+  dispatchDiagnosticEvent(state, enriched, metadata, privateData);
 }
 
 export function emitDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false);
 }
 
+export function emitInternalDiagnosticEvent(event: DiagnosticEventInput) {
+  emitDiagnosticEventWithTrust(event, false, { internal: true });
+}
+
 export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true);
+}
+
+export function emitTrustedDiagnosticEventWithPrivateData(
+  event: DiagnosticEventInput,
+  privateData?: DiagnosticEventPrivateData,
+) {
+  emitDiagnosticEventWithTrust(event, true, { privateData });
 }
 
 export function emitFailoverEvent(event: Omit<DiagnosticFailoverEvent, "seq" | "ts" | "type">) {
@@ -1047,6 +1125,16 @@ export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): ()
   };
 }
 
+export function onTrustedInternalDiagnosticEvent(
+  listener: TrustedDiagnosticEventListener,
+): () => void {
+  const state = getDiagnosticEventsState();
+  state.trustedListeners.add(listener);
+  return () => {
+    state.trustedListeners.delete(listener);
+  };
+}
+
 export function hasPendingInternalDiagnosticEvent(
   predicate: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => boolean,
 ): boolean {
@@ -1058,7 +1146,7 @@ export function hasPendingInternalDiagnosticEvent(
     } catch {
       continue;
     }
-    if (predicate(event, Object.freeze({ ...entry.metadata }))) {
+    if (predicate(event, createDiagnosticMetadataForListener(entry.metadata))) {
       return true;
     }
   }
@@ -1084,11 +1172,16 @@ export function formatDiagnosticTraceparentForPropagation(
   return formatDiagnosticTraceparent(event.trace);
 }
 
+export function isInternalDiagnosticEventMetadata(metadata: DiagnosticEventMetadata): boolean {
+  return metadata.internal === true;
+}
+
 export function resetDiagnosticEventsForTest(): void {
   const state = getDiagnosticEventsState();
   state.enabled = true;
   state.seq = 0;
   state.listeners.clear();
+  state.trustedListeners.clear();
   state.dispatchDepth = 0;
   state.asyncQueue = [];
   state.asyncDrainScheduled = false;

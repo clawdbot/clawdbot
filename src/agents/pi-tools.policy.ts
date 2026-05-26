@@ -14,6 +14,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import {
+  normalizeUniqueSingleOrTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig, resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
@@ -90,7 +94,7 @@ function mergeConfiguredSubagentAllow(
   allow: string[] | undefined,
   alsoAllow: string[] | undefined,
 ): string[] | undefined {
-  return allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
+  return allow && alsoAllow ? uniqueStrings([...allow, ...alsoAllow]) : allow;
 }
 
 export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
@@ -228,17 +232,7 @@ function buildProviderToolPolicyLookup(
 }
 
 function collectUniqueStrings(values: Array<string | null | undefined>): string[] {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const value of values) {
-    const trimmed = value?.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    resolved.push(trimmed);
-  }
-  return resolved;
+  return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
 function buildScopedGroupIdCandidates(groupId?: string | null): string[] {
@@ -509,7 +503,7 @@ export function resolveEffectiveToolPolicy(params: {
   }
 
   const profileAlsoAllow = explicitProfileAlsoAllow
-    ? Array.from(new Set(explicitProfileAlsoAllow))
+    ? uniqueStrings(explicitProfileAlsoAllow)
     : undefined;
   return {
     agentId,

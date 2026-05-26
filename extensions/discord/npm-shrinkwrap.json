@@ -1,23 +1,24 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/discord",
-      "version": "2026.5.24",
+      "version": "2026.5.26",
       "dependencies": {
         "@discordjs/voice": "0.19.2",
-        "discord-api-types": "0.38.47",
+        "discord-api-types": "0.38.48",
         "https-proxy-agent": "9.0.0",
-        "opusscript": "0.1.1",
+        "libopus-wasm": "0.0.1",
+        "prism-media": "1.3.5",
         "typebox": "1.1.38",
         "undici": "8.3.0",
-        "ws": "8.20.1"
+        "ws": "8.21.0"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.24"
+        "openclaw": ">=2026.5.26"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -401,9 +402,9 @@
       }
     },
     "node_modules/discord-api-types": {
-      "version": "0.38.47",
-      "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.47.tgz",
-      "integrity": "sha512-XgXQodHQBAE6kfD7kMvVo30863iHX1LHSqNq6MGUTDwIFCCvHva13+rwxyxVXDqudyApMNAd32PGjgVETi5rjA==",
+      "version": "0.38.48",
+      "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.48.tgz",
+      "integrity": "sha512-WFUE/2o0lBlLeCQonQ+Pu2RqHAqbytBJ2RlXR91gzk05InSS6k9ShzzLYoymrA4c2oRgRKGE7/VqQJNNdGWSxQ==",
       "license": "MIT",
       "workspaces": [
         "scripts/actions/documentation"
@@ -422,16 +423,19 @@
         "node": ">= 20"
       }
     },
+    "node_modules/libopus-wasm": {
+      "version": "0.0.1",
+      "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.0.1.tgz",
+      "integrity": "sha512-w//dxORfJfLl4quaA5nEA0xZlbbtS/Gba+NrZyCDPmAQh2THX4KI6aI600f+jpxf6v3p9ApGCx0/DCCe4Xftug==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      }
+    },
     "node_modules/ms": {
       "version": "2.1.3",
       "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
       "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
-      "license": "MIT"
-    },
-    "node_modules/opusscript": {
-      "version": "0.1.1",
-      "resolved": "https://registry.npmjs.org/opusscript/-/opusscript-0.1.1.tgz",
-      "integrity": "sha512-mL0fZZOUnXdZ78woRXp18lApwpp0lF5tozJOD1Wut0dgrA9WuQTgSels/CSmFleaAZrJi/nci5KOVtbuxeWoQA==",
       "license": "MIT"
     },
     "node_modules/prism-media": {
@@ -488,9 +492,9 @@
       "license": "MIT"
     },
     "node_modules/ws": {
-      "version": "8.20.1",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.20.1.tgz",
-      "integrity": "sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==",
+      "version": "8.21.0",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
+      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

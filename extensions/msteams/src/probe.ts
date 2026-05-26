@@ -53,10 +53,7 @@ function readScopes(value: unknown): string[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const out = value
-    .split(/\s+/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const out = normalizeStringEntries(value.split(/\s+/));
   return out.length > 0 ? out : undefined;
 }
 

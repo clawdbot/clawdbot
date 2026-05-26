@@ -12,6 +12,7 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { appendRegularFile } from "../infra/regular-file.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -35,10 +36,6 @@ function truncate(value: string, maxChars: number): string {
     return value.slice(0, maxChars);
   }
   return `${value.slice(0, maxChars - 1)}…`;
-}
-
-function toFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -441,7 +438,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       const phase = normalizeOptionalString(data?.phase);
       logEvent("acp", { phase: phase ?? "unknown", data: event.data });
       if (phase === "prompt_submitted") {
-        const at = toFiniteNumber(data?.at) ?? Date.now();
+        const at = asFiniteNumber(data?.at) ?? Date.now();
         promptSubmittedAt ??= at;
         proxyEnvKeysAtPrompt = normalizeStringArray(data?.proxyEnvKeys);
         lastProgressAt = Date.now();
@@ -465,10 +462,10 @@ export function startAcpSpawnParentStreamRelay(params: {
     logEvent("lifecycle", { phase: phase ?? "unknown", data: event.data });
     if (phase === "end") {
       flushPending();
-      const startedAt = toFiniteNumber(
+      const startedAt = asFiniteNumber(
         (event.data as { startedAt?: unknown } | undefined)?.startedAt,
       );
-      const endedAt = toFiniteNumber((event.data as { endedAt?: unknown } | undefined)?.endedAt);
+      const endedAt = asFiniteNumber((event.data as { endedAt?: unknown } | undefined)?.endedAt);
       const durationMs =
         startedAt != null && endedAt != null && endedAt >= startedAt
           ? endedAt - startedAt

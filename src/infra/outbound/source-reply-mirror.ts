@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { normalizeOptionalTrimmedStringList } from "../../shared/string-normalization.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForMirror } from "./payloads.js";
 
 type SourceReplyTranscriptMirrorParams = {
@@ -29,13 +30,7 @@ type MirrorableSourceReplyTranscriptParams = SourceReplyTranscriptMirrorParams &
 };
 
 function readStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  return normalized.length ? normalized : undefined;
+  return normalizeOptionalTrimmedStringList(value);
 }
 
 function readFirstString(

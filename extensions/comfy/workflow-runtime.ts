@@ -25,9 +25,11 @@ import {
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asBoolean,
   isRecord,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
@@ -112,8 +114,7 @@ export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | n
 }
 
 function readConfigBoolean(config: ComfyProviderConfig, key: string): boolean | undefined {
-  const value = config[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(config[key]);
 }
 
 function readConfigInteger(config: ComfyProviderConfig, key: string): number | undefined {
@@ -822,6 +823,6 @@ export async function runComfyWorkflow(params: {
     assets,
     model: providerModel,
     promptId,
-    outputNodeIds: Array.from(new Set(outputFiles.map((entry) => entry.nodeId))),
+    outputNodeIds: uniqueStrings(outputFiles.map((entry) => entry.nodeId)),
   };
 }

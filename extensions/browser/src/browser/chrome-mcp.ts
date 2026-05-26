@@ -10,6 +10,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import {
   normalizeOptionalString,
   readStringValue,
+  uniqueStrings,
+  uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -558,7 +560,7 @@ async function terminateChromeMcpProcessTree(
 
   const killProcess = deps?.killProcess ?? ((pid, signal) => process.kill(pid, signal));
   const sleep = deps?.sleep ?? sleepTimeout;
-  const pids = Array.from(new Set([...descendantPids.toReversed(), rootPid])).filter(
+  const pids = uniqueValues([...descendantPids.toReversed(), rootPid]).filter(
     (pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid,
   );
   const signaled: number[] = [];
@@ -1107,7 +1109,7 @@ export async function closeChromeMcpSession(profileName: string): Promise<boolea
 }
 
 export async function stopAllChromeMcpSessions(): Promise<void> {
-  const names = [...new Set([...sessions.keys()].map((key) => JSON.parse(key)[0] as string))];
+  const names = uniqueStrings([...sessions.keys()].map((key) => JSON.parse(key)[0] as string));
   for (const name of names) {
     await closeChromeMcpSession(name).catch(() => {});
   }

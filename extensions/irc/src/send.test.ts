@@ -268,9 +268,13 @@ describe("sendMessageIrc cfg threading", () => {
     } as unknown as CoreConfig;
     const client = {
       isReady: vi.fn(() => true),
+      join: vi.fn(),
       sendPrivmsg: vi.fn(),
       quit: vi.fn(),
-    } as unknown as IrcClient & { quit: ReturnType<typeof vi.fn> };
+    } as unknown as IrcClient & {
+      join: ReturnType<typeof vi.fn>;
+      quit: ReturnType<typeof vi.fn>;
+    };
     hoisted.connectIrcClient.mockResolvedValue(client);
 
     const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
@@ -284,6 +288,7 @@ describe("sendMessageIrc cfg threading", () => {
             text: "hello",
           });
           expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
+          expect(client.join).toHaveBeenCalledWith("#room");
           expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
         },
         media: async () => {
@@ -294,6 +299,7 @@ describe("sendMessageIrc cfg threading", () => {
             mediaUrl: "https://example.com/image.png",
           });
           expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
+          expect(client.join).toHaveBeenCalledWith("#room");
           expect(client.sendPrivmsg).toHaveBeenCalledWith(
             "#room",
             "image\n\nAttachment: https://example.com/image.png",
@@ -307,6 +313,7 @@ describe("sendMessageIrc cfg threading", () => {
             replyToId: "parent-1",
           });
           expect(result?.receipt.replyToId).toBe("parent-1");
+          expect(client.join).toHaveBeenCalledWith("#room");
           expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "threaded\n\n[reply:parent-1]");
         },
       },

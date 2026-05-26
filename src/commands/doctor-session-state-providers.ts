@@ -16,6 +16,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginDoctorSessionRouteStateOwners } from "../plugins/doctor-contract-registry.js";
 import type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeOptionalString as normalizeString } from "../shared/string-coerce.js";
+import { normalizeStringEntriesLower } from "../shared/string-normalization.js";
 import { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
@@ -31,16 +33,12 @@ function countLabel(count: number, singular: string, plural = `${singular}s`): s
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function normalizeIdSet(values: readonly string[] | undefined): Set<string> {
   return new Set((values ?? []).map((value) => normalizeProviderId(value)));
 }
 
 function normalizePrefixList(values: readonly string[] | undefined): string[] {
-  return (values ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean);
+  return normalizeStringEntriesLower(values);
 }
 
 function ownsPrefixedValue(prefixes: readonly string[], value: unknown): boolean {

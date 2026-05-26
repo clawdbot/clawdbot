@@ -99,9 +99,10 @@ id immediately, and tracks the job in the task ledger. The agent continues
 responding to other messages while the job runs. When the provider finishes,
 OpenClaw wakes the agent with the generated media paths so it can tell the
 user and relay the result through the message tool. If the requester session
-is inactive and some generated media is still missing from message-tool
-delivery, OpenClaw sends an idempotent direct fallback with only the missing
-media. Media already delivered through the message tool is not posted again.
+is inactive or its active wake fails, and some generated media is still
+missing from message-tool delivery, OpenClaw sends an idempotent direct
+fallback with only the missing media. Media already delivered through the
+message tool is not posted again.
 
 ## Speech-to-text and Voice Call
 

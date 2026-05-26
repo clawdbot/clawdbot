@@ -36,6 +36,10 @@ const {
   };
 });
 
+const approvalReactionMocks = vi.hoisted(() => ({
+  maybeResolveSignalApprovalReaction: vi.fn(async () => false),
+}));
+
 vi.mock("../send.js", () => ({
   sendMessageSignal: vi.fn(),
   sendTypingSignal: sendTypingMock,
@@ -76,6 +80,16 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async () => {
   };
 });
 
+vi.mock("../approval-reactions.js", async () => {
+  const actual = await vi.importActual<typeof import("../approval-reactions.js")>(
+    "../approval-reactions.js",
+  );
+  return {
+    ...actual,
+    maybeResolveSignalApprovalReaction: approvalReactionMocks.maybeResolveSignalApprovalReaction,
+  };
+});
+
 function requireCapturedContext(): MsgContext {
   if (!capture.ctx) {
     throw new Error("expected inbound MsgContext");
@@ -91,6 +105,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     enqueueSystemEventMock.mockReset();
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockClear();
+    approvalReactionMocks.maybeResolveSignalApprovalReaction.mockReset().mockResolvedValue(false);
   });
 
   it("passes a finalized MsgContext to dispatchInboundMessage", async () => {
@@ -519,6 +534,59 @@ describe("signal createSignalEventHandler inbound context", () => {
       sessionKey: "agent:main:signal:group:g1",
       contextKey: "signal:reaction:added:1700000000000:+15550001111:+1:g1",
     });
+  });
+
+  it("checks approval reactions before dropping defaultTo-only senders at the generic access gate", async () => {
+    approvalReactionMocks.maybeResolveSignalApprovalReaction.mockResolvedValueOnce(true);
+    const cfg = {
+      messages: { inbound: { debounceMs: 0 } },
+      channels: {
+        signal: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          defaultTo: "+15550001111",
+        },
+      },
+    };
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: cfg as any,
+        dmPolicy: "allowlist",
+        allowFrom: [],
+        reactionMode: "all",
+        isSignalReactionMessage: (reaction): reaction is SignalReactionMessage => Boolean(reaction),
+        shouldEmitSignalReactionNotification: () => true,
+        resolveSignalReactionTargets: () => [
+          { kind: "phone", id: "+15550001111", display: "+15550001111" },
+        ],
+        buildSignalReactionSystemEventText: () => "reaction added",
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        reactionMessage: {
+          emoji: "👍",
+          targetAuthor: "+15550009999",
+          targetSentTimestamp: 1700000000000,
+        },
+      }),
+    );
+
+    expect(approvalReactionMocks.maybeResolveSignalApprovalReaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        accountId: "default",
+        conversationKey: "+15550001111",
+        messageId: "1700000000000",
+        reactionKey: "👍",
+        actorId: "+15550001111",
+        targetAuthor: "+15550009999",
+      }),
+    );
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
   it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {

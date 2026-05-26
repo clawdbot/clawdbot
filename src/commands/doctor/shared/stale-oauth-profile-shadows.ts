@@ -18,6 +18,7 @@ import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-pro
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withFileLock } from "../../../infra/file-lock.js";
+import { isRecord } from "../../../shared/record-coerce.js";
 import { shortenHomePath } from "../../../utils.js";
 
 type StaleOAuthProfileShadow = {
@@ -28,10 +29,6 @@ type StaleOAuthProfileShadow = {
 
 const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
 const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function isLegacyOAuthRef(value: unknown): boolean {
   return (

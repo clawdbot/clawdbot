@@ -83,8 +83,10 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
   printf 'OPENCLAW_STATE_DIR=%s\n' "$OPENCLAW_STATE_DIR"
   printf 'OPENCLAW_CONFIG_PATH=%s\n' "$OPENCLAW_CONFIG_PATH"
 } >/tmp/openclaw-release-media-memory-env.log
-find "$package_root/dist/extensions/memory-core" -maxdepth 2 -type f -printf '%P\n' \
-  | sort >/tmp/openclaw-release-media-memory-package-files.log
+(
+  cd "$package_root/dist/extensions/memory-core"
+  find . -type f | sed 's#^\./##' | sort
+) >/tmp/openclaw-release-media-memory-package-files.log
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-media-memory-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
@@ -104,7 +106,8 @@ openclaw onboard \
   --skip-health >/tmp/openclaw-release-media-memory-onboard.log 2>&1
 cp "$OPENCLAW_CONFIG_PATH" /tmp/openclaw-release-media-memory-config.json
 openclaw plugins list --json >/tmp/openclaw-release-media-memory-plugins.json \
-  2>/tmp/openclaw-release-media-memory-plugins.stderr.log || true
+  2>/tmp/openclaw-release-media-memory-plugins.stderr.log
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-media-memory-plugins.json memory-core
 node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai "$MOCK_PORT"
 
 mkdir -p "$OPENCLAW_STATE_DIR/workspace/memory" /tmp/openclaw-release-media-memory

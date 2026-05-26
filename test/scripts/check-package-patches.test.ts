@@ -60,7 +60,7 @@ describe("check-package-patches", () => {
   - .
 patchedDependencies:
   "baileys@7.0.0-rc12": "patches/baileys@7.0.0-rc12.patch"
-  "@agentclientprotocol/claude-agent-acp@0.36.1": "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch"
+  "@agentclientprotocol/claude-agent-acp@0.37.0": "patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch"
 `,
       "utf8",
     );
@@ -68,14 +68,14 @@ patchedDependencies:
       path.join(dir, "pnpm-lock.yaml"),
       `lockfileVersion: '9.0'
 patchedDependencies:
-  '@agentclientprotocol/claude-agent-acp@0.36.1': 3995624bb834cc60fea1461c7ef33f1fcdd8fb58b8f43f2f1490bc689f6e1be2
+  '@agentclientprotocol/claude-agent-acp@0.37.0': 3c1bd768608166e6b2799e51a56ede1fdda010fd60ab52a64f7d309dc6192b35
   baileys@7.0.0-rc12: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
 `,
       "utf8",
     );
     writeFileSync(path.join(dir, "patches", "baileys@7.0.0-rc12.patch"), "diff\n", "utf8");
     writeFileSync(
-      path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.36.1.patch"),
+      path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.37.0.patch"),
       "diff\n",
       "utf8",
     );

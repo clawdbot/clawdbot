@@ -21,8 +21,9 @@ vi.mock(
   "../plugins/provider-runtime.js",
   async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
 );
-vi.mock("../plugins/provider-hook-runtime.js", () =>
-  createSanitizeSessionHistoryProviderHookRuntimeMock(),
+vi.mock(
+  "../plugins/provider-hook-runtime.js",
+  async () => await createSanitizeSessionHistoryProviderHookRuntimeMock(),
 );
 
 let sanitizeSessionHistory: SanitizeSessionHistoryHarness["sanitizeSessionHistory"];

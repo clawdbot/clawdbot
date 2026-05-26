@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import AjvPkg from "ajv";
-import type { JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
+import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_WIKI_RENDER_MODE,
@@ -16,9 +15,13 @@ function compileManifestConfigSchema() {
   const manifest = JSON.parse(
     fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
   ) as { configSchema: JsonSchemaObject };
-  const Ajv = AjvPkg as unknown as new (opts?: object) => import("ajv").default;
-  const ajv = new Ajv({ allErrors: true, strict: false, useDefaults: true });
-  return ajv.compile(manifest.configSchema);
+  return (value: unknown) =>
+    validateJsonSchemaValue({
+      cacheKey: "memory-wiki.manifest.config.test",
+      schema: manifest.configSchema,
+      value,
+      applyDefaults: true,
+    }).ok;
 }
 
 describe("resolveMemoryWikiConfig", () => {

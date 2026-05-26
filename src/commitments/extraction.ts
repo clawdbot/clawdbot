@@ -1,6 +1,8 @@
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatIntervalMs } from "../infra/heartbeat-summary.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
+import { normalizeOptionalString as asString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { resolveCommitmentsConfig } from "./config.js";
 import { listPendingCommitmentsForScope, upsertInferredCommitments } from "./store.js";
@@ -22,12 +24,8 @@ const KIND_VALUES = new Set<CommitmentKind>([
 const SENSITIVITY_VALUES = new Set<CommitmentSensitivity>(["routine", "personal", "care"]);
 const SOURCE_VALUES = new Set<CommitmentSource>(["inferred_user_context", "agent_promise"]);
 
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function asNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function parseCandidate(raw: unknown): CommitmentCandidate | undefined {

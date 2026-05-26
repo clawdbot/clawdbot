@@ -5,6 +5,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
+import { createDiscordOpusPlaybackStream } from "./audio.js";
 import { resolveDiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import { loadDiscordVoiceSdk } from "./sdk-runtime.js";
@@ -177,13 +178,20 @@ export async function processDiscordVoiceSegment(params: {
         const nodeStream = Readable.fromWeb(
           voiceReplyAudio.audioStream as import("node:stream/web").ReadableStream<Uint8Array>,
         );
-        const resource = voiceSdk.createAudioResource(nodeStream);
+        const resource = voiceSdk.createAudioResource(createDiscordOpusPlaybackStream(nodeStream), {
+          inputType: voiceSdk.StreamType.Opus,
+        });
         entry.player.play(resource);
       } else {
         logVoiceVerbose(
           `playback start: guild ${entry.guildId} channel ${entry.channelId} file ${path.basename(voiceReplyAudio.audioPath)}`,
         );
-        const resource = voiceSdk.createAudioResource(voiceReplyAudio.audioPath);
+        const resource = voiceSdk.createAudioResource(
+          createDiscordOpusPlaybackStream(voiceReplyAudio.audioPath),
+          {
+            inputType: voiceSdk.StreamType.Opus,
+          },
+        );
         entry.player.play(resource);
       }
       await voiceSdk

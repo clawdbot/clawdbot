@@ -1,23 +1,21 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPngBufferWithDimensions } from "./test-helpers.js";
 
-const { loadBundledPluginPublicArtifactModuleSyncMock, resolveSystemBinMock, runExecMock } =
-  vi.hoisted(() => ({
-    loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(),
-    resolveSystemBinMock: vi.fn(),
-    runExecMock: vi.fn(),
-  }));
-
-vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+const { createRastermillMock, resolveSystemBinMock } = vi.hoisted(() => ({
+  createRastermillMock: vi.fn(),
+  resolveSystemBinMock: vi.fn(),
 }));
+
+vi.mock("rastermill", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("rastermill")>();
+  return {
+    ...actual,
+    createRastermill: createRastermillMock,
+  };
+});
 
 vi.mock("../infra/resolve-system-bin.js", () => ({
   resolveSystemBin: resolveSystemBinMock,
-}));
-
-vi.mock("../process/exec.js", () => ({
-  runExec: runExecMock,
 }));
 
 import { getImageMetadata, resizeToJpeg } from "./image-ops.js";
@@ -25,15 +23,19 @@ import { getImageMetadata, resizeToJpeg } from "./image-ops.js";
 describe("image ops external backend security", () => {
   const previousBackend = process.env.OPENCLAW_IMAGE_BACKEND;
 
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("rastermill")>("rastermill");
+    createRastermillMock.mockImplementation(actual.createRastermill);
+  });
+
   afterEach(() => {
     if (previousBackend === undefined) {
       delete process.env.OPENCLAW_IMAGE_BACKEND;
     } else {
       process.env.OPENCLAW_IMAGE_BACKEND = previousBackend;
     }
-    loadBundledPluginPublicArtifactModuleSyncMock.mockReset();
+    createRastermillMock.mockReset();
     resolveSystemBinMock.mockReset();
-    runExecMock.mockReset();
   });
 
   it("does not use external metadata tools for unrecognized image bytes", async () => {
@@ -46,23 +48,15 @@ describe("image ops external backend security", () => {
 
     await expect(getImageMetadata(svgWithExternalReference)).resolves.toBeNull();
 
-    expect(runExecMock).not.toHaveBeenCalled();
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalled();
+    expect(resolveSystemBinMock).not.toHaveBeenCalled();
   });
 
-  it("stops backend fallback after a real processing error", async () => {
+  it("propagates Rastermill processing errors without OpenClaw-side backend fallback", async () => {
     delete process.env.OPENCLAW_IMAGE_BACKEND;
     resolveSystemBinMock.mockReturnValue("/usr/bin/magick");
-    loadBundledPluginPublicArtifactModuleSyncMock.mockReturnValue({
-      createMediaAttachmentImageOps: () => ({
-        getImageMetadata: vi.fn(),
-        normalizeExifOrientation: vi.fn(),
-        resizeToJpeg: vi.fn(async () => {
-          throw new Error("corrupt image payload");
-        }),
-        convertHeicToJpeg: vi.fn(),
-        hasAlphaChannel: vi.fn(),
-        resizeToPng: vi.fn(),
+    createRastermillMock.mockReturnValue({
+      encode: vi.fn(async () => {
+        throw new Error("corrupt image payload");
       }),
     });
 
@@ -74,6 +68,6 @@ describe("image ops external backend security", () => {
       }),
     ).rejects.toThrow(/corrupt image payload/);
 
-    expect(runExecMock).not.toHaveBeenCalled();
+    expect(resolveSystemBinMock).not.toHaveBeenCalled();
   });
 });

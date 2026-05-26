@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import type { MemoryIndexManager } from "./manager.js";
 import "./test-runtime-mocks.js";
 
@@ -89,6 +90,19 @@ describe("memory manager FTS-only reindex", () => {
     }
   }
 
+  function writeExistingMeta(memoryManager: MemoryIndexManager, model: string): void {
+    const metaWriter = memoryManager as unknown as {
+      writeMeta(meta: MemoryIndexMeta): void;
+    };
+    metaWriter.writeMeta({
+      model,
+      provider: "openai",
+      chunkTokens: 600,
+      chunkOverlap: 120,
+      sources: ["memory"],
+    });
+  }
+
   it("preserves indexed chunks across forced reindex in FTS-only mode", async () => {
     const memoryManager = await createManager();
 
@@ -115,5 +129,15 @@ describe("memory manager FTS-only reindex", () => {
 
     expect(countChunksContaining("refresh marker")).toBeGreaterThan(0);
     expect(countChunksContaining("Alpha topic")).toBe(0);
+  });
+
+  it("aborts instead of downgrading an existing semantic index to FTS-only", async () => {
+    const memoryManager = await createManager();
+    writeExistingMeta(memoryManager, "mock-embed");
+
+    await expect(memoryManager.sync({ force: true })).rejects.toThrow(
+      "Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: mock-embed).",
+    );
+    expect(memoryManager.status().provider).toBe("auto");
   });
 });

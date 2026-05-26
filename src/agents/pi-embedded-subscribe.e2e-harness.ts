@@ -45,6 +45,8 @@ export function createSubscribedSessionHarness(
   const mergedSession = Object.assign(session, sessionExtras ?? {});
   const subscription = subscribeEmbeddedPiSession({
     ...subscribeParams,
+    trustedLocalMediaToolNames:
+      subscribeParams.trustedLocalMediaToolNames ?? subscribeParams.builtinToolNames,
     session: mergedSession,
   });
   return { emit, session: mergedSession, subscription };

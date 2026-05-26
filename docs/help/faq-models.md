@@ -289,7 +289,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`
     - `gemini-flash` → `google/gemini-3-flash-preview`
-    - `gemini-flash-lite` → `google/gemini-3.1-flash-lite-preview`
+    - `gemini-flash-lite` → `google/gemini-3.1-flash-lite`
 
     If you set your own alias with the same name, your value wins.
 

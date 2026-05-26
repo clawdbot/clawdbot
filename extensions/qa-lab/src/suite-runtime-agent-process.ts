@@ -256,7 +256,7 @@ async function forceMemoryIndex(params: {
   await runQaCli(params.env, ["memory", "index", "--agent", "qa", "--force"], {
     timeoutMs: liveTurnTimeoutMs(params.env, 60_000),
   });
-  return await waitForMemorySearchMatch({
+  const result = await waitForMemorySearchMatch({
     expectedNeedle: params.expectedNeedle,
     timeoutMs: liveTurnTimeoutMs(params.env, 20_000),
     search: async () =>
@@ -269,6 +269,8 @@ async function forceMemoryIndex(params: {
         },
       )) as QaMemorySearchResult,
   });
+  await params.env.gateway.restartAfterStateMutation?.(async () => {});
+  return result;
 }
 
 async function runAgentPrompt(

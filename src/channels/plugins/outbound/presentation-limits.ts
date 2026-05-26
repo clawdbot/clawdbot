@@ -4,6 +4,7 @@ import type {
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -81,9 +82,9 @@ function fallbackListBlock(params: {
   labels: readonly string[];
   maxLabelLength?: number;
 }): MessagePresentationBlock | undefined {
-  const labels = params.labels
-    .map((label) => truncateText(label, params.maxLabelLength).trim())
-    .filter(Boolean);
+  const labels = normalizeStringEntries(
+    params.labels.map((label) => truncateText(label, params.maxLabelLength)),
+  );
   return labels.length > 0
     ? {
         type: params.blockType,

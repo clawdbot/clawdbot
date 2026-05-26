@@ -1,4 +1,3 @@
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-core";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeE164 } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -26,6 +25,7 @@ import {
 import { formatWhatsAppConfigAllowFromEntries } from "./config-accessors.js";
 import { WhatsAppChannelConfigSchema } from "./config-schema.js";
 import { whatsappDoctor } from "./doctor.js";
+import { resolveWhatsAppConfigPath } from "./group-config-path.js";
 import { resolveLegacyGroupSessionKey } from "./group-session-contract.js";
 import {
   collectUnsupportedSecretRefConfigCandidates,
@@ -39,56 +39,6 @@ import {
 } from "./session-contract.js";
 
 const WHATSAPP_CHANNEL = "whatsapp" as const;
-
-const WHATSAPP_GROUP_SCOPE_FIELDS = ["groupPolicy", "groupAllowFrom", "groups"] as const;
-
-type WhatsAppGroupScopeField = (typeof WHATSAPP_GROUP_SCOPE_FIELDS)[number];
-
-function resolveWhatsAppAccountKey(
-  accounts: Record<string, unknown> | undefined,
-  accountId: string,
-): string | undefined {
-  if (!accounts) {
-    return undefined;
-  }
-  if (Object.hasOwn(accounts, accountId)) {
-    return accountId;
-  }
-  const normalizedAccountId = accountId.trim().toLowerCase();
-  return Object.keys(accounts).find((key) => key.trim().toLowerCase() === normalizedAccountId);
-}
-
-function resolveWhatsAppGroupScopeBasePath(params: {
-  cfg: Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
-  accountId?: string | null;
-}): string {
-  const accountId =
-    typeof params.accountId === "string"
-      ? params.accountId.trim() || DEFAULT_ACCOUNT_ID
-      : DEFAULT_ACCOUNT_ID;
-  const accounts = params.cfg.channels?.whatsapp?.accounts;
-  const accountKey = resolveWhatsAppAccountKey(accounts, accountId);
-  const defaultAccountKey = resolveWhatsAppAccountKey(accounts, DEFAULT_ACCOUNT_ID);
-  const accountConfig = accountKey ? accounts?.[accountKey] : undefined;
-  const defaultAccountConfig = defaultAccountKey ? accounts?.[defaultAccountKey] : undefined;
-  const matchesAnyGroupScopeField = (config: Record<string, unknown> | undefined): boolean =>
-    WHATSAPP_GROUP_SCOPE_FIELDS.some((field) => config?.[field] !== undefined);
-  if (matchesAnyGroupScopeField(accountConfig)) {
-    return `channels.whatsapp.accounts.${accountKey}`;
-  }
-  if (accountId !== DEFAULT_ACCOUNT_ID && matchesAnyGroupScopeField(defaultAccountConfig)) {
-    return `channels.whatsapp.accounts.${defaultAccountKey}`;
-  }
-  return "channels.whatsapp";
-}
-
-function resolveWhatsAppConfigPath(params: {
-  cfg: Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
-  accountId?: string | null;
-  field: WhatsAppGroupScopeField;
-}): string {
-  return `${resolveWhatsAppGroupScopeBasePath(params)}.${params.field}`;
-}
 
 export async function loadWhatsAppChannelRuntime() {
   return await import("./channel.runtime.js");

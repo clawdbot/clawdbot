@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildRealtimeVoiceAgentConsultPolicyInstructions } from "openclaw/plugin-sdk/realtime-voice";
 import { root } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
@@ -16,10 +17,6 @@ type VoiceIdentityLike = {
   creature?: unknown;
   vibe?: unknown;
 };
-
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readAgentEntries(cfg: CoreConfig): AgentEntryLike[] {
   const agents = (cfg as { agents?: { list?: unknown } }).agents;

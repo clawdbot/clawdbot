@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
 
@@ -266,7 +267,7 @@ function normalizeTypeValue(value: string | string[] | undefined): string | stri
     return undefined;
   }
   if (Array.isArray(value)) {
-    const normalized = [...new Set(value)].toSorted((left, right) => left.localeCompare(right));
+    const normalized = sortUniqueStrings(value);
     return normalized.length === 1 ? normalized[0] : normalized;
   }
   return value;
@@ -335,9 +336,7 @@ function mergeConfigDocBaselineEntry(
     defaultValue,
     deprecated: current.deprecated || next.deprecated,
     sensitive: current.sensitive || next.sensitive,
-    tags: [...new Set([...current.tags, ...next.tags])].toSorted((left, right) =>
-      left.localeCompare(right),
-    ),
+    tags: sortUniqueStrings([...current.tags, ...next.tags]),
     label,
     help,
     hasChildren: current.hasChildren || next.hasChildren,

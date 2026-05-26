@@ -1,3 +1,5 @@
+import { normalizeStringEntries } from "../shared/string-normalization.js";
+
 export type PluginIdScope = readonly string[] | undefined;
 
 export function normalizePluginIdScope(ids?: readonly unknown[]): string[] | undefined {
@@ -5,12 +7,7 @@ export function normalizePluginIdScope(ids?: readonly unknown[]): string[] | und
     return undefined;
   }
   return Array.from(
-    new Set(
-      ids
-        .filter((id): id is string => typeof id === "string")
-        .map((id) => id.trim())
-        .filter(Boolean),
-    ),
+    new Set(normalizeStringEntries(ids.filter((id): id is string => typeof id === "string"))),
   ).toSorted();
 }
 

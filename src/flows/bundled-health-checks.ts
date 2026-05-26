@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { asOptionalObjectRecord as readRecord } from "../shared/record-coerce.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 
 type BundledHealthApi = {
@@ -20,7 +21,7 @@ export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?:
 
 function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string }): boolean {
   const entry = params.cfg.plugins?.entries?.policy;
-  const config = isRecord(entry?.config) ? entry.config : {};
+  const config = readRecord(entry?.config) ?? {};
   if (entry === undefined || entry.enabled === false || config.enabled === false) {
     return false;
   }
@@ -33,8 +34,4 @@ function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string 
     return false;
   }
   return entry.enabled === true || config.enabled === true;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }

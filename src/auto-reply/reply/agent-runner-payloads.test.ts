@@ -7,6 +7,7 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const baseParams = {
   isHeartbeat: false,
@@ -557,6 +558,32 @@ describe("buildReplyPayloads media filter integration", () => {
       blockStreamingEnabled: true,
       blockReplyPipeline: pipeline,
       payloads: [{ text: "response", mediaUrl: "/tmp/generated.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("drops final caption and media already sent as one coalesced block payload", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+    pipeline.enqueue({ text: "Preview" });
+    pipeline.enqueue({ text: "below" });
+    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
+    await pipeline.flush({ force: true });
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "Preview below", mediaUrls: ["file:///photo.png"] }],
     });
 
     expect(replyPayloads).toHaveLength(0);

@@ -483,6 +483,7 @@ export const OpenClawSchema = z
                     toolInputs: z.boolean().optional(),
                     toolOutputs: z.boolean().optional(),
                     systemPrompt: z.boolean().optional(),
+                    toolDefinitions: z.boolean().optional(),
                   })
                   .strict(),
               ])

@@ -33,16 +33,20 @@ function readJson(filePath: string): unknown {
 
 function collectPnpmLockPackages(): Set<string> {
   const lockfile = parse(fs.readFileSync("pnpm-lock.yaml", "utf8")) as {
-    packages?: Record<string, unknown>;
+    packages?: Record<string, { version?: unknown }>;
   };
-  return new Set(
-    Object.keys(lockfile.packages ?? {})
-      .map((packageKey) => {
-        const parsed = parsePnpmPackageKey(packageKey);
-        return parsed ? `${parsed.name}@${parsed.version}` : null;
-      })
-      .filter((packageKey) => packageKey !== null),
-  );
+  const packages = new Set<string>();
+  for (const [packageKey, metadata] of Object.entries(lockfile.packages ?? {})) {
+    const parsed = parsePnpmPackageKey(packageKey);
+    if (!parsed) {
+      continue;
+    }
+    packages.add(`${parsed.name}@${parsed.version}`);
+    if (typeof metadata.version === "string") {
+      packages.add(`${parsed.name}@${metadata.version}`);
+    }
+  }
+  return packages;
 }
 
 describe("package manager build policy", () => {

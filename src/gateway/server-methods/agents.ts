@@ -30,6 +30,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { root, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
+import { normalizeOptionalString as resolveOptionalStringParam } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   ErrorCodes,
@@ -263,10 +264,6 @@ function resolveAgentIdOrError(agentIdRaw: string, cfg: OpenClawConfig) {
 
 function sanitizeIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function resolveOptionalStringParam(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function respondInvalidMethodParams(

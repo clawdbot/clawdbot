@@ -405,6 +405,7 @@ struct GatewayNodeSessionTests {
         #expect(operatorEntry.scopes == [
             "operator.approvals",
             "operator.read",
+            "operator.talk.secrets",
             "operator.write",
         ])
 

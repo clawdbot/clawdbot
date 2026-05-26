@@ -3,6 +3,7 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 
 const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
@@ -11,10 +12,6 @@ type OpenAINativeWebSearchPatchResult =
   | "payload_not_object"
   | "native_tool_already_present"
   | "injected";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function isOpenAINativeWebSearchEligibleModel(model: {
   api?: unknown;

@@ -5,10 +5,15 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildRealtimeVoiceAgentConsultWorkingResponse,
+  createRealtimeVoiceForcedConsultCoordinator,
   createTalkSessionController,
   createRealtimeVoiceBridgeSession,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  readRealtimeVoiceConsultQuestion,
+  readSpeakableRealtimeVoiceToolResult,
   recordTalkObservabilityEvent,
+  type RealtimeVoiceForcedConsultCoordinator,
+  type RealtimeVoiceForcedConsultHandle,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
@@ -81,21 +86,6 @@ function buildGreetingInstructions(
     : `${intro} "${trimmedGreeting}"`;
 }
 
-function readSpeakableToolResultText(result: unknown): string | undefined {
-  if (typeof result === "string") {
-    return result.trim() || undefined;
-  }
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return undefined;
-  }
-  const text = (result as { text?: unknown }).text;
-  if (typeof text === "string" && text.trim()) {
-    return text.trim();
-  }
-  const output = (result as { output?: unknown }).output;
-  return typeof output === "string" && output.trim() ? output.trim() : undefined;
-}
-
 function readConsultArgText(args: unknown, key: string): string | undefined {
   if (!args || typeof args !== "object" || Array.isArray(args)) {
     return undefined;
@@ -105,12 +95,7 @@ function readConsultArgText(args: unknown, key: string): string | undefined {
 }
 
 function readConsultQuestionText(args: unknown): string | undefined {
-  return (
-    readConsultArgText(args, "question") ??
-    readConsultArgText(args, "prompt") ??
-    readConsultArgText(args, "query") ??
-    readConsultArgText(args, "task")
-  );
+  return readRealtimeVoiceConsultQuestion(args);
 }
 
 function normalizeTranscriptText(text: string): string {
@@ -315,10 +300,11 @@ export class RealtimeCallHandler {
     string,
     ReturnType<typeof setTimeout>
   >();
-  private readonly forcedConsultTimersByCallId = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly forcedConsultInFlightByCallId = new Set<string>();
+  private readonly forcedConsultCoordinatorsByCallId = new Map<
+    string,
+    RealtimeVoiceForcedConsultCoordinator
+  >();
   private readonly forcedConsultsByCallId = new Map<string, ForcedConsultState>();
-  private readonly lastProviderConsultAtByCallId = new Map<string, number>();
   private readonly nativeConsultsInFlightByCallId = new Map<string, NativeConsultState>();
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
@@ -1012,14 +998,19 @@ export class RealtimeCallHandler {
   }
 
   private clearForcedConsultState(callId: string): void {
-    const timer = this.forcedConsultTimersByCallId.get(callId);
-    if (timer) {
-      clearTimeout(timer);
-      this.forcedConsultTimersByCallId.delete(callId);
-    }
-    this.forcedConsultInFlightByCallId.delete(callId);
+    this.forcedConsultCoordinatorsByCallId.get(callId)?.clear();
+    this.forcedConsultCoordinatorsByCallId.delete(callId);
     this.forcedConsultsByCallId.delete(callId);
-    this.lastProviderConsultAtByCallId.delete(callId);
+  }
+
+  private forcedConsultCoordinator(callId: string): RealtimeVoiceForcedConsultCoordinator {
+    const existing = this.forcedConsultCoordinatorsByCallId.get(callId);
+    if (existing) {
+      return existing;
+    }
+    const created = createRealtimeVoiceForcedConsultCoordinator();
+    this.forcedConsultCoordinatorsByCallId.set(callId, created);
+    return created;
   }
 
   private closeTelephonyBridge(
@@ -1053,43 +1044,48 @@ export class RealtimeCallHandler {
     if (!handler) {
       return;
     }
-    const existingTimer = this.forcedConsultTimersByCallId.get(params.callId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
+    const existingForcedConsult = this.forcedConsultsByCallId.get(params.callId);
+    if (existingForcedConsult && !existingForcedConsult.completedAt) {
+      return;
     }
-    const timer = setTimeout(() => {
-      this.forcedConsultTimersByCallId.delete(params.callId);
-      if (this.forcedConsultInFlightByCallId.has(params.callId)) {
-        return;
-      }
-      const lastProviderConsultAt = this.lastProviderConsultAtByCallId.get(params.callId) ?? 0;
-      if (Date.now() - lastProviderConsultAt < 2_000) {
+    const coordinator = this.forcedConsultCoordinator(params.callId);
+    if (coordinator.hasRecentNativeConsult(question, { allowUnknownQuestion: true })) {
+      return;
+    }
+    coordinator.clearPending();
+    const pending = coordinator.prepare(question);
+    if (!pending) {
+      return;
+    }
+    coordinator.schedule(pending, FORCED_CONSULT_FALLBACK_DELAY_MS, (handle) => {
+      const activeForcedConsult = this.forcedConsultsByCallId.get(params.callId);
+      if (activeForcedConsult && !activeForcedConsult.completedAt) {
         return;
       }
       void this.runForcedAgentConsult({
         ...params,
-        question,
+        handle,
         handler,
       });
-    }, FORCED_CONSULT_FALLBACK_DELAY_MS);
-    this.forcedConsultTimersByCallId.set(params.callId, timer);
+    });
   }
 
   private async runForcedAgentConsult(params: {
     session: ActiveRealtimeVoiceBridge;
     callId: string;
     callSid: string;
-    question: string;
+    handle: RealtimeVoiceForcedConsultHandle;
     clearAudio: () => void;
     handler: ToolHandlerFn;
   }): Promise<void> {
-    this.forcedConsultInFlightByCallId.add(params.callId);
+    const coordinator = this.forcedConsultCoordinator(params.callId);
+    coordinator.markStarted(params.handle);
     const startedAt = Date.now();
     logger.debug(
-      `[voice-call] realtime forced agent consult reason=${FORCED_CONSULT_REASON} consultPolicy=always callId=${params.callId} providerCallId=${params.callSid} chars=${params.question.length}`,
+      `[voice-call] realtime forced agent consult reason=${FORCED_CONSULT_REASON} consultPolicy=always callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
     );
     console.log(
-      `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.question.length}`,
+      `[voice-call] realtime forced agent consult starting callId=${params.callId} providerCallId=${params.callSid} chars=${params.handle.question.length}`,
     );
     params.clearAudio();
     const state: ForcedConsultState = {
@@ -1097,7 +1093,7 @@ export class RealtimeCallHandler {
       promise: Promise.resolve().then(() =>
         params.handler(
           {
-            question: params.question,
+            question: params.handle.question,
           },
           params.callId,
           {},
@@ -1108,7 +1104,11 @@ export class RealtimeCallHandler {
     try {
       const result = await state.promise;
       state.completedAt = Date.now();
-      const text = readSpeakableToolResultText(result);
+      coordinator.markDelivered(params.handle);
+      const text = readSpeakableRealtimeVoiceToolResult(result, {
+        keys: ["text", "output"],
+        maxChars: FORCED_CONSULT_RESULT_MAX_CHARS,
+      });
       if (!text) {
         console.warn(
           `[voice-call] realtime forced agent consult returned no speakable text callId=${params.callId} providerCallId=${params.callSid}`,
@@ -1122,16 +1122,16 @@ export class RealtimeCallHandler {
       console.log(
         `[voice-call] realtime forced agent consult completed callId=${params.callId} providerCallId=${params.callSid} elapsedMs=${Date.now() - startedAt}`,
       );
-      this.consumePartialUserTranscript(params.callId, params.question);
+      this.consumePartialUserTranscript(params.callId, params.handle.question);
     } catch (error) {
       console.warn(
         `[voice-call] realtime forced agent consult failed callId=${params.callId} providerCallId=${params.callSid} error=${formatErrorMessage(error)}`,
       );
     } finally {
-      this.forcedConsultInFlightByCallId.delete(params.callId);
       const cleanupTimer = setTimeout(() => {
         if (this.forcedConsultsByCallId.get(params.callId) === state) {
           this.forcedConsultsByCallId.delete(params.callId);
+          coordinator.remove(params.handle);
         }
       }, FORCED_CONSULT_NATIVE_DEDUPE_MS);
       cleanupTimer.unref?.();
@@ -1273,15 +1273,17 @@ export class RealtimeCallHandler {
       }
     };
     if (name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      this.lastProviderConsultAtByCallId.set(callId, Date.now());
-      const timer = this.forcedConsultTimersByCallId.get(callId);
-      if (timer) {
-        clearTimeout(timer);
-        this.forcedConsultTimersByCallId.delete(callId);
+      const coordinator = this.forcedConsultCoordinator(callId);
+      const forcedMatch = coordinator.recordNativeConsult(args, bridgeCallId);
+      if (forcedMatch.kind === "none") {
+        const pending = coordinator.consumePending();
+        if (pending) {
+          coordinator.remove(pending);
+        }
       }
       const forcedConsult = this.forcedConsultsByCallId.get(callId);
       if (forcedConsult) {
-        if (forcedConsult.completedAt) {
+        if (forcedConsult.completedAt || forcedMatch.kind === "already_delivered") {
           submitFinalToolResult({
             status: "already_delivered",
             message: "OpenClaw already delivered this consult result internally. Do not repeat it.",

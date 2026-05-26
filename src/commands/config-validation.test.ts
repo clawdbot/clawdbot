@@ -108,4 +108,54 @@ describe("requireValidConfigSnapshot", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
   });
+
+  it("replaces doctor fix advice for plugin packaging compiled-output failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: source-only-pack",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+        },
+      ],
+      legacyIssues: [],
+    });
+    const runtime = createRuntime();
+
+    const config = await requireValidConfigSnapshot(runtime);
+
+    expect(config).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("plugin not found"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Fix: This is a plugin packaging issue, not a local config problem.\nUpdate or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith("Fix: openclaw doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps doctor fix advice for normal invalid config failures", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: false,
+      config: {},
+      issues: [{ path: "gateway.mode", message: "Expected 'local' or 'remote'" }],
+      legacyIssues: [],
+    });
+    const runtime = createRuntime();
+
+    const config = await requireValidConfigSnapshot(runtime);
+
+    expect(config).toBeNull();
+    expect(runtime.error).toHaveBeenCalledWith("Fix: openclaw doctor --fix");
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 });

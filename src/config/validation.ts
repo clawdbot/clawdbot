@@ -552,33 +552,51 @@ function collectUnsupportedMutableSecretRefIssues(raw: unknown): ConfigValidatio
   return issues;
 }
 
-function isUnsupportedMutableSecretRefSchemaIssue(params: {
+function formatFilteredUnrecognizedKeyMessage(message: string, keys: string[]): string {
+  const quotedKeys = keys.map((key) => `"${key}"`).join(", ");
+  if (/must not have additional properties/i.test(message)) {
+    return `must not have additional properties: ${quotedKeys}`;
+  }
+  return keys.length === 1 ? `Unrecognized key: ${quotedKeys}` : `Unrecognized keys: ${quotedKeys}`;
+}
+
+function filterUnsupportedMutableSecretRefSchemaIssue(params: {
   issue: ConfigValidationIssue;
   policyIssue: ConfigValidationIssue;
-}): boolean {
+}): ConfigValidationIssue | null {
   const { issue, policyIssue } = params;
   if (issue.path === policyIssue.path) {
-    return /expected string, received object/i.test(issue.message);
+    return /expected string, received object/i.test(issue.message) ? null : issue;
   }
 
   if (!issue.path || !policyIssue.path || !policyIssue.path.startsWith(`${issue.path}.`)) {
-    return false;
+    return issue;
   }
 
   const remainder = policyIssue.path.slice(issue.path.length + 1);
   const childKey = remainder.split(".")[0];
   if (!childKey) {
-    return false;
+    return issue;
   }
 
-  if (!/Unrecognized key/i.test(issue.message)) {
-    return false;
+  if (!/Unrecognized key|must not have additional properties/i.test(issue.message)) {
+    return issue;
   }
   const unrecognizedKeys = [...issue.message.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
   if (unrecognizedKeys.length === 0) {
-    return false;
+    return issue;
   }
-  return unrecognizedKeys.length === 1 && unrecognizedKeys[0] === childKey;
+  if (!unrecognizedKeys.includes(childKey)) {
+    return issue;
+  }
+  const remainingKeys = unrecognizedKeys.filter((key) => key !== childKey);
+  if (remainingKeys.length === 0) {
+    return null;
+  }
+  return {
+    ...issue,
+    message: formatFilteredUnrecognizedKeyMessage(issue.message, remainingKeys),
+  };
 }
 
 function mergeUnsupportedMutableSecretRefIssues(
@@ -588,12 +606,19 @@ function mergeUnsupportedMutableSecretRefIssues(
   if (policyIssues.length === 0) {
     return schemaIssues;
   }
-  const filteredSchemaIssues = schemaIssues.filter(
-    (issue) =>
-      !policyIssues.some((policyIssue) =>
-        isUnsupportedMutableSecretRefSchemaIssue({ issue, policyIssue }),
-      ),
-  );
+  const filteredSchemaIssues = schemaIssues.flatMap((issue) => {
+    let filteredIssue: ConfigValidationIssue | null = issue;
+    for (const policyIssue of policyIssues) {
+      if (!filteredIssue) {
+        return [];
+      }
+      filteredIssue = filterUnsupportedMutableSecretRefSchemaIssue({
+        issue: filteredIssue,
+        policyIssue,
+      });
+    }
+    return filteredIssue ? [filteredIssue] : [];
+  });
   return [...policyIssues, ...filteredSchemaIssues];
 }
 

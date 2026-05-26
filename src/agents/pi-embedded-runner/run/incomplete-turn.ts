@@ -6,6 +6,7 @@ import {
 } from "../../../auto-reply/tokens.js";
 import type { EmbeddedPiExecutionContract } from "../../../config/types.agent-defaults.js";
 import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { collectTextContentBlocks } from "../../content-blocks.js";
 import {
@@ -730,28 +731,18 @@ export function resolveAckExecutionFastPathInstruction(params: {
 }
 
 function extractPlanningOnlySteps(text: string): string[] {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const bulletLines = lines
-    .map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "").trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
+  const bulletLines = normalizeStringEntries(
+    lines.map((line) => line.replace(/^[-*•]\s+|^\d+[.)]\s+/u, "")),
+  );
   if (bulletLines.length >= 2) {
     return bulletLines.slice(0, 4);
   }
-  return text
-    .split(/(?<=[.!?])\s+/u)
-    .map((step) => step.trim())
-    .filter(Boolean)
-    .slice(0, 4);
+  return normalizeStringEntries(text.split(/(?<=[.!?])\s+/u)).slice(0, 4);
 }
 
 function hasStructuredPlanningOnlyFormat(text: string): boolean {
-  const lines = text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/));
   if (lines.length === 0) {
     return false;
   }

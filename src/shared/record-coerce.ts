@@ -1,5 +1,5 @@
 // Keep this local so browser bundles do not pull in src/utils.ts and its Node-only side effects.
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 

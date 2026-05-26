@@ -1,11 +1,7 @@
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+import { asOptionalRecord } from "../shared/record-coerce.js";
 
 function readToolName(value: unknown): string | undefined {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return undefined;
   }
@@ -19,7 +15,7 @@ function readToolName(value: unknown): string | undefined {
 }
 
 function isToolCallBlock(value: unknown): boolean {
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return false;
   }
@@ -33,7 +29,7 @@ function isToolCallBlock(value: unknown): boolean {
 }
 
 export function assistantCallsSessionsYield(message: unknown): boolean {
-  const record = asRecord(message);
+  const record = asOptionalRecord(message);
   if (!record || record.role !== "assistant" || !Array.isArray(record.content)) {
     return false;
   }
@@ -48,14 +44,14 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
     return undefined;
   }
   try {
-    return asRecord(JSON.parse(trimmed));
+    return asOptionalRecord(JSON.parse(trimmed));
   } catch {
     return undefined;
   }
 }
 
 function readStructuredToolPayload(content: unknown): Record<string, unknown> | undefined {
-  const record = asRecord(content);
+  const record = asOptionalRecord(content);
   if (record) {
     return record;
   }
@@ -66,7 +62,7 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
     return undefined;
   }
   for (const block of content) {
-    const blockRecord = asRecord(block);
+    const blockRecord = asOptionalRecord(block);
     if (!blockRecord) {
       continue;
     }
@@ -86,7 +82,7 @@ export function isSessionsYieldToolResult(
   message: unknown,
   previousAssistantCalledYield: boolean,
 ): boolean {
-  const record = asRecord(message);
+  const record = asOptionalRecord(message);
   if (!record || (record.role !== "toolResult" && record.role !== "tool")) {
     return false;
   }
@@ -97,7 +93,7 @@ export function isSessionsYieldToolResult(
   if (!previousAssistantCalledYield) {
     return false;
   }
-  const details = asRecord(record.details);
+  const details = asOptionalRecord(record.details);
   if (details?.status === "yielded") {
     return true;
   }

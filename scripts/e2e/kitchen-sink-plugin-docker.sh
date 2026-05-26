@@ -29,7 +29,8 @@ RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-plugin.XXXXXX")"
 STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-plugin-stats.XXXXXX")"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  rm -f "$RUN_LOG" "$STATS_LOG"
 }
 trap cleanup EXIT
 
@@ -54,15 +55,15 @@ if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
 fi
 
 echo "Running kitchen-sink plugin Docker E2E..."
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker_e2e_harness_mount_args
-docker run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash scripts/e2e/lib/kitchen-sink-plugin/sweep.sh \
+docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash scripts/e2e/lib/kitchen-sink-plugin/sweep.sh \
   >"$RUN_LOG" 2>&1 &
 docker_pid="$!"
 
 while kill -0 "$docker_pid" 2>/dev/null; do
-  if docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-    docker stats --no-stream --format '{{json .}}' "$CONTAINER_NAME" >>"$STATS_LOG" 2>/dev/null || true
+  if docker_e2e_docker_cmd inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+    docker_e2e_docker_cmd stats --no-stream --format '{{json .}}' "$CONTAINER_NAME" >>"$STATS_LOG" 2>/dev/null || true
   fi
   sleep 2
 done
@@ -76,5 +77,4 @@ cat "$RUN_LOG"
 
 node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink
 
-rm -f "$RUN_LOG" "$STATS_LOG"
 exit "$run_status"

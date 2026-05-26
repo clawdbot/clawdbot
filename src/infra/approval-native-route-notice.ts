@@ -1,4 +1,5 @@
 import { formatHumanList } from "../shared/human-list.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import type { ChannelApprovalNativePlannedTarget } from "./approval-native-delivery.js";
 
 export function describeApprovalDeliveryDestination(params: {
@@ -14,14 +15,14 @@ export function describeApprovalDeliveryDestination(params: {
 export function resolveApprovalRoutedElsewhereNoticeText(
   destinations: readonly string[],
 ): string | null {
-  const uniqueDestinations = Array.from(new Set(destinations.map((value) => value.trim()))).filter(
+  const uniqueDestinations = sortUniqueStrings(destinations.map((value) => value.trim())).filter(
     Boolean,
   );
   if (uniqueDestinations.length === 0) {
     return null;
   }
   return `Approval required. I sent the approval request to ${formatHumanList(
-    uniqueDestinations.toSorted((a, b) => a.localeCompare(b)),
+    uniqueDestinations,
   )}, not this chat.`;
 }
 

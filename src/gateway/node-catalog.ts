@@ -2,6 +2,7 @@ import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device
 import type { NodePairingPairedNode } from "../infra/node-pairing.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeSortedUniqueTrimmedStringList } from "../shared/string-normalization.js";
 import type { NodeSession } from "./node-registry.js";
 
 type KnownNodeDevicePairingSource = {
@@ -48,22 +49,7 @@ type KnownNodeCatalog = {
 };
 
 function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
-  const values = new Set<string>();
-  for (const item of items) {
-    if (!Array.isArray(item)) {
-      continue;
-    }
-    for (const value of item) {
-      if (typeof value !== "string") {
-        continue;
-      }
-      const trimmed = value.trim();
-      if (trimmed) {
-        values.add(trimmed);
-      }
-    }
-  }
-  return [...values].toSorted((left, right) => left.localeCompare(right));
+  return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {

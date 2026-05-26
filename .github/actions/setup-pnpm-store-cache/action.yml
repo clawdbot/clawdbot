@@ -51,8 +51,16 @@ runs:
       with:
         package_json_file: ${{ inputs.package-manager-file }}
         run_install: false
-        cache: ${{ inputs.use-actions-cache }}
+        cache: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
         cache_dependency_path: ${{ inputs.lockfile-path }}
+
+    - name: Ensure pnpm store cache directory exists
+      if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        store_path="$(pnpm store path --silent)"
+        node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "$store_path"
 
     - name: Record pnpm version
       id: pnpm-version

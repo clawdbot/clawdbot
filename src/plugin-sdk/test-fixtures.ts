@@ -42,3 +42,9 @@ export {
   repoInstallSpec,
 } from "./test-helpers/bundled-plugin-paths.js";
 export { importFreshModule } from "./test-helpers/import-fresh.js";
+export {
+  createGrayscaleAlphaPngBuffer,
+  createNoisyPngBuffer,
+  createNoisyRgbaBuffer,
+  createSolidPngBuffer,
+} from "./test-helpers/image-fixtures.js";

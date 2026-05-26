@@ -58,7 +58,7 @@ vi.mock("../../agents/model-auth.js", () => {
         provider: string;
       }) => {
         const apiKey = resolveConfigKey(params.cfg, params.provider);
-        if (!apiKey || apiKey === "secretref-managed") {
+        if (!apiKey || apiKey === "secretref-managed" || apiKey.startsWith("oauth:")) {
           return null;
         }
         if (apiKey === "OPENAI_API_KEY") {
@@ -188,6 +188,18 @@ describe("resolveProviderAuthOverview", () => {
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
     expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
+  });
+
+  it("treats OAuth delegation markers as effective models.json auth", () => {
+    const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
+      resolveOpenAiOverview("oauth:openai-codex"),
+    );
+
+    expect(overview.effective).toEqual({
+      kind: "models.json",
+      detail: "marker(oauth:openai-codex)",
+    });
+    expect(overview.modelsJson?.value).toBe("marker(oauth:openai-codex)");
   });
 
   it("keeps env-var-shaped models.json values masked to avoid accidental plaintext exposure", () => {

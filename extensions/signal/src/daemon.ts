@@ -33,16 +33,24 @@ export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
   return `signal daemon exited (source=${exit.source} code=${exit.code ?? "null"} signal=${exit.signal ?? "null"})`;
 }
 
+function isRecoverableSignalCliReceiveException(line: string): boolean {
+  return /\breceive exception:\s+.*\binvalid PreKey message:\s+decryption failed\b/i.test(line);
+}
+
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
   if (!trimmed) {
     return null;
   }
-  // signal-cli commonly writes all logs to stderr; treat severity explicitly.
-  if (/\b(ERROR|WARN|WARNING)\b/.test(trimmed)) {
+  // signal-cli commonly writes routine logs and warnings to stderr; only error-like lines should
+  // update channel failure state. Recoverable receive decrypt failures are noisy but non-fatal.
+  if (/\bERROR\b/.test(trimmed)) {
     return "error";
   }
-  // Some signal-cli failures are not tagged with WARN/ERROR but should still be surfaced loudly.
+  if (isRecoverableSignalCliReceiveException(trimmed)) {
+    return "log";
+  }
+  // Some signal-cli failures are not tagged with ERROR but should still be surfaced loudly.
   if (/\b(FAILED|SEVERE|EXCEPTION)\b/i.test(trimmed)) {
     return "error";
   }
@@ -165,5 +173,6 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
 
 export const testApi = {
   buildDaemonArgs,
+  classifySignalCliLogLine,
   resolveSignalCliConfigPath,
 } as const;

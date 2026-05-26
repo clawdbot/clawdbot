@@ -396,18 +396,13 @@ describe("google transport stream", () => {
     });
 
     const payload = parseRequestJsonBody(init);
-    expect(payload.systemInstruction).toEqual({
-      parts: [{ text: "Follow policy." }],
-    });
     expect(payload.cachedContent).toBe("cachedContents/request-cache");
+    expect(payload.systemInstruction).toBeUndefined();
+    expect(payload.tools).toBeUndefined();
+    expect(payload.toolConfig).toBeUndefined();
     expect((payload.generationConfig as { thinkingConfig?: unknown }).thinkingConfig).toEqual({
       includeThoughts: true,
       thinkingLevel: "HIGH",
-    });
-    expect(
-      (payload.toolConfig as { functionCallingConfig?: unknown }).functionCallingConfig,
-    ).toEqual({
-      mode: "AUTO",
     });
     expect(result.api).toBe("google-generative-ai");
     expect(result.provider).toBe("google");
@@ -1638,6 +1633,36 @@ describe("google transport stream", () => {
     );
 
     expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
+  });
+
+  it("omits per-request system and tool settings when using cachedContent", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel(),
+      {
+        systemPrompt: "Follow policy.",
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: {
+              type: "object",
+              properties: { q: { type: "string" } },
+              required: ["q"],
+            },
+          },
+        ],
+      } as never,
+      {
+        cachedContent: " cachedContents/prebuilt-context ",
+        toolChoice: "auto",
+      },
+    );
+
+    expect(params.cachedContent).toBe("cachedContents/prebuilt-context");
+    expect(params.systemInstruction).toBeUndefined();
+    expect(params.tools).toBeUndefined();
+    expect(params.toolConfig).toBeUndefined();
   });
 
   it("uses a non-empty text placeholder for empty user text", () => {

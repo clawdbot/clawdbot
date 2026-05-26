@@ -21,8 +21,7 @@ const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
   ],
   [
     "extensions/discord",
-    // Prefer the pure-JS opusscript decoder, but keep the optional native decoder
-    // fallback for users who install it themselves.
+    // @discordjs/voice still probes the native addon in its dependency report path.
     new Set(["@discordjs/opus"]),
   ],
 ]);
@@ -237,7 +236,6 @@ function allDependencyNames(manifest: PackageManifest): string[] {
 function isDiscordPackageDependency(dependencyName: string): boolean {
   return (
     dependencyName === "discord-api-types" ||
-    dependencyName === "opusscript" ||
     dependencyName.startsWith("@discordjs/") ||
     dependencyName.startsWith("@snazzah/")
   );

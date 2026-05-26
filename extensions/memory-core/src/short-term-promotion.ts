@@ -5,7 +5,11 @@ import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-ru
 import { formatMemoryDreamingDay } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
 import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -96,6 +100,7 @@ type ShortTermPhaseSignalEntry = {
   remHits: number;
   lastLightAt?: string;
   lastRemAt?: string;
+  lastRemConsideredAt?: string;
 };
 
 type ShortTermPhaseSignalStore = {
@@ -831,12 +836,17 @@ function normalizePhaseSignalStore(raw: unknown, nowIso: string): ShortTermPhase
       typeof entry.lastRemAt === "string" && entry.lastRemAt.trim().length > 0
         ? entry.lastRemAt
         : undefined;
+    const lastRemConsideredAt =
+      typeof entry.lastRemConsideredAt === "string" && entry.lastRemConsideredAt.trim().length > 0
+        ? entry.lastRemConsideredAt
+        : undefined;
     entries[key] = {
       key,
       lightHits,
       remHits,
       ...(lastLightAt ? { lastLightAt } : {}),
       ...(lastRemAt ? { lastRemAt } : {}),
+      ...(lastRemConsideredAt ? { lastRemConsideredAt } : {}),
     };
   }
   return {
@@ -1178,7 +1188,7 @@ export async function recordDreamingPhaseSignals(params: {
   if (!workspaceDir) {
     return;
   }
-  const keys = [...new Set(params.keys.map((key) => key.trim()).filter(Boolean))];
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
   if (keys.length === 0) {
     return;
   }
@@ -1220,6 +1230,86 @@ export async function recordDreamingPhaseSignals(params: {
     phaseSignals.updatedAt = nowIso;
     await writePhaseSignalStore(workspaceDir, phaseSignals);
   });
+}
+
+export async function recordRemConsideredPhaseSignals(params: {
+  workspaceDir?: string;
+  keys: string[];
+  nowMs?: number;
+}): Promise<void> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return;
+  }
+  const keys = uniqueStrings(normalizeStringEntries(params.keys));
+  if (keys.length === 0) {
+    return;
+  }
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  await withShortTermLock(workspaceDir, async () => {
+    const [store, phaseSignals] = await Promise.all([
+      readStore(workspaceDir, nowIso),
+      readPhaseSignalStore(workspaceDir, nowIso),
+    ]);
+    const knownKeys = new Set(Object.keys(store.entries));
+
+    for (const key of keys) {
+      if (!knownKeys.has(key)) {
+        continue;
+      }
+      const entry = phaseSignals.entries[key] ?? {
+        key,
+        lightHits: 0,
+        remHits: 0,
+      };
+      entry.lastRemConsideredAt = nowIso;
+      phaseSignals.entries[key] = entry;
+    }
+
+    for (const [key, entry] of Object.entries(phaseSignals.entries)) {
+      if (!knownKeys.has(key) || (entry.lightHits <= 0 && entry.remHits <= 0)) {
+        delete phaseSignals.entries[key];
+      }
+    }
+
+    phaseSignals.updatedAt = nowIso;
+    await writePhaseSignalStore(workspaceDir, phaseSignals);
+  });
+}
+
+export async function readLightStagedKeys(params: {
+  workspaceDir: string;
+  nowMs?: number;
+}): Promise<Set<string>> {
+  const workspaceDir = params.workspaceDir?.trim();
+  if (!workspaceDir) {
+    return new Set();
+  }
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const store = await readPhaseSignalStore(workspaceDir, nowIso);
+  const keys = new Set<string>();
+  for (const [key, entry] of Object.entries(store.entries)) {
+    if (entry.lightHits <= 0) {
+      continue;
+    }
+    const lastLightMs = Date.parse(entry.lastLightAt ?? "");
+    const lastRemMs = Date.parse(entry.lastRemAt ?? "");
+    const lastRemConsideredMs = Date.parse(entry.lastRemConsideredAt ?? "");
+    const lastConsumedMs = Math.max(
+      Number.isFinite(lastRemMs) ? lastRemMs : Number.NEGATIVE_INFINITY,
+      Number.isFinite(lastRemConsideredMs) ? lastRemConsideredMs : Number.NEGATIVE_INFINITY,
+    );
+    const hasPendingLightSignal = Number.isFinite(lastLightMs)
+      ? lastLightMs > lastConsumedMs
+      : !entry.lastRemAt;
+    if (hasPendingLightSignal) {
+      keys.add(key);
+    }
+  }
+  return keys;
 }
 
 export async function rankShortTermPromotionCandidates(

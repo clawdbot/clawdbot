@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveStateDir } from "../config/paths.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { writeJson } from "./json-files.js";
 
@@ -87,10 +88,6 @@ export async function writeRestartSentinel(
   const data: RestartSentinel = { version: 1, payload };
   await writeJson(filePath, data, { trailingNewline: true, dirMode: 0o700 });
   return filePath;
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function cloneRestartSentinelPayload(payload: RestartSentinelPayload): RestartSentinelPayload {

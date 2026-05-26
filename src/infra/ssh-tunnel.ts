@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
 import { ensurePortAvailable } from "./ports.js";
 
@@ -157,10 +158,7 @@ export async function startSshPortForward(opts: {
   });
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk) => {
-    const lines = String(chunk)
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
+    const lines = normalizeStringEntries(String(chunk).split("\n"));
     stderr.push(...lines);
   });
 

@@ -15,6 +15,8 @@ import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shar
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import { asOptionalRecord as asMutableRecord } from "../../../shared/record-coerce.js";
+import { normalizeOptionalLowercaseString as normalizeString } from "../../../shared/string-coerce.js";
 
 type CodexRouteHit = {
   path: string;
@@ -65,19 +67,9 @@ type CodexSessionRouteRepairSummary = {
   changes: string[];
 };
 
-function normalizeString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
-}
-
 function normalizeRuntimeString(value: unknown): string | undefined {
   const normalized = normalizeString(value);
   return normalized ? normalizeEmbeddedAgentRuntime(normalized) : undefined;
-}
-
-function asMutableRecord(value: unknown): MutableRecord | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as MutableRecord)
-    : undefined;
 }
 
 function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {
@@ -2744,7 +2736,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
   }
   if (!params.shouldRepair) {
     const stale = targets.flatMap((target) => {
-      const sessionKeys = scanCodexSessionStoreRoutes(loadSessionStore(target.storePath));
+      const sessionKeys = scanCodexSessionStoreRoutes(
+        loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+      );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
     });
     return {
@@ -2767,7 +2761,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
   let repairedStores = 0;
   let repairedSessions = 0;
   for (const target of targets) {
-    const staleSessionKeys = scanCodexSessionStoreRoutes(loadSessionStore(target.storePath));
+    const staleSessionKeys = scanCodexSessionStoreRoutes(
+      loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+    );
     if (staleSessionKeys.length === 0) {
       continue;
     }

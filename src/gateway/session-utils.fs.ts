@@ -4,6 +4,7 @@ import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../ag
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
@@ -273,7 +274,7 @@ function isOversizedTranscriptLine(line: string): boolean {
 }
 
 function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  const match = new RegExp(`"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
+  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
   if (!match) {
     return undefined;
   }
@@ -289,7 +290,7 @@ function extractJsonNullableStringFieldPrefix(
   prefix: string,
   field: string,
 ): string | null | undefined {
-  if (new RegExp(`"${field}"\\s*:\\s*null`).test(prefix)) {
+  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
     return null;
   }
   return extractJsonStringFieldPrefix(prefix, field);

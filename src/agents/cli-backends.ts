@@ -13,6 +13,7 @@ import type {
   PluginTextTransforms,
 } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeProviderId } from "./model-selection.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
 
@@ -159,7 +160,7 @@ function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig)
     args: override.args ?? base.args,
     env: { ...base.env, ...override.env },
     modelAliases: { ...base.modelAliases, ...override.modelAliases },
-    clearEnv: Array.from(new Set([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])])),
+    clearEnv: uniqueStrings([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])]),
     sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
     sessionArgs: override.sessionArgs ?? base.sessionArgs,
     resumeArgs: override.resumeArgs ?? base.resumeArgs,

@@ -5,6 +5,7 @@ import {
 } from "../media-generation/catalog.js";
 import type { UnifiedModelCatalogEntry } from "../model-catalog/types.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import type {
@@ -80,7 +81,7 @@ export function createModelCatalogRegistrationHandlers(params: {
       });
       return;
     }
-    const normalizedKinds = [...new Set(provider.kinds)];
+    const normalizedKinds = uniqueValues(provider.kinds);
     const samePluginOverlapping = params.registry.modelCatalogProviders.find(
       (entry) =>
         entry.provider.provider === providerId &&
@@ -92,7 +93,7 @@ export function createModelCatalogRegistrationHandlers(params: {
         ...samePluginOverlapping.provider,
         ...provider,
         provider: providerId,
-        kinds: [...new Set([...samePluginOverlapping.provider.kinds, ...normalizedKinds])],
+        kinds: uniqueValues([...samePluginOverlapping.provider.kinds, ...normalizedKinds]),
         staticCatalog: provider.staticCatalog ?? samePluginOverlapping.provider.staticCatalog,
         liveCatalog: provider.liveCatalog ?? samePluginOverlapping.provider.liveCatalog,
       };

@@ -3,6 +3,7 @@ import type {
   PartialReplyPayload,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
+import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -56,6 +57,7 @@ export type SubscribeEmbeddedPiSessionParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
@@ -68,10 +70,14 @@ export type SubscribeEmbeddedPiSessionParams = {
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
   /**
-   * Exact raw names of non-plugin OpenClaw tools registered for this run.
-   * When provided, MEDIA: passthrough requires an exact match instead of only
-   * a normalized-name collision with a trusted built-in.
+   * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /**
+   * Exact raw names allowed to emit local MEDIA: paths for this run.
+   * Includes core trusted tools plus bundled plugin tools proven from the
+   * startup metadata snapshot.
+   */
+  trustedLocalMediaToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
 };

@@ -219,6 +219,32 @@ describe("install-sh smoke runner", () => {
     expect(runner).toContain("==> Direct npm global install candidate");
     expect(runner).toContain("==> Direct npm global update candidate");
   });
+
+  it("forwards smoke-runner control knobs into Docker containers", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("SMOKE_RUNNER_ENV_ARGS=()");
+    for (const envName of [
+      "OPENCLAW_INSTALL_ALLOW_LEGACY_UPDATE_WARNING",
+      "OPENCLAW_INSTALL_SELF_UPDATE_WARNING_FIXED_VERSION",
+      "OPENCLAW_INSTALL_SMOKE_COMMAND_TIMEOUT",
+      "OPENCLAW_INSTALL_SMOKE_HEARTBEAT_INTERVAL",
+      "OPENCLAW_INSTALL_SMOKE_PREVIOUS",
+      "OPENCLAW_INSTALL_SMOKE_SKIP_PREVIOUS",
+    ]) {
+      expect(script).toContain(envName);
+    }
+    expect(script).toMatch(
+      /Run installer smoke test[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+    );
+    expect(script).toMatch(/Run update smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u);
+    expect(script).toMatch(
+      /Run direct npm global smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+    );
+    expect(script).toMatch(
+      /Run installer npm freshness smoke[\s\S]*"\$\{SMOKE_RUNNER_ENV_ARGS\[@\]\}"/u,
+    );
+  });
 });
 
 describe("bun global install smoke", () => {
@@ -285,6 +311,9 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("OPENCLAW_INSTALL_CLI_URL: file:///tmp/openclaw-install-cli.sh");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_CLI: "0"');
     expect(workflow).toContain("Run Rocky Linux installer smoke");
+    expect(workflow).toContain("Run Rocky Linux CLI installer smoke");
+    expect(workflow).toContain("scripts/install-cli.sh:/tmp/install-cli.sh:ro");
+    expect(workflow).toContain("bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli");
     expect(workflow).toContain("rockylinux:9@sha256:");
     expect(workflow).toContain("pnpm-workspace.yaml");
     expect(workflow).toContain("workspace.patchedDependencies");

@@ -1,8 +1,17 @@
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
 import { beginTelegramInboundEventDeliveryCorrelation } from "./inbound-event-delivery.js";
+import {
+  getTopicName,
+  resetTopicNameCacheForTest,
+  resolveTopicNameCacheScope,
+  setTelegramTopicNameStoreFactoryForTest,
+} from "./topic-name-cache.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -42,6 +51,38 @@ const createForumTopicTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 let envSnapshot: ReturnType<typeof captureEnv>;
+
+type TopicNameEntryForTest = {
+  name: string;
+  iconColor?: number;
+  iconCustomEmojiId?: string;
+  closed?: boolean;
+  updatedAt: number;
+};
+
+const topicNameStoresForTest = new Map<string, Map<string, TopicNameEntryForTest>>();
+
+function installTopicNameStoreForTest() {
+  topicNameStoresForTest.clear();
+  setTelegramTopicNameStoreFactoryForTest((namespace) => {
+    const entries = topicNameStoresForTest.get(namespace) ?? new Map();
+    topicNameStoresForTest.set(namespace, entries);
+    return {
+      async register(key, value) {
+        entries.set(key, value);
+      },
+      async entries() {
+        return Array.from(entries, ([key, value]) => ({ key, value }));
+      },
+      async delete(key) {
+        return entries.delete(key);
+      },
+      async clear() {
+        entries.clear();
+      },
+    };
+  });
+}
 
 type MockCallSource = {
   mock: {
@@ -93,6 +134,10 @@ describe("handleTelegramAction", () => {
     } as OpenClawConfig;
   }
 
+  function topicCacheScopeFor(cfg: OpenClawConfig, accountId: string): string {
+    return resolveTopicNameCacheScope(resolveStorePath(cfg.session?.store, { agentId: accountId }));
+  }
+
   async function sendInlineButtonsMessage(params: {
     to: string;
     buttons: Array<Array<{ text: string; callback_data: string; style?: string }>>;
@@ -131,6 +176,8 @@ describe("handleTelegramAction", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
+    resetTopicNameCacheForTest();
+    installTopicNameStoreForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
       reactMessageTelegram,
       sendMessageTelegram,
@@ -155,6 +202,9 @@ describe("handleTelegramAction", () => {
   });
 
   afterEach(() => {
+    setTelegramTopicNameStoreFactoryForTest(undefined);
+    resetTopicNameCacheForTest();
+    topicNameStoresForTest.clear();
     envSnapshot.restore();
   });
 
@@ -864,6 +914,53 @@ describe("handleTelegramAction", () => {
       expect(opts.gatewayClientScopes).toEqual(["operator.write"]);
     },
   );
+
+  it("stores created forum topic names in the account-scoped cache", async () => {
+    createForumTopicTelegram.mockResolvedValueOnce({
+      topicId: 99,
+      name: "Topic",
+      chatId: "-100123",
+    });
+    const cfg = {
+      ...telegramConfig({ actions: { createForumTopic: true } }),
+      session: { store: path.join(os.tmpdir(), "openclaw-telegram-action-sessions.json") },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      { action: "createForumTopic", accountId: "work", chatId: "alias-chat", name: "Topic" },
+      cfg,
+    );
+
+    const scope = topicCacheScopeFor(cfg, "work");
+    await expect(getTopicName("-100123", 99, scope)).resolves.toBe("Topic");
+    await expect(getTopicName("alias-chat", 99, scope)).resolves.toBeUndefined();
+  });
+
+  it("stores edited forum topic names in the account-scoped cache", async () => {
+    editForumTopicTelegram.mockResolvedValueOnce({
+      ok: true,
+      chatId: "-100123",
+      messageThreadId: 42,
+      name: "New",
+    });
+    const cfg = {
+      ...telegramConfig({ actions: { editForumTopic: true } }),
+      session: { store: path.join(os.tmpdir(), "openclaw-telegram-action-sessions.json") },
+    } as OpenClawConfig;
+
+    await handleTelegramAction(
+      {
+        action: "editForumTopic",
+        accountId: "work",
+        chatId: "alias-chat",
+        messageThreadId: 42,
+        name: "New",
+      },
+      cfg,
+    );
+
+    await expect(getTopicName("-100123", 42, topicCacheScopeFor(cfg, "work"))).resolves.toBe("New");
+  });
 
   it.each([
     {

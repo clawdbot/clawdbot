@@ -4,6 +4,7 @@ import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plu
 import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
+  resolveEnvelopeFormatOptions,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -59,6 +60,7 @@ import { advanceIMessageCatchupCursor, resolveCatchupConfig } from "./catchup.js
 import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
+import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -631,6 +633,24 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       storePath,
       sessionKey: decision.route.sessionKey,
     });
+    const dmHistoryLimit = !decision.isGroup
+      ? resolveIMessageDmHistoryLimit({
+          config: imessageCfg,
+          sender: decision.sender,
+          senderNormalized: decision.senderNormalized,
+        })
+      : 0;
+    const dmHistory =
+      !decision.isGroup && dmHistoryLimit > 0 && !previousTimestamp
+        ? await resolveIMessageDmHistoryContext({
+            client: getActiveClient(),
+            message,
+            senderNormalized: decision.senderNormalized,
+            limit: dmHistoryLimit,
+            envelopeOptions: resolveEnvelopeFormatOptions(cfg),
+            logVerbose,
+          })
+        : undefined;
     const { ctxPayload, chatTarget } = buildIMessageInboundContext({
       cfg,
       decision,
@@ -639,6 +659,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       remoteHost,
       historyLimit,
       groupHistories,
+      dmHistory,
       media: {
         path: mediaPath,
         type: mediaType,

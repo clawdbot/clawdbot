@@ -1,13 +1,10 @@
 export { asFiniteNumber } from "../shared/number-coercion.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
+export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
 
 const ERROR_BODY_METADATA_LIMIT = 500;
-
-export function asBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 
 export function asObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)

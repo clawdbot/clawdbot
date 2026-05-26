@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
+import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
 import { updateSessionStoreEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -23,10 +24,8 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
     case "subagent":
       return resolveSubagentMaxConcurrent(cfg);
     case "cron":
-    case "cron-nested": {
-      const raw = cfg?.cron?.maxConcurrentRuns;
-      return typeof raw === "number" && Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1;
-    }
+    case "cron-nested":
+      return resolveCronMaxConcurrentRuns(cfg?.cron);
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
   }

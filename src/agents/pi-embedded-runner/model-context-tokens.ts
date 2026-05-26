@@ -1,4 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import { asFiniteNumber } from "../../shared/number-coercion.js";
 
 type PiModelWithOptionalContextTokens = Model<Api> & {
   contextTokens?: number;
@@ -6,5 +7,5 @@ type PiModelWithOptionalContextTokens = Model<Api> & {
 
 export function readPiModelContextTokens(model: Model<Api> | null | undefined): number | undefined {
   const value = (model as PiModelWithOptionalContextTokens | null | undefined)?.contextTokens;
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }

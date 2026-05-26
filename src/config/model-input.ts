@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -11,10 +12,6 @@ type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
 };
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function modelKeyForConfig(provider: string, model: string): string {
   const providerId = provider.trim();

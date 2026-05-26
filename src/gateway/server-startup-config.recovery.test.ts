@@ -14,50 +14,48 @@ const configMocks = vi.hoisted(() => ({
   isNixMode: { value: false },
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
-const pluginMetadataSnapshot = vi.hoisted(
-  (): PluginMetadataSnapshot => {
-    const emptyOwners = {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    };
-    const zeroMetrics = {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: 0,
-    };
-    return {
+const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
+  const emptyOwners = {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
+  const zeroMetrics = {
+    registrySnapshotMs: 0,
+    manifestRegistryMs: 0,
+    ownerMapsMs: 0,
+    totalMs: 0,
+    indexPluginCount: 0,
+    manifestPluginCount: 0,
+  };
+  return {
+    policyHash: "policy",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
       policyHash: "policy",
-      index: {
-        version: 1,
-        hostContractVersion: "test",
-        compatRegistryVersion: "test",
-        migrationVersion: 1,
-        policyHash: "policy",
-        generatedAtMs: 0,
-        installRecords: {},
-        plugins: [],
-        diagnostics: [],
-      },
-      registryDiagnostics: [],
-      manifestRegistry: pluginManifestRegistry,
+      generatedAtMs: 0,
+      installRecords: {},
       plugins: [],
       diagnostics: [],
-      byPluginId: new Map(),
-      normalizePluginId: (pluginId) => pluginId,
-      owners: emptyOwners,
-      metrics: zeroMetrics,
-    };
-  },
-);
+    },
+    registryDiagnostics: [],
+    manifestRegistry: pluginManifestRegistry,
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: emptyOwners,
+    metrics: zeroMetrics,
+  };
+});
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
@@ -459,6 +457,98 @@ describe("gateway startup config validation", () => {
     ).rejects.toThrow(
       `Invalid config at ${configPath}.\ngateway.mode: Expected 'local' or 'remote'\nRun "openclaw doctor --fix" to repair, then retry.\nIf startup is still blocked, inspect the adjacent .bak backup before restoring it manually.`,
     );
+  });
+
+  it("does not suggest doctor repair for plugin packaging compiled-output failures", async () => {
+    const invalidSnapshot = buildTestConfigSnapshot({
+      path: configPath,
+      exists: true,
+      raw: `${JSON.stringify({
+        gateway: { mode: "local" },
+        plugins: { slots: { memory: "source-only-pack" } },
+      })}\n`,
+      parsed: {
+        gateway: { mode: "local" },
+        plugins: { slots: { memory: "source-only-pack" } },
+      },
+      valid: false,
+      config: {
+        gateway: { mode: "local" },
+        plugins: { slots: { memory: "source-only-pack" } },
+      } as OpenClawConfig,
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: source-only-pack",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+        },
+      ],
+      legacyIssues: [],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+
+    const start = loadGatewayStartupConfigSnapshot({
+      minimalTestGateway: true,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+    await expect(start).rejects.toThrow(
+      `Invalid config at ${configPath}.\nplugins.slots.memory: plugin not found: source-only-pack\nThis is a plugin packaging issue, not a local config problem.\nUpdate or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.`,
+    );
+    await start.catch((error: unknown) => {
+      expect(String(error)).not.toContain("openclaw doctor --fix");
+    });
+  });
+
+  it("keeps doctor repair guidance for mixed plugin packaging and core invalidity", async () => {
+    const invalidSnapshot = buildTestConfigSnapshot({
+      path: configPath,
+      exists: true,
+      raw: `${JSON.stringify({
+        gateway: { mode: "invalid" },
+        plugins: { slots: { memory: "source-only-pack" } },
+      })}\n`,
+      parsed: {
+        gateway: { mode: "invalid" },
+        plugins: { slots: { memory: "source-only-pack" } },
+      },
+      valid: false,
+      config: {
+        gateway: { mode: "invalid" },
+        plugins: { slots: { memory: "source-only-pack" } },
+      } as unknown as OpenClawConfig,
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: source-only-pack",
+        },
+        {
+          path: "gateway.mode",
+          message: "Expected 'local' or 'remote'",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+      ],
+      legacyIssues: [],
+    });
+    vi.mocked(configIo.readConfigFileSnapshot).mockResolvedValueOnce(invalidSnapshot);
+
+    await expect(
+      loadGatewayStartupConfigSnapshot({
+        minimalTestGateway: true,
+        log: { info: vi.fn(), warn: vi.fn() },
+      }),
+    ).rejects.toThrow('Run "openclaw doctor --fix" to repair, then retry.');
   });
 
   it("rejects legacy config entries in Nix mode", async () => {

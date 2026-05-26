@@ -3,6 +3,7 @@ import officialExternalPluginCatalog from "../../scripts/lib/official-external-p
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestChannelConfig,
@@ -122,11 +123,13 @@ function resolveOfficialExternalPluginLookupIds(
   entry: OfficialExternalPluginCatalogEntry,
 ): string[] {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
-  return [
-    normalizeOptionalString(manifest?.plugin?.id),
-    normalizeOptionalString(manifest?.channel?.id),
-    normalizeOptionalString(manifest?.providers?.[0]?.id),
-  ].filter((value, index, all): value is string => Boolean(value) && all.indexOf(value) === index);
+  return uniqueStrings(
+    [
+      normalizeOptionalString(manifest?.plugin?.id),
+      normalizeOptionalString(manifest?.channel?.id),
+      normalizeOptionalString(manifest?.providers?.[0]?.id),
+    ].filter((value): value is string => Boolean(value)),
+  );
 }
 
 export function resolveOfficialExternalPluginLabel(

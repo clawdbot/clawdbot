@@ -90,7 +90,7 @@
       "kind": "object-property",
       "name": "description",
       "path": "ui/src/ui/chat/build-chat-items.ts",
-      "text": "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view."
+      "text": "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view."
     },
     {
       "count": 1,

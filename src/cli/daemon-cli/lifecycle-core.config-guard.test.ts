@@ -19,6 +19,14 @@ const invalidConfigRecoveryHint = [
   'Run "openclaw doctor --fix" to repair, then retry.',
   "If startup is still blocked, inspect the adjacent .bak backup before restoring it manually.",
 ].join("\n");
+const pluginPackagingRecoveryHints = [
+  "This is a plugin packaging issue, not a local config problem.",
+  "Update or reinstall the plugin after the publisher ships compiled JavaScript, or disable/uninstall the plugin until then.",
+];
+const pluginPackagingHintItems = pluginPackagingRecoveryHints.map((text) => ({
+  kind: "generic",
+  text,
+}));
 
 function expectLatestRuntimeJson(payload: unknown) {
   const calls = defaultRuntime.writeJson.mock.calls;
@@ -47,6 +55,8 @@ function setConfigSnapshot(params: {
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
+  warnings?: Array<{ path: string; message: string }>;
+  legacyIssues?: Array<{ path: string; message: string }>;
   lastTouchedVersion?: string;
 }) {
   const config = params.lastTouchedVersion
@@ -58,6 +68,28 @@ function setConfigSnapshot(params: {
     config,
     sourceConfig: config,
     issues: params.issues ?? [],
+    warnings: params.warnings ?? [],
+    legacyIssues: params.legacyIssues ?? [],
+  });
+}
+
+function setPluginPackagingInvalidSnapshot() {
+  setConfigSnapshot({
+    exists: true,
+    valid: false,
+    issues: [
+      {
+        path: "plugins.slots.memory",
+        message: "plugin not found: source-only-pack",
+      },
+    ],
+    warnings: [
+      {
+        path: "plugins",
+        message:
+          "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+      },
+    ],
   });
 }
 
@@ -103,6 +135,22 @@ describe("runServiceRestart config pre-flight (#35862)", () => {
       error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
       hints: undefined,
       hintItems: undefined,
+      warnings: undefined,
+    });
+  });
+
+  it("points restart at plugin packaging recovery for packaging-only invalid config", async () => {
+    setPluginPackagingInvalidSnapshot();
+
+    await expect(runServiceRestart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "restart",
+      ok: false,
+      error: "Gateway restart blocked: plugins.slots.memory: plugin not found: source-only-pack",
+      hints: pluginPackagingRecoveryHints,
+      hintItems: pluginPackagingHintItems,
       warnings: undefined,
     });
   });
@@ -181,6 +229,22 @@ describe("runServiceStart config pre-flight (#35862)", () => {
       error: `Gateway aborted: config is invalid.\nagents.defaults.pdfModel: Unrecognized key\n${invalidConfigRecoveryHint}`,
       hints: undefined,
       hintItems: undefined,
+      warnings: undefined,
+    });
+  });
+
+  it("points start at plugin packaging recovery for packaging-only invalid config", async () => {
+    setPluginPackagingInvalidSnapshot();
+
+    await expect(runServiceStart(createServiceRunArgs())).rejects.toThrow("__exit__:1");
+
+    expect(service.restart).not.toHaveBeenCalled();
+    expectLatestRuntimeJson({
+      action: "start",
+      ok: false,
+      error: "Gateway start blocked: plugins.slots.memory: plugin not found: source-only-pack",
+      hints: pluginPackagingRecoveryHints,
+      hintItems: pluginPackagingHintItems,
       warnings: undefined,
     });
   });

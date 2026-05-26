@@ -1,3 +1,5 @@
+import { isRecord } from "../shared/record-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   loadBundledPluginPublicArtifactModuleSync,
   resolveBundledPluginPublicArtifactPath,
@@ -20,10 +22,6 @@ const WEB_FETCH_ARTIFACT_CANDIDATES = [
   "web-fetch-provider.js",
   "web-fetch.js",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
@@ -104,7 +102,7 @@ function tryLoadBundledPublicArtifactModule(params: {
 }
 
 function normalizeExplicitBundledPluginIds(pluginIds: readonly string[]): string[] {
-  return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(pluginIds);
 }
 
 function loadBundledProviderEntriesFromDir<TProvider extends object>(params: {

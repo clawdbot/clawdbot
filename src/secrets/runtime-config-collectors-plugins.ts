@@ -6,6 +6,7 @@ import {
 } from "../plugins/config-contracts.js";
 import { normalizePluginsConfig, resolveEnableState } from "../plugins/config-state.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   collectSecretInputAssignment,
   type ResolverContext,
@@ -161,11 +162,7 @@ function createPluginConfigAssignmentApply(
   relativePath: string,
 ): (value: unknown) => void {
   return (value) => {
-    const segments = relativePath
-      .replace(/\[(\d+)\]/g, ".$1")
-      .split(".")
-      .map((segment) => segment.trim())
-      .filter(Boolean);
+    const segments = normalizeStringEntries(relativePath.replace(/\[(\d+)\]/g, ".$1").split("."));
     if (segments.length === 0) {
       return;
     }

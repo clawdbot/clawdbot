@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   createTalkEventSequencer,
   type TalkBrain,
@@ -210,8 +211,3 @@ export function normalizeTalkTransport(value: string | undefined): string | unde
 }
 
 export type { TalkBrain, TalkEvent, TalkEventContext, TalkEventInput, TalkMode, TalkTransport };
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}

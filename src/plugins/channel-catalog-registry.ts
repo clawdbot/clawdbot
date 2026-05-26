@@ -1,4 +1,5 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { normalizeOptionalString as resolveOptionalString } from "../shared/string-coerce.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
@@ -63,10 +64,6 @@ export function listChannelCatalogEntries(
       },
     ];
   });
-}
-
-function resolveOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function resolveChannelCatalogPluginId(

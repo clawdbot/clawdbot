@@ -44,18 +44,22 @@ describe("scripts/test-group-report aggregation", () => {
                 name: path.join(process.cwd(), "src", "commands", "agent.test.ts"),
                 startTime: 100,
                 endTime: 700,
-                assertionResults: [{}, {}],
+                assertionResults: [
+                  { duration: 150, fullName: "agent ok", status: "passed" },
+                  { duration: 2600, fullName: "agent slow", status: "passed" },
+                ],
               },
               {
                 name: path.join(process.cwd(), "extensions", "discord", "src", "send.test.ts"),
                 startTime: 200,
                 endTime: 450,
-                assertionResults: [{}],
+                assertionResults: [{ duration: 50, fullName: "send ok", status: "passed" }],
               },
             ],
           },
         },
       ],
+      maxTestMs: 2000,
     });
 
     expect(report.totals).toEqual({ durationMs: 850, fileCount: 2, testCount: 3 });
@@ -70,6 +74,15 @@ describe("scripts/test-group-report aggregation", () => {
         durationMs: 850,
         fileCount: 2,
         testCount: 3,
+      },
+    ]);
+    expect(report.slowTests).toStrictEqual([
+      {
+        config: "commands",
+        durationMs: 2600,
+        file: "src/commands/agent.test.ts",
+        fullName: "agent slow",
+        status: "passed",
       },
     ]);
   });
@@ -238,9 +251,10 @@ describe("scripts/test-group-report arg parsing", () => {
       fullSuite: false,
       groupBy: "folder",
       limit: 25,
+      maxTestMs: null,
       output: null,
       reports: [],
-      rss: process.platform === "darwin",
+      rss: process.platform !== "win32",
       topFiles: 25,
       vitestArgs: ["--maxWorkers=1"],
     });
@@ -264,16 +278,51 @@ describe("scripts/test-group-report arg parsing", () => {
       fullSuite: false,
       groupBy: "area",
       limit: 5,
+      maxTestMs: null,
       output: null,
       reports: [],
-      rss: process.platform === "darwin",
+      rss: process.platform !== "win32",
       topFiles: 3,
       vitestArgs: [],
+    });
+  });
+
+  it("parses individual test duration threshold", () => {
+    expect(parseTestGroupReportArgs(["--max-test-ms", "2000"])).toMatchObject({
+      maxTestMs: 2000,
     });
   });
 });
 
 describe("scripts/test-group-report run plans", () => {
+  it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousLeaf = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    try {
+      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+
+      expect(plans.map((plan) => plan.config)).not.toContain(
+        "test/vitest/vitest.full-agentic.config.ts",
+      );
+      expect(plans.map((plan) => plan.config)).toContain(
+        "test/vitest/vitest.agents-tools.config.ts",
+      );
+    } finally {
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousLeaf === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeaf;
+      }
+    }
+  });
+
   it("preserves full-suite shard file args and unique report labels", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6";

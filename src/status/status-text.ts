@@ -10,7 +10,10 @@ import {
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
+import {
+  areRuntimeModelRefsEquivalent,
+  shouldPreferActiveRuntimeAliasAuthLabel,
+} from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-codex-routing.js";
 import {
@@ -280,10 +283,11 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     modelRefs.active.label,
   );
   if (
-    runtimeAliasModelEquivalent &&
-    normalizeOptionalLowercaseString(selectedModelAuth) === "unknown" &&
-    activeModelAuth &&
-    normalizeOptionalLowercaseString(activeModelAuth) !== "unknown"
+    shouldPreferActiveRuntimeAliasAuthLabel({
+      runtimeAliasModelEquivalent,
+      selectedAuthLabel: selectedModelAuth,
+      activeAuthLabel: activeModelAuth,
+    })
   ) {
     selectedModelAuth = activeModelAuth;
   }

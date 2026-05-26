@@ -2,6 +2,7 @@ import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { patchTopLevelChannelConfigSection, splitSetupEntries } from "openclaw/plugin-sdk/setup";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const channel = "nostr" as const;
 
@@ -25,7 +26,7 @@ export function parseRelayUrls(raw: string): { relays: string[]; error?: string 
     }
     relays.push(entry);
   }
-  return { relays: [...new Set(relays)] };
+  return { relays: uniqueStrings(relays) };
 }
 
 export function createNostrSetupAdapter(params: {

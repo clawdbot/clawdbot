@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalString as trimString,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -20,10 +24,6 @@ function extractUrlCitations(annotations: unknown): string[] {
 
 const XAI_RESPONSES_BASE_URL = "https://api.x.ai/v1";
 export const XAI_RESPONSES_ENDPOINT = `${XAI_RESPONSES_BASE_URL}/responses`;
-
-function trimString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 export function resolveXaiResponsesEndpoint(baseUrl?: unknown): string {
   return `${(trimString(baseUrl) ?? XAI_RESPONSES_BASE_URL).replace(/\/+$/, "")}/responses`;
@@ -59,14 +59,14 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
         }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
           const urls = extractUrlCitations(block.annotations);
-          return { text: block.text, annotationCitations: [...new Set(urls)] };
+          return { text: block.text, annotationCitations: uniqueStrings(urls) };
         }
       }
     }
 
     if (output.type === "output_text" && typeof output.text === "string" && output.text) {
       const urls = extractUrlCitations(output.annotations);
-      return { text: output.text, annotationCitations: [...new Set(urls)] };
+      return { text: output.text, annotationCitations: uniqueStrings(urls) };
     }
   }
 

@@ -23,8 +23,15 @@ MOCK_REQUEST_LOG="/tmp/openclaw-release-typed-onboarding-openai.jsonl"
 export SUCCESS_MARKER MOCK_REQUEST_LOG
 
 mock_pid=""
+wizard_pid=""
+input_fifo_dir=""
 cleanup() {
+  exec 3>&- 2>/dev/null || true
+  openclaw_e2e_stop_process "${wizard_pid:-}"
   openclaw_e2e_stop_process "${mock_pid:-}"
+  if [ -n "${input_fifo_dir:-}" ]; then
+    rm -rf "$input_fifo_dir"
+  fi
 }
 trap cleanup EXIT
 
@@ -80,7 +87,8 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-typed-onboarding-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
-input_fifo="$(mktemp -u "/tmp/openclaw-release-typed-onboarding.XXXXXX")"
+input_fifo_dir="$(mktemp -d "/tmp/openclaw-release-typed-onboarding.XXXXXX")"
+input_fifo="$input_fifo_dir/stdin.fifo"
 mkfifo "$input_fifo"
 openclaw_e2e_run_script_with_pty "node \"$entry\" onboard --flow quickstart --mode local --auth-choice skip --gateway-port \"$PORT\" --gateway-bind loopback --skip-daemon --skip-ui --skip-channels --skip-skills --skip-health" /tmp/openclaw-release-typed-onboarding.log <"$input_fifo" >/dev/null 2>&1 &
 wizard_pid="$!"
@@ -95,8 +103,10 @@ send $' \r' 0.4
 send $'\r' 0.4
 
 wait "$wizard_pid"
+wizard_pid=""
 exec 3>&-
-rm -f "$input_fifo"
+rm -rf "$input_fifo_dir"
+input_fifo_dir=""
 
 openclaw onboard \
   --non-interactive \

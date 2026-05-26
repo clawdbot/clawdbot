@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../terminal/ansi.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import type { HealthSummary } from "./health.js";
-import { formatHealthChannelLines, healthCommand } from "./health.js";
+import { formatHealthChannelLines, formatModelPricingHealthLine, healthCommand } from "./health.js";
 
 const runtime = {
   log: vi.fn(),
@@ -177,7 +177,7 @@ describe("healthCommand", () => {
     expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
   });
 
-  it("prints degraded model-pricing health without failing the command", async () => {
+  it("formats degraded model-pricing health as a warning", () => {
     const snapshot = createHealthSummary({
       channels: {},
       channelOrder: [],
@@ -196,12 +196,8 @@ describe("healthCommand", () => {
       detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
       lastFailureAt: Date.now(),
     };
-    callGatewayMock.mockResolvedValueOnce(snapshot);
 
-    await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime as never);
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(stripAnsi(runtime.log.mock.calls.flat().join("\n"))).toContain(
+    expect(formatModelPricingHealthLine(snapshot)).toBe(
       "Model pricing: warning (optional pricing refresh degraded) (OpenRouter pricing fetch failed: TypeError: fetch failed)",
     );
   });

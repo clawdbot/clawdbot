@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
+  parseDockerAllCliArgs,
 } from "../../scripts/test-docker-all.mjs";
 
 const limits = {
@@ -30,6 +32,46 @@ function activePool({
 }
 
 describe("scripts/test-docker-all scheduler", () => {
+  it("parses the supported CLI options", () => {
+    expect(parseDockerAllCliArgs([])).toEqual({
+      help: false,
+      planJson: false,
+    });
+    expect(parseDockerAllCliArgs(["--plan-json"])).toEqual({
+      help: false,
+      planJson: true,
+    });
+    expect(parseDockerAllCliArgs(["--help"])).toEqual({
+      help: true,
+      planJson: false,
+    });
+  });
+
+  it("prints CLI help without a stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/test-docker-all.mjs [--plan-json]");
+    expect(result.stdout).toContain("OPENCLAW_DOCKER_ALL_* env vars");
+  });
+
+  it("rejects unknown CLI options without a stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--bogus"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("unknown argument: --bogus");
+    expect(result.stderr).toContain("Usage: node scripts/test-docker-all.mjs [--plan-json]");
+    expect(result.stderr).not.toContain("at ");
+  });
+
   it("allows an overweight lane to start alone under low parallelism", () => {
     expect(
       canStartSchedulerLane(

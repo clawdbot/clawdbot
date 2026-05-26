@@ -1,5 +1,6 @@
 import type { APIMessage, APIUser } from "discord-api-types/v10";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getChannelMessage, Message as DiscordMessage, type Message } from "../internal/discord.js";
 import { resolveDiscordMessageText, type DiscordChannelInfo } from "./message-utils.js";
 
@@ -91,10 +92,6 @@ function readMessageFallback(message: Message): MessageFallback {
       ? (value.message_snapshots as APIMessage["message_snapshots"])
       : undefined,
   };
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function normalizeStringArray(value: unknown): string[] {

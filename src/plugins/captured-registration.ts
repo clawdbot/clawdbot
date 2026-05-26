@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -174,9 +175,7 @@ export function createCapturedPluginRegistration(params?: {
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
-          const parentPath = (opts?.parentPath ?? [])
-            .map((segment) => segment.trim())
-            .filter(Boolean);
+          const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
           const descriptors = (opts?.descriptors ?? [])
             .map((descriptor) => ({
               name: descriptor.name.trim(),
@@ -184,12 +183,10 @@ export function createCapturedPluginRegistration(params?: {
               hasSubcommands: descriptor.hasSubcommands,
             }))
             .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = [
+          const commands = normalizeStringEntries([
             ...(opts?.commands ?? []),
             ...descriptors.map((descriptor) => descriptor.name),
-          ]
-            .map((command) => command.trim())
-            .filter(Boolean);
+          ]);
           if (commands.length === 0) {
             return;
           }

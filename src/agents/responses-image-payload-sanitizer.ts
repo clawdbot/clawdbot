@@ -1,13 +1,10 @@
 import { canonicalizeBase64 } from "../media/base64.js";
+import { isRecord } from "../shared/record-coerce.js";
 
 const DATA_URL_PREFIX = "data:";
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
 type JsonRecord = Record<string, unknown>;
-
-function isRecord(value: unknown): value is JsonRecord {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function startsWithDataUrl(value: string): boolean {
   return value.slice(0, DATA_URL_PREFIX.length).toLowerCase() === DATA_URL_PREFIX;

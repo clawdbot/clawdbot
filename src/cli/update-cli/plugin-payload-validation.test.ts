@@ -155,6 +155,7 @@ describe("runPluginPayloadSmokeCheck", () => {
     await writePackage(dir, {
       name: "@openclaw/brave-plugin",
       openclaw: { extensions: ["./index.js", " "] },
+      main: "main.js",
     });
     await fs.writeFile(path.join(dir, "index.js"), "export default {};\n", "utf8");
     const result = await runPluginPayloadSmokeCheck({
@@ -168,6 +169,50 @@ describe("runPluginPayloadSmokeCheck", () => {
         reason: "missing-extension-entry",
         detail:
           "Plugin extension entry validation failed: package.json openclaw.extensions[1] must be a non-empty string",
+      },
+    ]);
+  });
+
+  it("reports only extension-entry failure for an empty extensions list even if main is missing", async () => {
+    const dir = path.join(tmpRoot, "brave-empty");
+    await writePackage(dir, {
+      name: "@openclaw/brave-plugin",
+      openclaw: { extensions: [] },
+      main: "dist/index.js",
+    });
+    const result = await runPluginPayloadSmokeCheck({
+      records: { brave: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "brave",
+        installPath: dir,
+        reason: "missing-extension-entry",
+        detail:
+          "Plugin extension entry validation failed: package.json openclaw.extensions is empty",
+      },
+    ]);
+  });
+
+  it("reports missing main entry when extension entries are valid", async () => {
+    const dir = path.join(tmpRoot, "brave");
+    await writePackage(dir, {
+      name: "@openclaw/brave-plugin",
+      openclaw: { extensions: ["./index.js"] },
+      main: "dist/index.js",
+    });
+    await fs.writeFile(path.join(dir, "index.js"), "export default {};\n", "utf8");
+    const result = await runPluginPayloadSmokeCheck({
+      records: { brave: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "brave",
+        installPath: dir,
+        reason: "missing-main-entry",
+        detail: `Plugin main entry "dist/index.js" not found at ${path.join(dir, "dist/index.js")}`,
       },
     ]);
   });

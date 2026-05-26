@@ -10,9 +10,10 @@ import {
   isAgentMediatedCompletionSourceTool,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../sessions/input-provenance.js";
-import { isCronSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -593,9 +594,7 @@ function hasGatewayAgentMessagingToolDeliveredExpectedMedia(
   response: unknown,
   expectedMediaUrls: readonly string[],
 ): boolean {
-  const expected = Array.from(
-    new Set(expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
-  );
+  const expected = uniqueStrings(normalizeStringEntries(expectedMediaUrls));
   if (expected.length === 0) {
     return true;
   }
@@ -714,9 +713,7 @@ function resolveGeneratedMediaDirectFallbackUrls(params: {
   expectedMediaUrls: readonly string[];
   announceResponse?: unknown;
 }): string[] {
-  const expected = Array.from(
-    new Set(params.expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
-  );
+  const expected = uniqueStrings(normalizeStringEntries(params.expectedMediaUrls));
   const result = getGatewayAgentResult(params.announceResponse);
   if (!result) {
     return expected;
@@ -829,8 +826,9 @@ async function sendSubagentAnnounceDirectly(params: {
       completionRouteRequiresMessageToolDelivery ||
       (agentMediatedCompletion && expectedMediaUrls.length > 0);
     const requesterActivity = resolveRequesterSessionActivity(canonicalRequesterSessionKey);
+    let activeRequesterWakeFailed = false;
     const tryGeneratedMediaDirectDelivery = async (announceResponse?: unknown) => {
-      if (requesterActivity.isActive) {
+      if (requesterActivity.isActive && !activeRequesterWakeFailed) {
         return undefined;
       }
       const missingMediaUrls = resolveGeneratedMediaDirectFallbackUrls({
@@ -899,12 +897,29 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
+      activeRequesterWakeFailed = true;
       defaultRuntime.log(
         `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
           "active requester session could not be woken",
           wakeOutcome,
         )}`,
       );
+    }
+    if (
+      params.expectsCompletionMessage &&
+      isCronRunSessionKey(canonicalRequesterSessionKey) &&
+      !resolveRequesterSessionActivity(canonicalRequesterSessionKey).isActive
+    ) {
+      const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+      if (generatedMediaDelivery) {
+        return generatedMediaDelivery;
+      }
+      if (!agentMediatedCompletion) {
+        return {
+          delivered: true,
+          path: "none",
+        };
+      }
     }
     if (params.signal?.aborted) {
       return {

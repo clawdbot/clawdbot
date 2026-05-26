@@ -10,10 +10,19 @@ export function parseArgs(argv) {
   const args = {
     mode: "",
     outputDir: process.env.OPENCLAW_VITEST_PROFILE_DIR?.trim() || "",
+    vitestArgs: [],
   };
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+    if (arg === "--") {
+      const rest = argv.slice(i + 1);
+      if (rest[0] === "--output-dir") {
+        continue;
+      }
+      args.vitestArgs = rest;
+      break;
+    }
     if (arg === "--output-dir") {
       args.outputDir = argv[i + 1] ?? "";
       i += 1;
@@ -44,6 +53,10 @@ export function resolveVitestProfileDir({ mode, outputDir }) {
 }
 
 export function buildVitestProfileCommand({ mode, outputDir }) {
+  return buildVitestProfileCommandWithArgs({ mode, outputDir, vitestArgs: [] });
+}
+
+export function buildVitestProfileCommandWithArgs({ mode, outputDir, vitestArgs }) {
   if (mode === "main") {
     return {
       command: process.execPath,
@@ -55,6 +68,7 @@ export function buildVitestProfileCommand({ mode, outputDir }) {
         "--config",
         "test/vitest/vitest.unit.config.ts",
         "--no-file-parallelism",
+        ...vitestArgs,
       ],
     };
   }
@@ -71,6 +85,7 @@ export function buildVitestProfileCommand({ mode, outputDir }) {
       `--execArgv=--cpu-prof-dir=${outputDir}`,
       "--execArgv=--heap-prof",
       `--execArgv=--heap-prof-dir=${outputDir}`,
+      ...vitestArgs,
     ],
   };
 }
@@ -99,9 +114,10 @@ function main() {
   const outputDir = resolveVitestProfileDir(parsed);
   fs.mkdirSync(outputDir, { recursive: true });
 
-  const plan = buildVitestProfileCommand({
+  const plan = buildVitestProfileCommandWithArgs({
     mode: parsed.mode,
     outputDir,
+    vitestArgs: parsed.vitestArgs,
   });
 
   console.log(`[run-vitest-profile] writing ${parsed.mode} profiles to ${outputDir}`);

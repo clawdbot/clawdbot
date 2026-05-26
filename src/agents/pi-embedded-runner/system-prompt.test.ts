@@ -130,6 +130,63 @@ describe("buildEmbeddedSystemPrompt", () => {
     expect(prompt).toContain("Mode: prefer");
   });
 
+  it("adds workspace-only scratch path guidance when fs workspaceOnly is enabled", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      config: {
+        tools: {
+          fs: {
+            workspaceOnly: true,
+          },
+        },
+      },
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("tools.fs.workspaceOnly is enabled");
+    expect(prompt).toContain("`.openclaw/tmp/`");
+    expect(prompt).toContain("Do not write files to `/tmp/...`");
+  });
+
+  it("omits workspace-only scratch path guidance when fs workspaceOnly is disabled", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      config: {
+        tools: {
+          fs: {
+            workspaceOnly: false,
+          },
+        },
+      },
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).not.toContain("tools.fs.workspaceOnly is enabled");
+    expect(prompt).not.toContain("Do not write files to `/tmp/...`");
+  });
+
   it("forwards the subagent prompt surface to embedded prompt rendering", () => {
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",

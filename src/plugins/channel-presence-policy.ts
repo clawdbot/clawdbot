@@ -8,6 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   createPluginActivationSource,
@@ -51,18 +52,13 @@ export type ConfiguredChannelPresencePolicyEntry = {
   blockedReasons: ConfiguredChannelBlockedReason[];
 };
 
-function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
-}
-
 function normalizeChannelIds(channelIds: Iterable<string>): string[] {
-  return Array.from(
-    new Set(
-      [...channelIds]
-        .map((channelId) => normalizeOptionalLowercaseString(channelId))
-        .filter((channelId): channelId is string => Boolean(channelId)),
-    ),
-  ).toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(
+    [...channelIds].flatMap((channelId) => {
+      const normalized = normalizeOptionalLowercaseString(channelId);
+      return normalized ? [normalized] : [];
+    }),
+  );
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
@@ -403,7 +399,7 @@ export function resolveConfiguredChannelPresencePolicy(params: {
         left.localeCompare(right),
       ),
       effective: effectivePluginIds.length > 0,
-      pluginIds: dedupeSortedPluginIds(effectivePluginIds),
+      pluginIds: sortUniqueStrings(effectivePluginIds),
       blockedReasons,
     });
   }
@@ -464,7 +460,7 @@ function resolveScopedChannelOwnerPluginIds(params: {
     });
   const trustConfig = params.activationSourceConfig ?? params.config;
   const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
-  const candidateIds = dedupeSortedPluginIds(
+  const candidateIds = sortUniqueStrings(
     channelIds.flatMap((channelId) => {
       return resolveManifestActivationPluginIds({
         trigger: {

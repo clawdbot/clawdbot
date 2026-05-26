@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isRecord } from "../shared/record-coerce.js";
 
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME =
   "gateway-supervisor-restart-handoff.json";
@@ -205,10 +206,6 @@ function isRestartKind(value: unknown): value is GatewayRestartHandoffRestartKin
 
 function isSupervisorMode(value: unknown): value is GatewayRestartHandoffSupervisorMode {
   return value === "launchd" || value === "systemd" || value === "schtasks" || value === "external";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {

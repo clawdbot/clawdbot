@@ -70,7 +70,9 @@ function isPathInsideRepo(relativePath) {
 }
 
 function isSkippedTrackedTestFile(relativePath) {
-  return relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules");
+  return relativePath
+    .split("/")
+    .some((segment) => segment === "dist" || segment === "node_modules");
 }
 
 function listTrackedTestFiles(rootPath) {
@@ -97,6 +99,18 @@ function listTrackedTestFiles(rootPath) {
         !isSkippedTrackedTestFile(line) &&
         (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
     );
+}
+
+export function listTrackedTestFilesForRoots(roots) {
+  const files = [];
+  for (const root of roots) {
+    const trackedFiles = listTrackedTestFiles(path.join(repoRoot, root));
+    if (!trackedFiles) {
+      return null;
+    }
+    files.push(...trackedFiles);
+  }
+  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
 }
 
 function countTestFiles(rootPath) {

@@ -78,6 +78,8 @@ export const resolveSessionAgentIdsMock = vi.fn(() => ({
   sessionAgentId: "main",
 }));
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
+export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "pi" }));
+export const resolveContextWindowInfoMock = vi.fn(() => ({ tokens: 128_000 }));
 function createDefaultSessionMessages(): unknown[] {
   return [
     { role: "user", content: "hello", timestamp: 1 },
@@ -313,6 +315,10 @@ export function resetCompactHooksHarnessMocks(): void {
     authStorage: { setRuntimeApiKey: vi.fn() },
     modelRegistry: {},
   });
+  resolveAgentHarnessPolicyMock.mockReset();
+  resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "pi" });
+  resolveContextWindowInfoMock.mockReset();
+  resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
 
   sessionCompactImpl.mockReset();
   sessionCompactImpl.mockResolvedValue({
@@ -381,7 +387,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../harness/selection.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
-    resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
+    resolveAgentHarnessPolicy: resolveAgentHarnessPolicyMock,
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({
@@ -537,7 +543,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../context-window-guard.js", () => ({
-    resolveContextWindowInfo: vi.fn(() => ({ tokens: 128_000 })),
+    resolveContextWindowInfo: resolveContextWindowInfoMock,
   }));
 
   vi.doMock("../bootstrap-files.js", () => ({
@@ -816,11 +822,15 @@ export async function loadCompactHooksHarness(): Promise<{
     createSystemPromptOverride: vi.fn(() => () => ""),
   }));
 
-  vi.doMock("./utils.js", () => ({
-    describeUnknownError: vi.fn((err: unknown) => String(err)),
-    mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
-    resolveExecToolDefaults: vi.fn(() => undefined),
-  }));
+  vi.doMock("./utils.js", async () => {
+    const actual = await vi.importActual<typeof import("./utils.js")>("./utils.js");
+    return {
+      ...actual,
+      describeUnknownError: vi.fn((err: unknown) => String(err)),
+      mapThinkingLevel: vi.fn((level?: string) => level ?? "off"),
+      resolveExecToolDefaults: vi.fn(() => undefined),
+    };
+  });
 
   const [compactModule, compactQueuedModule, transcriptEvents] = await Promise.all([
     import("./compact.js"),

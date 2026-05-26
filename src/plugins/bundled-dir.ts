@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
@@ -96,9 +97,7 @@ function trustedBundledPluginRootsForPackageRoot(packageRoot: string): string[] 
 function resolvePackageRootsForBundledPlugins(): string[] {
   const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
   const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-  return [argvRoot, moduleRoot].filter(
-    (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
-  );
+  return uniqueStrings([argvRoot, moduleRoot].filter((entry): entry is string => Boolean(entry)));
 }
 
 export function resolveSourceCheckoutDependencyDiagnostic(
@@ -250,8 +249,8 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
     );
     const safeArgvRoot = rejectedOverrideUsesArgvRoot ? null : argvRoot;
     const moduleRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
-    const packageRoots = [safeArgvRoot, moduleRoot].filter(
-      (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
+    const packageRoots = uniqueStrings(
+      [safeArgvRoot, moduleRoot].filter((entry): entry is string => Boolean(entry)),
     );
     for (const packageRoot of packageRoots) {
       const bundledDir = resolveBundledDirFromPackageRoot(packageRoot);

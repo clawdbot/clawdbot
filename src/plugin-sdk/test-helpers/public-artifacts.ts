@@ -2,6 +2,7 @@ import {
   assertUniqueValues,
   BUNDLED_RUNTIME_SIDECAR_PATHS,
 } from "../../plugins/runtime-sidecar-paths.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 
 export function getPublicArtifactBasename(relativePath: string): string {
   return relativePath.split("/").at(-1) ?? relativePath;
@@ -30,7 +31,7 @@ const EXTRA_GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES = assertUniqueValues(
 );
 
 export const BUNDLED_RUNTIME_SIDECAR_BASENAMES = assertUniqueValues(
-  [...new Set(BUNDLED_RUNTIME_SIDECAR_PATHS.map(getPublicArtifactBasename))],
+  uniqueStrings(BUNDLED_RUNTIME_SIDECAR_PATHS.map(getPublicArtifactBasename)),
   "bundled runtime sidecar basename",
 );
 

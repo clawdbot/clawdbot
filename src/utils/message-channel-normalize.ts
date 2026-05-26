@@ -1,5 +1,6 @@
 import { CHANNEL_IDS } from "../channels/ids.js";
 import { listRegisteredChannelPluginIds } from "../channels/registry.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   type InternalMessageChannel,
@@ -21,7 +22,7 @@ const listPluginChannelIds = (): string[] => {
 };
 
 export const listDeliverableMessageChannels = (): ChannelId[] =>
-  Array.from(new Set([...CHANNEL_IDS, ...listPluginChannelIds()]));
+  uniqueStrings([...CHANNEL_IDS, ...listPluginChannelIds()]) as ChannelId[];
 
 const listGatewayMessageChannels = (): GatewayMessageChannel[] => [
   ...listDeliverableMessageChannels(),

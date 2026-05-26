@@ -1,3 +1,4 @@
+import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import type { VideoGenerationProvider } from "./types.js";
 
@@ -7,7 +8,7 @@ function normalizeSupportedDurationValues(
   if (!Array.isArray(values) || values.length === 0) {
     return undefined;
   }
-  const normalized = [...new Set(values)]
+  const normalized = uniqueValues(values)
     .filter((value) => Number.isFinite(value) && value > 0)
     .map((value) => Math.round(value))
     .filter((value) => value > 0)

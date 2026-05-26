@@ -1,5 +1,6 @@
 import { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 import { sanitizeAndNormalizeEmbedding } from "./embedding-vectors.js";
+import { createLocalEmbeddingWorkerProvider } from "./embeddings-worker.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.types.js";
 import {
   importNodeLlamaCpp,
@@ -24,6 +25,10 @@ export type {
 
 export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
 
+export type LocalEmbeddingProviderRuntimeOptions = {
+  workerScriptPath?: string;
+};
+
 async function disposeResources(
   resources: Array<DisposableResource | null | undefined>,
 ): Promise<void> {
@@ -41,6 +46,12 @@ async function disposeResources(
 }
 
 export async function createLocalEmbeddingProvider(
+  options: EmbeddingProviderOptions,
+): Promise<EmbeddingProvider> {
+  return await createLocalEmbeddingWorkerProvider(options);
+}
+
+export async function createLocalEmbeddingProviderInProcess(
   options: EmbeddingProviderOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
@@ -85,7 +96,9 @@ export async function createLocalEmbeddingProvider(
       initAbortController = abortController;
       try {
         if (!llama) {
-          const nextLlama = await getLlama({ logLevel: LlamaLogLevel.error });
+          const nextLlama = await getLlama({
+            logLevel: LlamaLogLevel.error,
+          });
           llama = await disposeAndThrowIfClosed(nextLlama);
         }
         if (!embeddingModel) {
@@ -138,14 +151,13 @@ export async function createLocalEmbeddingProvider(
       const ctx = await ensureContext();
       throwIfClosed();
       options?.signal?.throwIfAborted();
-      const embeddings = await Promise.all(
-        texts.map(async (text) => {
-          throwIfClosed();
-          options?.signal?.throwIfAborted();
-          const embedding = await ctx.getEmbeddingFor(text);
-          return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
-        }),
-      );
+      const embeddings: number[][] = [];
+      for (const text of texts) {
+        throwIfClosed();
+        options?.signal?.throwIfAborted();
+        const embedding = await ctx.getEmbeddingFor(text);
+        embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+      }
       return embeddings;
     },
     close: async () => {

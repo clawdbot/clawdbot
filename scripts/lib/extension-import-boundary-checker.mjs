@@ -13,6 +13,7 @@ import {
   resolveRepoRoot,
   resolveSourceRoots,
 } from "./ts-guard-utils.mjs";
+import { mapWithConcurrency } from "./source-file-scan-cache.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 
@@ -72,8 +73,10 @@ export function createExtensionImportBoundaryChecker(params) {
       .toSorted((left, right) =>
         normalizeRepoPath(repoRoot, left).localeCompare(normalizeRepoPath(repoRoot, right)),
       );
-    const entriesByFile = await Promise.all(
-      files.map(async (filePath) => {
+    const entriesByFile = await mapWithConcurrency(
+      files,
+      undefined,
+      async (filePath) => {
         const source = await fs.readFile(filePath, "utf8");
         if (
           params.skipSourcesWithoutBundledPluginPrefix &&
@@ -87,7 +90,7 @@ export function createExtensionImportBoundaryChecker(params) {
           params.boundaryLabel,
           params.allowResolvedPath,
         );
-      }),
+      },
     );
     const inventory = entriesByFile.flat();
     return inventory.toSorted(compareEntries);

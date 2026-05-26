@@ -1,3 +1,4 @@
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
   COMMAND_CARRIER_EXECUTABLES,
@@ -76,7 +77,7 @@ function stripLeadingEnvAssignments(argv: string[]): string[] {
 }
 
 function uniqueCommandPayloadCandidates(candidates: string[]): string[] {
-  return [...new Set(candidates.filter((candidate) => candidate.trim().length > 0))];
+  return uniqueStrings(candidates.filter((candidate) => candidate.trim().length > 0));
 }
 
 type ShellPositionalCarrierPlan = { kind: "all" } | { kind: "indexes"; indexes: number[] };

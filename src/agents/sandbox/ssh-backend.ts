@@ -16,9 +16,9 @@ import {
 } from "./remote-fs-bridge.js";
 import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 import {
-  buildExecRemoteCommand,
   buildRemoteCommand,
   buildSshSandboxArgv,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   runSshSandboxCommand,
@@ -143,13 +143,13 @@ class SshSandboxBackendImpl {
       remoteWorkspaceDir: this.params.runtimePaths.remoteWorkspaceDir,
       remoteAgentWorkspaceDir: this.params.runtimePaths.remoteAgentWorkspaceDir,
       buildExecSpec: async ({ command, workdir, env, usePty }) => {
-        await this.ensureRuntime();
-        const sshSession = await this.createSession();
-        const remoteCommand = buildExecRemoteCommand({
+        const remoteCommand = buildValidatedExecRemoteCommand({
           command,
           workdir: workdir ?? this.params.runtimePaths.remoteWorkspaceDir,
           env,
         });
+        await this.ensureRuntime();
+        const sshSession = await this.createSession();
         return {
           argv: buildSshSandboxArgv({
             session: sshSession,

@@ -1,5 +1,6 @@
 import { isAllowedParsedChatSender as isAllowedParsedChatSenderShared } from "../channels/plugins/chat-target-prefixes.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export type {
   AllowlistMatch,
@@ -35,9 +36,7 @@ export function formatAllowFromLowercase(params: {
   allowFrom: Array<string | number>;
   stripPrefixRe?: RegExp;
 }): string[] {
-  return params.allowFrom
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+  return normalizeStringEntries(params.allowFrom)
     .map((entry) => (params.stripPrefixRe ? entry.replace(params.stripPrefixRe, "") : entry))
     .map((entry) => normalizeOptionalLowercaseString(entry))
     .filter((entry): entry is string => Boolean(entry));
@@ -48,9 +47,7 @@ export function formatNormalizedAllowFromEntries(params: {
   allowFrom: Array<string | number>;
   normalizeEntry: (entry: string) => string | undefined | null;
 }): string[] {
-  return params.allowFrom
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
+  return normalizeStringEntries(params.allowFrom)
     .map((entry) => params.normalizeEntry(entry))
     .filter((entry): entry is string => Boolean(entry));
 }

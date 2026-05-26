@@ -778,6 +778,81 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(bridge.isConnected()).toBe(true);
   });
 
+  it("rotates realtime bridges on provider max-duration events without reporting an error", async () => {
+    vi.useFakeTimers();
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const firstSocket = FakeWebSocket.instances[0];
+    if (!firstSocket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    firstSocket.readyState = FakeWebSocket.OPEN;
+    firstSocket.emit("open");
+    firstSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    firstSocket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: { message: "Your session hit the maximum duration of 60 minutes." },
+        }),
+      ),
+    );
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(firstSocket.closed).toBe(true);
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "server",
+      type: "session.rotation",
+      detail: "reason=max-duration",
+    });
+    expect(onEvent).toHaveBeenCalledWith({
+      direction: "client",
+      type: "session.reconnect.scheduled",
+      detail: "reason=max-duration attempt=1 delayMs=1000",
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(FakeWebSocket.instances).toHaveLength(2));
+    const secondSocket = FakeWebSocket.instances[1];
+    if (!secondSocket) {
+      throw new Error("expected bridge to reconnect");
+    }
+    secondSocket.readyState = FakeWebSocket.OPEN;
+    secondSocket.emit("open");
+    secondSocket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+
+    await vi.waitFor(() =>
+      expect(onEvent).toHaveBeenCalledWith({
+        direction: "server",
+        type: "session.rotation.ready",
+        detail: "reason=max-duration",
+      }),
+    );
+    await vi.waitFor(() =>
+      expect(onEvent).toHaveBeenCalledWith({
+        direction: "client",
+        type: "session.reconnect.ready",
+        detail: "reason=max-duration attempt=1",
+      }),
+    );
+    expect(bridge.isConnected()).toBe(true);
+
+    bridge.close();
+  });
+
   it("keeps Azure deployment bridges on deployment-compatible session payloads", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({

@@ -8,6 +8,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import {
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -307,9 +308,7 @@ function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
 }
 
 function parseEnvironmentFileSpecs(raw: string): string[] {
-  return splitArgsPreservingQuotes(raw, { escapeMode: "backslash" })
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(splitArgsPreservingQuotes(raw, { escapeMode: "backslash" }));
 }
 
 function parseEnvironmentFileLine(rawLine: string): { key: string; value: string } | null {

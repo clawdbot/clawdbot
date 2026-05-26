@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GoogleMeetConfig,
   GoogleMeetMode,
@@ -207,7 +207,7 @@ function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
         config.chrome.audioOutputCommand?.[0],
         config.chrome.bargeInInputCommand?.[0],
       ];
-  return [...new Set(commands.filter((value): value is string => Boolean(value?.trim())))];
+  return uniqueStrings(commands.filter((value): value is string => Boolean(value?.trim())));
 }
 
 async function commandExists(runtime: PluginRuntime, command: string): Promise<boolean> {

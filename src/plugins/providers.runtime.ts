@@ -1,3 +1,4 @@
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
@@ -31,7 +32,7 @@ import {
 import type { ProviderPlugin } from "./types.js";
 
 function dedupeSortedPluginIds(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(values);
 }
 
 function resolveExplicitProviderOwnerPluginIds(
@@ -151,13 +152,11 @@ function resolvePluginProviderLoadBase(
     params.modelRefs?.length ||
     providerOwnedPluginIds.length > 0 ||
     modelOwnedPluginIds.length > 0
-      ? [
-          ...new Set([
-            ...(params.onlyPluginIds ?? []),
-            ...providerOwnedPluginIds,
-            ...modelOwnedPluginIds,
-          ]),
-        ].toSorted((left, right) => left.localeCompare(right))
+      ? dedupeSortedPluginIds([
+          ...(params.onlyPluginIds ?? []),
+          ...providerOwnedPluginIds,
+          ...modelOwnedPluginIds,
+        ])
       : undefined;
   const explicitOwnerPluginIds = dedupeSortedPluginIds([
     ...providerOwnedPluginIds,

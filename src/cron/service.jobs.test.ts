@@ -481,14 +481,28 @@ describe("createJob rejects sessionTarget main for non-default agents", () => {
     expect(job.sessionTarget).toBe("isolated");
   });
 
-  it("rejects custom session targets with path separators", () => {
+  it("accepts custom session targets with channel-native separators", () => {
+    const state = createMockState(now, { defaultAgentId: "main" });
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+    const job = createJob(state, {
+      name: "dingtalk-group-session",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget,
+      wakeMode: "now",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+    expect(job.sessionTarget).toBe(sessionTarget);
+  });
+
+  it("rejects null bytes in custom session targets", () => {
     const state = createMockState(now, { defaultAgentId: "main" });
     expect(() =>
       createJob(state, {
         name: "bad-custom-session",
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "session:../../outside",
+        sessionTarget: "session:bad\0id",
         wakeMode: "now",
         payload: { kind: "agentTurn", message: "hello" },
       }),
@@ -548,13 +562,27 @@ describe("applyJobPatch rejects sessionTarget main for non-default agents", () =
     expect(job.agentId).toBe("main");
   });
 
-  it("rejects patching to a custom session target with path separators", () => {
+  it("accepts patching to a custom session target with channel-native separators", () => {
+    const job = createMainJob();
+    const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
+    applyJobPatch(
+      job,
+      {
+        sessionTarget,
+        payload: { kind: "agentTurn", message: "hello" },
+      },
+      { defaultAgentId: "main" },
+    );
+    expect(job.sessionTarget).toBe(sessionTarget);
+  });
+
+  it("rejects patching to a custom session target with null bytes", () => {
     const job = createMainJob();
     expect(() =>
       applyJobPatch(
         job,
         {
-          sessionTarget: "session:..\\outside",
+          sessionTarget: "session:bad\0id",
           payload: { kind: "agentTurn", message: "hello" },
         },
         { defaultAgentId: "main" },

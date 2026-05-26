@@ -7,6 +7,7 @@ import type { TSchema } from "typebox";
 import { readLocalFileSafely } from "../../infra/fs-safe.js";
 import { detectMime } from "../../media/mime.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 
@@ -202,10 +203,7 @@ export function readStringArrayParam(
   const { required = false, label = key } = options;
   const raw = readParamRaw(params, key);
   if (Array.isArray(raw)) {
-    const values = raw
-      .filter((entry) => typeof entry === "string")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
+    const values = normalizeStringEntries(raw.filter((entry) => typeof entry === "string"));
     if (values.length === 0) {
       if (required) {
         throw new ToolInputError(`${label} required`);

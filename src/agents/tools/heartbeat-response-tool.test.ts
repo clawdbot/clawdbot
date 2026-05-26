@@ -53,6 +53,24 @@ describe("createHeartbeatResponseTool", () => {
     expect(details.summary).toBe("Nothing needs attention.");
   });
 
+  it("rejects repeated heartbeat responses from the same tool instance", async () => {
+    const tool = createHeartbeatResponseTool();
+
+    await tool.execute("call-1", {
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+
+    await expect(
+      tool.execute("call-2", {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      }),
+    ).rejects.toThrow("heartbeat_respond already recorded");
+  });
+
   it("accepts notification text and optional scheduling metadata", async () => {
     const tool = createHeartbeatResponseTool();
 

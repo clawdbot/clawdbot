@@ -27,6 +27,7 @@ import { uniqueStrings } from "./shared.js";
 import {
   loadVitestImageGenerationProviderContractRegistry,
   loadVitestMediaUnderstandingProviderContractRegistry,
+  loadVitestMeetingNotesSourceProviderContractRegistry,
   loadVitestMusicGenerationProviderContractRegistry,
   loadVitestRealtimeTranscriptionProviderContractRegistry,
   loadVitestRealtimeVoiceProviderContractRegistry,
@@ -562,13 +563,15 @@ function loadMediaUnderstandingProviderContractRegistry(): MediaUnderstandingPro
 }
 
 function loadMeetingNotesSourceProviderContractRegistry(): MeetingNotesSourceProviderContractEntry[] {
-  return loadBundledCapabilityRuntimeRegistry({
-    pluginIds: resolveBundledManifestPluginIdsForContract("meetingNotesSourceProviders"),
-    pluginSdkResolution: "dist",
-  }).meetingNotesSourceProviders.map((entry) => ({
-    pluginId: entry.pluginId,
-    provider: entry.provider,
-  }));
+  return process.env.VITEST
+    ? loadVitestMeetingNotesSourceProviderContractRegistry()
+    : loadBundledCapabilityRuntimeRegistry({
+        pluginIds: resolveBundledManifestPluginIdsForContract("meetingNotesSourceProviders"),
+        pluginSdkResolution: "dist",
+      }).meetingNotesSourceProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      }));
 }
 
 function loadImageGenerationProviderContractRegistry(): ImageGenerationProviderContractEntry[] {

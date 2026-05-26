@@ -15,6 +15,10 @@ import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import {
+  summarizeActionableTaskAuditFindings,
+  summarizeRetainedLostTaskAuditFindings,
+} from "../tasks/task-registry.audit.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.types.js";
 
@@ -79,6 +83,19 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   }
   return flags;
 };
+
+function discountRetainedLostTaskFailures(
+  tasks: StatusSummary["tasks"],
+  retainedLostCount: number,
+): StatusSummary["tasks"] {
+  if (retainedLostCount <= 0 || tasks.failures <= 0) {
+    return tasks;
+  }
+  return {
+    ...tasks,
+    failures: Math.max(0, tasks.failures - retainedLostCount),
+  };
+}
 
 function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
   if (!entry?.modelOverride) {
@@ -166,8 +183,12 @@ export async function getStatusSummary(
   taskMaintenanceModule.configureTaskRegistryMaintenance({
     cronStorePath: resolveCronStorePath(cfg.cron?.store),
   });
-  const tasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAudit = taskMaintenanceModule.getInspectableTaskAuditSummary();
+  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
+  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
+  const now = Date.now();
+  const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
+  const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
+  const tasks = discountRetainedLostTaskFailures(rawTasks, taskAuditRetainedLost.count);
 
   const resolved = resolveConfiguredStatusModelRef({
     cfg,
@@ -187,7 +208,6 @@ export async function getStatusSummary(
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
 
-  const now = Date.now();
   const storeCache = new Map<string, Record<string, SessionEntry | undefined>>();
   const loadStore = (storePath: string) => {
     const cached = storeCache.get(storePath);
@@ -325,6 +345,7 @@ export async function getStatusSummary(
     queuedSystemEvents,
     tasks,
     taskAudit,
+    ...(taskAuditRetainedLost.count > 0 ? { taskAuditRetainedLost } : {}),
     sessions: {
       paths: Array.from(paths),
       count: totalSessions,

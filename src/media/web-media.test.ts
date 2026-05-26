@@ -3,6 +3,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -17,8 +18,8 @@ let loadWebMediaRaw: typeof import("./web-media.js").loadWebMediaRaw;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 let resolveImageCompressionGrid: typeof import("./web-media.js").resolveImageCompressionGrid;
 
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const TINY_PNG_BUFFER = createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 });
+const TINY_PNG_BASE64 = TINY_PNG_BUFFER.toString("base64");
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
@@ -448,19 +449,19 @@ describe("loadWebMedia", () => {
       convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
       hasAlphaChannel: vi.fn(async () => {
         throw new Error(
-          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
         );
       }),
       isImageProcessorUnavailableError: (err: unknown) =>
-        err instanceof Error && err.message.includes("Optional dependency sharp is required"),
+        err instanceof Error && err.message.includes("Photon did not expose"),
       optimizeImageToPng: vi.fn(async () => {
         throw new Error(
-          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
         );
       }),
       resizeToJpeg: vi.fn(async () => {
         throw new Error(
-          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+          "Photon did not expose the required image processor API | Cannot find package '@silvia-odwyer/photon-node' imported from image-ops.js",
         );
       }),
     }));
@@ -472,7 +473,7 @@ describe("loadWebMedia", () => {
     }
   }
 
-  it("sends an in-limit original image when optional sharp optimization is unavailable", async () => {
+  it("sends an in-limit original image when image optimization is unavailable", async () => {
     await withUnavailableImageOptimizer(async () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       const result = await loadWebMediaWithMissingOptimizer(
@@ -486,16 +487,16 @@ describe("loadWebMedia", () => {
     });
   });
 
-  it("does not bypass the size cap when optional sharp optimization is unavailable", async () => {
+  it("does not bypass the size cap when image optimization is unavailable", async () => {
     await withUnavailableImageOptimizer(async () => {
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(tinyPngFile, { maxBytes: 8, localRoots: [fixtureRoot] }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/Photon did not expose/);
     });
   });
 
-  it("sends an in-limit data URL image when optional sharp optimization is unavailable", async () => {
+  it("sends an in-limit data URL image when image optimization is unavailable", async () => {
     await withUnavailableImageOptimizer(async () => {
       const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
       const buffer = Buffer.from(TINY_PNG_BASE64, "base64");
@@ -511,7 +512,21 @@ describe("loadWebMedia", () => {
     });
   });
 
-  it("does not bypass the data URL image cap when optional sharp optimization is unavailable", async () => {
+  it("does not preserve an original image when the declared MIME mismatches the bytes", async () => {
+    await withUnavailableImageOptimizer(async () => {
+      const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
+      await expect(
+        optimizeImageBufferForWebMedia({
+          buffer: Buffer.from(TINY_PNG_BASE64, "base64"),
+          contentType: "image/jpeg",
+          maxBytes: 1024,
+          imageCompression: { models: [{ maxSidePx: 1024 }] },
+        }),
+      ).rejects.toThrow(/Photon did not expose/);
+    });
+  });
+
+  it("does not bypass the data URL image cap when image optimization is unavailable", async () => {
     await withUnavailableImageOptimizer(async () => {
       const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
       await expect(
@@ -521,11 +536,11 @@ describe("loadWebMedia", () => {
           maxBytes: 8,
           imageCompression: { models: [{ maxSidePx: 1024 }] },
         }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/Photon did not expose/);
     });
   });
 
-  it("does not bypass model dimensions when optional sharp optimization is unavailable", async () => {
+  it("does not bypass model dimensions when image optimization is unavailable", async () => {
     await withUnavailableImageOptimizer(async () => {
       const { optimizeImageBufferForWebMedia } = await import("./web-media.js");
       await expect(
@@ -535,7 +550,7 @@ describe("loadWebMedia", () => {
           maxBytes: 16 * 1024 * 1024,
           imageCompression: { models: [{ maxSidePx: 512 }] },
         }),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/Photon did not expose/);
     });
   });
 
@@ -644,14 +659,14 @@ describe("loadWebMedia", () => {
     ).toBe(2048);
   });
 
-  it("does not send original HEIC media when optional sharp conversion is unavailable", async () => {
+  it("does not send original HEIC media when image conversion is unavailable", async () => {
     await withUnavailableImageOptimizer(async () => {
       const heicFile = path.join(fixtureRoot, "photo.heic");
       await fs.writeFile(heicFile, Buffer.from("heic-source"));
       const { loadWebMedia: loadWebMediaWithMissingOptimizer } = await import("./web-media.js");
       await expect(
         loadWebMediaWithMissingOptimizer(heicFile, createLocalWebMediaOptions()),
-      ).rejects.toThrow(/Optional dependency sharp is required/);
+      ).rejects.toThrow(/Photon did not expose/);
     });
   });
 

@@ -1,11 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestModelIdNormalizationProvider } from "./manifest.js";
-import {
-  resolvePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type ManifestModelIdNormalizationLookupParams = {
@@ -37,19 +35,37 @@ let cachedPolicies: ManifestModelIdNormalizationPolicyCache | undefined;
 function resolveMetadataSnapshotForPolicies(
   params: ManifestModelIdNormalizationLookupParams = {},
 ): {
-  snapshot: PluginMetadataSnapshot;
+  plugins: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+  configFingerprint?: string;
   cacheable: boolean;
 } {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  return {
-    snapshot: resolvePluginMetadataSnapshot({
-      config: params.config ?? {},
+  if (params.config === undefined) {
+    const currentSnapshot = getCurrentPluginMetadataSnapshot({
       env,
       workspaceDir,
-      allowWorkspaceScopedCurrent: true,
-    }),
-    cacheable: true,
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    if (currentSnapshot) {
+      return {
+        plugins: currentSnapshot.plugins,
+        configFingerprint: currentSnapshot.configFingerprint,
+        cacheable: true,
+      };
+    }
+  }
+  const snapshot = resolvePluginMetadataSnapshot({
+    config: params.config ?? {},
+    env,
+    workspaceDir,
+    allowWorkspaceScopedCurrent: true,
+  });
+  return {
+    plugins: snapshot.plugins,
+    configFingerprint: snapshot.configFingerprint,
+    cacheable: false,
   };
 }
 
@@ -59,12 +75,11 @@ function loadManifestModelIdNormalizationPolicies(
   if (params.plugins) {
     return collectManifestModelIdNormalizationPolicies(params.plugins);
   }
-  const { snapshot, cacheable } = resolveMetadataSnapshotForPolicies(params);
-  const configFingerprint = snapshot.configFingerprint;
+  const { plugins, configFingerprint, cacheable } = resolveMetadataSnapshotForPolicies(params);
   if (cacheable && configFingerprint && cachedPolicies?.configFingerprint === configFingerprint) {
     return cachedPolicies.policies;
   }
-  const policies = collectManifestModelIdNormalizationPolicies(snapshot.plugins);
+  const policies = collectManifestModelIdNormalizationPolicies(plugins);
   if (cacheable && configFingerprint) {
     cachedPolicies = { configFingerprint, policies };
   }

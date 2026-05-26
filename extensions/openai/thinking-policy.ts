@@ -17,7 +17,13 @@ const OPENAI_XHIGH_MODEL_IDS = [
   "gpt-5.4-nano",
 ] as const;
 
-const OPENAI_CODEX_XHIGH_MODEL_IDS = ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5.4-pro"] as const;
+const OPENAI_CODEX_XHIGH_MODEL_IDS = [
+  "gpt-5.5",
+  "gpt-5.5-pro",
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5.3-codex-spark",
+] as const;
 
 function normalizeModelId(value: string): string {
   return value.trim().toLowerCase();

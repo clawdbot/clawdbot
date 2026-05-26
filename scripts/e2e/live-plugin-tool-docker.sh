@@ -13,6 +13,18 @@ HOST_BUILD="${OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-300}"
 PROFILE_FILE="${OPENCLAW_LIVE_PLUGIN_TOOL_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
+run_log=""
+
+cleanup() {
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
+
 if [ ! -f "$PROFILE_FILE" ] && [ -f "$HOME/.profile" ]; then
   PROFILE_FILE="$HOME/.profile"
 fi
@@ -148,9 +160,7 @@ node scripts/e2e/lib/live-plugin-tool/assertions.mjs assert-agent-turn
 echo "Live plugin tool Docker E2E passed"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
-rm -f "$run_log"
 echo "Live plugin tool Docker E2E passed"

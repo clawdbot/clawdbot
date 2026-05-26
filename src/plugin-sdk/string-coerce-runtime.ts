@@ -10,9 +10,16 @@ export {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
+  normalizeStringifiedEntries,
   normalizeStringifiedOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+export {
+  asFiniteNumber,
+  asPositiveSafeInteger,
+  parseFiniteNumber,
+} from "../shared/number-coercion.js";
+export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {
   asRecord,
   asNullableRecord,
@@ -24,8 +31,15 @@ export {
   normalizeAtHashSlug,
   normalizeHyphenSlug,
   normalizeOptionalTrimmedStringList,
+  normalizeSortedUniqueTrimmedStringList,
   normalizeSingleOrTrimmedStringList,
   normalizeStringEntries,
   normalizeStringEntriesLower,
+  normalizeUniqueStringEntries,
+  normalizeUniqueTrimmedStringList,
+  normalizeTrimmedStringList,
+  sortUniqueStrings,
+  uniqueStrings,
+  uniqueValues,
 } from "../shared/string-normalization.js";
 export { summarizeStringEntries } from "../shared/string-sample.js";

@@ -2,6 +2,7 @@ import { loadBundledCapabilityRuntimeRegistry } from "../bundled-capability-runt
 import type {
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
+  MeetingNotesSourceProviderPlugin,
   MusicGenerationProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -18,6 +19,11 @@ export type SpeechProviderContractEntry = {
 export type MediaUnderstandingProviderContractEntry = {
   pluginId: string;
   provider: MediaUnderstandingProviderPlugin;
+};
+
+export type MeetingNotesSourceProviderContractEntry = {
+  pluginId: string;
+  provider: MeetingNotesSourceProviderPlugin;
 };
 
 export type RealtimeVoiceProviderContractEntry = {
@@ -49,6 +55,7 @@ type ManifestContractKey =
   | "imageGenerationProviders"
   | "speechProviders"
   | "mediaUnderstandingProviders"
+  | "meetingNotesSourceProviders"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
   | "videoGenerationProviders"
@@ -63,6 +70,9 @@ const VITEST_CONTRACT_PLUGIN_IDS = {
   ).map((entry) => entry.pluginId),
   mediaUnderstandingProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
     (entry) => entry.mediaUnderstandingProviderIds.length > 0,
+  ).map((entry) => entry.pluginId),
+  meetingNotesSourceProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
+    (entry) => entry.meetingNotesSourceProviderIds.length > 0,
   ).map((entry) => entry.pluginId),
   realtimeVoiceProviders: BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.filter(
     (entry) => entry.realtimeVoiceProviderIds.length > 0,
@@ -199,6 +209,18 @@ export function loadVitestMediaUnderstandingProviderContractRegistry(): MediaUnd
     contract: "mediaUnderstandingProviders",
     pickEntries: (registry) =>
       registry.mediaUnderstandingProviders.map((entry) => ({
+        pluginId: entry.pluginId,
+        provider: entry.provider,
+      })),
+  });
+}
+
+export function loadVitestMeetingNotesSourceProviderContractRegistry(): MeetingNotesSourceProviderContractEntry[] {
+  return loadVitestCapabilityContractEntries({
+    contract: "meetingNotesSourceProviders",
+    pluginSdkResolution: "src",
+    pickEntries: (registry) =>
+      registry.meetingNotesSourceProviders.map((entry) => ({
         pluginId: entry.pluginId,
         provider: entry.provider,
       })),

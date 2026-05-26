@@ -10,6 +10,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { extractSimpleExplicitGroupId } from "./group-id-simple.js";
 
 function extractInferredGroupTargetId(params: {
@@ -18,9 +19,8 @@ function extractInferredGroupTargetId(params: {
   messaging?: ChannelMessagingAdapter;
 }): string | undefined {
   const normalized = params.messaging?.normalizeTarget?.(params.raw);
-  const candidates = [normalized, params.raw].filter(
-    (candidate, index, values): candidate is string =>
-      Boolean(candidate) && values.indexOf(candidate) === index,
+  const candidates = uniqueStrings(
+    [normalized, params.raw].filter((candidate): candidate is string => Boolean(candidate)),
   );
   for (const candidate of candidates) {
     const chatType = params.messaging?.inferTargetChatType?.({ to: candidate });

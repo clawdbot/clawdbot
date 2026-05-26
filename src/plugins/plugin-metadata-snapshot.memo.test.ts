@@ -9,6 +9,7 @@ import {
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   clearLoadPluginMetadataSnapshotMemo,
   loadPluginMetadataSnapshot,
@@ -198,26 +199,6 @@ function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
   return { plugins: [plugin], diagnostics: [] };
 }
 
-function firstPlugin(
-  snapshot: ReturnType<typeof loadPluginMetadataSnapshot>,
-): PluginManifestRecord {
-  const plugin = snapshot.plugins[0];
-  if (!plugin) {
-    throw new Error("expected memo test fixture plugin");
-  }
-  return plugin;
-}
-
-function firstCommandAlias(
-  plugin: PluginManifestRecord,
-): NonNullable<PluginManifestRecord["commandAliases"]>[number] {
-  const commandAlias = plugin.commandAliases?.[0];
-  if (!commandAlias) {
-    throw new Error("expected memo test fixture command alias");
-  }
-  return commandAlias;
-}
-
 describe("loadPluginMetadataSnapshot process memo", () => {
   beforeEach(() => {
     clearLoadPluginMetadataSnapshotMemo();
@@ -244,21 +225,41 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     });
 
     const first = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    const firstRecord = firstPlugin(first);
-    firstRecord.providers.push("first-mutated");
-    firstCommandAlias(firstRecord).name = "first-command-mutated";
     const second = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
-    const secondRecord = firstPlugin(second);
-    secondRecord.providers.push("second-mutated");
-    firstCommandAlias(secondRecord).name = "second-command-mutated";
     const third = loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(() => third.plugins[0]?.providers.push("mutated")).toThrow();
+    expect(() => {
+      if (third.plugins[0]?.commandAliases?.[0]) {
+        third.plugins[0].commandAliases[0].name = "mutated";
+      }
+    }).toThrow();
     expect(third.plugins[0]?.providers).toEqual(["demo"]);
     expect(third.plugins[0]?.commandAliases?.[0]?.name).toBe("demo-command");
     expect(second.manifestRegistry.plugins[0]).toBe(second.plugins[0]);
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
+  });
+
+  it("clears the process memo at plugin metadata lifecycle boundaries", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    clearPluginMetadataLifecycleCaches();
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
   });
 
   it("keeps hot persisted snapshots for alternating config callers", () => {
@@ -385,7 +386,34 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(readSpy).not.toHaveBeenCalled();
   });
 
-  it("does not memoize policy-stale derived snapshots", () => {
+  it("does not freeze caller-owned provided index records", () => {
+    const stateDir = tempStateDir();
+    const index = makeIndex();
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "provided",
+      snapshot: index,
+      diagnostics: [],
+    });
+
+    const snapshot = loadPluginMetadataSnapshot({ config: {}, env: {}, index, stateDir });
+    const callerRecord = index.plugins[0];
+    const snapshotRecord = snapshot.index.plugins[0];
+    if (!callerRecord || !snapshotRecord) {
+      throw new Error("expected metadata records");
+    }
+
+    expect(() => {
+      callerRecord.pluginId = "caller-mutated";
+      callerRecord.startup.agentHarnesses = ["caller-mutated"];
+    }).not.toThrow();
+    expect(snapshot.index.plugins[0]?.pluginId).toBe("demo");
+    expect(snapshot.index.plugins[0]?.startup.agentHarnesses).toEqual([]);
+    expect(() => {
+      snapshotRecord.pluginId = "snapshot-mutated";
+    }).toThrow();
+  });
+
+  it("memoizes policy-stale derived snapshots within the process", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -403,10 +431,10 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
-  it("refreshes policy-stale derived snapshots when derived plugin files change", () => {
+  it("keeps process-stable derived snapshots when derived plugin files change", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
     const pluginDir = path.join(stateDir, "current", "derived");
@@ -429,8 +457,8 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     writeJson(manifestPath, { id: "derived", version: "2.0.0", commandAliases: [{ name: "new" }] });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
-    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledTimes(2);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -438,7 +466,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     ["persisted-registry-stale-source", undefined],
     ["persisted-registry-disabled", undefined],
     [undefined, { preferPersisted: false }],
-  ])("does not memoize derived snapshots for %s diagnostics", (code, options) => {
+  ])("memoizes derived snapshots for %s diagnostics within the process", (code, options) => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -450,7 +478,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, ...options });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, ...options });
 
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
   });
 
   it("refreshes when the persisted registry file changes", () => {

@@ -67,20 +67,39 @@ docker_e2e_build_or_reuse() {
 
   echo "Building Docker image: $image_name"
   local build_args=()
+  local package_tgz=""
+  local package_context=""
+  local package_pack_dir=""
   if [ -n "$target" ]; then
     build_args+=(--target "$target")
   fi
   if [ "$target" = "functional" ]; then
-    local package_tgz
-    local package_context
     package_tgz="$(docker_e2e_prepare_package_tgz "$label")"
-    package_context="$(docker_e2e_prepare_package_context "$package_tgz")"
+    if [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+      package_pack_dir="$(dirname "$package_tgz")"
+    fi
+    local context_status=0
+    package_context="$(docker_e2e_prepare_package_context "$package_tgz")" || context_status="$?"
+    if [ "$context_status" -ne 0 ]; then
+      if [ -n "$package_pack_dir" ]; then
+        rm -rf "$package_pack_dir"
+      fi
+      return "$context_status"
+    fi
     # The Dockerfile never sees repo sources as app input; functional installs
     # exactly this tarball through a named BuildKit context.
     build_args+=(--build-context "openclaw_package=$package_context")
   fi
   build_args+=(-t "$image_name" -f "$dockerfile" "$context")
-  docker_build_run "$label-build" "${build_args[@]}"
+  local build_status=0
+  docker_build_run "$label-build" "${build_args[@]}" || build_status="$?"
+  if [ -n "$package_context" ]; then
+    rm -rf "$package_context"
+  fi
+  if [ -n "$package_pack_dir" ]; then
+    rm -rf "$package_pack_dir"
+  fi
+  return "$build_status"
 }
 
 docker_e2e_test_state_shell_b64() {

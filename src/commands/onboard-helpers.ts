@@ -20,6 +20,7 @@ import { detectBinary } from "../infra/detect-binary.js";
 import { movePathToTrash } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { decorativeEmoji, supportsDecorativeEmoji } from "../terminal/decorative-emoji.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
@@ -284,7 +285,7 @@ async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<strin
       // Broken symlinks are handled lexically by fs-safe.
     }
   }
-  return [...new Set(allowedRoots)];
+  return uniqueStrings(allowedRoots);
 }
 
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {

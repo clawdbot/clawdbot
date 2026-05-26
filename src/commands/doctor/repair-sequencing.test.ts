@@ -359,7 +359,7 @@ describe("doctor repair sequencing", () => {
       events.push("sidecar-oauth");
       return {
         detected: ["auth-profiles.json"],
-        changes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
+        changes: ["Migrated 1 legacy Codex OAuth profile."],
         warnings: ["Sidecar warning"],
       };
     });
@@ -389,7 +389,7 @@ describe("doctor repair sequencing", () => {
       env: process.env,
     });
     expect(result.changeNotes).toEqual([
-      "Migrated 1 sidecar-backed Codex OAuth profile.",
+      "Migrated 1 legacy Codex OAuth profile.",
       "Removed stale OAuth auth profile shadow openai-codex.",
     ]);
     expect(result.warningNotes).toEqual(["Sidecar warning"]);

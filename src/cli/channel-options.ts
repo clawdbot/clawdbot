@@ -1,16 +1,8 @@
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
 function dedupe(values: string[]): string[] {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    resolved.push(value);
-  }
-  return resolved;
+  return uniqueStrings(values.filter(Boolean));
 }
 
 let precomputedChannelOptions: string[] | null | undefined;

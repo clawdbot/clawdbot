@@ -1,9 +1,51 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
+import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
   buildChannelSummary: vi.fn(async () => ["ok"]),
   readSessionStoreReadOnly: vi.fn(() => ({})),
+  taskRegistrySummary: {
+    total: 0,
+    active: 0,
+    terminal: 0,
+    failures: 0,
+    byStatus: {
+      queued: 0,
+      running: 0,
+      succeeded: 0,
+      failed: 0,
+      timed_out: 0,
+      cancelled: 0,
+      lost: 0,
+    },
+    byRuntime: {
+      subagent: 0,
+      acp: 0,
+      cli: 0,
+      cron: 0,
+    },
+  } as TaskRegistrySummary,
+  taskAuditFindings: [
+    {
+      severity: "warn",
+      code: "delivery_failed",
+      detail: "terminal update delivery failed",
+      task: {
+        taskId: "task-delivery",
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        scopeKind: "session",
+        task: "Deliver update",
+        status: "failed",
+        deliveryStatus: "failed",
+        notifyPolicy: "done_only",
+        createdAt: 1,
+      },
+    },
+  ] as TaskAuditFinding[],
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -73,27 +115,7 @@ vi.mock("../infra/system-events.js", () => ({
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   configureTaskRegistryMaintenance: vi.fn(),
-  getInspectableTaskRegistrySummary: vi.fn(() => ({
-    total: 0,
-    active: 0,
-    terminal: 0,
-    failures: 0,
-    byStatus: {
-      queued: 0,
-      running: 0,
-      succeeded: 0,
-      failed: 0,
-      timed_out: 0,
-      cancelled: 0,
-      lost: 0,
-    },
-    byRuntime: {
-      subagent: 0,
-      acp: 0,
-      cli: 0,
-      cron: 0,
-    },
-  })),
+  getInspectableTaskRegistrySummary: vi.fn(() => statusSummaryMocks.taskRegistrySummary),
   getInspectableTaskAuditSummary: vi.fn(() => ({
     total: 1,
     warnings: 1,
@@ -107,6 +129,7 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
       inconsistent_timestamps: 0,
     },
   })),
+  getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
 }));
 
 vi.mock("../routing/session-key.js", () => ({
@@ -140,6 +163,46 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    statusSummaryMocks.taskRegistrySummary = {
+      total: 0,
+      active: 0,
+      terminal: 0,
+      failures: 0,
+      byStatus: {
+        queued: 0,
+        running: 0,
+        succeeded: 0,
+        failed: 0,
+        timed_out: 0,
+        cancelled: 0,
+        lost: 0,
+      },
+      byRuntime: {
+        subagent: 0,
+        acp: 0,
+        cli: 0,
+        cron: 0,
+      },
+    };
+    statusSummaryMocks.taskAuditFindings = [
+      {
+        severity: "warn",
+        code: "delivery_failed",
+        detail: "terminal update delivery failed",
+        task: {
+          taskId: "task-delivery",
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Deliver update",
+          status: "failed",
+          deliveryStatus: "failed",
+          notifyPolicy: "done_only",
+          createdAt: 1,
+        },
+      },
+    ];
     statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
     statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
     statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
@@ -153,6 +216,63 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("keeps retained lost tasks out of default status audit counts", async () => {
+    const cleanupAfter = Date.now() + 60_000;
+    statusSummaryMocks.taskRegistrySummary = {
+      ...statusSummaryMocks.taskRegistrySummary,
+      total: 1,
+      terminal: 1,
+      failures: 1,
+      byStatus: {
+        ...statusSummaryMocks.taskRegistrySummary.byStatus,
+        lost: 1,
+      },
+    };
+    statusSummaryMocks.taskAuditFindings = [
+      {
+        severity: "warn",
+        code: "lost",
+        detail: "task lost its backing session and is retained until cleanupAfter",
+        task: {
+          taskId: "task-lost-retained",
+          runtime: "subagent",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Retained lost",
+          status: "lost",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+          createdAt: cleanupAfter - 60_000,
+          endedAt: cleanupAfter - 60_000,
+          cleanupAfter,
+        },
+      },
+    ];
+
+    const summary = await getStatusSummary();
+
+    expect(summary.tasks.failures).toBe(0);
+    expect(summary.tasks.byStatus.lost).toBe(1);
+    expect(summary.taskAudit).toEqual({
+      total: 0,
+      warnings: 0,
+      errors: 0,
+      byCode: {
+        stale_queued: 0,
+        stale_running: 0,
+        lost: 0,
+        delivery_failed: 0,
+        missing_cleanup: 0,
+        inconsistent_timestamps: 0,
+      },
+    });
+    expect(summary.taskAuditRetainedLost).toEqual({
+      count: 1,
+      nextCleanupAfter: cleanupAfter,
+    });
   });
 
   it("skips channel summary imports when no channels are configured", async () => {

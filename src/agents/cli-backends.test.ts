@@ -585,7 +585,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
     expect(builder?.config.resumeArgs).toContain("bypassPermissions");
   });
 
-  it("uses existing exec policy and raw Claude args as permission overrides", () => {
+  it("preserves raw Claude permission args during backend normalization", () => {
     const safe = resolveCliBackendConfig("claude-cli", {
       tools: { exec: { security: "full", ask: "off" } },
       agents: {

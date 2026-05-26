@@ -4,6 +4,7 @@ import {
   installVitestNoOutputWatchdog,
   resolveDirectNodeVitestArgs,
   resolveImplicitVitestArgs,
+  resolveMissingExplicitTestFiles,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
   resolveVitestSpawnParams,
@@ -50,6 +51,79 @@ describe("scripts/run-vitest", () => {
       "ui/src/ui/controllers/chat.test.ts",
     ];
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("reports missing explicit test files before Vitest can silently ignore them", () => {
+    const fsImpl = {
+      existsSync: (filePath: string) =>
+        filePath.replaceAll("\\", "/").endsWith("src/agents/bash-tools.test.ts"),
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        [
+          "src/agents/bash-tools.test.ts",
+          "test/agents/bash-tools.exec.background-abort.test.ts",
+        ],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual(["test/agents/bash-tools.exec.background-abort.test.ts"]);
+  });
+
+  it("does not treat option values or glob patterns as explicit missing files", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        [
+          "-t",
+          "missing.test.ts",
+          "basename-filter.test.ts",
+          "src/**/*.test.ts",
+          "--config",
+          "missing.config.ts",
+          "--exclude",
+          "ignored.test.ts",
+          "--bail",
+          "1",
+          "--mode",
+          "test",
+          "--mergeReports",
+          "reports.test.ts",
+          "--coverage.exclude",
+          "coverage.test.ts",
+        ],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+  });
+
+  it("skips missing-file preflight when Vitest controls path resolution", () => {
+    const fsImpl = {
+      existsSync: () => false,
+    };
+
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--config", "test/vitest/vitest.gateway.config.ts", "server/health-state.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+    expect(
+      resolveMissingExplicitTestFiles(
+        ["--root", "packages/example", "src/example.test.ts"],
+        "/repo",
+        fsImpl,
+      ),
+    ).toEqual([]);
+    expect(
+      resolveMissingExplicitTestFiles(["--dir=src", "example.test.ts"], "/repo", fsImpl),
+    ).toEqual([]);
   });
 
   it("keeps the run subcommand first when routing unit ui tests", () => {

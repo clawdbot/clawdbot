@@ -1,8 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyDefaultModel, applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 describe("applyProviderAuthConfigPatch", () => {
+  beforeAll(() => {
+    applyProviderAuthConfigPatch(
+      {},
+      {
+        models: {
+          providers: {
+            google: {
+              models: [],
+            },
+          },
+        },
+      },
+    );
+  });
+
   const base = {
     agents: {
       defaults: {

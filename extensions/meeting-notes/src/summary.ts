@@ -2,6 +2,7 @@ import type {
   MeetingNotesSessionDescriptor,
   MeetingNotesUtterance,
 } from "openclaw/plugin-sdk/meeting-notes";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type MeetingNotesSummary = {
   sessionId: string;
@@ -22,16 +23,9 @@ const RISK_PATTERNS =
   /\b(risk|blocked|blocker|concern|issue|problem|unknown|deadline|privacy|security)\b/i;
 
 function firstSentences(utterances: MeetingNotesUtterance[], limit: number): string {
-  const text = utterances
-    .map((utterance) => utterance.text.trim())
-    .filter(Boolean)
-    .join(" ");
+  const text = normalizeStringEntries(utterances.map((utterance) => utterance.text)).join(" ");
   const sentences = text.match(/[^.!?]+[.!?]?/g) ?? [];
-  return sentences
-    .slice(0, limit)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean)
-    .join(" ");
+  return normalizeStringEntries(sentences.slice(0, limit)).join(" ");
 }
 
 function collectMatches(utterances: MeetingNotesUtterance[], pattern: RegExp): string[] {

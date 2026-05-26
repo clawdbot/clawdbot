@@ -20,6 +20,7 @@ import type {
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
@@ -284,7 +285,7 @@ export async function prepareCliRunContext(
     backend: {
       ...preparedBackend.backend,
       ...(preparedBackendClearEnv.length > 0
-        ? { clearEnv: Array.from(new Set(preparedBackendClearEnv)) }
+        ? { clearEnv: uniqueStrings(preparedBackendClearEnv) }
         : {}),
     },
     ...(preparedBackendEnv ? { env: preparedBackendEnv } : {}),

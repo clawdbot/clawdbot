@@ -4,7 +4,11 @@ import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
-import { loadCronStore, saveCronStore } from "../store.js";
+import {
+  loadCronStoreWithConfigJobs,
+  saveCronStore,
+  type PreservedCronConfigJob,
+} from "../store.js";
 import type { CronJob } from "../types.js";
 import { recomputeNextRuns } from "./jobs.js";
 import type { CronServiceState } from "./state.js";
@@ -44,6 +48,21 @@ function warnInvalidPersistedCronJob(params: {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function hasUnsupportedStringPayloadKind(candidate: Record<string, unknown>): boolean {
+  const payload = candidate.payload;
+  if (!isRecord(payload)) {
+    return false;
+  }
+  const kind = payload.kind;
+  return (
+    typeof kind === "string" && kind.trim() !== "" && kind !== "systemEvent" && kind !== "agentTurn"
+  );
+}
+
 async function getFileMtimeMs(path: string): Promise<number | null> {
   try {
     const stats = await fs.promises.stat(path);
@@ -75,11 +94,13 @@ export async function ensureLoaded(
   // edits on filesystems with coarse mtime resolution.
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
-  const loaded = await loadCronStore(state.deps.storePath);
-  const loadedJobs = (loaded.jobs ?? []) as unknown as CronJob[];
+  const loaded = await loadCronStoreWithConfigJobs(state.deps.storePath);
+  const loadedJobs = (loaded.store.jobs ?? []) as unknown as CronJob[];
   const jobs: CronJob[] = [];
+  const preservedInvalidPersistedJobs: PreservedCronConfigJob[] = [];
   for (const [index, job] of loadedJobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
+    const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
     const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
     let normalized: Record<string, unknown> | null;
     try {
@@ -100,6 +121,9 @@ export async function ensureLoaded(
       hydrated as unknown as Record<string, unknown>,
     );
     if (invalidReason) {
+      if (invalidReason === "invalid-payload" && hasUnsupportedStringPayloadKind(rawConfigJob)) {
+        preservedInvalidPersistedJobs.push({ index, job: rawConfigJob });
+      }
       warnInvalidPersistedCronJob({ state, raw, index, reason: invalidReason });
       continue;
     }
@@ -159,6 +183,7 @@ export async function ensureLoaded(
     version: 1,
     jobs,
   };
+  state.preservedInvalidPersistedJobs = preservedInvalidPersistedJobs;
   state.storeLoadedAtMs = state.deps.nowMs();
   state.storeFileMtimeMs = fileMtimeMs;
 
@@ -188,7 +213,10 @@ export async function persist(
   if (!state.store) {
     return;
   }
-  await saveCronStore(state.deps.storePath, state.store, opts);
+  await saveCronStore(state.deps.storePath, state.store, {
+    ...opts,
+    preservedConfigJobs: state.preservedInvalidPersistedJobs,
+  });
   // Update file mtime after save to prevent immediate reload
   state.storeFileMtimeMs = await getFileMtimeMs(state.deps.storePath);
 }

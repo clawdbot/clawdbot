@@ -7,7 +7,7 @@ import {
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
   pro: "gemini-3.1-pro-preview",
   flash: "gemini-3.1-flash-preview",
-  "flash-lite": "gemini-3.1-flash-lite-preview",
+  "flash-lite": "gemini-3.1-flash-lite",
 };
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
 

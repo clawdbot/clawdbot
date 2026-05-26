@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/clickclack",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "private": true,
   "description": "OpenClaw ClickClack channel plugin",
   "type": "module",
@@ -10,7 +10,7 @@
     "./runtime-api.js": "./runtime-api.ts"
   },
   "dependencies": {
-    "ws": "8.20.1",
+    "ws": "8.21.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -18,7 +18,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.24"
+    "openclaw": ">=2026.5.26"
   },
   "peerDependenciesMeta": {
     "openclaw": {

@@ -644,6 +644,7 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+    hash?: string;
   };
   currentTurn?: {
     kind?: "user_request" | "room_event";
@@ -660,6 +661,7 @@ export type SessionSystemPromptReport = {
   }>;
   skills: {
     promptChars: number;
+    hash?: string;
     entries: Array<{ name: string; blockChars: number }>;
   };
   tools: {
@@ -668,7 +670,9 @@ export type SessionSystemPromptReport = {
     entries: Array<{
       name: string;
       summaryChars: number;
+      summaryHash?: string;
       schemaChars: number;
+      schemaHash?: string;
       propertiesCount?: number | null;
     }>;
   };

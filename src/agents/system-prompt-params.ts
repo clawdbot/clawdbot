@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import {
   formatUserTime,
@@ -78,9 +79,7 @@ function resolveRepoRoot(params: {
       // ignore invalid config path
     }
   }
-  const candidates = [params.workspaceDir, params.cwd]
-    .map((value) => value?.trim())
-    .filter(Boolean) as string[];
+  const candidates = normalizeStringEntries([params.workspaceDir ?? "", params.cwd ?? ""]);
   const seen = new Set<string>();
   for (const candidate of candidates) {
     const resolved = path.resolve(candidate);

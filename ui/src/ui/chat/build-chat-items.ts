@@ -507,7 +507,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
             : `divider:compaction:${normalized.timestamp}:${i}`,
         label: "Compacted history",
         description:
-          "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
         action: {
           kind: "session-checkpoints",
           label: "Open checkpoints",

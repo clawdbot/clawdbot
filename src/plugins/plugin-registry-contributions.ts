@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 import {
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig,
@@ -101,12 +102,6 @@ export type ResolveManifestContractPluginIdsByCompatibilityRuntimePathParams =
 
 function normalizeContributionId(value: string): string {
   return value.trim();
-}
-
-function sortUnique(values: Iterable<string>): string[] {
-  return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
 }
 
 function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
@@ -263,7 +258,9 @@ function filterContributionOwnerIds(params: {
       config: params.config,
     }),
   );
-  return sortUnique(params.owners.filter((owner) => enabledPluginIds.has(owner)));
+  return normalizeSortedUniqueStringEntries(
+    params.owners.filter((owner) => enabledPluginIds.has(owner)),
+  );
 }
 
 function canReuseCurrentManifestRegistry(params: LoadPluginRegistryManifestParams): boolean {
@@ -353,7 +350,7 @@ export function listPluginContributionIds(
 ): readonly string[] {
   const index = params.lookUpTable?.index ?? loadPluginRegistrySnapshot(params);
   const plugins = listContributionManifestPlugins({ ...params, index });
-  return sortUnique(
+  return normalizeSortedUniqueStringEntries(
     plugins.flatMap((plugin) => listManifestContributionIds(plugin, params.contribution)),
   );
 }
@@ -380,7 +377,7 @@ export function resolvePluginContributionOwners(
       ? (contributionId: string) => contributionId === params.matches
       : params.matches;
   const plugins = listContributionManifestPlugins({ ...params, index });
-  return sortUnique(
+  return normalizeSortedUniqueStringEntries(
     plugins.flatMap((plugin) =>
       listManifestContributionIds(plugin, params.contribution).some(matcher) ? [plugin.id] : [],
     ),

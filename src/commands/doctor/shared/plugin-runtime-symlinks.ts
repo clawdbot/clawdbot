@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sortUniqueStrings } from "../../../shared/string-normalization.js";
 import { note } from "../../../terminal/note.js";
 import { shortenHomePath } from "../../../utils.js";
 
@@ -142,9 +143,7 @@ export async function removeStalePluginRuntimeSymlinks(
 }
 
 function uniqueResolvedRoots(values: readonly string[]): string[] {
-  return [...new Set(values.map((value) => path.resolve(value)))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return sortUniqueStrings(values.map((value) => path.resolve(value)));
 }
 
 function isPathInsideRoot(candidate: string, root: string): boolean {

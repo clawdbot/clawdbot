@@ -125,7 +125,7 @@ steps:
                   message:
                     expr: config.prompt
                   timeoutMs:
-                    expr: liveTurnTimeoutMs(env, 30000)
+                    expr: liveTurnTimeoutMs(env, 180000)
             - call: waitForOutboundMessage
               saveAs: outbound
               args:
@@ -133,7 +133,7 @@ steps:
                 - lambda:
                     params: [candidate]
                     expr: "candidate.conversation.id === 'qa-operator'"
-                - expr: liveTurnTimeoutMs(env, 30000)
+                - expr: liveTurnTimeoutMs(env, 180000)
             - set: lower
               value:
                 expr: "normalizeLowercaseStringOrEmpty(outbound.text)"

@@ -1,9 +1,12 @@
 import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -119,8 +122,7 @@ function readCompatBoolean(
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
-  const value = (compat as Record<string, unknown>)[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean((compat as Record<string, unknown>)[key]);
 }
 
 const OPENCLAW_ATTRIBUTION_PRODUCT = "OpenClaw";
@@ -231,19 +233,6 @@ function isManifestProviderEndpointClass(value: string): value is ProviderEndpoi
   return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => entry !== undefined);
-}
-
 function readManifestProviderEndpoints(
   manifest: Record<string, unknown>,
 ): ManifestProviderEndpointCacheEntry[] {
@@ -261,9 +250,11 @@ function readManifestProviderEndpoints(
     }
     entries.push({
       endpointClass: endpointClassRaw,
-      hosts: normalizeStringList(rawEndpoint.hosts).map((host) => host.toLowerCase()),
-      hostSuffixes: normalizeStringList(rawEndpoint.hostSuffixes).map((host) => host.toLowerCase()),
-      normalizedBaseUrls: normalizeStringList(rawEndpoint.baseUrls)
+      hosts: normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase()),
+      hostSuffixes: normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
+        host.toLowerCase(),
+      ),
+      normalizedBaseUrls: normalizeTrimmedStringList(rawEndpoint.baseUrls)
         .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
         .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
       ...(normalizeOptionalString(rawEndpoint.googleVertexRegion)

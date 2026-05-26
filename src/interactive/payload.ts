@@ -1,3 +1,4 @@
+import { asOptionalRecord as toRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -173,13 +174,6 @@ function normalizePresentationTone(value: unknown): MessagePresentationTone | un
     tone === "neutral"
     ? tone
     : undefined;
-}
-
-function toRecord(raw: unknown): Record<string, unknown> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return undefined;
-  }
-  return raw as Record<string, unknown>;
 }
 
 function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {

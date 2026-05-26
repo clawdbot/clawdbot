@@ -12,6 +12,17 @@ DOCKER_TARGET="${OPENCLAW_NPM_ONBOARD_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_NPM_ONBOARD_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
 CHANNEL="${OPENCLAW_NPM_ONBOARD_CHANNEL:-telegram}"
+run_log=""
+
+cleanup() {
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
 
 case "$CHANNEL" in
 telegram | discord | slack) ;;
@@ -178,9 +189,7 @@ node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-agent-turn 
 echo "npm tarball onboard/channel/agent Docker E2E passed for $CHANNEL"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
-rm -f "$run_log"
 echo "npm tarball onboard/channel/agent Docker E2E passed ($CHANNEL)"

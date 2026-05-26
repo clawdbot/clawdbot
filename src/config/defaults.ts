@@ -2,11 +2,13 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   DEFAULT_AGENT_MAX_CONCURRENT,
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
 } from "./agent-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "./cron-limits.js";
 import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import {
   applyProviderConfigDefaultsForConfig,
@@ -33,10 +35,10 @@ const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
 
-  // Google Gemini (3.x are preview ids in the catalog)
+  // Google Gemini (3.x — flash-lite is GA; pro and flash are still preview)
   gemini: "google/gemini-3.1-pro-preview",
   "gemini-flash": "google/gemini-3-flash-preview",
-  "gemini-flash-lite": "google/gemini-3.1-flash-lite-preview",
+  "gemini-flash-lite": "google/gemini-3.1-flash-lite",
 };
 
 const DEFAULT_MODEL_COST: ModelDefinitionConfig["cost"] = {
@@ -58,10 +60,6 @@ const MISTRAL_SAFE_MAX_TOKENS_BY_MODEL = {
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -434,6 +432,20 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
         ...nextDefaults,
         subagents: nextSubagents,
       },
+    },
+  };
+}
+
+export function applyCronDefaults(cfg: OpenClawConfig): OpenClawConfig {
+  const raw = cfg.cron?.maxConcurrentRuns;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    cron: {
+      ...cfg.cron,
+      maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
     },
   };
 }

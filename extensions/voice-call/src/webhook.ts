@@ -3,7 +3,10 @@ import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createWebhookInFlightLimiter,
   WEBHOOK_BODY_READ_DEFAULTS,
@@ -131,10 +134,7 @@ function resolveForwardedClientIp(
   );
   const forwardedFor = getHeader(request.headers, "x-forwarded-for");
   if (forwardedFor) {
-    const forwardedIps = forwardedFor
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean);
+    const forwardedIps = normalizeStringEntries(forwardedFor.split(","));
     if (forwardedIps.length > 0) {
       if (normalizedTrustedProxyIps.size === 0) {
         return forwardedIps[0];

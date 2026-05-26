@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { compileMemoryWikiVault } from "./compile.js";
 import { renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
@@ -108,6 +108,61 @@ describe("compileMemoryWikiVault", () => {
     await expect(
       fs.readFile(path.join(rootDir, ".openclaw-wiki", "cache", "claims.jsonl"), "utf8"),
     ).resolves.toContain('"text":"Alpha is the canonical source page."');
+  });
+
+  it("bounds concurrent page reads while compiling", async () => {
+    const { rootDir, config } = await createVault({
+      rootDir: nextCaseRoot(),
+      initialize: true,
+    });
+
+    for (let index = 0; index < 24; index += 1) {
+      await fs.writeFile(
+        path.join(rootDir, "sources", `page-${index}.md`),
+        renderWikiMarkdown({
+          frontmatter: {
+            pageType: "source",
+            id: `source.page-${index}`,
+            title: `Page ${index}`,
+          },
+          body: `# Page ${index}\n`,
+        }),
+        "utf8",
+      );
+    }
+
+    const originalReadFile = fs.readFile.bind(fs);
+    let activePageReads = 0;
+    let maxActivePageReads = 0;
+    const readFileSpy = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const targetPath = args[0];
+        const isTestPageRead =
+          typeof targetPath === "string" &&
+          targetPath.startsWith(path.join(rootDir, "sources", "page-"));
+        if (!isTestPageRead) {
+          return await originalReadFile(...args);
+        }
+
+        activePageReads += 1;
+        maxActivePageReads = Math.max(maxActivePageReads, activePageReads);
+        try {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          return await originalReadFile(...args);
+        } finally {
+          activePageReads -= 1;
+        }
+      });
+
+    try {
+      await compileMemoryWikiVault(config);
+    } finally {
+      readFileSpy.mockRestore();
+    }
+
+    expect(maxActivePageReads).toBeGreaterThan(0);
+    expect(maxActivePageReads).toBeLessThanOrEqual(16);
   });
 
   it("renders obsidian-friendly links when configured", async () => {

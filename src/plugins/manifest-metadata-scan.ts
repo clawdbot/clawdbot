@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString as normalizeTrimmedString } from "../shared/string-coerce.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 type PluginManifestMetadataRecord = {
@@ -25,14 +27,6 @@ let manifestMetadataCache:
       records: PluginManifestMetadataRecord[];
     }
   | undefined;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function resolveUserPath(value: string, env: NodeJS.ProcessEnv): string {
   if (value === "~" || value.startsWith("~/")) {

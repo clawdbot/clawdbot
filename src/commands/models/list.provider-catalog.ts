@@ -28,6 +28,7 @@ import {
   resolveOwningPluginIdsForProvider,
 } from "../../plugins/providers.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
+import { sortUniqueStrings } from "../../shared/string-normalization.js";
 
 const DISCOVERY_ORDERS = ["simple", "profile", "paired", "late"] as const;
 const SELF_HOSTED_DISCOVERY_PROVIDER_IDS = new Set(["lmstudio", "ollama", "sglang", "vllm"]);
@@ -92,7 +93,7 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
     ...collectMatchingContributionOwners(index, "cliBackends", params.providerFilter, params.cfg),
   ];
   if (pluginIds.length > 0) {
-    return [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right));
+    return sortUniqueStrings(pluginIds);
   }
   const disabledPluginIds = [
     ...collectMatchingContributionOwners(index, "providers", params.providerFilter, params.cfg, {

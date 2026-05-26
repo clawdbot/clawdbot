@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 export function replaceSensitiveValuesInRaw(params: {
   raw: string;
@@ -8,7 +9,7 @@ export function replaceSensitiveValuesInRaw(params: {
 }): string {
   // Empty string is not a valid replacement token here: replaceAll("", x)
   // matches every character boundary and corrupts the whole raw snapshot.
-  const values = [...new Set(params.sensitiveValues)]
+  const values = uniqueStrings(params.sensitiveValues)
     .filter((value) => value !== "")
     .toSorted((a, b) => b.length - a.length);
   let result = params.raw;

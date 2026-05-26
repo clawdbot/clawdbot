@@ -14,6 +14,7 @@ import {
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -60,10 +61,6 @@ const IMAGE_MODELS = new Set([
 const VIDEO_MODELS = new Set(["gen4_aleph"]);
 const RUNWAY_TEXT_ASPECT_RATIOS = ["16:9", "9:16"] as const;
 const RUNWAY_EDIT_ASPECT_RATIOS = ["1:1", "16:9", "9:16", "3:4", "4:3", "21:9"] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function readRunwayJsonResponse<T>(
   response: Pick<Response, "json">,

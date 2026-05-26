@@ -91,32 +91,32 @@ function getRestartReplyDrainCounts(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
 }) {
   const pendingReplyCount = params.getPendingReplyCount();
-  const activeChatRuns = listRestartDrainChatRuns(params.chatAbortControllers).length;
+  const activeRuns = listRestartDrainRuns(params.chatAbortControllers).length;
   return {
     pendingReplies:
       Number.isFinite(pendingReplyCount) && pendingReplyCount > 0
         ? Math.floor(pendingReplyCount)
         : 0,
-    activeChatRuns,
+    activeRuns,
   };
 }
 
-function listRestartDrainChatRuns(
+function listRestartDrainRuns(
   chatAbortControllers: Map<string, ChatAbortControllerEntry>,
 ): Array<[string, ChatAbortControllerEntry]> {
-  return Array.from(chatAbortControllers.entries()).filter(([, entry]) => entry.kind !== "agent");
+  return Array.from(chatAbortControllers.entries());
 }
 
 function formatRestartReplyDrainDetails(counts: {
   pendingReplies: number;
-  activeChatRuns: number;
+  activeRuns: number;
 }): string {
   const details: string[] = [];
   if (counts.pendingReplies > 0) {
     details.push(`${counts.pendingReplies} pending reply(ies)`);
   }
-  if (counts.activeChatRuns > 0) {
-    details.push(`${counts.activeChatRuns} active chat run(s)`);
+  if (counts.activeRuns > 0) {
+    details.push(`${counts.activeRuns} active run(s)`);
   }
   return details.length > 0 ? details.join(", ") : "no pending reply work";
 }
@@ -136,12 +136,12 @@ async function waitForRestartReplyDrain(params: {
 }): Promise<{
   drained: boolean;
   elapsedMs: number;
-  counts: { pendingReplies: number; activeChatRuns: number };
+  counts: { pendingReplies: number; activeRuns: number };
 }> {
   const timeoutMs = Math.max(0, Math.floor(params.timeoutMs));
   const pollMs = Math.max(25, Math.floor(params.pollMs ?? RESTART_REPLY_DRAIN_POLL_MS));
   let counts = getRestartReplyDrainCounts(params);
-  if (counts.pendingReplies <= 0 && counts.activeChatRuns <= 0) {
+  if (counts.pendingReplies <= 0 && counts.activeRuns <= 0) {
     return { drained: true, elapsedMs: 0, counts };
   }
   if (timeoutMs <= 0) {
@@ -156,13 +156,13 @@ async function waitForRestartReplyDrain(params: {
     }
     await sleepForRestartReplyDrain(Math.min(pollMs, timeoutMs - elapsedMs));
     counts = getRestartReplyDrainCounts(params);
-    if (counts.pendingReplies <= 0 && counts.activeChatRuns <= 0) {
+    if (counts.pendingReplies <= 0 && counts.activeRuns <= 0) {
       return { drained: true, elapsedMs: Date.now() - startedAt, counts };
     }
   }
 }
 
-function abortActiveChatRunsForRestart(params: {
+function abortActiveRunsForRestart(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunState: ChatRunState;
   removeChatRun: (
@@ -175,7 +175,7 @@ function abortActiveChatRunsForRestart(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 }): number {
   let aborted = 0;
-  for (const [runId, entry] of listRestartDrainChatRuns(params.chatAbortControllers)) {
+  for (const [runId, entry] of listRestartDrainRuns(params.chatAbortControllers)) {
     const result = abortChatRunById(
       {
         chatAbortControllers: params.chatAbortControllers,
@@ -220,7 +220,7 @@ async function drainRestartPendingRepliesForShutdown(params: {
   warnings: string[];
 }): Promise<void> {
   const initialCounts = getRestartReplyDrainCounts(params);
-  if (initialCounts.pendingReplies <= 0 && initialCounts.activeChatRuns <= 0) {
+  if (initialCounts.pendingReplies <= 0 && initialCounts.activeRuns <= 0) {
     return;
   }
 
@@ -246,16 +246,16 @@ async function drainRestartPendingRepliesForShutdown(params: {
   );
   recordShutdownWarning(params.warnings, "restart-reply-drain");
 
-  if (drainResult.counts.activeChatRuns <= 0) {
+  if (drainResult.counts.activeRuns <= 0) {
     return;
   }
 
-  const abortedRuns = abortActiveChatRunsForRestart(params);
+  const abortedRuns = abortActiveRunsForRestart(params);
   if (abortedRuns <= 0) {
     return;
   }
 
-  shutdownLog.warn(`aborted ${abortedRuns} active chat run(s) during restart shutdown`);
+  shutdownLog.warn(`aborted ${abortedRuns} active run(s) during restart shutdown`);
   const postAbortDrain = await waitForRestartReplyDrain({
     getPendingReplyCount: params.getPendingReplyCount,
     chatAbortControllers: params.chatAbortControllers,

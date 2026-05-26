@@ -116,9 +116,13 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     return null;
   }
 
-  // Standard DP with early exit. O(maxDistance * minLen) in common cases.
-  const prev = Array.from({ length: bLen + 1 }, (_, idx) => idx);
-  const curr = Array.from({ length: bLen + 1 }, () => 0);
+  // Standard DP with early exit. Reuse fixed-size numeric buffers so fuzzy
+  // matching large model catalogs does not allocate a row per candidate.
+  const prev = new Uint32Array(bLen + 1);
+  const curr = new Uint32Array(bLen + 1);
+  for (let index = 0; index <= bLen; index += 1) {
+    prev[index] = index;
+  }
 
   for (let i = 1; i <= aLen; i++) {
     curr[0] = i;
@@ -138,12 +142,12 @@ function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): 
     }
 
     for (let j = 0; j <= bLen; j++) {
-      prev[j] = curr[j] ?? 0;
+      prev[j] = curr[j];
     }
   }
 
-  const dist = prev[bLen] ?? null;
-  if (dist == null || dist > maxDistance) {
+  const dist = prev[bLen];
+  if (dist > maxDistance) {
     return null;
   }
   return dist;

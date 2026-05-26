@@ -21,9 +21,11 @@ import {
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-test("sessions.compaction.* lists checkpoints and branches or restores from pre-compaction snapshots", async () => {
+test("sessions.compaction.* lists checkpoints and branches or restores from compacted transcripts", async () => {
   const { dir, storePath } = await createSessionStoreDir();
-  const fixture = await createCheckpointFixture(dir);
+  const fixture = await createCheckpointFixture(dir, { legacyPreCompactionSnapshot: false });
+  expect((await fs.readdir(dir)).some((file) => file.includes(".checkpoint."))).toBe(false);
+  const checkpointEntryCount = fixture.session.getEntries().length;
   const checkpointCreatedAt = Date.now();
   const { SessionManager } = await getSessionManagerModule();
   await writeSessionStore({
@@ -42,8 +44,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
             summary: "checkpoint summary",
             firstKeptEntryId: fixture.preCompactionLeafId,
             preCompaction: {
-              sessionId: fixture.preCompactionSession.getSessionId(),
-              sessionFile: fixture.preCompactionSessionFile,
+              sessionId: fixture.sessionId,
               leafId: fixture.preCompactionLeafId,
             },
             postCompaction: {
@@ -56,6 +57,11 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ],
       }),
     },
+  });
+  fixture.session.appendMessage({
+    role: "user",
+    content: "future turn after checkpoint",
+    timestamp: Date.now(),
   });
 
   const { ws } = await openClient();
@@ -104,8 +110,7 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     tokensAfter: 45,
     firstKeptEntryId: fixture.preCompactionLeafId,
     preCompaction: {
-      sessionId: fixture.preCompactionSession.getSessionId(),
-      sessionFile: fixture.preCompactionSessionFile,
+      sessionId: fixture.sessionId,
       leafId: fixture.preCompactionLeafId,
     },
     postCompaction: {
@@ -119,16 +124,14 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   const checkpoint = await rpcReq<{
     ok: true;
     key: string;
-    checkpoint: { checkpointId: string; preCompaction: { sessionFile: string } };
+    checkpoint: { checkpointId: string; preCompaction: { sessionFile?: string } };
   }>(ws, "sessions.compaction.get", {
     key: "main",
     checkpointId: "checkpoint-1",
   });
   expect(checkpoint.ok).toBe(true);
   expect(checkpoint.payload?.checkpoint.checkpointId).toBe("checkpoint-1");
-  expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBe(
-    fixture.preCompactionSessionFile,
-  );
+  expect(checkpoint.payload?.checkpoint.preCompaction.sessionFile).toBeUndefined();
 
   const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
   const sessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFrom");
@@ -138,7 +141,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ok: true;
         sourceKey: string;
         key: string;
-        entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+        entry: {
+          sessionId: string;
+          sessionFile?: string;
+          parentSessionKey?: string;
+          totalTokens?: number;
+          totalTokensFresh?: boolean;
+        };
       }>
     >
   >;
@@ -147,7 +156,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       ok: true;
       sourceKey: string;
       key: string;
-      entry: { sessionId: string; sessionFile?: string; parentSessionKey?: string };
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        parentSessionKey?: string;
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+      };
     }>(ws, "sessions.compaction.branch", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -161,14 +176,21 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(branched.ok).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
   expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
+  expect(branched.payload?.entry.totalTokens).toBe(45);
+  expect(branched.payload?.entry.totalTokensFresh).toBe(true);
   const branchedSessionFile = branched.payload?.entry.sessionFile;
   if (!branchedSessionFile) {
     throw new Error("expected branched compaction session file");
   }
   const branchedSession = SessionManager.open(branchedSessionFile, dir);
-  expect(branchedSession.getEntries()).toHaveLength(
-    fixture.preCompactionSession.getEntries().length,
-  );
+  expect(branchedSession.getEntries()).toHaveLength(checkpointEntryCount);
+  expect(
+    branchedSession
+      .buildSessionContext()
+      .messages.some(
+        (message) => (message as { content?: unknown }).content === "future turn after checkpoint",
+      ),
+  ).toBe(false);
 
   const storeAfterBranch = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,
@@ -190,7 +212,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
         ok: true;
         key: string;
         sessionId: string;
-        entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+        entry: {
+          sessionId: string;
+          sessionFile?: string;
+          compactionCheckpoints?: unknown[];
+          totalTokens?: number;
+          totalTokensFresh?: boolean;
+        };
       }>
     >
   >;
@@ -199,7 +227,13 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
       ok: true;
       key: string;
       sessionId: string;
-      entry: { sessionId: string; sessionFile?: string; compactionCheckpoints?: unknown[] };
+      entry: {
+        sessionId: string;
+        sessionFile?: string;
+        compactionCheckpoints?: unknown[];
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+      };
     }>(ws, "sessions.compaction.restore", {
       key: "main",
       checkpointId: "checkpoint-1",
@@ -214,14 +248,21 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(restored.payload?.key).toBe("agent:main:main");
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);
   expect(restored.payload?.entry.compactionCheckpoints).toHaveLength(1);
+  expect(restored.payload?.entry.totalTokens).toBe(45);
+  expect(restored.payload?.entry.totalTokensFresh).toBe(true);
   const restoredSessionFile = restored.payload?.entry.sessionFile;
   if (!restoredSessionFile) {
     throw new Error("expected restored compaction session file");
   }
   const restoredSession = SessionManager.open(restoredSessionFile, dir);
-  expect(restoredSession.getEntries()).toHaveLength(
-    fixture.preCompactionSession.getEntries().length,
-  );
+  expect(restoredSession.getEntries()).toHaveLength(checkpointEntryCount);
+  expect(
+    restoredSession
+      .buildSessionContext()
+      .messages.some(
+        (message) => (message as { content?: unknown }).content === "future turn after checkpoint",
+      ),
+  ).toBe(false);
 
   const storeAfterRestore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
     string,

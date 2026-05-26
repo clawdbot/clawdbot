@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { privateFileStore } from "../infra/private-file-store.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS,
   DEFAULT_COMMITMENT_MAX_PER_HEARTBEAT,
@@ -55,22 +57,6 @@ function emptyStore(): CommitmentStoreFile {
   return { version: STORE_VERSION, commitments: [] };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function normalizeRequiredString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim() || undefined : undefined;
-}
-
 function normalizeNonNegativeNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
@@ -88,24 +74,24 @@ function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
     return undefined;
   }
 
-  const id = normalizeRequiredString(raw.id);
-  const agentId = normalizeRequiredString(raw.agentId);
-  const sessionKey = normalizeRequiredString(raw.sessionKey);
-  const channel = normalizeRequiredString(raw.channel);
-  const reason = normalizeRequiredString(raw.reason);
-  const suggestedText = normalizeRequiredString(raw.suggestedText);
-  const dedupeKey = normalizeRequiredString(raw.dedupeKey);
-  const kind = normalizeRequiredString(raw.kind);
-  const sensitivity = normalizeRequiredString(raw.sensitivity);
-  const source = normalizeRequiredString(raw.source);
-  const status = normalizeRequiredString(raw.status);
+  const id = normalizeOptionalString(raw.id);
+  const agentId = normalizeOptionalString(raw.agentId);
+  const sessionKey = normalizeOptionalString(raw.sessionKey);
+  const channel = normalizeOptionalString(raw.channel);
+  const reason = normalizeOptionalString(raw.reason);
+  const suggestedText = normalizeOptionalString(raw.suggestedText);
+  const dedupeKey = normalizeOptionalString(raw.dedupeKey);
+  const kind = normalizeOptionalString(raw.kind);
+  const sensitivity = normalizeOptionalString(raw.sensitivity);
+  const source = normalizeOptionalString(raw.source);
+  const status = normalizeOptionalString(raw.status);
   const confidence = normalizeNonNegativeNumber(raw.confidence);
   const createdAtMs = normalizeNonNegativeNumber(raw.createdAtMs);
   const updatedAtMs = normalizeNonNegativeNumber(raw.updatedAtMs);
   const attempts = normalizeNonNegativeInteger(raw.attempts);
   const earliestMs = normalizeNonNegativeNumber(dueWindow.earliestMs);
   const latestMs = normalizeNonNegativeNumber(dueWindow.latestMs);
-  const timezone = normalizeRequiredString(dueWindow.timezone);
+  const timezone = normalizeOptionalString(dueWindow.timezone);
   const accountId = normalizeOptionalString(raw.accountId);
   const to = normalizeOptionalString(raw.to);
   const threadId = normalizeOptionalString(raw.threadId);

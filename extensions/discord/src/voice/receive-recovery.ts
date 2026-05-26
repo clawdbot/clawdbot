@@ -4,6 +4,7 @@ const DECRYPT_FAILURE_WINDOW_MS = 30_000;
 const DECRYPT_FAILURE_RECONNECT_THRESHOLD = 3;
 const DECRYPT_FAILURE_MARKER = "DecryptionFailed(";
 const DAVE_PASSTHROUGH_DISABLED_MARKER = "UnencryptedWhenPassthroughDisabled";
+const WASM_MEMORY_ACCESS_MARKER = "memory access out of bounds";
 
 export const DAVE_RECEIVE_PASSTHROUGH_INITIAL_EXPIRY_SECONDS = 30;
 export const DAVE_RECEIVE_PASSTHROUGH_REARM_EXPIRY_SECONDS = 15;
@@ -81,11 +82,15 @@ function isAbortLikeReceiveError(err: unknown): boolean {
 export function analyzeVoiceReceiveError(err: unknown): VoiceReceiveErrorAnalysis {
   const message = formatErrorMessage(err);
   const shouldAttemptPassthrough = message.includes(DAVE_PASSTHROUGH_DISABLED_MARKER);
+  const isWasmMemoryAccessFailure = message.toLowerCase().includes(WASM_MEMORY_ACCESS_MARKER);
   return {
     message,
     isAbortLike: isAbortLikeReceiveError(err),
     shouldAttemptPassthrough,
-    countsAsDecryptFailure: message.includes(DECRYPT_FAILURE_MARKER) || shouldAttemptPassthrough,
+    countsAsDecryptFailure:
+      message.includes(DECRYPT_FAILURE_MARKER) ||
+      shouldAttemptPassthrough ||
+      isWasmMemoryAccessFailure,
   };
 }
 

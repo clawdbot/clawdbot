@@ -103,6 +103,7 @@
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "serviceName": "OpenClaw"
 }
@@ -121,6 +122,7 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "threadId": "thread-discord-group-codex-message-tool"
 }
@@ -150,6 +152,7 @@
     }
   ],
   "model": "gpt-5.5",
+  "personality": "none",
   "sandboxPolicy": {
     "type": "dangerFullAccess"
   },
@@ -218,8 +221,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 40340,
-    "roughTokens": 10085
+    "chars": 40277,
+    "roughTokens": 10070
   },
   "openClawDeveloperInstructions": {
     "chars": 2846,
@@ -230,8 +233,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6890
   },
   "totalWithDynamicToolsJson": {
-    "chars": 67900,
-    "roughTokens": 16975
+    "chars": 67837,
+    "roughTokens": 16960
   },
   "userInputText": {
     "chars": 1629,
@@ -633,9 +636,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
             "type": "object"
           },
           "type": "array"
-        },
-        "bestEffort": {
-          "type": "boolean"
         },
         "buffer": {
           "description": "Base64 attachment payload; data URL ok.",

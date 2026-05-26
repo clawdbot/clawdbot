@@ -9,7 +9,7 @@ import type {
   TelegramGroupConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type NormalizedAllowFrom = {
   entries: string[];
@@ -52,7 +52,7 @@ export const normalizeAllowFrom = (list?: Array<string | number>): NormalizedAll
     .map((value) => value.replace(/^(telegram|tg):/i, ""));
   const invalidEntries = normalized.filter((value) => !/^\d+$/.test(value));
   if (invalidEntries.length > 0) {
-    warnInvalidAllowFromEntries([...new Set(invalidEntries)]);
+    warnInvalidAllowFromEntries(uniqueStrings(invalidEntries));
   }
   const ids = normalized.filter((value) => /^\d+$/.test(value));
   return {

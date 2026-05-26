@@ -80,6 +80,7 @@ export type CodexThreadStartParams = JsonObject & {
   cwd?: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: string;
@@ -95,6 +96,7 @@ export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
+  personality?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
   sandbox?: string;
@@ -150,6 +152,7 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  personality?: string | null;
   environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
     mode: string;

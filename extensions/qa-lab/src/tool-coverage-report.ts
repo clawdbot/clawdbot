@@ -1,3 +1,7 @@
+import {
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   RuntimeId,
   RuntimeParityCell,
@@ -76,14 +80,6 @@ type ToolFixtureGroup = {
 };
 
 const PASSING_DRIFTS: ReadonlySet<QaToolCoverageDrift> = new Set(["none", "text-only"]);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
 
 function normalizeRuntimePair(
   pair: [RuntimeId, RuntimeId] | null | undefined,
@@ -209,9 +205,7 @@ function buildRow(params: {
     .find((entry) => entry.required);
   const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]);
   const rowMetadata = metadata ?? fallbackMetadata;
-  const runtimeToolName = params.group.scenarios
-    .map(readScenarioRuntimeToolName)
-    .find(Boolean);
+  const runtimeToolName = params.group.scenarios.map(readScenarioRuntimeToolName).find(Boolean);
   return {
     tool: params.group.tool,
     ...(runtimeToolName ? { runtimeToolName } : {}),

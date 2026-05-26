@@ -1,3 +1,4 @@
+import { asBoolean } from "../utils/boolean.js";
 import type { OpenClawConfig } from "./config.js";
 
 type DangerousNameMatchingConfig = {
@@ -21,10 +22,6 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
-}
-
-function asOptionalBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 export function isDangerousNameMatchingEnabled(
@@ -80,7 +77,7 @@ export function collectProviderDangerousNameMatchingScopes(
     }
 
     const accountPrefix = `${providerPrefix}.accounts.${key}`;
-    const accountDangerousNameMatching = asOptionalBoolean(account.dangerouslyAllowNameMatching);
+    const accountDangerousNameMatching = asBoolean(account.dangerouslyAllowNameMatching);
 
     scopes.push({
       prefix: accountPrefix,

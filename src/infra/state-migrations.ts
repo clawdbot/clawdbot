@@ -38,6 +38,7 @@ import {
   ensureDir,
   existsDir,
   fileExists,
+  parseSessionStoreJson5,
   readSessionStoreJson5,
   type SessionEntryLike,
   safeReadDir,
@@ -464,6 +465,213 @@ function canonicalizeSessionStore(params: {
   }
 
   return { store: canonical, legacyKeys };
+}
+
+function skipJson5Trivia(raw: string, index: number): number {
+  let i = index;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === " " || ch === "\n" || ch === "\r" || ch === "\t") {
+      i++;
+      continue;
+    }
+    if (ch === "/" && raw[i + 1] === "/") {
+      i += 2;
+      while (i < raw.length && raw[i] !== "\n") {
+        i++;
+      }
+      continue;
+    }
+    if (ch === "/" && raw[i + 1] === "*") {
+      i += 2;
+      while (i < raw.length && !(raw[i] === "*" && raw[i + 1] === "/")) {
+        i++;
+      }
+      return i < raw.length ? i + 2 : i;
+    }
+    break;
+  }
+  return i;
+}
+
+function readJson5String(raw: string, index: number): { value: string; next: number } | null {
+  const quote = raw[index];
+  if (quote !== '"' && quote !== "'") {
+    return null;
+  }
+  let i = index + 1;
+  let value = "";
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === quote) {
+      return { value, next: i + 1 };
+    }
+    if (ch === "\\") {
+      return null;
+    }
+    value += ch;
+    i++;
+  }
+  return null;
+}
+
+function readJson5BareKey(raw: string, index: number): { value: string; next: number } | null {
+  let i = index;
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (
+      ch === ":" ||
+      ch === " " ||
+      ch === "\n" ||
+      ch === "\r" ||
+      ch === "\t" ||
+      ch === "," ||
+      ch === "}" ||
+      ch === "{" ||
+      ch === "[" ||
+      ch === "]"
+    ) {
+      break;
+    }
+    i++;
+  }
+  if (i === index) {
+    return null;
+  }
+  return { value: raw.slice(index, i), next: i };
+}
+
+function listTopLevelSessionStoreKeys(raw: string): string[] | null {
+  let i = skipJson5Trivia(raw, 0);
+  if (raw[i] !== "{") {
+    return null;
+  }
+  i++;
+  const keys: string[] = [];
+  let depth = 1;
+  let expectingKey = true;
+
+  while (i < raw.length) {
+    i = skipJson5Trivia(raw, i);
+    const ch = raw[i];
+    if (ch === undefined) {
+      return null;
+    }
+    if (depth === 1 && ch === "}") {
+      return keys;
+    }
+    if (depth === 1 && expectingKey) {
+      const key = ch === '"' || ch === "'" ? readJson5String(raw, i) : readJson5BareKey(raw, i);
+      if (!key) {
+        return null;
+      }
+      i = skipJson5Trivia(raw, key.next);
+      if (raw[i] !== ":") {
+        return null;
+      }
+      keys.push(key.value);
+      i++;
+      expectingKey = false;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const str = readJson5String(raw, i);
+      if (!str) {
+        return null;
+      }
+      i = str.next;
+      continue;
+    }
+    if (ch === "{" || ch === "[") {
+      depth++;
+      i++;
+      continue;
+    }
+    if (ch === "}" || ch === "]") {
+      depth--;
+      i++;
+      if (depth < 1) {
+        return keys;
+      }
+      continue;
+    }
+    if (depth === 1 && ch === ",") {
+      expectingKey = true;
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return null;
+}
+
+export function sessionStoreTextMayNeedCanonicalization(params: {
+  raw: string;
+  storeAgentIds: Iterable<string>;
+  mainKey: string;
+  scope?: SessionScope;
+}): boolean {
+  const keys = listTopLevelSessionStoreKeys(params.raw);
+  if (!keys) {
+    return true;
+  }
+  const storeAgentIds = new Set([...params.storeAgentIds].map((id) => normalizeAgentId(id)));
+  const hasNonMainAgent = [...storeAgentIds].some((id) => id !== DEFAULT_AGENT_ID);
+  for (const key of keys) {
+    const rawKey = key.trim();
+    if (rawKey !== key) {
+      return true;
+    }
+    if (!rawKey) {
+      continue;
+    }
+    const lowerKey = normalizeLowercaseStringOrEmpty(rawKey);
+    if (lowerKey !== rawKey) {
+      return true;
+    }
+    if (lowerKey === "global" || lowerKey === "unknown") {
+      continue;
+    }
+    if (lowerKey === DEFAULT_MAIN_KEY || lowerKey === params.mainKey) {
+      return true;
+    }
+    if (lowerKey.startsWith("subagent:")) {
+      return true;
+    }
+    if (lowerKey.startsWith("group:") || lowerKey.startsWith("channel:")) {
+      return true;
+    }
+    if (!lowerKey.startsWith("agent:")) {
+      return true;
+    }
+    for (const storeAgentId of storeAgentIds) {
+      const agentMainAlias = `agent:${storeAgentId}:${DEFAULT_MAIN_KEY}`;
+      const agentMainKey = `agent:${storeAgentId}:${params.mainKey}`;
+      if (
+        lowerKey === agentMainAlias &&
+        (params.mainKey !== DEFAULT_MAIN_KEY || params.scope === "global")
+      ) {
+        return true;
+      }
+      if (lowerKey === agentMainKey && params.scope === "global") {
+        return true;
+      }
+    }
+    if (
+      lowerKey === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` &&
+      (params.mainKey !== DEFAULT_MAIN_KEY || hasNonMainAgent || params.scope === "global")
+    ) {
+      return true;
+    }
+    if (
+      lowerKey === `agent:${DEFAULT_AGENT_ID}:${params.mainKey}` &&
+      hasNonMainAgent &&
+      !storeAgentIds.has(DEFAULT_AGENT_ID)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function listLegacySessionKeys(params: {
@@ -1163,9 +1371,26 @@ export async function migrateOrphanedSessionKeys(params: {
     if (!fileExists(storePath)) {
       continue;
     }
+    let raw: string;
+    try {
+      raw = fs.readFileSync(storePath, "utf-8");
+    } catch (err) {
+      warnings.push(`Could not read ${storePath}: ${String(err)}`);
+      continue;
+    }
+    if (
+      !sessionStoreTextMayNeedCanonicalization({
+        raw,
+        storeAgentIds,
+        mainKey,
+        scope,
+      })
+    ) {
+      continue;
+    }
     let parsed: ReturnType<typeof readSessionStoreJson5>;
     try {
-      parsed = readSessionStoreJson5(storePath);
+      parsed = parseSessionStoreJson5(raw);
     } catch (err) {
       warnings.push(`Could not read ${storePath}: ${String(err)}`);
       continue;

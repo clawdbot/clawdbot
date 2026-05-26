@@ -17,23 +17,25 @@ vi.mock(
   "../plugins/provider-runtime.js",
   async () => await createSanitizeSessionHistoryProviderRuntimeMock(),
 );
-vi.mock("../plugins/provider-hook-runtime.js", () =>
-  createSanitizeSessionHistoryProviderHookRuntimeMock({
-    resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
-      provider === "openai"
-        ? {
-            buildReplayPolicy: (context?: { modelApi?: string }) => ({
-              sanitizeMode: "images-only",
-              sanitizeToolCallIds: context?.modelApi === "openai-completions",
-              ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
-              applyAssistantFirstOrderingFix: false,
-              validateGeminiTurns: false,
-              validateAnthropicTurns: false,
-            }),
-          }
-        : undefined,
-    ),
-  }),
+vi.mock(
+  "../plugins/provider-hook-runtime.js",
+  async () =>
+    await createSanitizeSessionHistoryProviderHookRuntimeMock({
+      resolveProviderRuntimePlugin: vi.fn(({ provider }: { provider?: string }) =>
+        provider === "openai"
+          ? {
+              buildReplayPolicy: (context?: { modelApi?: string }) => ({
+                sanitizeMode: "images-only",
+                sanitizeToolCallIds: context?.modelApi === "openai-completions",
+                ...(context?.modelApi === "openai-completions" ? { toolCallIdMode: "strict" } : {}),
+                applyAssistantFirstOrderingFix: false,
+                validateGeminiTurns: false,
+                validateAnthropicTurns: false,
+              }),
+            }
+          : undefined,
+      ),
+    }),
 );
 
 describe("sanitizeSessionHistory openai tool id preservation", () => {

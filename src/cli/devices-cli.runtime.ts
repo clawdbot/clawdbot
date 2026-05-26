@@ -30,6 +30,7 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -403,7 +404,7 @@ function resolveOriginalReplacementScopes(
 ): string[] {
   const requestedScopes = normalizeDeviceAuthScopes(original.scopes);
   const inferredOperatorScopes = resolvePendingOperatorApprovalScopes(original, paired);
-  return [...new Set([...requestedScopes, ...inferredOperatorScopes])];
+  return uniqueStrings([...requestedScopes, ...inferredOperatorScopes]);
 }
 
 function replacementScopesCoverOriginal(

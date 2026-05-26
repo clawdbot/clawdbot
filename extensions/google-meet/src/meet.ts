@@ -1,4 +1,5 @@
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
 import { googleApiError } from "./google-api-errors.js";
 
@@ -797,9 +798,10 @@ function mergeAttendanceRows(
       grouped.set(key, { ...row, participants: [row.participant] });
       continue;
     }
-    existing.participants = [
-      ...new Set([...(existing.participants ?? [existing.participant]), row.participant]),
-    ];
+    existing.participants = uniqueStrings([
+      ...(existing.participants ?? [existing.participant]),
+      row.participant,
+    ]);
     existing.sessions.push(...row.sessions);
     existing.displayName ??= row.displayName;
     existing.user ??= row.user;

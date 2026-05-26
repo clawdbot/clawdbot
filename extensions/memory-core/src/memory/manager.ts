@@ -20,6 +20,7 @@ import {
   type MemorySource,
   type MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -38,9 +39,13 @@ import {
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
+  createDegradedMemoryProviderLifecycle,
+  createPendingMemoryProviderLifecycle,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
+  type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchKeyword, searchVector } from "./manager-search.js";
@@ -124,7 +129,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providerInitialized = false;
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
-  private providerUnavailableReason?: string;
+  protected providerUnavailableReason?: string;
+  protected override providerLifecycle: MemoryProviderLifecycleState;
   protected override providerRuntime?: EmbeddingProviderRuntime;
   protected batch: {
     enabled: boolean;
@@ -239,6 +245,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.settings = params.settings;
     this.provider = null;
     this.requestedProvider = params.settings.provider;
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
     if (params.providerResult) {
       this.applyProviderResult(params.providerResult);
     }
@@ -283,6 +290,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.fallbackFrom = providerState.fallbackFrom;
     this.fallbackReason = providerState.fallbackReason;
     this.providerUnavailableReason = providerState.providerUnavailableReason;
+    this.providerLifecycle = providerState.lifecycle;
     this.providerRuntime = providerState.providerRuntime;
     this.providerInitialized = true;
   }
@@ -305,11 +313,52 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     try {
       await this.providerInitPromise;
+    } catch (err) {
+      // Clear the cached rejected promise so subsequent calls can retry
+      // initialization instead of being permanently stuck with a stale failure.
+      this.providerInitPromise = null;
+      throw err;
     } finally {
       if (this.providerInitialized) {
         this.providerInitPromise = null;
       }
     }
+  }
+
+  protected resetProviderInitializationForRetry(): void {
+    this.providerInitialized = false;
+    this.providerInitPromise = null;
+    this.providerUnavailableReason = undefined;
+    this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
+  }
+
+  protected markLocalEmbeddingProviderDegraded(err: unknown): void {
+    if (this.provider?.id !== "local") {
+      return;
+    }
+    if (!isLocalEmbeddingWorkerFailure(err)) {
+      return;
+    }
+    const message = formatErrorMessage(err);
+    const degradedProvider = this.provider;
+    this.provider = null;
+    this.providerRuntime = undefined;
+    this.providerUnavailableReason = `Local embeddings degraded: ${message}`;
+    this.providerLifecycle = createDegradedMemoryProviderLifecycle({
+      providerId: degradedProvider.id,
+      reason: message,
+      code: err.code,
+    });
+    EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+    this.providerKey = this.computeProviderKey();
+    this.batch = this.resolveBatchConfig();
+    this.vector.semanticAvailable = false;
+    void Promise.resolve(degradedProvider.close?.()).catch((err: unknown) => {
+      log.debug(`memory embeddings: failed to close degraded local provider: ${String(err)}`);
+    });
+    log.warn("memory embeddings: local provider degraded after worker failure", {
+      error: message,
+    });
   }
 
   async warmSession(sessionKey?: string): Promise<void> {
@@ -378,7 +427,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const searchSources =
       opts?.sources && opts.sources.length > 0
-        ? [...new Set(opts.sources)].filter((s) => this.sources.has(s))
+        ? uniqueValues(opts.sources).filter((s) => this.sources.has(s))
         : undefined;
     if (
       opts?.sources &&
@@ -393,6 +442,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
+
+    if (!this.provider && this.providerLifecycle.mode === "degraded") {
+      const activatedFallback = await this.activateFallbackProvider(
+        this.providerLifecycle.reason,
+      ).catch((fallbackErr: unknown) => {
+        log.warn(
+          `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+        );
+        return false;
+      });
+      if (activatedFallback) {
+        await this.runSafeReindex({ reason: "fallback", force: true });
+      }
+    }
 
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
@@ -461,7 +524,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
-    const keywordResults =
+    const loadKeywordResults = async () =>
       hybrid.enabled && this.fts.enabled && this.fts.available
         ? await this.searchKeyword(
             cleaned,
@@ -473,8 +536,32 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
             return [];
           })
         : [];
+    let keywordResults = await loadKeywordResults();
 
-    const queryVec = await this.embedQueryWithTimeout(cleaned);
+    let queryVec: number[];
+    try {
+      queryVec = await this.embedQueryWithTimeout(cleaned);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      const activatedFallback = this.shouldFallbackOnError(err)
+        ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
+            log.warn(
+              `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
+            );
+            return false;
+          })
+        : false;
+      if (activatedFallback) {
+        await this.runSafeReindex({ reason: "fallback", force: true });
+        keywordResults = await loadKeywordResults();
+        queryVec = await this.embedQueryWithTimeout(cleaned);
+      } else if (!this.provider && this.fts.enabled && this.fts.available) {
+        log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
+        return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
+      } else {
+        throw err;
+      }
+    }
     const hasVector = queryVec.some((v) => v !== 0);
     const vectorResults = hasVector
       ? await this.searchVector(queryVec, candidates, sourceFilterList).catch((err) => {
@@ -846,6 +933,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       },
       custom: {
         searchMode: providerInfo.searchMode,
+        providerState: this.providerLifecycle,
         providerUnavailableReason: this.providerUnavailableReason,
         readonlyRecovery: {
           attempts: this.readonlyRecoveryAttempts,

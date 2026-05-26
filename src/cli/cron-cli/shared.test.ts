@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   coerceCronDeliveryPreviews,
   getCronChannelOptions,
+  parseAt,
   parseCronToolsAllow,
   printCronList,
 } from "./shared.js";
@@ -29,6 +30,10 @@ function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
 function expectLogsToInclude(logs: readonly string[], text: string): void {
   expect(logs.join("\n")).toContain(text);
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
@@ -228,6 +233,16 @@ describe("printCronList", () => {
 
     printCronList([job], runtime);
     expectLogsToInclude(logs, "(exact)");
+  });
+});
+
+describe("parseAt", () => {
+  it("accepts leading plus relative durations for cron add --at", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    expect(parseAt("+30m")).toBe("2026-05-25T00:30:00.000Z");
+    expect(parseAt("30m")).toBe("2026-05-25T00:30:00.000Z");
   });
 });
 

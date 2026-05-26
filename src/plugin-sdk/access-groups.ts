@@ -5,6 +5,7 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { AccessGroupConfig } from "../config/types.access-groups.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 
 export { ACCESS_GROUP_ALLOW_FROM_PREFIX, parseAccessGroupAllowFromEntry };
 
@@ -177,5 +178,5 @@ export async function expandAllowFromWithAccessGroups(params: {
     return allowFrom;
   }
   const senderEntry = params.senderAllowEntry ?? params.senderId;
-  return Array.from(new Set([...allowFrom, senderEntry]));
+  return uniqueStrings([...allowFrom, senderEntry]);
 }

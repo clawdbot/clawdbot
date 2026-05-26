@@ -1,6 +1,7 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { ChannelSecurityDmPolicy } from "./types.core.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
@@ -24,10 +25,7 @@ export function parseOptionalDelimitedEntries(value?: string): string[] | undefi
   if (!value?.trim()) {
     return undefined;
   }
-  const parsed = value
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const parsed = normalizeStringEntries(value.split(/[\n,;]+/g));
   return parsed.length > 0 ? parsed : undefined;
 }
 

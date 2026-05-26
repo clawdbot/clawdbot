@@ -108,15 +108,6 @@ If you already manage Node yourself:
   </Tab>
 </Tabs>
 
-<Accordion title="Troubleshooting: sharp build errors (npm)">
-  If `sharp` fails due to a globally installed libvips:
-
-```bash
-SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g openclaw@latest
-```
-
-</Accordion>
-
 ### From source
 
 For contributors or anyone who wants to run from a local checkout:

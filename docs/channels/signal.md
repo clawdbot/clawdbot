@@ -306,6 +306,21 @@ Config:
   - `minimal`/`extensive` enables agent reactions and sets the guidance level.
 - Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
+## Approval reactions
+
+Signal exec and plugin approval prompts use the top-level `approvals.exec` and
+`approvals.plugin` routing blocks. Signal does not have a
+`channels.signal.execApprovals` block.
+
+- `👍` approves once.
+- `👎` denies.
+- Use `/approve <id> allow-always` when a request offers persistent approval.
+
+Approval reaction resolution requires explicit Signal approvers from
+`channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields.
+Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback
+without explicit approvers; no-approver group approvals keep the local fallback visible.
+
 ## Delivery targets (CLI/cron)
 
 - DMs: `signal:+15551234567` (or plain E.164).

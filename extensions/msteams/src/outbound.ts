@@ -8,7 +8,11 @@ import {
   resolveTextChunksWithFallback,
   sendPayloadMediaSequence,
 } from "openclaw/plugin-sdk/reply-payload";
-import { chunkTextForOutbound, type ChannelOutboundAdapter } from "../runtime-api.js";
+import {
+  chunkTextForOutbound,
+  normalizeStringEntries,
+  type ChannelOutboundAdapter,
+} from "../runtime-api.js";
 import { createMSTeamsPollStoreFs } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
@@ -80,12 +84,12 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       });
       return attachChannelToResult("msteams", result);
     }
-    const mediaUrls = resolvePayloadMediaUrls({
-      ...payload,
-      mediaUrl: payload.mediaUrl ?? mediaUrl,
-    })
-      .map((url) => url.trim())
-      .filter(Boolean);
+    const mediaUrls = normalizeStringEntries(
+      resolvePayloadMediaUrls({
+        ...payload,
+        mediaUrl: payload.mediaUrl ?? mediaUrl,
+      }),
+    );
     if (mediaUrls.length > 0) {
       type SendFn = (
         to: string,

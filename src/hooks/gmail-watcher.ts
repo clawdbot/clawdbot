@@ -28,6 +28,7 @@ let watcherProcess: ChildProcess | null = null;
 let renewInterval: ReturnType<typeof setInterval> | null = null;
 let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
+let respawnTimeout: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Check if gog binary is available
@@ -101,6 +102,10 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
 
   child.on("exit", (code, signal) => {
+    // If a newer watcher has replaced this child, do not respawn.
+    if (watcherProcess !== null && watcherProcess !== child) {
+      return;
+    }
     if (shuttingDown) {
       return;
     }
@@ -114,7 +119,8 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
     }
     log.warn(`gog exited (code=${code}, signal=${signal}); restarting in 5s`);
     watcherProcess = null;
-    setTimeout(() => {
+    respawnTimeout = setTimeout(() => {
+      respawnTimeout = null;
       if (shuttingDown || !currentConfig) {
         return;
       }
@@ -123,6 +129,48 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   });
 
   return child;
+}
+
+/**
+ * Send SIGTERM, escalate to SIGKILL after 3 s, and resolve on exit/close/error
+ * or a final 5 s timeout after SIGKILL so the caller never hangs.
+ */
+function settleProcess(proc: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    let escalation: ReturnType<typeof setTimeout> | undefined;
+    let finalTimeout: ReturnType<typeof setTimeout> | undefined;
+    const settle = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(escalation);
+      clearTimeout(finalTimeout);
+      resolve();
+    };
+
+    proc.on("exit", settle);
+    proc.on("close", settle);
+    proc.on("error", settle);
+
+    proc.kill("SIGTERM");
+
+    escalation = setTimeout(() => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // already dead
+      }
+    }, 3_000);
+
+    finalTimeout = setTimeout(() => {
+      if (!settled) {
+        log.warn("gog process did not exit after SIGKILL; giving up");
+        settle();
+      }
+    }, 8_000);
+  });
 }
 
 export type GmailWatcherStartResult = {
@@ -235,6 +283,32 @@ export async function startGmailWatcher(
   }
   currentConfig = runtimeConfig;
 
+  // Stop any existing watcher before doing async setup so a re-entry
+  // does not orphan the old serve process or leave a dangling timer.
+  // This must run before Tailscale/watch-start to prevent the old
+  // process from exiting and queuing a respawn during async work.
+  if (watcherProcess || renewInterval || respawnTimeout) {
+    shuttingDown = true;
+    if (respawnTimeout) {
+      clearTimeout(respawnTimeout);
+      respawnTimeout = null;
+    }
+    if (renewInterval) {
+      clearInterval(renewInterval);
+      renewInterval = null;
+    }
+    if (watcherProcess) {
+      const oldProcess = watcherProcess;
+      watcherProcess = null;
+      await settleProcess(oldProcess);
+      // Remove lingering spawnGogServe listeners so a late exit (after the
+      // settleProcess timeout) cannot trigger a duplicate respawn while
+      // watcherProcess is null and shuttingDown is false.
+      oldProcess.removeAllListeners();
+    }
+    shuttingDown = false;
+  }
+
   // Set up Tailscale endpoint if needed
   if (runtimeConfig.tailscale.mode !== "off") {
     const cancellation = createGmailWatcherCancellation(options);
@@ -283,8 +357,6 @@ export async function startGmailWatcher(
   }
   shuttingDown = false;
   watcherProcess = spawnGogServe(runtimeConfig);
-
-  // Set up renewal interval
   const renewMs = runtimeConfig.renewEveryMinutes * 60_000;
   renewInterval = setInterval(() => {
     if (shuttingDown) {
@@ -306,6 +378,10 @@ export async function startGmailWatcher(
 export async function stopGmailWatcher(): Promise<void> {
   shuttingDown = true;
 
+  if (respawnTimeout) {
+    clearTimeout(respawnTimeout);
+    respawnTimeout = null;
+  }
   if (renewInterval) {
     clearInterval(renewInterval);
     renewInterval = null;
@@ -313,24 +389,9 @@ export async function stopGmailWatcher(): Promise<void> {
 
   if (watcherProcess) {
     log.info("stopping gmail watcher");
-    watcherProcess.kill("SIGTERM");
-
-    // Wait a bit for graceful shutdown
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => {
-        if (watcherProcess) {
-          watcherProcess.kill("SIGKILL");
-        }
-        resolve();
-      }, 3000);
-
-      watcherProcess?.on("exit", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-    });
-
+    const proc = watcherProcess;
     watcherProcess = null;
+    await settleProcess(proc);
   }
 
   currentConfig = null;

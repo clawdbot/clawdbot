@@ -18,6 +18,8 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 
+const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
+
 export type PackageUpdateStepResult = {
   name: string;
   command: string;
@@ -423,14 +425,14 @@ async function swapStagedNpmInstall(params: {
     if (await pathExists(targetPackageRoot)) {
       await movePathWithCopyFallback({
         from: targetPackageRoot,
-        sourceHardlinks: "reject",
+        sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
         to: backupRoot,
       });
       movedExisting = true;
     }
     await movePathWithCopyFallback({
       from: params.stage.packageRoot,
-      sourceHardlinks: "reject",
+      sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
       to: targetPackageRoot,
     });
     movedStaged = true;
@@ -462,7 +464,7 @@ async function swapStagedNpmInstall(params: {
     if (movedExisting) {
       await movePathWithCopyFallback({
         from: backupRoot,
-        sourceHardlinks: "reject",
+        sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
         to: targetPackageRoot,
       }).catch(() => undefined);
     }

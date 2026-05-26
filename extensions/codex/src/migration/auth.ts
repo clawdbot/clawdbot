@@ -17,6 +17,10 @@ import {
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
+import {
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readJsonObject } from "./helpers.js";
 import type { CodexSource } from "./source.js";
 import type { resolveCodexMigrationTargets } from "./targets.js";
@@ -64,14 +68,6 @@ type CodexAuthProfileConfig = {
 type CodexAuthConfigApplyResult = "configured" | "conflict" | "unavailable";
 
 class CodexAuthConfigConflict extends Error {}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
   const payload = token.split(".")[1];

@@ -39,6 +39,10 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
+  maybeResolveSignalApprovalReaction,
+  resolveSignalApprovalConversationKey,
+} from "../approval-reactions.js";
+import {
   formatSignalPairingIdLine,
   formatSignalSenderDisplay,
   formatSignalSenderId,
@@ -418,14 +422,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
   });
 
-  function handleReactionOnlyInbound(params: {
+  async function handleReactionOnlyInbound(params: {
     envelope: SignalEnvelope;
     sender: SignalSender;
     senderDisplay: string;
     reaction: SignalReactionMessage;
     hasBodyContent: boolean;
     accessDecision: { decision: "allow" | "block" | "pairing"; reasonCode: string };
-  }): boolean {
+  }): Promise<boolean> {
     if (params.hasBodyContent) {
       return false;
     }
@@ -438,6 +442,28 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
     const groupName = params.reaction.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
+    const messageId = params.reaction.targetSentTimestamp
+      ? String(params.reaction.targetSentTimestamp)
+      : "unknown";
+    const conversationKey = resolveSignalApprovalConversationKey(
+      groupId ? `group:${groupId}` : `signal:${resolveSignalRecipient(params.sender)}`,
+    );
+    if (
+      conversationKey &&
+      (await maybeResolveSignalApprovalReaction({
+        cfg: deps.cfg,
+        accountId: deps.accountId,
+        conversationKey,
+        messageId,
+        reactionKey: emojiLabel,
+        actorId: formatSignalSenderId(params.sender),
+        targetAuthor: params.reaction.targetAuthor,
+        targetAuthorUuid: params.reaction.targetAuthorUuid,
+        logVerboseMessage: logVerbose,
+      }))
+    ) {
+      return true;
+    }
     if (params.accessDecision.decision !== "allow") {
       logVerbose(
         `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
@@ -465,9 +491,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-    const messageId = params.reaction.targetSentTimestamp
-      ? String(params.reaction.targetSentTimestamp)
-      : "unknown";
     const text = deps.buildSignalReactionSystemEventText({
       emojiLabel,
       actorLabel: senderName,
@@ -588,14 +611,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
 
     if (
       reaction &&
-      handleReactionOnlyInbound({
+      (await handleReactionOnlyInbound({
         envelope,
         sender,
         senderDisplay,
         reaction,
         hasBodyContent,
         accessDecision: senderAccess,
-      })
+      }))
     ) {
       return;
     }

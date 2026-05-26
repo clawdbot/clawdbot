@@ -14,6 +14,7 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 
@@ -179,7 +180,7 @@ export function applyAuthProfileConfig(
   );
   const existingProviderOrder =
     matchingProviderOrderEntries.length > 0
-      ? [...new Set(matchingProviderOrderEntries.flatMap(([, order]) => order))]
+      ? uniqueStrings(matchingProviderOrderEntries.flatMap(([, order]) => order))
       : undefined;
   const preferProfileFirst = params.preferProfileFirst ?? true;
   const reorderedProviderOrder =

@@ -6,7 +6,11 @@ import { resolveOAuthDir } from "../../config/paths.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { legacyOAuthSidecarTestUtils } from "./legacy-oauth-sidecar.js";
 import { resolveAuthStorePath } from "./paths.js";
-import { coercePersistedAuthProfileStore, loadPersistedAuthProfileStore } from "./persisted.js";
+import {
+  coercePersistedAuthProfileStore,
+  loadPersistedAuthProfileStore,
+  mergeAuthProfileStores,
+} from "./persisted.js";
 
 function withEnvValue(key: string, value: string | undefined): () => void {
   const previous = process.env[key];
@@ -211,5 +215,140 @@ describe("persisted auth profile boundary", () => {
       restoreStateDir();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
+  });
+
+  it("lets authoritative runtime external metadata remove stale base profiles", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: ["anthropic:claude-cli"],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          "anthropic:claude-cli": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "stale-access",
+            refresh: "stale-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          anthropic: ["anthropic:claude-cli"],
+        },
+        lastGood: {
+          anthropic: "anthropic:claude-cli",
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {},
+      },
+    );
+
+    expect(merged.runtimeExternalProfileIds).toEqual([]);
+    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
+    expect(merged.profiles["anthropic:claude-cli"]).toBeUndefined();
+    expect(merged.order?.anthropic).toBeUndefined();
+    expect(merged.lastGood?.anthropic).toBeUndefined();
+  });
+
+  it("keeps override profiles when authoritative metadata removes base runtime external state", () => {
+    const profileId = "anthropic:claude-cli";
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [profileId],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "stale-access",
+            refresh: "stale-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          anthropic: [profileId],
+        },
+        lastGood: {
+          anthropic: profileId,
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-local",
+          },
+        },
+        order: {
+          anthropic: [profileId],
+        },
+        lastGood: {
+          anthropic: profileId,
+        },
+      },
+    );
+
+    expect(merged.runtimeExternalProfileIds).toEqual([]);
+    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
+    expect(merged.profiles[profileId]).toMatchObject({
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-local",
+    });
+    expect(merged.order?.anthropic).toEqual([profileId]);
+    expect(merged.lastGood?.anthropic).toBe(profileId);
+  });
+
+  it("preserves inherited base runtime external profiles during agent-store merges", () => {
+    const profileId = "anthropic:claude-cli";
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [profileId],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "main-access",
+            refresh: "main-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          anthropic: [profileId],
+        },
+        lastGood: {
+          anthropic: profileId,
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {},
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.runtimeExternalProfileIds).toEqual([profileId]);
+    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
+    expect(merged.profiles[profileId]).toMatchObject({
+      type: "oauth",
+      provider: "anthropic",
+      access: "main-access",
+      refresh: "main-refresh",
+    });
+    expect(merged.order?.anthropic).toEqual([profileId]);
+    expect(merged.lastGood?.anthropic).toBe(profileId);
   });
 });

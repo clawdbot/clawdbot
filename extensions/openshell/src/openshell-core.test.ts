@@ -1,12 +1,19 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
+import type { CreateSandboxBackendParams } from "openclaw/plugin-sdk/sandbox";
+import {
+  createSandboxBrowserConfig,
+  createSandboxPruneConfig,
+  createSandboxSshConfig,
+  createSandboxTestContext,
+} from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenShellSandboxBackend } from "./backend.js";
 import {
   applyGatewayEndpointToSshConfig,
   buildExecRemoteCommand,
+  buildValidatedExecRemoteCommand,
   buildOpenShellBaseArgv,
   resolveOpenShellCommand,
   runOpenShellCli,
@@ -19,6 +26,7 @@ const cliMocks = vi.hoisted(() => ({
 }));
 
 let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
+let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
 
 describe("openshell cli helpers", () => {
   const originalEnv = { ...process.env };
@@ -75,6 +83,15 @@ describe("openshell cli helpers", () => {
     expect(command).toContain(`'env'`);
     expect(command).toContain(`'TOKEN=abc 123'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
+  });
+
+  it("uses the shared SSH exec command preflight", () => {
+    expect(() =>
+      buildValidatedExecRemoteCommand({
+        command: 'workflow run <workflow-id> "<task>"',
+        env: {},
+      }),
+    ).toThrow(/unresolved placeholder token <workflow-id>/);
   });
 
   it("passes direct gateway endpoints to openshell commands without registration", async () => {
@@ -151,7 +168,8 @@ describe("openshell backend manager", () => {
         runOpenShellCli: cliMocks.runOpenShellCli,
       };
     });
-    ({ createOpenShellSandboxBackendManager } = await import("./backend.js"));
+    ({ createOpenShellSandboxBackendFactory, createOpenShellSandboxBackendManager } =
+      await import("./backend.js"));
   });
 
   afterAll(() => {
@@ -261,9 +279,58 @@ describe("openshell backend manager", () => {
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
   });
+
+  it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "openshell",
+      }),
+    });
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    await expect(
+      backend.buildExecSpec({
+        command: "workflow install <name>",
+        env: {},
+        usePty: false,
+      }),
+    ).rejects.toThrow(/unresolved placeholder token <name>/);
+    expect(cliMocks.runOpenShellCli).not.toHaveBeenCalled();
+  });
 });
 
 const tempDirs: string[] = [];
+
+function createOpenShellBackendSandboxConfig(): CreateSandboxBackendParams["cfg"] {
+  return {
+    mode: "all",
+    backend: "openshell",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: "/tmp/openclaw-sandboxes",
+    docker: {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      binds: [],
+      env: {},
+    },
+    ssh: createSandboxSshConfig("/tmp/openclaw-sandboxes"),
+    browser: createSandboxBrowserConfig(),
+    tools: { allow: ["*"], deny: [] },
+    prune: createSandboxPruneConfig(),
+  };
+}
 
 async function makeTempDir(prefix: string) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));

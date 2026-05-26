@@ -139,12 +139,12 @@ Issue triage is review/prove/patch-local by default:
 2. Fix only issues that are easy, high-confidence, and narrowly owned by the implicated path.
 3. Add focused regression proof when practical.
 4. Stop with the dirty diff, touched files, and test/gate output for maintainer review.
-5. After maintainer approval to ship, make one commit per accepted fix, with its own changelog entry when user-facing.
+5. After maintainer approval to ship, make one commit per accepted fix, with release-note context in the PR body or commit message when user-facing.
 6. Pull/rebase, push, then comment and close only the issues that were fixed or explicitly triaged closed.
 
 Do not batch unrelated issue fixes into one commit. Do not publish, comment, close, or label during the review/prove phase.
 
-Missing changelog is not a PR review finding or merge blocker. If landing/fixing a user-visible change, add/update changelog automatically when practical; never ask or block solely on it.
+Missing `CHANGELOG.md` is not a PR review finding or merge blocker. If landing/fixing a user-visible change, make sure the PR body or commit message captures the release-note context; never ask or block solely on it.
 
 Only list candidates that pass all gates:
 
@@ -244,9 +244,8 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
 
 ## Follow PR review and landing hygiene
 
-- Never mention merge conflicts that are relatively easy to resolve, such as
-  `CHANGELOG.md` entries, in review-only output. These are landing mechanics,
-  not correctness findings.
+- Never mention release-note bookkeeping in review-only output. It is landing
+  or release-generation mechanics, not a correctness finding.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
 - Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.

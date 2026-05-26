@@ -20,6 +20,7 @@ const hoisted = await vi.hoisted(async () => {
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
     pathExistsMock: vi.fn(async (_filePath: string) => true),
+    migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
     exportHtmlTemplateContents: new Map<string, string>(),
     sessionTranscriptContent: "",
   };
@@ -41,6 +42,10 @@ vi.mock("./commands-system-prompt.js", () => ({
 
 vi.mock("../../infra/fs-safe.js", () => ({
   pathExists: hoisted.pathExistsMock,
+}));
+
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  migrateSessionEntries: hoisted.migrateSessionEntriesMock,
 }));
 
 vi.mock("node:fs", async () => {

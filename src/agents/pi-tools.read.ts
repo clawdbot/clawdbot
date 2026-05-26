@@ -60,6 +60,7 @@ type ReadTruncationDetails = {
 const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines total\)$/;
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
+const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -218,6 +219,40 @@ function emptyReadResult(): AgentToolResult<unknown> {
   return { content: [textBlock], details: undefined };
 }
 
+function missingDailyMemoryReadResult(relativePath: string): AgentToolResult<unknown> {
+  return {
+    content: [
+      {
+        type: "text",
+        text: `No daily memory file exists yet at ${relativePath}.`,
+      },
+    ],
+    details: {
+      status: "not_found",
+      path: relativePath,
+      optional: true,
+    },
+  };
+}
+
+function normalizeDailyMemoryReadPath(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\\/g, "/").replace(/^\.\/+/, "");
+  return DAILY_MEMORY_PATH_RE.test(normalized) ? normalized : undefined;
+}
+
+function isNotFoundError(error: unknown): boolean {
+  if (typeof (error as NodeJS.ErrnoException | undefined)?.code === "string") {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return /\bENOENT\b|no such file or directory|file not found/i.test(error.message);
+}
+
 async function executeReadPage(params: {
   base: AnyAgentTool;
   toolCallId: string;
@@ -229,6 +264,10 @@ async function executeReadPage(params: {
   } catch (error) {
     if (isOffsetBeyondEof(error, params.args)) {
       return emptyReadResult();
+    }
+    const missingDailyMemoryPath = normalizeDailyMemoryReadPath(params.args.path);
+    if (missingDailyMemoryPath && isNotFoundError(error)) {
+      return missingDailyMemoryReadResult(missingDailyMemoryPath);
     }
     throw error;
   }
@@ -628,8 +667,18 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
   };
 }
 
-function isSandboxRootEscapeError(error: unknown): boolean {
+function isSandboxRootEscapeError(error: unknown): error is Error {
   return error instanceof Error && /^Path escapes sandbox root \(/i.test(error.message);
+}
+
+function withWorkspaceSafeTempHint(error: unknown): unknown {
+  if (!isSandboxRootEscapeError(error)) {
+    return error;
+  }
+  const message = error.message.includes(".openclaw/tmp/")
+    ? error.message
+    : `${error.message}. Use a relative path under \`.openclaw/tmp/\` inside the workspace for scratch/temp/meta files that file tools need to read or write later.`;
+  return new Error(message, { cause: error });
 }
 
 async function assertSandboxPathWithinAnyRoot(params: {
@@ -713,10 +762,15 @@ export function wrapToolWorkspaceRootGuardWithOptions(
         }
         const additionalRoots =
           guardedRoot === root && !workspaceMapping.matched ? (options?.additionalRoots ?? []) : [];
-        const sandboxResult = await assertSandboxPathWithinAnyRoot({
-          filePath: sandboxPath,
-          roots: [guardedRoot, ...additionalRoots],
-        });
+        let sandboxResult: Awaited<ReturnType<typeof assertSandboxPathWithinAnyRoot>>;
+        try {
+          sandboxResult = await assertSandboxPathWithinAnyRoot({
+            filePath: sandboxPath,
+            roots: [guardedRoot, ...additionalRoots],
+          });
+        } catch (error) {
+          throw withWorkspaceSafeTempHint(error);
+        }
         if (options?.normalizeGuardedPathParams && record) {
           normalizedRecord ??= { ...record };
           normalizedRecord[key] = sandboxResult.resolved;

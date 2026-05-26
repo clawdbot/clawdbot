@@ -17,6 +17,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -48,10 +49,6 @@ export type LegacyOAuthSidecarRepairResult = {
   changes: string[];
   warnings: string[];
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -222,7 +219,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
       [
         ...stores.map(
           (entry) =>
-            `- ${shortenHomePath(entry.authPath)} has legacy sidecar-backed Codex OAuth profiles.`,
+            `- ${shortenHomePath(entry.authPath)} has legacy Codex OAuth profiles to migrate.`,
         ),
         ...(unreferencedSidecars.length > 0
           ? [
@@ -237,7 +234,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
   }
 
   const shouldRepair = await params.prompter.confirmAutoFix({
-    message: "Migrate legacy sidecar-backed Codex OAuth credentials now?",
+    message: "Migrate legacy Codex OAuth credentials now?",
     initialValue: true,
   });
   if (!shouldRepair) {
@@ -283,7 +280,7 @@ export async function maybeRepairLegacyOAuthSidecarProfiles(params: {
         migratedSidecarsByRefId.set(refId, sidecarPath);
       }
       result.changes.push(
-        `Migrated ${migratedCount} sidecar-backed Codex OAuth profile${migratedCount === 1 ? "" : "s"} in ${shortenHomePath(store.authPath)} to inline credentials (backup: ${shortenHomePath(backupPath)}).`,
+        `Migrated ${migratedCount} legacy Codex OAuth profile${migratedCount === 1 ? "" : "s"} in ${shortenHomePath(store.authPath)} to inline credentials (backup: ${shortenHomePath(backupPath)}).`,
       );
     } catch (err) {
       for (const refId of storeMigratedSidecarsByRefId.keys()) {

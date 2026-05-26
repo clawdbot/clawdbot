@@ -9,6 +9,7 @@ import {
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
 } from "../plugins/official-external-plugin-catalog.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
 
@@ -110,9 +111,12 @@ function resolveOfficialExternalInstallRecoveryMetadata(
   const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
   const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
   const values = new Set(
-    [request.rawSpec, request.normalizedSpec, rawNpmPrefixSpec ?? "", normalizedNpmPrefixSpec ?? ""]
-      .map((value) => value.trim())
-      .filter(Boolean),
+    normalizeStringEntries([
+      request.rawSpec,
+      request.normalizedSpec,
+      rawNpmPrefixSpec ?? "",
+      normalizedNpmPrefixSpec ?? "",
+    ]),
   );
   if (values.size === 0) {
     return {};

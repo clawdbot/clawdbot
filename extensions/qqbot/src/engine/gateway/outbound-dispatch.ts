@@ -33,6 +33,7 @@ import {
 import { StreamingController, shouldUseOfficialC2cStream } from "../messaging/streaming-c2c.js";
 import { audioFileToSilkBase64 } from "../utils/audio.js";
 import type { InboundContext } from "./inbound-context.js";
+import { resolveResponseTimeoutMs } from "./response-timeout.js";
 import type {
   GatewayAccount,
   EngineLogger,
@@ -42,7 +43,12 @@ import type {
 
 // ============ Config ============
 
-const RESPONSE_TIMEOUT = 300_000;
+// Historical floor for the QQBot outbound response watchdog (5 min). The
+// effective wait budget is now derived from existing
+// `agents.defaults.timeoutSeconds` and `models.providers.<id>.timeoutSeconds`
+// via `resolveResponseTimeoutMs(cfg)` — see issue #85267, where a slow
+// local ollama/qwen3.5:27b turn was capped at 5 min despite a configured
+// 1800s provider timeout.
 const TOOL_ONLY_TIMEOUT = 60_000;
 const MAX_TOOL_RENEWALS = 3;
 const TOOL_MEDIA_SEND_TIMEOUT = 45_000;
@@ -149,12 +155,16 @@ export async function dispatchOutbound(
   };
 
   // ---- Timeout promise ----
+  // #85267: derive watchdog from existing agent / provider timeout config so
+  // a longer configured ceiling (e.g. slow local ollama models) is not
+  // silently undercut by a plugin-local 5-minute cap.
+  const responseTimeoutMs = resolveResponseTimeoutMs(cfg);
   const timeoutPromise = new Promise<void>((_, reject) => {
     timeoutId = setTimeout(() => {
       if (!hasResponse) {
         reject(new Error("Response timeout"));
       }
-    }, RESPONSE_TIMEOUT);
+    }, responseTimeoutMs);
   });
 
   // ---- Deliver deps ----

@@ -5,6 +5,7 @@ import {
   isSensitiveUrlConfigPath,
   redactSensitiveUrlLikeString,
 } from "../shared/net/redact-sensitive-url.js";
+import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   replaceSensitiveValuesInRaw,
@@ -42,10 +43,6 @@ function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string
     return false;
   }
   return paths.some((path) => hasSensitiveUrlHintTag(hints[path]));
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {

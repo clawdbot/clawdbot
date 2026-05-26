@@ -7,6 +7,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 
 export type LmstudioModelWire = {
@@ -76,13 +77,7 @@ function normalizeReasoningOptions(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return [
-    ...new Set(
-      value
-        .map((option) => normalizeReasoningOption(option))
-        .filter((option): option is string => option !== null),
-    ),
-  ];
+  return uniqueStrings(value.flatMap((option) => normalizeReasoningOption(option) ?? []));
 }
 
 function isLmstudioBinaryReasoningOptions(allowedOptions: readonly string[]): boolean {
@@ -98,13 +93,11 @@ function resolveLmstudioTransportReasoningEfforts(allowedOptions: readonly strin
       ? [...LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS]
       : [...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS];
   }
-  return [
-    ...new Set(
-      allowedOptions
-        .map((option) => (option === "off" ? "none" : option))
-        .filter((option) => option !== "on"),
-    ),
-  ];
+  return uniqueStrings(
+    allowedOptions
+      .map((option) => (option === "off" ? "none" : option))
+      .filter((option) => option !== "on"),
+  );
 }
 
 function resolveLmstudioEnabledTransportReasoningOption(

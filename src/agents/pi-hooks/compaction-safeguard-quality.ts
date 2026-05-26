@@ -1,5 +1,6 @@
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
 import { localeLowercasePreservingWhitespace } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { CompactionSummarizationInstructions } from "../compaction.js";
 import { wrapUntrustedPromptDataBlock } from "../sanitize-for-prompt.js";
 
@@ -186,7 +187,7 @@ function hasAskOverlap(summary: string, latestAsk: string | null): boolean {
   if (!latestAsk) {
     return true;
   }
-  const askTokens = Array.from(new Set(tokenizeAskOverlapText(latestAsk))).slice(
+  const askTokens = uniqueStrings(tokenizeAskOverlapText(latestAsk)).slice(
     0,
     MAX_ASK_OVERLAP_TOKENS,
   );

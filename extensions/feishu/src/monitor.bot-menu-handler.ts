@@ -1,3 +1,4 @@
+import { isRecord, readStringValue as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, HistoryEntry, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
@@ -18,16 +19,8 @@ type FeishuBotMenuEvent = {
   };
 };
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
 function readStringOrNumber(value: unknown): string | number | undefined {
   return typeof value === "string" || typeof value === "number" ? value : undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseFeishuBotMenuEvent(value: unknown): FeishuBotMenuEvent | null {

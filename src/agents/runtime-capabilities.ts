@@ -5,6 +5,7 @@ import {
 import { resolveChannelCapabilities } from "../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeStringEntriesLower } from "../shared/string-normalization.js";
 import { resolveChannelPromptCapabilities } from "./channel-tools.js";
 
 const THREAD_BOUND_SUBAGENT_SPAWN_CAPABILITY = "threadbound-subagent-spawn";
@@ -15,9 +16,7 @@ function mergeRuntimeCapabilities(
   additions: readonly string[] = [],
 ): string[] | undefined {
   const merged = [...(base ?? [])];
-  const seen = new Set(
-    merged.map((capability) => normalizeOptionalLowercaseString(capability)).filter(Boolean),
-  );
+  const seen = new Set(normalizeStringEntriesLower(merged));
 
   for (const capability of additions) {
     const normalizedCapability = normalizeOptionalLowercaseString(capability);

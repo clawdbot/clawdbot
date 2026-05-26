@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  normalizeNullableString as nonEmptyStringField,
+  normalizeOptionalString as normalizeRunId,
+} from "../shared/string-coerce.js";
 import { isPlainObject } from "../utils.js";
 import { stableStringify } from "./stable-stringify.js";
 
@@ -62,11 +66,6 @@ type ResolvedLoopDetectionConfig = {
 type ToolLoopDetectionScope = {
   runId?: string;
 };
-
-function normalizeRunId(runId?: string): string | undefined {
-  const trimmed = runId?.trim();
-  return trimmed ? trimmed : undefined;
-}
 
 function selectHistoryForScope(
   history: readonly ToolCallRecord[],
@@ -190,14 +189,6 @@ function extractUnknownToolName(error: unknown): string | undefined {
 
 function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
-}
-
-function nonEmptyStringField(value: unknown): string | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
 }
 
 function hashExecToolOutcome(details: Record<string, unknown>, text: string): string | undefined {

@@ -4,6 +4,7 @@ import {
   isConfigApplyNoopForSnapshot,
   isConfigHashConflict,
   isConfigPatchNoopForSnapshot,
+  patchConfig,
   waitForConfigRestartSettle,
 } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -24,6 +25,25 @@ function createRestartSettleEnv(waitReady: (params: unknown) => Promise<void>) {
     gateway: { baseUrl: "http://127.0.0.1:43123" },
     transport: { waitReady },
   } as unknown as Pick<QaSuiteRuntimeEnv, "gateway" | "transport">;
+}
+
+function createConfigMutationEnv(
+  gatewayCall: (method: string, params: unknown, options: unknown) => Promise<unknown>,
+) {
+  const waitReady = vi.fn(async (_params: { gateway: unknown; timeoutMs: number }) => {});
+  const env = {
+    gateway: {
+      baseUrl: "http://127.0.0.1:43123",
+      call: gatewayCall,
+    },
+    transport: {
+      waitReady,
+    },
+    providerMode: "mock-openai",
+    primaryModel: "openai/gpt-5.5",
+    alternateModel: "openai/gpt-5.5-mini",
+  } as unknown as QaSuiteRuntimeEnv;
+  return { env, waitReady };
 }
 
 describe("qa suite gateway helpers", () => {
@@ -132,6 +152,69 @@ describe("qa suite gateway helpers", () => {
         }),
       ),
     ).toBe(false);
+  });
+
+  it("uses the live timeout profile for config mutations and restart settle", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: { tools: {} } };
+      }
+      return { ok: true };
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+
+    await patchConfig({
+      env,
+      patch: { tools: { deny: ["read"] } },
+      restartDelayMs: 0,
+    });
+
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "config.patch",
+      expect.objectContaining({
+        raw: expect.stringContaining('"deny"'),
+        baseHash: "hash-1",
+      }),
+      { timeoutMs: 180_000 },
+    );
+    expect(waitReady).toHaveBeenCalledWith({
+      gateway: env.gateway,
+      timeoutMs: expect.any(Number),
+    });
+    expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
+  });
+
+  it("uses the live timeout profile when config mutation races a restart", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: { ok: true },
+      release,
+    });
+    const gatewayCall = vi.fn(async (method: string) => {
+      if (method === "config.get") {
+        return { hash: "hash-1", config: { tools: {} } };
+      }
+      throw new Error("service restart");
+    });
+    const { env, waitReady } = createConfigMutationEnv(gatewayCall);
+
+    const result = await patchConfig({
+      env,
+      patch: { tools: { deny: ["read"] } },
+      restartDelayMs: 0,
+    });
+
+    expect(result).toEqual({ ok: true, restarted: true });
+    expect(waitReady).toHaveBeenCalledWith({
+      gateway: env.gateway,
+      timeoutMs: expect.any(Number),
+    });
+    expect(waitReady.mock.calls[0]?.[0].timeoutMs).toBeGreaterThan(60_000);
   });
 
   it("waits for transport readiness after gateway restart health", async () => {

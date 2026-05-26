@@ -9,6 +9,7 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
+import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_DEEPGRAM_AUDIO_BASE_URL = "https://api.deepgram.com/v1";
 export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
@@ -16,12 +17,6 @@ export const DEFAULT_DEEPGRAM_AUDIO_MODEL = "nova-3";
 function resolveModel(model?: string): string {
   const trimmed = model?.trim();
   return trimmed || DEFAULT_DEEPGRAM_AUDIO_MODEL;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readDeepgramTranscript(payload: Record<string, unknown>): string | undefined {

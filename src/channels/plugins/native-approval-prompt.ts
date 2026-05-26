@@ -15,6 +15,7 @@ const KNOWN_NATIVE_APPROVAL_PROMPT_CHANNELS = new Set([
   "qqbot",
   "slack",
   "telegram",
+  "signal",
 ]);
 
 export function channelPluginHasNativeApprovalPromptUi(

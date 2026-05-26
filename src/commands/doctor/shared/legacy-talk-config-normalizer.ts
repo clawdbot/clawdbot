@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeTalkSection } from "../../../config/talk.js";
 import type { OpenClawConfig } from "../../../config/types.js";
+import { isRecord } from "../../../shared/record-coerce.js";
 
 function buildLegacyTalkProviderCompat(
   talk: Record<string, unknown>,
@@ -37,10 +38,6 @@ function buildLegacyRealtimeTalkCompat(
     compat.providers = normalizedTalk.providers;
   }
   return normalizeTalkSection({ realtime: compat } as OpenClawConfig["talk"])?.realtime;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {

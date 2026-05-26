@@ -946,6 +946,139 @@ describe("buildAssistantMessage", () => {
     expect(result.content).toEqual([{ type: "thinking", thinking: "Reasoning output" }]);
   });
 
+  it("strips inline reasoning prefix from kimi cloud visible text", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️Final answer only.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "Final answer only." }]);
+  });
+
+  it("strips inline reasoning for provider-qualified Kimi cloud refs", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️Final answer only.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "ollama/kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "Final answer only." }]);
+  });
+
+  it("strips inline reasoning when the Kimi boundary is followed by whitespace", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️ Final answer only.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "Final answer only." }]);
+  });
+
+  it("strips inline reasoning before short Kimi cloud answers", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️ OK.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([{ type: "text", text: "OK." }]);
+  });
+
+  it("strips inline reasoning when the Kimi boundary has no visible answer", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️ ",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([]);
+  });
+
+  it("does not strip inline boundary marker on non-kimi models", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "intro ️keep this intact",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    expect(result.content).toEqual([{ type: "text", text: "intro ️keep this intact" }]);
+  });
+
+  it("does not treat emoji variation selectors as Kimi inline-reasoning boundaries", () => {
+    const response = {
+      model: "kimi-k2.6:cloud",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content:
+          "This is a normal Kimi cloud answer with enough length to cross the prefix threshold and no hidden reasoning leak. ☀️sunshine should remain visible to the user.",
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, {
+      api: "ollama",
+      provider: "ollama",
+      id: "kimi-k2.6:cloud",
+    });
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "This is a normal Kimi cloud answer with enough length to cross the prefix threshold and no hidden reasoning leak. ☀️sunshine should remain visible to the user.",
+      },
+    ]);
+  });
+
   it("estimates usage when Ollama omits eval counters", () => {
     const response = {
       model: "qwen3:32b",
@@ -1698,12 +1831,201 @@ describe("createOllamaStreamFn streaming events", () => {
         const events = await collectStreamEvents(stream);
 
         const types = events.map((e) => e.type);
-        expect(types).toEqual(["start", "text_start", "text_delta", "error"]);
+        expect(types).toEqual(["error"]);
         const errorEvent = events.at(-1);
         expect(errorEvent?.type).toBe("error");
         if (errorEvent?.type === "error") {
           expect(errorEvent.error.errorMessage).toContain("garbled visible text");
         }
+      },
+    );
+  });
+
+  it("buffers Kimi inline reasoning until the streaming boundary is safe", async () => {
+    const controlledFetch = createControlledNdjsonFetch();
+    fetchWithSsrFGuardMock.mockImplementation(controlledFetch.fetchImpl);
+
+    try {
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+      });
+      const iterator = stream[Symbol.asyncIterator]();
+
+      controlledFetch.pushLine(
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: {
+            role: "assistant",
+            content:
+              "The user is asking for a short answer. I should reason privately before answering. I need to avoid showing this planning text to the user.",
+          },
+          done: false,
+        }),
+      );
+
+      const pendingStartEvent = iterator.next();
+      expect(
+        await Promise.race([
+          pendingStartEvent.then(() => "event" as const),
+          new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 100)),
+        ]),
+      ).toBe("timeout");
+
+      controlledFetch.pushLine(
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: " ️ OK." },
+          done: false,
+        }),
+      );
+
+      const startEvent = await pendingStartEvent;
+      expectIteratorEvent(startEvent, { type: "start", done: false });
+
+      const textStartEvent = await nextEventWithin(iterator);
+      expect(textStartEvent).not.toBe("timeout");
+      expectIteratorEvent(textStartEvent, { type: "text_start", done: false });
+
+      const textDeltaEvent = await nextEventWithin(iterator);
+      expect(textDeltaEvent).not.toBe("timeout");
+      expectIteratorEvent(textDeltaEvent, {
+        type: "text_delta",
+        delta: "OK.",
+        done: false,
+      });
+      if (textDeltaEvent !== "timeout" && textDeltaEvent.done === false) {
+        const value = requireRecord(textDeltaEvent.value, "text_delta value");
+        expect(JSON.stringify(value)).not.toContain("The user is asking");
+      }
+
+      controlledFetch.pushLine(
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      );
+      controlledFetch.close();
+
+      const textEndEvent = await nextEventWithin(iterator);
+      expect(textEndEvent).not.toBe("timeout");
+      expectIteratorEvent(textEndEvent, {
+        type: "text_end",
+        content: "OK.",
+        done: false,
+      });
+
+      const doneEvent = await nextEventWithin(iterator);
+      expect(doneEvent).not.toBe("timeout");
+      expectIteratorEvent(doneEvent, { type: "done", done: false });
+      if (doneEvent !== "timeout" && doneEvent.done === false) {
+        const value = requireRecord(doneEvent.value, "done value");
+        expect(JSON.stringify(value)).not.toContain("The user is asking");
+      }
+
+      const streamEnd = await nextEventWithin(iterator);
+      expect(streamEnd).not.toBe("timeout");
+      expectIteratorEvent(streamEnd, { done: true });
+    } finally {
+      fetchWithSsrFGuardMock.mockReset();
+    }
+  });
+
+  it("streams marker-less Kimi answers after the bounded sanitizer window", async () => {
+    const controlledFetch = createControlledNdjsonFetch();
+    fetchWithSsrFGuardMock.mockImplementation(controlledFetch.fetchImpl);
+
+    try {
+      const stream = await createOllamaTestStream({
+        baseUrl: "http://ollama-host:11434",
+        model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+      });
+      const iterator = stream[Symbol.asyncIterator]();
+      const visibleAnswer = "This is a normal Kimi cloud answer without hidden reasoning. ".repeat(
+        12,
+      );
+
+      controlledFetch.pushLine(
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: visibleAnswer },
+          done: false,
+        }),
+      );
+
+      const startEvent = await nextEventWithin(iterator);
+      expect(startEvent).not.toBe("timeout");
+      expectIteratorEvent(startEvent, { type: "start", done: false });
+
+      const textStartEvent = await nextEventWithin(iterator);
+      expect(textStartEvent).not.toBe("timeout");
+      expectIteratorEvent(textStartEvent, { type: "text_start", done: false });
+
+      const textDeltaEvent = await nextEventWithin(iterator);
+      expect(textDeltaEvent).not.toBe("timeout");
+      expectIteratorEvent(textDeltaEvent, {
+        type: "text_delta",
+        delta: visibleAnswer,
+        done: false,
+      });
+
+      controlledFetch.pushLine(
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      );
+      controlledFetch.close();
+
+      const textEndEvent = await nextEventWithin(iterator);
+      expect(textEndEvent).not.toBe("timeout");
+      expectIteratorEvent(textEndEvent, {
+        type: "text_end",
+        content: visibleAnswer,
+        done: false,
+      });
+
+      const doneEvent = await nextEventWithin(iterator);
+      expect(doneEvent).not.toBe("timeout");
+      expectIteratorEvent(doneEvent, { type: "done", done: false });
+
+      const streamEnd = await nextEventWithin(iterator);
+      expect(streamEnd).not.toBe("timeout");
+      expectIteratorEvent(streamEnd, { done: true });
+    } finally {
+      fetchWithSsrFGuardMock.mockReset();
+    }
+  });
+
+  it("keeps Kimi deltas append-only after the bounded sanitizer window is bypassed", async () => {
+    const longPrefix = "This Kimi cloud output has streamed past the sanitizer window. ".repeat(10);
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: longPrefix },
+          done: false,
+        }),
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: " ️ OK." },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+        const deltas = events.filter((event) => event.type === "text_delta");
+        expect(deltas.map((event) => event.delta)).toEqual([longPrefix, " ️ OK."]);
+
+        const rawText = `${longPrefix} ️ OK.`;
+        const textEnd = events.find((event) => event.type === "text_end");
+        expect(textEnd?.content).toBe(rawText);
+        const doneEvent = events.find((event) => event.type === "done");
+        expect(doneEvent?.message.content).toEqual([{ type: "text", text: rawText }]);
       },
     );
   });
@@ -1750,8 +2072,159 @@ describe("createOllamaStreamFn streaming events", () => {
         const types = events.map((e) => e.type);
         expect(types).toEqual(["start", "text_start", "text_delta", "text_end", "done"]);
 
+        const textStart = events.find((e) => e.type === "text_start");
+        expect(textStart?.partial.content).toEqual([]);
         const delta = events.find((e) => e.type === "text_delta");
         expect(delta?.delta).toBe("one shot");
+      },
+    );
+  });
+
+  it("sanitizes Kimi inline reasoning in text_delta, text_end, partial, and done output", async () => {
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: {
+            role: "assistant",
+            content:
+              "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️Final answer",
+          },
+          done: false,
+        }),
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: " only." },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":3,"eval_count":4}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+        const types = events.map((e) => e.type);
+        expect(types).toEqual([
+          "start",
+          "text_start",
+          "text_delta",
+          "text_delta",
+          "text_end",
+          "done",
+        ]);
+
+        const textStart = events.find((e) => e.type === "text_start");
+        expect(textStart?.partial.content).toEqual([]);
+        const deltas = events.filter((e) => e.type === "text_delta");
+        expect(deltas).toHaveLength(2);
+        expect(deltas[0]?.delta).toBe("Final answer");
+        expect(deltas[1]?.delta).toBe(" only.");
+        expect(deltas[0]?.partial.content).toEqual([{ type: "text", text: "Final answer" }]);
+        expect(deltas[1]?.partial.content).toEqual([{ type: "text", text: "Final answer only." }]);
+
+        const textEnd = events.find((e) => e.type === "text_end");
+        expect(textEnd?.content).toBe("Final answer only.");
+        expect(textEnd?.partial.content).toEqual([{ type: "text", text: "Final answer only." }]);
+
+        const doneEvent = events.at(-1);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.content).toEqual([{ type: "text", text: "Final answer only." }]);
+        }
+      },
+    );
+  });
+
+  it("does not re-sanitize visible Kimi stream output before done", async () => {
+    const visibleAnswer =
+      "This visible answer is intentionally long enough to look like a reasoning prefix if it is sanitized a second time. ️ keep this marker visible.";
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: {
+            role: "assistant",
+            content:
+              "I should think privately and not leak this planning text in the answer. I need to keep deciding what to say next. ️",
+          },
+          done: false,
+        }),
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: visibleAnswer },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":3,"eval_count":4}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+        const textEnd = events.find((event) => event.type === "text_end");
+        const doneEvent = events.at(-1);
+
+        expect(textEnd?.content).toBe(visibleAnswer);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.content).toEqual([{ type: "text", text: visibleAnswer }]);
+        }
+      },
+    );
+  });
+
+  it("does not leak Kimi inline reasoning when a boundary is followed by tool calls only", async () => {
+    const hiddenPrefix =
+      "I should think privately and not leak this planning text in the answer. " +
+      "I need to keep deciding what tool to call before showing any visible text.";
+    await withMockNdjsonFetch(
+      [
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: { role: "assistant", content: `${hiddenPrefix} ️ ` },
+          done: false,
+        }),
+        JSON.stringify({
+          model: "kimi-k2.6:cloud",
+          created_at: "t",
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{ function: { name: "bash", arguments: { command: "ls" } } }],
+          },
+          done: false,
+        }),
+        '{"model":"kimi-k2.6:cloud","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":20,"eval_count":40}',
+      ],
+      async () => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: { id: "kimi-k2.6:cloud", provider: "ollama" },
+        });
+        const events = await collectStreamEvents(stream);
+
+        expect(events.map((e) => e.type)).toEqual(["done"]);
+        const doneEvent = events.at(-1);
+        expect(doneEvent?.type).toBe("done");
+        if (doneEvent?.type === "done") {
+          expect(doneEvent.message.content).toEqual([
+            {
+              type: "toolCall",
+              id: expect.any(String),
+              name: "bash",
+              arguments: { command: "ls" },
+            },
+          ]);
+          expect(JSON.stringify(doneEvent)).not.toContain("I should think privately");
+        }
       },
     );
   });

@@ -89,7 +89,7 @@ function resolveExternalAuthProfileMap(params: {
   return resolved;
 }
 
-function listRuntimeExternalAuthProfiles(params: {
+export function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -121,6 +121,10 @@ function hasPersistableExternalCliSyncCandidate(
   return false;
 }
 
+function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {
+  return Boolean(params?.externalCliProviderIds || params?.externalCliProfileIds);
+}
+
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
   params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
@@ -131,7 +135,9 @@ export function overlayExternalAuthProfiles(
     env: params?.env,
     externalCli: params,
   });
-  return overlayRuntimeExternalOAuthProfiles(store, profiles);
+  return overlayRuntimeExternalOAuthProfiles(store, profiles, {
+    runtimeExternalProfileIdsAuthoritative: !hasScopedExternalCliOverlay(params),
+  });
 }
 
 export function shouldPersistExternalAuthProfile(params: {

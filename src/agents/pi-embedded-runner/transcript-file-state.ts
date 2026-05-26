@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { appendRegularFile } from "../../infra/fs-safe.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
+import { isRecord } from "../../shared/record-coerce.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
@@ -46,10 +47,6 @@ const repairableToolCallContentTypes = new Set([
 ]);
 
 const invalidJsonlSlotType = "__openclaw_invalid_jsonl_slot";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function isString(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";

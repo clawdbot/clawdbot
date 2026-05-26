@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
@@ -14,7 +15,6 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "./lib/plugin-gateway-gauntlet.mjs";
-import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
 const DEFAULT_QA_SCENARIOS = [
   "channel-chat-baseline",
@@ -25,6 +25,7 @@ const DEFAULT_CPU_CORE_WARN = 0.9;
 const DEFAULT_HOT_WALL_WARN_MS = 30_000;
 const DEFAULT_MAX_RSS_WARN_MB = 1536;
 const DEFAULT_QA_PLUGIN_CHUNK_SIZE = 12;
+const COMMAND_OUTPUT_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 function parseArgs(argv) {
@@ -57,6 +58,7 @@ function parseArgs(argv) {
     commandTimeoutMs: 120_000,
     buildTimeoutMs: 600_000,
     qaTimeoutMs: 900_000,
+    keepRunRoot: process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT === "1",
   };
   const envIds = normalizeCsv(process.env.OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS);
   options.pluginIds.push(...envIds);
@@ -151,6 +153,9 @@ function parseArgs(argv) {
       case "--skip-slash-help":
         options.skipSlashHelp = true;
         break;
+      case "--keep-run-root":
+        options.keepRunRoot = true;
+        break;
       case "--help":
         printHelp();
         process.exit(0);
@@ -186,6 +191,7 @@ Options:
   --skip-lifecycle              Skip plugin install/inspect/disable/enable/doctor/uninstall
   --skip-qa                     Skip QA Lab RPC conversation runs
   --skip-slash-help             Skip CLI help probes for plugin-declared command aliases
+  --keep-run-root               Preserve isolated HOME/state/log temp root after success
 `);
 }
 
@@ -232,13 +238,11 @@ function parsePositiveNumber(raw, label) {
   return value;
 }
 
-function pnpmCommand(args, { cwd, env }) {
-  return createPnpmRunnerSpawnSpec({
-    cwd,
-    env,
-    pnpmArgs: args,
-    stdio: "pipe",
-  });
+export function createGauntletPrebuildCommand(repoRoot) {
+  return {
+    command: process.execPath,
+    args: [path.join(repoRoot, "scripts", "build-all.mjs"), "cliStartup"],
+  };
 }
 
 function openclawCommand(repoRoot, args) {
@@ -263,12 +267,18 @@ function chunkArray(values, chunkSize) {
   return chunks;
 }
 
-function toRepoRelativePath(repoRoot, absolutePath) {
+export function toRepoRelativePath(repoRoot, absolutePath) {
   const relativePath = path.relative(repoRoot, absolutePath);
   if (!relativePath || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new Error(`Output path must stay inside repo root: ${absolutePath}`);
   }
   return relativePath;
+}
+
+function validateOutputDir(options, repoRoot) {
+  if (!options.skipQa) {
+    toRepoRelativePath(repoRoot, path.join(options.outputDir, "qa-suite"));
+  }
 }
 
 function createIsolatedEnv(repoRoot, runRoot) {
@@ -305,19 +315,26 @@ function timeWrapperArgs(command, args) {
   return { command: "/usr/bin/time", args: ["-v", command, ...args], mode: "gnu" };
 }
 
-function parseTimedMetrics(stderr, wallMs, mode) {
+export function parseTimedMetrics(stderr, wallMs, mode) {
   let userSeconds = null;
   let systemSeconds = null;
   let maxRssMb = null;
   if (mode === "gnu") {
-    userSeconds = parseFirstFloat(stderr, /User time \(seconds\):\s*([0-9.]+)/u);
-    systemSeconds = parseFirstFloat(stderr, /System time \(seconds\):\s*([0-9.]+)/u);
-    const maxRssKb = parseFirstFloat(stderr, /Maximum resident set size \(kbytes\):\s*([0-9.]+)/u);
+    userSeconds = parseLastFloat(stderr, /^\s*User time \(seconds\):\s*([0-9.]+)\s*$/gmu);
+    systemSeconds = parseLastFloat(stderr, /^\s*System time \(seconds\):\s*([0-9.]+)\s*$/gmu);
+    const maxRssKb = parseLastFloat(
+      stderr,
+      /^\s*Maximum resident set size \(kbytes\):\s*([0-9.]+)\s*$/gmu,
+    );
     maxRssMb = maxRssKb == null ? null : maxRssKb / 1024;
   } else if (mode === "bsd") {
-    userSeconds = parseFirstFloat(stderr, /[0-9.]+\s+real\s+([0-9.]+)\s+user/u);
-    systemSeconds = parseFirstFloat(stderr, /([0-9.]+)\s+sys/u);
-    const maxRssBytes = parseFirstFloat(stderr, /([0-9]+)\s+maximum resident set size/u);
+    const cpuLine = parseLastMatch(
+      stderr,
+      /^\s*[0-9.]+\s+real\s+([0-9.]+)\s+user\s+([0-9.]+)\s+sys\s*$/gmu,
+    );
+    userSeconds = parseMatchFloat(cpuLine, 1);
+    systemSeconds = parseMatchFloat(cpuLine, 2);
+    const maxRssBytes = parseLastFloat(stderr, /^\s*([0-9]+)\s+maximum resident set size\s*$/gmu);
     maxRssMb = maxRssBytes == null ? null : maxRssBytes / 1024 / 1024;
   }
   const cpuMs =
@@ -332,13 +349,24 @@ function parseTimedMetrics(stderr, wallMs, mode) {
   };
 }
 
-function parseFirstFloat(value, pattern) {
-  const match = value.match(pattern);
+function parseLastMatch(value, pattern) {
+  let lastMatch = null;
+  for (const match of value.matchAll(pattern)) {
+    lastMatch = match;
+  }
+  return lastMatch;
+}
+
+function parseMatchFloat(match, index) {
   if (!match) {
     return null;
   }
-  const parsed = Number(match[1]);
+  const parsed = Number(match[index]);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseLastFloat(value, pattern) {
+  return parseMatchFloat(parseLastMatch(value, pattern), 1);
 }
 
 function stripAnsi(value) {
@@ -358,21 +386,35 @@ function writeCommandLog(params) {
   return logPath;
 }
 
-function runMeasuredCommand(params) {
-  const { command, args, mode } = timeWrapperArgs(params.command, params.args);
+export function runMeasuredCommand(params) {
+  const { command, args, mode } =
+    params.timeMode === "none"
+      ? { command: params.command, args: params.args, mode: "none" }
+      : timeWrapperArgs(params.command, params.args);
   const started = performance.now();
   const result = spawnSync(command, args, {
     cwd: params.cwd,
     env: params.env,
     encoding: "utf8",
     timeout: params.timeoutMs,
-    maxBuffer: 16 * 1024 * 1024,
+    maxBuffer: params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES,
     ...(mode === "none" ? (params.spawnOptions ?? {}) : {}),
   });
   const wallMs = performance.now() - started;
-  const status = result.status ?? (result.signal ? 1 : 0);
+  const spawnError = result.error
+    ? {
+        code: typeof result.error.code === "string" ? result.error.code : null,
+        message: result.error.message,
+      }
+    : null;
+  const status = result.status ?? (result.signal || spawnError ? 1 : 0);
   const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
+  const stderr = [
+    result.stderr ?? "",
+    spawnError ? `[spawn error] ${spawnError.code ?? "unknown"} ${spawnError.message}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
   const diagnosticFailure = detectCommandDiagnosticFailure(stdout, stderr);
   const logPath = writeCommandLog({
     logDir: params.logDir,
@@ -388,10 +430,185 @@ function runMeasuredCommand(params) {
     status,
     diagnosticFailure,
     signal: result.signal ?? null,
-    timedOut: result.error?.code === "ETIMEDOUT",
+    timedOut: spawnError?.code === "ETIMEDOUT",
+    spawnError,
     logPath,
     ...parseTimedMetrics(stderr, wallMs, mode),
   };
+}
+
+export function runMeasuredCommandLive(params) {
+  const { command, args, mode } =
+    params.timeMode === "none"
+      ? { command: params.command, args: params.args, mode: "none" }
+      : timeWrapperArgs(params.command, params.args);
+  const started = performance.now();
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let spawnError = null;
+    let timedOut = false;
+    let settled = false;
+    let forceKillTimeout = null;
+    const maxBufferBytes = params.maxBufferBytes ?? COMMAND_OUTPUT_MAX_BUFFER_BYTES;
+    const timeoutKillGraceMs = params.timeoutKillGraceMs ?? 5_000;
+    const spawnOptions = mode === "none" ? (params.spawnOptions ?? {}) : {};
+    const useProcessGroup =
+      process.platform !== "win32" &&
+      params.killProcessGroup !== false &&
+      spawnOptions.detached !== false;
+    const child = spawn(command, args, {
+      cwd: params.cwd,
+      env: params.env,
+      ...spawnOptions,
+      ...(useProcessGroup ? { detached: true } : {}),
+    });
+    const killMeasuredProcess = (signal = "SIGTERM") => {
+      if (useProcessGroup && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {}
+      }
+      child.kill(signal);
+    };
+    const parentSignalHandlers = new Map();
+    const removeParentSignalHandlers = () => {
+      for (const [signal, handler] of parentSignalHandlers) {
+        process.off(signal, handler);
+      }
+      parentSignalHandlers.clear();
+    };
+    const parentSignals =
+      process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+    for (const signal of parentSignals) {
+      const handler = () => {
+        killMeasuredProcess(signal);
+        removeParentSignalHandlers();
+        process.kill(process.pid, signal);
+      };
+      parentSignalHandlers.set(signal, handler);
+      process.once(signal, handler);
+    }
+    const appendCapturedOutput = (streamName, chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      const currentBytes = streamName === "stdout" ? stdoutBytes : stderrBytes;
+      const alreadyTruncated = streamName === "stdout" ? stdoutTruncated : stderrTruncated;
+      if (alreadyTruncated) {
+        return;
+      }
+      const remainingBytes = maxBufferBytes - currentBytes;
+      const appendTruncation = () => {
+        const message = `\n[${streamName} truncated after ${maxBufferBytes} bytes]\n`;
+        if (streamName === "stdout") {
+          stdout += message;
+          stdoutTruncated = true;
+        } else {
+          stderr += message;
+          stderrTruncated = true;
+        }
+      };
+      if (remainingBytes <= 0) {
+        appendTruncation();
+        return;
+      }
+      const capturedBuffer =
+        buffer.length > remainingBytes ? buffer.subarray(0, remainingBytes) : buffer;
+      if (streamName === "stdout") {
+        stdout += capturedBuffer.toString("utf8");
+        stdoutBytes += capturedBuffer.length;
+      } else {
+        stderr += capturedBuffer.toString("utf8");
+        stderrBytes += capturedBuffer.length;
+      }
+      if (buffer.length > remainingBytes) {
+        appendTruncation();
+      }
+    };
+    const appendOutput = (streamName, chunk) => {
+      const text = chunk.toString("utf8");
+      if (streamName === "stdout") {
+        process.stdout.write(text);
+      } else {
+        process.stderr.write(text);
+      }
+      appendCapturedOutput(streamName, chunk);
+    };
+    child.stdout?.on("data", (chunk) => appendOutput("stdout", chunk));
+    child.stderr?.on("data", (chunk) => appendOutput("stderr", chunk));
+    const timeout =
+      params.timeoutMs > 0
+        ? setTimeout(() => {
+            timedOut = true;
+            spawnError = {
+              code: "ETIMEDOUT",
+              message: `Command timed out after ${params.timeoutMs}ms`,
+            };
+            killMeasuredProcess();
+            forceKillTimeout = setTimeout(() => {
+              killMeasuredProcess("SIGKILL");
+            }, timeoutKillGraceMs);
+            forceKillTimeout.unref?.();
+          }, params.timeoutMs)
+        : null;
+    timeout?.unref?.();
+    const finish = (status, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (timeout) {
+        clearTimeout(timeout);
+      }
+      if (timedOut) {
+        killMeasuredProcess("SIGKILL");
+      }
+      if (forceKillTimeout) {
+        clearTimeout(forceKillTimeout);
+      }
+      removeParentSignalHandlers();
+      const wallMs = performance.now() - started;
+      const finalStatus = status ?? (signal || spawnError ? 1 : 0);
+      const finalStderr = [
+        stderr,
+        spawnError ? `[spawn error] ${spawnError.code ?? "unknown"} ${spawnError.message}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const diagnosticFailure = detectCommandDiagnosticFailure(stdout, finalStderr);
+      const logPath = writeCommandLog({
+        logDir: params.logDir,
+        label: params.label,
+        command: [params.command, ...params.args],
+        stdout,
+        stderr: finalStderr,
+      });
+      resolve({
+        label: params.label,
+        phase: params.phase,
+        pluginId: params.pluginId ?? null,
+        status: finalStatus,
+        diagnosticFailure,
+        signal: signal ?? null,
+        timedOut,
+        spawnError,
+        logPath,
+        ...parseTimedMetrics(finalStderr, wallMs, mode),
+      });
+    };
+    child.on("error", (error) => {
+      spawnError = {
+        code: typeof error.code === "string" ? error.code : null,
+        message: error.message,
+      };
+      finish(null, null);
+    });
+    child.on("close", (status, signal) => finish(status, signal));
+  });
 }
 
 function runPluginLifecycle(params) {
@@ -503,147 +720,187 @@ function runQaChunks(params) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = path.resolve(options.repoRoot);
+  validateOutputDir(options, repoRoot);
   fs.mkdirSync(options.outputDir, { recursive: true });
   const runRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-gauntlet-"));
+  let preserveRunRoot = options.keepRunRoot;
   const env = createIsolatedEnv(repoRoot, runRoot);
-  const matrix = discoverBundledPluginManifests(repoRoot);
-  const selectedPlugins = selectPluginEntries(matrix, {
-    ids: options.pluginIds,
-    shardTotal: options.shardTotal,
-    shardIndex: options.shardIndex,
-    limit: options.limit,
-  });
-  const rows = [];
-  if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
-    process.stderr.write("[plugin-gauntlet] prebuild\n");
-    const prebuildEnv = buildGauntletPrebuildEnv(env, { includePrivateQa: !options.skipQa });
-    const prebuildCommand = pnpmCommand(["build"], { cwd: repoRoot, env: prebuildEnv });
-    rows.push(
-      runMeasuredCommand({
-        cwd: repoRoot,
-        env: prebuildEnv,
-        logDir: path.join(options.outputDir, "logs", "prebuild"),
-        command: prebuildCommand.command,
-        args: prebuildCommand.args,
-        spawnOptions: prebuildCommand.options,
-        label: "prebuild",
-        phase: "prebuild",
-        timeoutMs: options.buildTimeoutMs,
-      }),
-    );
-  }
-  const prebuildFailed = rows.some(
-    (row) => row.phase === "prebuild" && (row.status !== 0 || row.timedOut),
-  );
-  if (!prebuildFailed && !options.skipLifecycle) {
-    runPluginLifecycle({
-      repoRoot,
-      outputDir: options.outputDir,
-      env,
-      plugins: selectedPlugins,
-      rows,
-      commandTimeoutMs: options.commandTimeoutMs,
-    });
-  }
-  if (!prebuildFailed && !options.skipSlashHelp) {
-    runSlashHelpProbes({
-      repoRoot,
-      outputDir: options.outputDir,
-      env,
-      plugins: selectedPlugins,
-      rows,
-      commandTimeoutMs: options.commandTimeoutMs,
-    });
-  }
-  const qaSummaries =
-    options.skipQa || prebuildFailed
-      ? []
-      : runQaChunks({
-          repoRoot,
-          outputDir: options.outputDir,
-          env,
-          plugins: selectedPlugins,
-          qaBaseline: options.qaBaseline,
-          rows,
-          qaScenarios: options.qaScenarios,
-          qaPluginChunkSize: options.qaPluginChunkSize,
-          qaTimeoutMs: options.qaTimeoutMs,
-        });
-  const metricObservations = collectMetricObservations(rows, {
-    cpuCoreWarn: options.cpuCoreWarn,
-    hotWallWarnMs: options.hotWallWarnMs,
-    maxRssWarnMb: options.maxRssWarnMb,
-    wallAnomalyMultiplier: options.wallAnomalyMultiplier,
-    rssAnomalyMultiplier: options.rssAnomalyMultiplier,
-  });
-  const qaBaselineObservations = collectQaBaselineRegressionObservations(rows, {
-    cpuRegressionMultiplier: options.qaCpuRegressionMultiplier,
-    wallRegressionMultiplier: options.qaWallRegressionMultiplier,
-  });
-  const gatewayObservations = qaSummaries.flatMap((qa) =>
-    collectGatewayCpuObservations({
-      startup: null,
-      qa,
-      cpuCoreWarn: options.cpuCoreWarn,
-      hotWallWarnMs: options.hotWallWarnMs,
-    }),
-  );
-  const failures = rows.filter((row) => row.status !== 0 || row.timedOut || row.diagnosticFailure);
-  const summary = {
-    generatedAt: new Date().toISOString(),
-    repoRoot,
-    outputDir: options.outputDir,
-    isolatedRunRoot: runRoot,
-    selectedPluginCount: selectedPlugins.length,
-    totalPluginCount: matrix.length,
-    options: {
-      pluginIds: options.pluginIds,
+  try {
+    const matrix = discoverBundledPluginManifests(repoRoot);
+    const selectedPlugins = selectPluginEntries(matrix, {
+      ids: options.pluginIds,
       shardTotal: options.shardTotal,
       shardIndex: options.shardIndex,
-      limit: options.limit ?? null,
-      qaScenarios: options.qaScenarios,
-      qaPluginChunkSize: options.qaPluginChunkSize,
-      qaBaseline: options.qaBaseline,
-      skipLifecycle: options.skipLifecycle,
-      skipQa: options.skipQa,
-      skipSlashHelp: options.skipSlashHelp,
-      skipPrebuild: options.skipPrebuild,
-      thresholds: {
+      limit: options.limit,
+    });
+    const rows = [];
+    const commandEnv = buildGauntletPrebuildEnv(env, {
+      includePrivateQa: !options.skipQa,
+      buildIds: selectedPlugins.map((plugin) => plugin.buildId),
+      skipDeclarationBuild: true,
+    });
+    if (!options.skipPrebuild && (selectedPlugins.length > 0 || !options.skipQa)) {
+      process.stderr.write("[plugin-gauntlet] prebuild\n");
+      const prebuildCommand = createGauntletPrebuildCommand(repoRoot);
+      rows.push(
+        await runMeasuredCommandLive({
+          cwd: repoRoot,
+          env: commandEnv,
+          logDir: path.join(options.outputDir, "logs", "prebuild"),
+          command: prebuildCommand.command,
+          args: prebuildCommand.args,
+          label: "prebuild",
+          phase: "prebuild",
+          timeoutMs: options.buildTimeoutMs,
+        }),
+      );
+    }
+    const prebuildFailed = rows.some(
+      (row) => row.phase === "prebuild" && (row.status !== 0 || row.timedOut),
+    );
+    if (!prebuildFailed && !options.skipLifecycle) {
+      runPluginLifecycle({
+        repoRoot,
+        outputDir: options.outputDir,
+        env: commandEnv,
+        plugins: selectedPlugins,
+        rows,
+        commandTimeoutMs: options.commandTimeoutMs,
+      });
+    }
+    if (!prebuildFailed && !options.skipSlashHelp) {
+      runSlashHelpProbes({
+        repoRoot,
+        outputDir: options.outputDir,
+        env: commandEnv,
+        plugins: selectedPlugins,
+        rows,
+        commandTimeoutMs: options.commandTimeoutMs,
+      });
+    }
+    const qaSummaries =
+      options.skipQa || prebuildFailed
+        ? []
+        : runQaChunks({
+            repoRoot,
+            outputDir: options.outputDir,
+            env: commandEnv,
+            plugins: selectedPlugins,
+            qaBaseline: options.qaBaseline,
+            rows,
+            qaScenarios: options.qaScenarios,
+            qaPluginChunkSize: options.qaPluginChunkSize,
+            qaTimeoutMs: options.qaTimeoutMs,
+          });
+    const metricObservations = collectMetricObservations(rows, {
+      cpuCoreWarn: options.cpuCoreWarn,
+      hotWallWarnMs: options.hotWallWarnMs,
+      maxRssWarnMb: options.maxRssWarnMb,
+      wallAnomalyMultiplier: options.wallAnomalyMultiplier,
+      rssAnomalyMultiplier: options.rssAnomalyMultiplier,
+    });
+    const qaBaselineObservations = collectQaBaselineRegressionObservations(rows, {
+      cpuRegressionMultiplier: options.qaCpuRegressionMultiplier,
+      wallRegressionMultiplier: options.qaWallRegressionMultiplier,
+    });
+    const gatewayObservations = qaSummaries.flatMap((qa) =>
+      collectGatewayCpuObservations({
+        startup: null,
+        qa,
         cpuCoreWarn: options.cpuCoreWarn,
         hotWallWarnMs: options.hotWallWarnMs,
-        maxRssWarnMb: options.maxRssWarnMb,
-        wallAnomalyMultiplier: options.wallAnomalyMultiplier,
-        rssAnomalyMultiplier: options.rssAnomalyMultiplier,
-        qaCpuRegressionMultiplier: options.qaCpuRegressionMultiplier,
-        qaWallRegressionMultiplier: options.qaWallRegressionMultiplier,
-      },
-    },
-    matrix,
-    selectedPlugins,
-    rows,
-    observations: [...metricObservations, ...qaBaselineObservations, ...gatewayObservations],
-    failures,
-  };
-  const summaryPath = path.join(options.outputDir, "plugin-gateway-gauntlet-summary.json");
-  fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-  process.stdout.write(`[plugin-gauntlet] summary: ${summaryPath}\n`);
-  process.stdout.write(
-    `[plugin-gauntlet] plugins=${selectedPlugins.length}/${matrix.length} rows=${rows.length} failures=${failures.length} observations=${summary.observations.length}\n`,
-  );
-  for (const failure of failures) {
-    process.stdout.write(
-      `[plugin-gauntlet] failure phase=${failure.phase} plugin=${failure.pluginId ?? "<none>"} status=${failure.status} timedOut=${failure.timedOut} diagnostic=${failure.diagnosticFailure ?? ""} wallMs=${Math.round(failure.wallMs)} log=${failure.logPath}\n`,
+      }),
     );
-  }
-  for (const observation of summary.observations.slice(0, 20)) {
-    process.stdout.write(`[plugin-gauntlet] observation ${JSON.stringify(observation)}\n`);
-  }
-  if (failures.length > 0) {
-    process.exitCode = 1;
+    const failures = rows.filter(
+      (row) => row.status !== 0 || row.timedOut || row.diagnosticFailure,
+    );
+    preserveRunRoot = preserveRunRoot || failures.length > 0;
+    let cleanupError = null;
+    if (!preserveRunRoot) {
+      try {
+        fs.rmSync(runRoot, { recursive: true, force: true });
+      } catch (error) {
+        cleanupError = error instanceof Error ? error.message : String(error);
+        preserveRunRoot = true;
+      }
+    }
+    const summary = {
+      generatedAt: new Date().toISOString(),
+      repoRoot,
+      outputDir: options.outputDir,
+      isolatedRunRoot: runRoot,
+      isolatedRunRootPreserved: preserveRunRoot,
+      isolatedRunRootCleanupError: cleanupError,
+      selectedPluginCount: selectedPlugins.length,
+      totalPluginCount: matrix.length,
+      options: {
+        pluginIds: options.pluginIds,
+        shardTotal: options.shardTotal,
+        shardIndex: options.shardIndex,
+        limit: options.limit ?? null,
+        qaScenarios: options.qaScenarios,
+        qaPluginChunkSize: options.qaPluginChunkSize,
+        qaBaseline: options.qaBaseline,
+        keepRunRoot: options.keepRunRoot,
+        skipLifecycle: options.skipLifecycle,
+        skipQa: options.skipQa,
+        skipSlashHelp: options.skipSlashHelp,
+        skipPrebuild: options.skipPrebuild,
+        thresholds: {
+          cpuCoreWarn: options.cpuCoreWarn,
+          hotWallWarnMs: options.hotWallWarnMs,
+          maxRssWarnMb: options.maxRssWarnMb,
+          wallAnomalyMultiplier: options.wallAnomalyMultiplier,
+          rssAnomalyMultiplier: options.rssAnomalyMultiplier,
+          qaCpuRegressionMultiplier: options.qaCpuRegressionMultiplier,
+          qaWallRegressionMultiplier: options.qaWallRegressionMultiplier,
+        },
+      },
+      matrix,
+      selectedPlugins,
+      rows,
+      observations: [...metricObservations, ...qaBaselineObservations, ...gatewayObservations],
+      failures,
+    };
+    const summaryPath = path.join(options.outputDir, "plugin-gateway-gauntlet-summary.json");
+    fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+    process.stdout.write(`[plugin-gauntlet] summary: ${summaryPath}\n`);
+    process.stdout.write(
+      `[plugin-gauntlet] plugins=${selectedPlugins.length}/${matrix.length} rows=${rows.length} failures=${failures.length} observations=${summary.observations.length}\n`,
+    );
+    if (preserveRunRoot) {
+      process.stdout.write(`[plugin-gauntlet] isolated run root preserved: ${runRoot}\n`);
+    }
+    for (const failure of failures) {
+      process.stdout.write(
+        `[plugin-gauntlet] failure phase=${failure.phase} plugin=${failure.pluginId ?? "<none>"} status=${failure.status} timedOut=${failure.timedOut} diagnostic=${failure.diagnosticFailure ?? ""} wallMs=${Math.round(failure.wallMs)} log=${failure.logPath}\n`,
+      );
+    }
+    for (const observation of summary.observations.slice(0, 20)) {
+      process.stdout.write(`[plugin-gauntlet] observation ${JSON.stringify(observation)}\n`);
+    }
+    if (failures.length > 0) {
+      process.exitCode = 1;
+    }
+  } catch (error) {
+    if (!options.keepRunRoot) {
+      try {
+        fs.rmSync(runRoot, { recursive: true, force: true });
+      } catch (cleanupError) {
+        process.stderr.write(
+          `[plugin-gauntlet] failed to clean isolated run root ${runRoot}: ${
+            cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+          }\n`,
+        );
+      }
+    }
+    throw error;
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
-});
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  });
+}

@@ -340,8 +340,14 @@ describe("extractToolResultMediaPaths", () => {
     expect(isToolResultMediaTrusted("video_generate")).toBe(true);
   });
 
-  it("trusts bundled plugin tool local MEDIA paths", () => {
-    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  it("does not trust bundled plugin tool names without run-local metadata", () => {
+    expect(isToolResultMediaTrusted("meeting_notes")).toBe(false);
+  });
+
+  it("trusts bundled plugin tool names carried by run-local metadata", () => {
+    expect(isToolResultMediaTrusted("meeting_notes", undefined, new Set(["meeting_notes"]))).toBe(
+      true,
+    );
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
@@ -382,18 +388,15 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual(["/tmp/reply.opus"]);
   });
 
-  it("keeps local media for bundled plugin tool names registered in this run", () => {
-    // music_generate is a bundled-plugin trusted tool; when the runner
-    // registers it for this run, its raw name must be allowed through the
-    // exact-name gate just like a core built-in.
+  it("keeps local media for bundled plugin tool names trusted in this run", () => {
     expect(
       filterToolResultMediaUrls(
-        "music_generate",
-        ["/tmp/song.mp3"],
+        "meeting_notes",
+        ["/tmp/meeting.wav"],
         undefined,
-        new Set(["music_generate"]),
+        new Set(["meeting_notes"]),
       ),
-    ).toEqual(["/tmp/song.mp3"]);
+    ).toEqual(["/tmp/meeting.wav"]);
   });
 
   it("strips local media for plugin-name collisions when the plugin is not registered", () => {

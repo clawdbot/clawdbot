@@ -11,6 +11,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.types.js";
 
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
@@ -269,7 +270,7 @@ export async function collectChannelSecurityFindings(params: {
       cfg: sourceConfig,
       accountIds,
     });
-    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+    const orderedAccountIds = uniqueStrings([defaultAccountId, ...accountIds]);
 
     for (const accountId of orderedAccountIds) {
       const hasExplicitAccountPath = hasExplicitProviderAccountConfig(

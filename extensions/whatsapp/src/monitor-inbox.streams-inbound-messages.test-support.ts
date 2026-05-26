@@ -18,9 +18,24 @@ import {
 } from "./monitor-inbox.test-harness.js";
 import type { InboxOnMessage } from "./monitor-inbox.test-harness.js";
 
-const { sleepWithAbortMock } = vi.hoisted(() => ({
+const { imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
+  imageOps: {
+    getImageMetadata: vi.fn(),
+    resizeToJpeg: vi.fn(),
+  },
   sleepWithAbortMock: vi.fn(async (_ms: number, _signal?: AbortSignal) => undefined),
 }));
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    getImageMetadata: imageOps.getImageMetadata,
+    resizeToJpeg: imageOps.resizeToJpeg,
+  };
+});
 
 vi.mock("./reconnect.js", async () => {
   const actual = await vi.importActual<typeof import("./reconnect.js")>("./reconnect.js");
@@ -83,6 +98,10 @@ describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
   beforeEach(() => {
+    imageOps.getImageMetadata.mockReset();
+    imageOps.getImageMetadata.mockResolvedValue(null);
+    imageOps.resizeToJpeg.mockReset();
+    imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     sleepWithAbortMock.mockReset();
     sleepWithAbortMock.mockImplementation(async (_ms: number, _signal?: AbortSignal) => undefined);
   });
@@ -482,6 +501,49 @@ describe("web monitor inbox", () => {
       "999@s.whatsapp.net",
     );
     expect(sock.sendMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("prepopulates image previews for inbound sendMedia replies", async () => {
+    const onMessage = vi.fn(async () => undefined);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    sock.ev.emit(
+      "messages.upsert",
+      buildNotifyMessageUpsert({
+        id: nextMessageId("image-preview"),
+        remoteJid: "999@s.whatsapp.net",
+        text: "ping",
+        timestamp: 1_700_000_000,
+        pushName: "Tester",
+      }),
+    );
+    await waitForMessageCalls(onMessage, 1);
+
+    const inbound = inboundMessage(onMessage) as {
+      sendMedia: (payload: Record<string, unknown>) => Promise<void>;
+    };
+    const image = Buffer.from("img");
+    const thumbnail = Buffer.from("thumb");
+    imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
+    imageOps.resizeToJpeg.mockResolvedValueOnce(thumbnail);
+
+    await inbound.sendMedia({ image, caption: "cap", mimetype: "image/png" });
+
+    expect(imageOps.resizeToJpeg).toHaveBeenCalledWith({
+      buffer: image,
+      maxSide: 32,
+      quality: 50,
+      withoutEnlargement: true,
+    });
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      image,
+      caption: "cap",
+      mimetype: "image/png",
+      width: 640,
+      height: 480,
+      jpegThumbnail: thumbnail.toString("base64"),
+    });
 
     await listener.close();
   });

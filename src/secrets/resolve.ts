@@ -13,6 +13,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
@@ -636,7 +637,7 @@ async function resolveExecRefs(params: {
   env: NodeJS.ProcessEnv;
   limits: ResolutionLimits;
 }): Promise<ProviderResolutionOutput> {
-  const ids = [...new Set(params.refs.map((ref) => ref.id))];
+  const ids = uniqueStrings(params.refs.map((ref) => ref.id));
   if (ids.length > params.limits.maxRefsPerProvider) {
     throw providerResolutionError({
       source: "exec",

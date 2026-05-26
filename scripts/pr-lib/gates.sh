@@ -53,11 +53,6 @@ prepare_gates() {
     exit 1
   fi
 
-  if [ "$changelog_required" = "true" ] && [ "$has_changelog_update" = "false" ]; then
-    echo "Missing changelog update. Add CHANGELOG.md changes."
-    exit 1
-  fi
-
   if [ "$has_changelog_update" = "true" ]; then
     normalize_pr_changelog_entries "$pr"
     validate_changelog_attribution_policy

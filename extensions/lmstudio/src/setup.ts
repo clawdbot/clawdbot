@@ -23,6 +23,7 @@ import {
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/provider-setup";
 import { WizardCancelledError, type WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
   LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
@@ -281,7 +282,7 @@ function mergeDiscoveredModels(params: {
   }
 
   const merged = [...explicitModels];
-  const seen = new Set(explicitModels.map((model) => model.id.trim()).filter(Boolean));
+  const seen = new Set(normalizeStringEntries(explicitModels.map((model) => model.id)));
   for (const model of discoveredModels) {
     const id = model.id.trim();
     if (!id || seen.has(id)) {
@@ -328,17 +329,16 @@ function mergeDiscoveredLmstudioAllowlistEntries(params: {
 }) {
   return withAgentModelAliases(
     params.existing,
-    params.discoveredModels
-      .map((model) => model.id.trim())
-      .filter(Boolean)
-      .map((id) => `${PROVIDER_ID}/${id}`),
+    normalizeStringEntries(params.discoveredModels.map((model) => model.id)).map(
+      (id) => `${PROVIDER_ID}/${id}`,
+    ),
   );
 }
 
 function selectDefaultLmstudioModelId(
   discoveredModels: ModelDefinitionConfig[],
 ): string | undefined {
-  const ids = discoveredModels.map((model) => model.id.trim()).filter(Boolean);
+  const ids = normalizeStringEntries(discoveredModels.map((model) => model.id));
   if (ids.length === 0) {
     return undefined;
   }

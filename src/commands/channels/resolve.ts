@@ -21,6 +21,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
 
 export type ChannelsResolveOptions = {
@@ -130,7 +131,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     runtime,
     autoEnable: true,
   });
-  const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
     throw new Error(
       `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,

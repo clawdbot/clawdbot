@@ -34,7 +34,6 @@ import {
   logSessionStateChange,
   logMessageQueued,
   diagnosticLogger,
-  isDiagnosticQueuePressureBackoffActive,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionAbortMs,
@@ -653,6 +652,113 @@ describe("stuck session diagnostics threshold", () => {
       expect(recoverStuckSession).not.toHaveBeenCalled();
 
       vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "stalled_agent_run",
+        reason: "active_work_without_progress",
+        activeWorkKind: "model_call",
+        lastProgressReason: "model_call:started",
+      },
+    );
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("does not actively abort model calls with recent stream progress", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "lmstudio",
+        model: "gemma-4-e4b-it",
+      });
+
+      vi.advanceTimersByTime(stuckSessionAbortMs - 15_000);
+      markDiagnosticRunProgressForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        reason: "model_call:stream_progress",
+      });
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.findLast((event) => event.type === "session.recovery.requested")).toBeUndefined();
+    expectRecordFields(
+      getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" }),
+      {
+        activeWorkKind: "model_call",
+        hasActiveEmbeddedRun: true,
+        lastProgressAgeMs: 30_000,
+        lastProgressReason: "model_call:stream_progress",
+      },
+    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
+  it("actively aborts silent local model calls after the stuck timeout", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const stuckSessionWarnMs = 30_000;
+    const stuckSessionAbortMs = 60_000;
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs,
+            stuckSessionAbortMs,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticModelStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        provider: "vllm",
+        model: "qwen/qwen3.5-9b",
+      });
+
+      vi.advanceTimersByTime(stuckSessionAbortMs);
     } finally {
       unsubscribe();
     }
@@ -1692,35 +1798,6 @@ describe("stuck session diagnostics threshold", () => {
       },
       "queued backlog liveness stability event",
     );
-  });
-
-  it("marks queued gateway pressure for low-priority backoff", () => {
-    startDiagnosticHeartbeat(
-      {
-        diagnostics: {
-          enabled: true,
-        },
-      },
-      {
-        emitMemorySample: createEmitMemorySampleMock(),
-        sampleLiveness: () => ({
-          reasons: ["cpu"],
-          intervalMs: 30_000,
-          eventLoopUtilization: 0.99,
-          cpuTotalMs: 30_000,
-          cpuCoreRatio: 1,
-        }),
-      },
-    );
-
-    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
-    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "discord" });
-    vi.advanceTimersByTime(30_000);
-
-    expect(isDiagnosticQueuePressureBackoffActive(Date.now())).toBe(true);
-    stopDiagnosticHeartbeat();
-    expect(isDiagnosticQueuePressureBackoffActive(Date.now())).toBe(false);
-    expect(isDiagnosticQueuePressureBackoffActive(Date.now() + 60_001)).toBe(false);
   });
 
   it("does not let idle liveness samples suppress later active-work warnings", () => {

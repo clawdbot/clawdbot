@@ -8,7 +8,10 @@ import {
 } from "../config/types.models.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import {
   buildModelCatalogMergeKey,
@@ -467,11 +470,6 @@ export function normalizeModelCatalog(
   return Object.keys(catalog).length > 0 ? catalog : undefined;
 }
 
-function normalizeStringList(value: unknown): string[] | undefined {
-  const normalized = normalizeTrimmedStringList(value);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 export function normalizeModelCatalogProviderRows(params: {
   provider: string;
   providerCatalog: ModelCatalogProvider;
@@ -502,8 +500,8 @@ export function normalizeModelCatalogProviderRows(params: {
     const mediaInput = normalizeModelCatalogMediaInput(model.mediaInput);
     const statusReason = normalizeOptionalString(model.statusReason) ?? "";
     const replacedBy = normalizeOptionalString(model.replacedBy) ?? "";
-    const replaces = normalizeStringList(model.replaces);
-    const tags = normalizeStringList(model.tags);
+    const replaces = normalizeOptionalTrimmedStringList(model.replaces);
+    const tags = normalizeOptionalTrimmedStringList(model.tags);
     rows.push({
       provider,
       id,

@@ -9,6 +9,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
@@ -51,9 +52,9 @@ import type {
   TaskStatus,
   TaskTerminalOutcome,
 } from "./task-registry.types.js";
+import { resolveTaskCleanupAfter } from "./task-retention.js";
 
 const log = createSubsystemLogger("tasks/registry");
-const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
 const taskRegistryProcessState = getTaskRegistryProcessState();
 const tasks = taskRegistryProcessState.tasks;
@@ -521,14 +522,11 @@ function deleteIndexedKey(index: Map<string, Set<string>>, key: string, taskId: 
 }
 
 function getTaskRelatedSessionIndexKeys(task: Pick<TaskRecord, "ownerKey" | "childSessionKey">) {
-  return [
-    ...new Set(
-      [
-        normalizeOptionalString(task.ownerKey),
-        normalizeOptionalString(task.childSessionKey),
-      ].filter(Boolean) as string[],
-    ),
-  ];
+  return uniqueStrings(
+    [normalizeOptionalString(task.ownerKey), normalizeOptionalString(task.childSessionKey)].filter(
+      Boolean,
+    ) as string[],
+  );
 }
 
 function addOwnerKeyIndex(taskId: string, task: Pick<TaskRecord, "ownerKey">) {
@@ -986,8 +984,10 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
-    const terminalAt = next.endedAt ?? next.lastEventAt ?? Date.now();
-    next.cleanupAfter = terminalAt + DEFAULT_TASK_RETENTION_MS;
+    next.cleanupAfter = resolveTaskCleanupAfter({
+      ...next,
+      createdAt: next.createdAt ?? Date.now(),
+    });
   }
   const sessionIndexChanged =
     normalizeOptionalString(current.ownerKey) !== normalizeOptionalString(next.ownerKey) ||
@@ -1598,8 +1598,7 @@ export function createTaskRecord(params: {
     }),
   });
   if (isTerminalTaskStatus(record.status) && typeof record.cleanupAfter !== "number") {
-    record.cleanupAfter =
-      (record.endedAt ?? record.lastEventAt ?? record.createdAt) + DEFAULT_TASK_RETENTION_MS;
+    record.cleanupAfter = resolveTaskCleanupAfter(record);
   }
   tasks.set(taskId, record);
   upsertTaskDeliveryState({

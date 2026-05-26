@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { PluginHookInboundClaimEvent } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeSingleOrTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexUserInput } from "./app-server/protocol.js";
 
 type InboundMedia = {
@@ -28,10 +29,14 @@ function extractInboundMedia(event: PluginHookInboundClaimEvent): InboundMedia[]
   // OpenClaw channels expose either local staged files or remote URLs. Keep
   // them separate so Codex can receive the cheaper localImage input when a file
   // is already present, while still supporting remote-only transports.
-  const paths = readStringArray(metadata.mediaPaths).concat(readStringArray(metadata.mediaPath));
-  const urls = readStringArray(metadata.mediaUrls).concat(readStringArray(metadata.mediaUrl));
-  const mimeTypes = readStringArray(metadata.mediaTypes).concat(
-    readStringArray(metadata.mediaType),
+  const paths = normalizeSingleOrTrimmedStringList(metadata.mediaPaths).concat(
+    normalizeSingleOrTrimmedStringList(metadata.mediaPath),
+  );
+  const urls = normalizeSingleOrTrimmedStringList(metadata.mediaUrls).concat(
+    normalizeSingleOrTrimmedStringList(metadata.mediaUrl),
+  );
+  const mimeTypes = normalizeSingleOrTrimmedStringList(metadata.mediaTypes).concat(
+    normalizeSingleOrTrimmedStringList(metadata.mediaType),
   );
   const count = Math.max(paths.length, urls.length, mimeTypes.length);
   const media: InboundMedia[] = [];
@@ -93,14 +98,4 @@ function readLocalMediaPath(value: string | undefined): string | undefined {
     return value;
   }
   return /^[a-z][a-z0-9+.-]*:/i.test(value) ? undefined : value;
-}
-
-function readStringArray(value: unknown): string[] {
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim()];
-  }
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
 }

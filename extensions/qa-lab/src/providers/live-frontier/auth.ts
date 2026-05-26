@@ -9,6 +9,7 @@ import {
   resolveEnvApiKey,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "../shared/auth-store.js";
 
 export const QA_LIVE_ANTHROPIC_SETUP_TOKEN_ENV = "OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN";
@@ -35,9 +36,7 @@ function buildQaLiveApiKeyProfileId(provider: string): string {
 }
 
 function normalizeQaLiveProviderIds(providerIds: readonly string[]) {
-  return [...new Set(providerIds.map((providerId) => providerId.trim()))]
-    .filter((providerId) => providerId.length > 0)
-    .toSorted();
+  return uniqueStrings(normalizeStringEntries(providerIds)).toSorted();
 }
 
 function isQaLiveOfficialOpenAiBaseUrl(baseUrl: unknown): boolean {
@@ -231,9 +230,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
   agentIds?: readonly string[];
 }): Promise<OpenClawConfig> {
   const env = params.env ?? process.env;
-  const providerIds = [...new Set(params.providerIds.map((providerId) => providerId.trim()))]
-    .filter((providerId) => providerId.length > 0)
-    .toSorted();
+  const providerIds = uniqueStrings(normalizeStringEntries(params.providerIds)).toSorted();
   const profiles: Record<
     string,
     {
@@ -267,7 +264,7 @@ export async function stageQaLiveApiKeyProfiles(params: {
   if (Object.keys(profiles).length === 0) {
     return next;
   }
-  const agentIds = [...new Set(params.agentIds ?? QA_LIVE_API_KEY_AGENT_IDS)];
+  const agentIds = uniqueStrings(params.agentIds ?? QA_LIVE_API_KEY_AGENT_IDS);
   await Promise.all(
     agentIds.map((agentId) =>
       writeQaAuthProfiles({

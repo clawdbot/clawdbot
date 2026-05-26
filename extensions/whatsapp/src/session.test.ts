@@ -26,10 +26,14 @@ const { envHttpProxyAgentCtor, proxyAgentCtor } = vi.hoisted(() => ({
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
-vi.mock("undici", () => ({
-  EnvHttpProxyAgent: envHttpProxyAgentCtor,
-  ProxyAgent: proxyAgentCtor,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    EnvHttpProxyAgent: envHttpProxyAgentCtor,
+    ProxyAgent: proxyAgentCtor,
+  };
+});
 
 const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 

@@ -1,27 +1,27 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/acpx",
-      "version": "2026.5.24",
+      "version": "2026.5.26",
       "dependencies": {
-        "@agentclientprotocol/claude-agent-acp": "0.36.1",
-        "@zed-industries/codex-acp": "0.14.0",
-        "acpx": "0.8.0",
+        "@agentclientprotocol/claude-agent-acp": "0.37.0",
+        "@zed-industries/codex-acp": "0.15.0",
+        "acpx": "0.10.0",
         "zod": "4.4.3"
       }
     },
     "node_modules/@agentclientprotocol/claude-agent-acp": {
-      "version": "0.36.1",
-      "resolved": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.36.1.tgz",
-      "integrity": "sha512-836UDBbfKNdwLCjyY2NNzHBaH2iQZrg2XqMSdD07wPY+iA9vocy1uw5MWv4AZB4B4JRZPJJxZ0wZryyacAyv5w==",
+      "version": "0.37.0",
+      "resolved": "https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp/-/claude-agent-acp-0.37.0.tgz",
+      "integrity": "sha512-xZd/0tYQyUAQICMqx/msJJEtF07KJzUwQodHDrpUoaHG3miBKW635bLKo9kQInWYIhQ96ZJDhdSHHnH44e+KlA==",
       "license": "Apache-2.0",
       "dependencies": {
-        "@agentclientprotocol/sdk": "0.22.0",
-        "@anthropic-ai/claude-agent-sdk": "0.3.143",
+        "@agentclientprotocol/sdk": "0.22.1",
+        "@anthropic-ai/claude-agent-sdk": "0.3.146",
         "zod": "^3.25.0 || ^4.0.0"
       },
       "bin": {
@@ -29,31 +29,31 @@
       }
     },
     "node_modules/@agentclientprotocol/sdk": {
-      "version": "0.22.0",
-      "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.22.0.tgz",
-      "integrity": "sha512-mnkpiuEfGm7/snhWbrRhe3Hk+WDDjv7U2N/Ql0XiThl9zg7T984dPH8Tich4wlBQnaaXTV4Fl5OQSe2pa9hoFA==",
+      "version": "0.22.1",
+      "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.22.1.tgz",
+      "integrity": "sha512-DfqXtl/8gO9NImq094MTaCXEU2vkhh6v7q/kT+9UjZxUqj8hYaya2OjLVIqn16MzNHcXEpShTR2RIauLSYeDQQ==",
       "license": "Apache-2.0",
       "peerDependencies": {
         "zod": "^3.25.0 || ^4.0.0"
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.143.tgz",
-      "integrity": "sha512-JnxOTRpSBpFqKFMfV5cW4QjpeDOHUNr31rRislmOVWEPsRmCjsy9jYwKxDf7kxcwxyZ6h/YHz1ACvMaUWy6o6A==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/-/claude-agent-sdk-0.3.146.tgz",
+      "integrity": "sha512-hK9/Ng+hOyexUemTxdIUsSWJ9o2LFi2YNWzHwz8/YMCohUYOnFMZkBiENvUAb0WIc5hieOyBZrOIlg5OewuJMg==",
       "license": "SEE LICENSE IN README.md",
       "engines": {
         "node": ">=18.0.0"
       },
       "optionalDependencies": {
-        "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.143",
-        "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.143",
-        "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.143",
-        "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.143",
-        "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.143",
-        "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.143",
-        "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.143",
-        "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.143"
+        "@anthropic-ai/claude-agent-sdk-darwin-arm64": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk-darwin-x64": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk-linux-arm64-musl": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk-linux-x64": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk-linux-x64-musl": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk-win32-arm64": "0.3.146",
+        "@anthropic-ai/claude-agent-sdk-win32-x64": "0.3.146"
       },
       "peerDependencies": {
         "@anthropic-ai/sdk": ">=0.93.0",
@@ -62,9 +62,9 @@
       }
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.3.143.tgz",
-      "integrity": "sha512-41WuTuP+bk4NxrjpG9IJGffsjh1ivyiiAmqgb5QoxPltDAA0p3gs+iZ3lTgDmY4Ga68wDoN05Lt18oCE+DQb7g==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.3.146.tgz",
+      "integrity": "sha512-0IIvlEaenq2CRSVx5Bo5BaCtHQXS87GancM35WKEYveGVLn6DI+5G7ikYuTE4AKRPkMnogFtY4BJt6LulWGj+A==",
       "cpu": [
         "arm64"
       ],
@@ -75,9 +75,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.143.tgz",
-      "integrity": "sha512-3WrJ6MjjwQKvPnPbzUOm08qftlHYobkp/tmM1P/Vk/ldSjoPfFIgLFfzSzUmCKJiKEh2ZlHLJr8ORNrTxXhgQg==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-darwin-x64/-/claude-agent-sdk-darwin-x64-0.3.146.tgz",
+      "integrity": "sha512-Dk5xJ03Ff1JXbMRP1t2wc/TyfY6xF/2Ysp31wMhFPjoNiKSPHMWaIg242+T3CHdxLWmJ8plWHL1HL5cyZ/LCkw==",
       "cpu": [
         "x64"
       ],
@@ -88,9 +88,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-0.3.143.tgz",
-      "integrity": "sha512-/9oP/FCewrPnwVN+QUS5rlO3kMa07w+hOrpWrz24aEpBYhcHzr0zoNMBriPDAkTr3ao/z1k40UZ2dHmgsSODzA==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64/-/claude-agent-sdk-linux-arm64-0.3.146.tgz",
+      "integrity": "sha512-mzBXDDWWBAC/vDtAYpO1G/dq5QvJtYSPXsqcb+sNdcDhiuf4IYnYp7ytRncYlsUNDkLmX6Gk2jkWAHUUA2Lozg==",
       "cpu": [
         "arm64"
       ],
@@ -101,9 +101,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64-musl": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64-musl/-/claude-agent-sdk-linux-arm64-musl-0.3.143.tgz",
-      "integrity": "sha512-9UeV1W2vjOVwJSJrq9aw3UeMo82Ir59FfJ5mchh7OXZEaevkANvHYn25bTCnIpqfqOx7qFEosJW2ELIoV1nprg==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-arm64-musl/-/claude-agent-sdk-linux-arm64-musl-0.3.146.tgz",
+      "integrity": "sha512-QlCid0ucdrmhUAOewfQjaofN2wlokWcfFTxSFePTSj1umk35JO7TDFP700F7jU49r1fPWIdvJpPwWGyB0DeFPA==",
       "cpu": [
         "arm64"
       ],
@@ -114,9 +114,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.143.tgz",
-      "integrity": "sha512-kwqnbHo4Zj6TzO1V/83uLhsTt0xBp/BN5V/aHIX+khM4UuNO6NOKNaZvr8Int3sF0ARF95Hjr4l/hMKxry6DhQ==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64/-/claude-agent-sdk-linux-x64-0.3.146.tgz",
+      "integrity": "sha512-B2baXU1tCBT5CVlD7jJMKjpC4xdO45NUIWpqImmwuOfKvlM/PITjyTXyTY662mGZf1dBmdqBBsqirwFH/jhi8Q==",
       "cpu": [
         "x64"
       ],
@@ -127,9 +127,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64-musl/-/claude-agent-sdk-linux-x64-musl-0.3.143.tgz",
-      "integrity": "sha512-rr4334GOLl9caYDeyWsbwMaVJCiNvKHE9nLdey8opIkq7/FHHu712U6tDk0tcoCdsGU/S3/BBaZParOgF+s5qw==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-linux-x64-musl/-/claude-agent-sdk-linux-x64-musl-0.3.146.tgz",
+      "integrity": "sha512-E3coK1ThQT08KIX80RLcsq7DWXFllCKOzoOe32it/bdtY56TBgPY9xemwXhIJ+cVBHTI9/MpBSIlKBcFCt+yQA==",
       "cpu": [
         "x64"
       ],
@@ -140,9 +140,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-win32-arm64": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-arm64/-/claude-agent-sdk-win32-arm64-0.3.143.tgz",
-      "integrity": "sha512-q5UaLZ9ABbqQN8UXpqHUqjW6akI1zMrV5Jvtq0yueKP4nIRbBBZBQ80M4bpdrc0+SiRmjVRV3p8lsCCAd8azgg==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-arm64/-/claude-agent-sdk-win32-arm64-0.3.146.tgz",
+      "integrity": "sha512-CIwQxGX2r/yWpjCJ6ahB3smKXhghWgGTxL98+LGW52TUwqTiBnlNrH9DPqqgv1/+Hyquw6xfLrKU+StyfMgiLw==",
       "cpu": [
         "arm64"
       ],
@@ -153,9 +153,9 @@
       ]
     },
     "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64": {
-      "version": "0.3.143",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.3.143.tgz",
-      "integrity": "sha512-46L2mkskvIRfwzHP3p0uUE5u9Oc7Eb/DRVmXuGNk5Z8jiahlDSv0SHP1vnWSWw5nWIu4DWOKyXZelRmYc9LxCg==",
+      "version": "0.3.146",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.3.146.tgz",
+      "integrity": "sha512-qmxrsyaqA8s4HShqJls7ZCRjdoqN66Jo/hbjQNB3uHepD8tEO1iD19aPV4+osdLT7feMkhDBfLT07Q30R2NB5w==",
       "cpu": [
         "x64"
       ],
@@ -166,9 +166,9 @@
       ]
     },
     "node_modules/@anthropic-ai/sdk": {
-      "version": "0.97.1",
-      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.97.1.tgz",
-      "integrity": "sha512-wOf7AUeJPitcVpvKO4UMu63mWH5SaVipkGd7OOQJt/G6VYGlV8D2Gp9dLxOrttDJh/9gqPqdaBwDGcBevumeAg==",
+      "version": "0.98.0",
+      "resolved": "https://registry.npmjs.org/@anthropic-ai/sdk/-/sdk-0.98.0.tgz",
+      "integrity": "sha512-N7aXtCvC5g6T1Y4V29lJjceu/zTkVkIZF0jdBvagr0TRFHuKeImffalGWEfqZKrvjH+IQbzJWw6TmSmUzrlMgg==",
       "license": "MIT",
       "dependencies": {
         "json-schema-to-ts": "^3.1.1",
@@ -698,26 +698,26 @@
       "license": "MIT"
     },
     "node_modules/@zed-industries/codex-acp": {
-      "version": "0.14.0",
-      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.14.0.tgz",
-      "integrity": "sha512-IT9Zh9YDsRfXnc+RN9T00OCBFZrvQxzsWARWL9C1f0do4xB67eCZGildkJCHjoXmGAyYn1V7rIdRR6/+PzDdmw==",
+      "version": "0.15.0",
+      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp/-/codex-acp-0.15.0.tgz",
+      "integrity": "sha512-eAv7sGBeiYrYkOulF729nrM51szS7WIhBtugRj5wWq6csRKZUhAZfoUZlF8xUWdHPtOIzd/eT6MNG6gMHu6z0w==",
       "license": "Apache-2.0",
       "bin": {
         "codex-acp": "bin/codex-acp.js"
       },
       "optionalDependencies": {
-        "@zed-industries/codex-acp-darwin-arm64": "0.14.0",
-        "@zed-industries/codex-acp-darwin-x64": "0.14.0",
-        "@zed-industries/codex-acp-linux-arm64": "0.14.0",
-        "@zed-industries/codex-acp-linux-x64": "0.14.0",
-        "@zed-industries/codex-acp-win32-arm64": "0.14.0",
-        "@zed-industries/codex-acp-win32-x64": "0.14.0"
+        "@zed-industries/codex-acp-darwin-arm64": "0.15.0",
+        "@zed-industries/codex-acp-darwin-x64": "0.15.0",
+        "@zed-industries/codex-acp-linux-arm64": "0.15.0",
+        "@zed-industries/codex-acp-linux-x64": "0.15.0",
+        "@zed-industries/codex-acp-win32-arm64": "0.15.0",
+        "@zed-industries/codex-acp-win32-x64": "0.15.0"
       }
     },
     "node_modules/@zed-industries/codex-acp-darwin-arm64": {
-      "version": "0.14.0",
-      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-darwin-arm64/-/codex-acp-darwin-arm64-0.14.0.tgz",
-      "integrity": "sha512-FWjHKlNJTZmXWM/2/GAQAg0WJEjPlfxEQJgvfxuzK1xZh81CDg9U6uSgZ1ggBkkN2bOoCnOupvGAPOmBoL5m2Q==",
+      "version": "0.15.0",
+      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-darwin-arm64/-/codex-acp-darwin-arm64-0.15.0.tgz",
+      "integrity": "sha512-9/tnj1fXeXIONgr+5FGwr3bkqd4jaORdr3X9/k++rzHW+UIzvgIeXrJKv43403gtuKp0BoxdzsFxe2qsAQhhkw==",
       "cpu": [
         "arm64"
       ],
@@ -731,9 +731,9 @@
       }
     },
     "node_modules/@zed-industries/codex-acp-darwin-x64": {
-      "version": "0.14.0",
-      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-darwin-x64/-/codex-acp-darwin-x64-0.14.0.tgz",
-      "integrity": "sha512-KgC92J5wxOJM2N0VMNX7UQSGHVKa7xQCFsniWcxClsLWleJGlUdGlde5Aefd/yoU0J86ii6HCK8RfalUC76Inw==",
+      "version": "0.15.0",
+      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-darwin-x64/-/codex-acp-darwin-x64-0.15.0.tgz",
+      "integrity": "sha512-2cmflnVYM5yzvNu4ldff6OsfLzQThFToPszCT3t7jytWuG28V+W1cUEGsvFJGNkGC1Wo29Z4w5LZ3wyfOkvPxg==",
       "cpu": [
         "x64"
       ],
@@ -747,9 +747,9 @@
       }
     },
     "node_modules/@zed-industries/codex-acp-linux-arm64": {
-      "version": "0.14.0",
-      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-linux-arm64/-/codex-acp-linux-arm64-0.14.0.tgz",
-      "integrity": "sha512-KGfQq0/tdY31XBsdLe5nsKiV97pcsCruW28UDw7sgHUjPq8NPh9IiDdVj+xr1L4opihnswGelcoVvya+Vng8jQ==",
+      "version": "0.15.0",
+      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-linux-arm64/-/codex-acp-linux-arm64-0.15.0.tgz",
+      "integrity": "sha512-ioCXCiZMd4v7Eqyed9Iz4xcPKsZbSH157wOitsWQKxUiX43c1Ti5fykZcrh9cNSLOgiGmI3V2nbYp0aTf66grQ==",
       "cpu": [
         "arm64"
       ],
@@ -763,9 +763,9 @@
       }
     },
     "node_modules/@zed-industries/codex-acp-linux-x64": {
-      "version": "0.14.0",
-      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-linux-x64/-/codex-acp-linux-x64-0.14.0.tgz",
-      "integrity": "sha512-y1wrDOTJ/OYjYNRVmrf9Jti2571DjSp1xe5lSiZ9pBohA4oUQk9YIhlnv7NzeI0PYWyrjLd6QpQ09wTfxZFC8w==",
+      "version": "0.15.0",
+      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-linux-x64/-/codex-acp-linux-x64-0.15.0.tgz",
+      "integrity": "sha512-WtqI8KGX9z7XvdkazumYraoDwpip5lFBRtFXoIwYCSBoDZdOqQsfNQndIfTDttfQ1BdZYKczDnrfbRaiIFU9UA==",
       "cpu": [
         "x64"
       ],
@@ -779,9 +779,9 @@
       }
     },
     "node_modules/@zed-industries/codex-acp-win32-arm64": {
-      "version": "0.14.0",
-      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-win32-arm64/-/codex-acp-win32-arm64-0.14.0.tgz",
-      "integrity": "sha512-mUNZYfcpkM9YSs0tFzH7j2NHlxpjScFz2lpyJKiMl8wcTHLU8HYzeJZ7xodHzsIJrb5YMKxZ44zkBM3FBGAVaw==",
+      "version": "0.15.0",
+      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-win32-arm64/-/codex-acp-win32-arm64-0.15.0.tgz",
+      "integrity": "sha512-L+OFIPOzAuxsImlq8E227MZxgujMLMEJSqiR9QjZq8fiIFCKh/HnxmvyXvjWaHbJdb1pZ09WKe3MNwV9ln/+GQ==",
       "cpu": [
         "arm64"
       ],
@@ -795,9 +795,9 @@
       }
     },
     "node_modules/@zed-industries/codex-acp-win32-x64": {
-      "version": "0.14.0",
-      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-win32-x64/-/codex-acp-win32-x64-0.14.0.tgz",
-      "integrity": "sha512-KYckY87//om8Vsnb3fMUOkex76z2MF+e3H/n91tXnBep9ecnDT0rtEuoTvr4gP7evAf210YoSSGi0BB4ljse4w==",
+      "version": "0.15.0",
+      "resolved": "https://registry.npmjs.org/@zed-industries/codex-acp-win32-x64/-/codex-acp-win32-x64-0.15.0.tgz",
+      "integrity": "sha512-LDnADpCg1Rzbkyxs4hMaOvRwNa68KLp8CoNVom8ZE/sChSvcDrj/RCoMsZWrARJGWs7EQ9zYeLoeVk5VcVQoPQ==",
       "cpu": [
         "x64"
       ],
@@ -824,12 +824,12 @@
       }
     },
     "node_modules/acpx": {
-      "version": "0.8.0",
-      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.8.0.tgz",
-      "integrity": "sha512-mI8ma3sDz8QfI2c40iiOAQ3iklpdv0XB7YFieOIcZZWw8dBTGsbFn4qqgbKQjDBX8S/yIWiKvmqi5j/L8c2kUQ==",
+      "version": "0.10.0",
+      "resolved": "https://registry.npmjs.org/acpx/-/acpx-0.10.0.tgz",
+      "integrity": "sha512-hd48XV03gG3sd409T1lDrOKJTTz1ap4g0wrndXjxQ590tN85pBYlvfNLyerybvGRrtUGsZjNdt99r1jpIt6ukA==",
       "license": "MIT",
       "dependencies": {
-        "@agentclientprotocol/sdk": "^0.21.1",
+        "@agentclientprotocol/sdk": "^0.22.1",
         "commander": "^14.0.3",
         "skillflag": "^0.1.4",
         "tsx": "^4.22.0",
@@ -840,15 +840,6 @@
       },
       "engines": {
         "node": ">=22.13.0"
-      }
-    },
-    "node_modules/acpx/node_modules/@agentclientprotocol/sdk": {
-      "version": "0.21.1",
-      "resolved": "https://registry.npmjs.org/@agentclientprotocol/sdk/-/sdk-0.21.1.tgz",
-      "integrity": "sha512-ZTLH+o9QxcZDLX/9ww+W7C2iExnXFM+vD/uGFVSlR61Kzj9FaxUqBC6Rv/kwgA7qVWYUEI9c5ZNqCuO9PM4rKg==",
-      "license": "Apache-2.0",
-      "peerDependencies": {
-        "zod": "^3.25.0 || ^4.0.0"
       }
     },
     "node_modules/ajv": {
@@ -1834,9 +1825,9 @@
       }
     },
     "node_modules/qs": {
-      "version": "6.14.2",
-      "resolved": "https://registry.npmjs.org/qs/-/qs-6.14.2.tgz",
-      "integrity": "sha512-V/yCWTTF7VJ9hIh18Ugr2zhJMP01MY7c5kh4J870L7imm6/DIzBsNLTXzMwUA3yZ5b/KBqLx8Kp3uRvd7xSe3Q==",
+      "version": "6.15.2",
+      "resolved": "https://registry.npmjs.org/qs/-/qs-6.15.2.tgz",
+      "integrity": "sha512-Rzq0KEyX/w/tEybncDgdkZrJgVUsUMk3xjh3t5bv3S1HTAtg+uOYt72+ZfwiQwKdysThkTBdL/rTi6HDmX9Ddw==",
       "license": "BSD-3-Clause",
       "dependencies": {
         "side-channel": "^1.1.0"

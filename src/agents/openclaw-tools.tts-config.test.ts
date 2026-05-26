@@ -17,6 +17,9 @@ const mocks = vi.hoisted(() => {
   return {
     stubTool,
     createCronToolOptions: vi.fn(),
+    createImageGenerateToolOptions: vi.fn(),
+    createMusicGenerateToolOptions: vi.fn(),
+    createVideoGenerateToolOptions: vi.fn(),
     textToSpeech: vi.fn(async () => ({
       success: true,
       audioPath: "/tmp/openclaw/tts-config-test.opus",
@@ -50,7 +53,10 @@ vi.mock("./tools/gateway-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-generate-tool.js", () => ({
-  createImageGenerateTool: () => mocks.stubTool("image_generate"),
+  createImageGenerateTool: (options: unknown) => {
+    mocks.createImageGenerateToolOptions(options);
+    return mocks.stubTool("image_generate");
+  },
 }));
 
 vi.mock("./tools/image-tool.js", () => ({
@@ -62,7 +68,10 @@ vi.mock("./tools/message-tool.js", () => ({
 }));
 
 vi.mock("./tools/music-generate-tool.js", () => ({
-  createMusicGenerateTool: () => mocks.stubTool("music_generate"),
+  createMusicGenerateTool: (options: unknown) => {
+    mocks.createMusicGenerateToolOptions(options);
+    return mocks.stubTool("music_generate");
+  },
 }));
 
 vi.mock("./tools/nodes-tool.js", () => ({
@@ -106,7 +115,10 @@ vi.mock("./tools/update-plan-tool.js", () => ({
 }));
 
 vi.mock("./tools/video-generate-tool.js", () => ({
-  createVideoGenerateTool: () => mocks.stubTool("video_generate"),
+  createVideoGenerateTool: (options: unknown) => {
+    mocks.createVideoGenerateToolOptions(options);
+    return mocks.stubTool("video_generate");
+  },
 }));
 
 vi.mock("./tools/web-tools.js", () => ({
@@ -134,6 +146,9 @@ function getTextToSpeechParams() {
 describe("createOpenClawTools TTS config wiring", () => {
   beforeEach(() => {
     mocks.createCronToolOptions.mockClear();
+    mocks.createImageGenerateToolOptions.mockClear();
+    mocks.createMusicGenerateToolOptions.mockClear();
+    mocks.createVideoGenerateToolOptions.mockClear();
     mocks.textToSpeech.mockClear();
   });
 
@@ -263,6 +278,74 @@ describe("createOpenClawTools TTS config wiring", () => {
     } finally {
       testing.setDepsForTest();
     }
+  });
+});
+
+describe("createOpenClawTools media generation session wiring", () => {
+  beforeEach(() => {
+    mocks.createImageGenerateToolOptions.mockClear();
+    mocks.createMusicGenerateToolOptions.mockClear();
+    mocks.createVideoGenerateToolOptions.mockClear();
+  });
+
+  it("uses the isolated cron run key for background media completions", () => {
+    const config = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+          videoGenerationModel: { primary: "video-owner/model" },
+          musicGenerationModel: { primary: "music-owner/model" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:main:cron:daily-media",
+      runSessionKey: "agent:main:cron:daily-media:run:run-123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
+    expect(mocks.createVideoGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
+    expect(mocks.createMusicGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
+  });
+
+  it("keeps the requester session key for non-cron media completions", () => {
+    const config = {
+      agents: {
+        defaults: {
+          imageGenerationModel: { primary: "image-owner/model" },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    createOpenClawTools({
+      config,
+      agentSessionKey: "agent:main:slack:channel:C123",
+      runSessionKey: "agent:main:slack:channel:C123:run:run-123",
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(mocks.createImageGenerateToolOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:main:slack:channel:C123",
+      }),
+    );
   });
 });
 

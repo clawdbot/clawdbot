@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter, testApi } from "./service.js";
 
@@ -94,7 +95,38 @@ describe("diagnostics-prometheus service", () => {
     expect(testApi.renderPrometheusMetrics(store)).toBe("");
   });
 
-  it("records trusted async diagnostic queue drop summaries", () => {
+  it("drops untrusted plugin-emitted diagnostic events that spoof gateway stability signals", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    for (const event of [
+      {
+        ...baseEvent(),
+        type: "webhook.received",
+        channel: "telegram",
+        updateType: "message",
+      },
+      {
+        ...baseEvent(),
+        type: "payload.large",
+        surface: "gateway.frame",
+        action: "rejected",
+        bytes: 2048,
+      },
+      {
+        ...baseEvent(),
+        type: "session.stuck",
+        state: "processing",
+        ageMs: 12_000,
+        classification: "stale_session_state",
+      },
+    ] satisfies DiagnosticEventPayload[]) {
+      testApi.recordDiagnosticEvent(store, event, untrusted);
+    }
+
+    expect(testApi.renderPrometheusMetrics(store)).toBe("");
+  });
+
+  it("records sanitized async diagnostic queue drop summaries from core diagnostics", () => {
     const store = testApi.createPrometheusMetricStore();
 
     testApi.recordDiagnosticEvent(
@@ -147,6 +179,166 @@ describe("diagnostics-prometheus service", () => {
       'openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool",tool_owner="none",tool_source="core"} 1',
     );
     expect(rendered).not.toContain("Bearer");
+    expect(rendered).not.toContain("sk-secret");
+  });
+
+  it("records operator-critical diagnostic signals missing from generic run metrics", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    for (const event of [
+      {
+        ...baseEvent(),
+        type: "tool.execution.blocked",
+        toolName: "browser",
+        toolSource: "mcp",
+        toolOwner: "browser-tools",
+        deniedReason: "tools.deny",
+        reason: "matched browser",
+        paramsSummary: { kind: "object" },
+      },
+      {
+        ...baseEvent(),
+        type: "model.failover",
+        lane: "session:Agent:qa:otel-trace-smoke",
+        fromProvider: "anthropic",
+        fromModel: "claude-opus-4-6",
+        toProvider: "openai",
+        toModel: "gpt-5.4",
+        reason: "overloaded",
+        suspended: true,
+      },
+    ] satisfies DiagnosticEventPayload[]) {
+      testApi.recordDiagnosticEvent(store, event, trusted);
+    }
+    for (const event of [
+      {
+        ...baseEvent(),
+        type: "session.stuck",
+        sessionId: "session-should-not-export",
+        sessionKey: "key-should-not-export",
+        state: "processing",
+        ageMs: 12_000,
+        classification: "stale_session_state",
+        reason: "startup-sweep",
+      },
+      {
+        ...baseEvent(),
+        type: "payload.large",
+        surface: "gateway.frame",
+        action: "rejected",
+        bytes: 2048,
+        limitBytes: 1024,
+        channel: "web",
+        pluginId: "agent:qa:otel-trace-smoke",
+        reason: "body-too-large",
+      },
+    ] satisfies DiagnosticEventPayload[]) {
+      testApi.recordDiagnosticEvent(store, event, trusted);
+    }
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_tool_execution_blocked_total{denied_reason="tools.deny",params_kind="object",tool="browser",tool_owner="browser-tools",tool_source="mcp"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_model_failover_total{from_model="claude-opus-4-6",from_provider="anthropic",lane="session",reason="overloaded",suspended="true",to_model="gpt-5.4",to_provider="openai"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_stuck_total{reason="startup-sweep",state="processing"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_stuck_age_seconds_sum{reason="startup-sweep",state="processing"} 12',
+    );
+    expect(rendered).toContain(
+      'openclaw_payload_large_total{action="rejected",channel="web",plugin="none",reason="body-too-large",surface="gateway.frame"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_payload_large_bytes_sum{action="rejected",channel="web",plugin="none",reason="body-too-large",surface="gateway.frame"} 2048',
+    );
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("key-should-not-export");
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
+  });
+
+  it("records webhook ingress and liveness warning metrics", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "webhook.received",
+        channel: "telegram",
+        updateType: "message",
+        chatId: "chat-should-not-export",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "webhook.processed",
+        channel: "telegram",
+        updateType: "message",
+        chatId: "chat-should-not-export",
+        durationMs: 250,
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "webhook.error",
+        channel: "telegram",
+        updateType: "message",
+        chatId: "chat-should-not-export",
+        error: "Bearer sk-secret",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "diagnostic.liveness.warning",
+        reasons: ["event_loop_delay", "cpu"],
+        intervalMs: 30_000,
+        eventLoopDelayP99Ms: 250,
+        eventLoopDelayMaxMs: 900,
+        eventLoopUtilization: 0.95,
+        cpuCoreRatio: 1.4,
+        active: 2,
+        waiting: 1,
+        queued: 4,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_webhook_received_total{channel="telegram",webhook="message"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_webhook_error_total{channel="telegram",webhook="message"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_webhook_duration_seconds_sum{channel="telegram",webhook="message"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_liveness_warning_total{reason="event_loop_delay:cpu"} 1',
+    );
+    expect(rendered).toContain('openclaw_liveness_sessions{state="active"} 2');
+    expect(rendered).toContain(
+      'openclaw_liveness_event_loop_delay_p99_seconds_sum{reason="event_loop_delay:cpu"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_liveness_cpu_core_ratio_sum{reason="event_loop_delay:cpu"} 1.4',
+    );
+    expect(rendered).not.toContain("chat-should-not-export");
     expect(rendered).not.toContain("sk-secret");
   });
 
@@ -475,7 +667,11 @@ describe("diagnostics-prometheus service", () => {
 
   it("subscribes to internal diagnostics and renders scrape text", () => {
     const listeners: Array<
-      (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => void
+      (
+        event: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
+      ) => void
     > = [];
     const emitted: unknown[] = [];
     const exporter = createDiagnosticsPrometheusExporter();
@@ -509,6 +705,7 @@ describe("diagnostics-prometheus service", () => {
         usage: { input: 12, output: 3, total: 15 },
       },
       trusted,
+      {},
     );
 
     expect(emitted).toStrictEqual([

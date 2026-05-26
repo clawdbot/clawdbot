@@ -61,6 +61,7 @@ import {
 } from "./task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import { DEFAULT_TASK_RETENTION_MS, LOST_TASK_RETENTION_MS } from "./task-retention.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 const hoisted = vi.hoisted(() => {
@@ -1875,7 +1876,9 @@ describe("task-registry", () => {
         status: "lost",
         error: "backing session missing",
       });
-      expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
+      const lostTask = getTaskById(task.taskId);
+      expect(lostTask?.cleanupAfter).toBeGreaterThan(now);
+      expect((lostTask?.cleanupAfter ?? 0) - (lostTask?.endedAt ?? 0)).toBe(LOST_TASK_RETENTION_MS);
       const summary = getInspectableTaskAuditSummary();
       expectRecordFields(summary, {
         errors: 0,
@@ -2602,6 +2605,41 @@ describe("task-registry", () => {
       status: "succeeded",
       cleanupAfter: now + 60_000,
     });
+  });
+
+  it("prunes retained lost tasks once the shorter lost retention window expires", async () => {
+    const now = Date.now();
+    const endedAt = now - LOST_TASK_RETENTION_MS - 1;
+    const snapshotTask = createTaskRecord({
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: "agent:main:main",
+      runId: "run-old-lost-cleanup",
+      task: "Old lost task",
+      status: "lost",
+      deliveryStatus: "not_applicable",
+      startedAt: endedAt - 1,
+    });
+    const staleTask = {
+      ...snapshotTask,
+      endedAt,
+      lastEventAt: endedAt,
+      cleanupAfter: endedAt + DEFAULT_TASK_RETENTION_MS,
+    };
+    const currentTasks = new Map([[snapshotTask.taskId, staleTask]]);
+    configureTaskRegistryMaintenanceRuntimeForTest({
+      currentTasks,
+      snapshotTasks: [staleTask],
+    });
+
+    expect(await sweepTaskRegistry()).toEqual({
+      reconciled: 0,
+      recovered: 0,
+      cleanupStamped: 0,
+      pruned: 1,
+    });
+    expect(currentTasks.has(snapshotTask.taskId)).toBe(false);
   });
 
   it("backdates createdAt when a task is created with an earlier startedAt", async () => {

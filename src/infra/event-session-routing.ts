@@ -10,6 +10,7 @@ import {
 import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "../security/dm-policy-shared.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -30,10 +31,6 @@ type DirectSessionTarget = {
   accountId?: string;
   peerId: string;
 };
-
-function isRecord(value: unknown): value is UnknownRecord {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function readAllowFrom(value: unknown): Array<string | number> | undefined {
   if (!isRecord(value)) {

@@ -307,7 +307,36 @@ jobs:
             exit 1
           fi
           report_md="${report_json%.json}.md"
+          effective_status="$status"
+          if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
+            if REPORT_JSON="$report_json" node <<'NODE'
+          const fs = require("node:fs");
+          const report = JSON.parse(fs.readFileSync(process.env.REPORT_JSON, "utf8"));
+          const statuses = report.summary?.statuses ?? {};
+          const nonPassStatuses = Object.entries(statuses)
+            .filter(([status, count]) => status !== "PASS" && Number(count) > 0);
+          const baselineRegressionCount =
+            Number(report.baseline?.comparison?.regressionCount ?? report.gate?.baseline?.regressionCount ?? 0);
+          const gate = report.gate;
+          const toleratedPartial =
+            gate?.verdict === "PARTIAL" &&
+            Number(gate.blockingCount ?? 0) === 0 &&
+            baselineRegressionCount === 0 &&
+            nonPassStatuses.length === 0;
+          if (!toleratedPartial) {
+            process.exit(1);
+          }
+          NODE
+            then
+              effective_status=0
+              {
+                echo "Kova returned a partial release-gate verdict for filtered performance coverage, but all selected scenarios passed and no baseline regression was reported."
+                echo
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
+          echo "effective_status=$effective_status" >> "$GITHUB_OUTPUT"
           echo "report_json=$report_json" >> "$GITHUB_OUTPUT"
           echo "report_md=$report_md" >> "$GITHUB_OUTPUT"
 
@@ -344,8 +373,43 @@ jobs:
           EOF
           cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
 
-          if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
-            exit "$status"
+          if [[ "$FAIL_ON_REGRESSION" == "true" && "$effective_status" != "0" ]]; then
+            exit "$effective_status"
+          fi
+
+      - name: Fetch previous source performance baseline
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.lane == 'mock-provider' && steps.clawgrit.outputs.present == 'true' }}
+        env:
+          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reports_root=".artifacts/clawgrit-baseline"
+          mkdir -p "$reports_root"
+          git -C "$reports_root" init -b main
+          git -C "$reports_root" remote add origin "https://x-access-token:${CLAWGRIT_REPORTS_TOKEN}@github.com/openclaw/clawgrit-reports.git"
+          if ! git -C "$reports_root" fetch --depth=1 origin main; then
+            echo "No previous source performance baseline could be fetched." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git -C "$reports_root" checkout -B main FETCH_HEAD
+          ref_slug="$(printf '%s' "${TESTED_REF}" | tr -c 'A-Za-z0-9._-' '-')"
+          pointer="${reports_root}/openclaw-performance/${ref_slug}/latest-mock-provider.json"
+          if [[ ! -f "$pointer" ]]; then
+            echo "No previous source performance baseline exists for ${TESTED_REF}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if ! latest_path="$(node -e "const fs=require('node:fs'); const data=JSON.parse(fs.readFileSync(process.argv[1],'utf8')); const value=String(data.path || ''); if (!/^openclaw-performance\\/[A-Za-z0-9._-]+\\/[0-9]+-[0-9]+\\/mock-provider$/u.test(value)) process.exit(1); process.stdout.write(value);" "$pointer")"; then
+            echo "Previous source performance baseline pointer is invalid." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          baseline_source="${reports_root}/${latest_path}/source"
+          if [[ -d "$baseline_source" ]]; then
+            baseline_source="$(realpath "$baseline_source")"
+            echo "SOURCE_PERF_BASELINE_DIR=$baseline_source" >> "$GITHUB_ENV"
+            echo "Using source performance baseline: ${latest_path}/source" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Previous source performance baseline has no source directory." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Run OpenClaw source performance probes
@@ -359,7 +423,7 @@ jobs:
           fi
 
           mkdir -p "$SOURCE_PERF_DIR/mock-hello"
-          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts.openclaw && fs.existsSync('scripts/bench-cli-startup.ts') ? 0 : 1)"; then
+          if ! node -e "const fs=require('node:fs'); const scripts=require('./package.json').scripts||{}; process.exit(scripts['test:gateway:cpu-scenarios'] && scripts['test:extensions:memory'] && scripts.openclaw && fs.existsSync('scripts/bench-cli-startup.ts') && fs.existsSync('scripts/profile-extension-memory.mjs') ? 0 : 1)"; then
             cat > "$SOURCE_PERF_DIR/index.md" <<EOF
           # OpenClaw Source Performance
 
@@ -371,7 +435,7 @@ jobs:
 
           - Tested ref: ${TESTED_REF}
           - Tested SHA: ${TESTED_SHA}
-          - Required scripts: test:gateway:cpu-scenarios, openclaw, scripts/bench-cli-startup.ts
+          - Required scripts: test:gateway:cpu-scenarios, test:extensions:memory, openclaw, scripts/bench-cli-startup.ts, scripts/profile-extension-memory.mjs
           EOF
             cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -390,6 +454,9 @@ jobs:
             --startup-case allInternalHooks \
             --startup-case fiftyPlugins \
             --startup-case fiftyStartupLazyPlugins
+
+          pnpm test:extensions:memory \
+            -- --json "$SOURCE_PERF_DIR/extension-memory.json"
 
           for run_index in $(seq 1 "$source_runs"); do
             run_dir="$SOURCE_PERF_DIR/mock-hello/run-$(printf '%03d' "$run_index")"
@@ -460,9 +527,13 @@ jobs:
           cleanup_gateway
           trap - EXIT
 
-          node "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mjs" \
+          summary_args=(node "$PERFORMANCE_HELPER_DIR/scripts/openclaw-performance-source-summary.mjs" \
             --source-dir "$SOURCE_PERF_DIR" \
-            --output "$SOURCE_PERF_DIR/index.md"
+            --output "$SOURCE_PERF_DIR/index.md")
+          if [[ -n "${SOURCE_PERF_BASELINE_DIR:-}" && -d "$SOURCE_PERF_BASELINE_DIR" ]]; then
+            summary_args+=(--baseline-source-dir "$SOURCE_PERF_BASELINE_DIR")
+          fi
+          "${summary_args[@]}"
 
           cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
 

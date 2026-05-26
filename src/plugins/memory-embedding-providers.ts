@@ -62,6 +62,7 @@ export type MemoryEmbeddingProviderCreateOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    contextSize?: number | "auto";
   };
   outputDimensionality?: number;
   taskType?:

@@ -15,7 +15,95 @@ type MemoryResolvedProviderState = {
   fallbackReason?: string;
   providerUnavailableReason?: string;
   providerRuntime?: EmbeddingProviderRuntime;
+  lifecycle: MemoryProviderLifecycleState;
 };
+
+export type MemoryProviderLifecycleState =
+  | {
+      mode: "pending";
+      requestedProvider: string;
+    }
+  | {
+      mode: "active";
+      providerId: string;
+    }
+  | {
+      mode: "degraded";
+      providerId: string;
+      reason: string;
+      code?: string;
+    }
+  | {
+      mode: "fallback-active";
+      providerId: string;
+      fallbackFrom: string;
+      reason: string;
+    }
+  | {
+      mode: "fts-only";
+      reason: string;
+      attemptedProviderId?: string;
+    };
+
+export function createPendingMemoryProviderLifecycle(
+  requestedProvider: string,
+): MemoryProviderLifecycleState {
+  return { mode: "pending", requestedProvider };
+}
+
+export function createDegradedMemoryProviderLifecycle(params: {
+  providerId: string;
+  reason: string;
+  code?: string;
+}): MemoryProviderLifecycleState {
+  return {
+    mode: "degraded",
+    providerId: params.providerId,
+    reason: params.reason,
+    ...(params.code ? { code: params.code } : {}),
+  };
+}
+
+function resolveProviderLifecycle(
+  result: Pick<
+    EmbeddingProviderResult,
+    | "provider"
+    | "fallbackFrom"
+    | "fallbackReason"
+    | "providerUnavailableReason"
+    | "requestedProvider"
+  >,
+): MemoryProviderLifecycleState {
+  if (result.provider && result.fallbackFrom) {
+    return {
+      mode: "fallback-active",
+      providerId: result.provider.id,
+      fallbackFrom: result.fallbackFrom,
+      reason: result.fallbackReason ?? "fallback activated",
+    };
+  }
+  if (result.provider) {
+    return { mode: "active", providerId: result.provider.id };
+  }
+  return {
+    mode: "fts-only",
+    reason: result.providerUnavailableReason ?? "No embedding provider available",
+    attemptedProviderId: result.requestedProvider,
+  };
+}
+
+export function resolveFallbackCurrentProviderId(params: {
+  provider: EmbeddingProvider | null;
+  lifecycle: MemoryProviderLifecycleState;
+}): string | null {
+  if (params.provider) {
+    return params.provider.id;
+  }
+  if (params.lifecycle.mode === "degraded") {
+    return params.lifecycle.providerId;
+  }
+  return null;
+}
 
 export function resolveMemoryPrimaryProviderRequest(params: {
   settings: ResolvedMemorySearchConfig;
@@ -46,7 +134,12 @@ export function resolveMemoryPrimaryProviderRequest(params: {
 export function resolveMemoryProviderState(
   result: Pick<
     EmbeddingProviderResult,
-    "provider" | "fallbackFrom" | "fallbackReason" | "providerUnavailableReason" | "runtime"
+    | "provider"
+    | "fallbackFrom"
+    | "fallbackReason"
+    | "providerUnavailableReason"
+    | "runtime"
+    | "requestedProvider"
   >,
 ): MemoryResolvedProviderState {
   return {
@@ -55,6 +148,7 @@ export function resolveMemoryProviderState(
     fallbackReason: result.fallbackReason,
     providerUnavailableReason: result.providerUnavailableReason,
     providerRuntime: result.runtime,
+    lifecycle: resolveProviderLifecycle(result),
   };
 }
 
@@ -68,8 +162,21 @@ export function applyMemoryFallbackProviderState(params: {
     ...params.current,
     fallbackFrom: params.fallbackFrom,
     fallbackReason: params.reason,
+    providerUnavailableReason: undefined,
     provider: params.result.provider,
     providerRuntime: params.result.runtime,
+    lifecycle: params.result.provider
+      ? {
+          mode: "fallback-active",
+          providerId: params.result.provider.id,
+          fallbackFrom: params.fallbackFrom,
+          reason: params.reason,
+        }
+      : {
+          mode: "fts-only",
+          reason: params.reason,
+          attemptedProviderId: params.fallbackFrom,
+        },
   };
 }
 

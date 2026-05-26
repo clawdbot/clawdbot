@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -108,7 +109,7 @@ export function resolveManifestActivationPlan(
 
   return {
     trigger: params.trigger,
-    pluginIds: [...new Set(entries.map((entry) => entry.pluginId))],
+    pluginIds: uniqueStrings(entries.map((entry) => entry.pluginId)),
     entries,
     diagnostics: registry.diagnostics,
   };

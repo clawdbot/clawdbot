@@ -21,6 +21,11 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  asBoolean,
+  asFiniteNumber,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -807,9 +812,7 @@ export class CodexAppServerEventProjector {
   }
 
   private buildToolMediaUrls(toolTelemetry: CodexAppServerToolTelemetry): string[] | undefined {
-    const mediaUrls = new Set(
-      toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
-    );
+    const mediaUrls = new Set(normalizeStringEntries(toolTelemetry.toolMediaUrls ?? []));
     if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
       for (const mediaUrl of this.nativeGeneratedMediaUrls) {
         mediaUrls.add(mediaUrl);
@@ -1581,13 +1584,11 @@ function readNullableString(record: JsonObject, key: string): string | null | un
 }
 
 function readNumber(record: JsonObject, key: string): number | undefined {
-  const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(record[key]);
 }
 
 function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
+  return asBoolean(record[key]);
 }
 
 function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean | undefined {

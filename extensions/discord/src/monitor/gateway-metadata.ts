@@ -24,6 +24,10 @@ export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
 ) => Promise<DiscordGatewayMetadataResponse>;
+export type DiscordGatewayMetadataFetchOptions = {
+  capture?: false | { flowId: string; meta: Record<string, unknown> };
+  proxyUrl?: string;
+};
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 
@@ -265,10 +269,10 @@ export function resolveGatewayInfoWithFallback(params: { runtime?: RuntimeEnv; e
   };
 }
 
-export async function fetchDiscordGatewayMetadataDirect(
+export async function fetchDiscordGatewayMetadataGuarded(
   input: string,
   init?: DiscordGatewayFetchInit,
-  capture?: false | { flowId: string; meta: Record<string, unknown> },
+  options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
   const guarded = await fetchWithSsrFGuard({
     url: resolveFetchInputUrl(input),
@@ -276,6 +280,16 @@ export async function fetchDiscordGatewayMetadataDirect(
     policy: { allowedHostnames: [DISCORD_API_HOST] },
     capture: false,
     auditContext: "discord.gateway.metadata",
+    ...(options?.proxyUrl
+      ? {
+          mode: "trusted_explicit_proxy" as const,
+          dispatcherPolicy: {
+            mode: "explicit-proxy" as const,
+            proxyUrl: options.proxyUrl,
+            allowPrivateProxy: true,
+          },
+        }
+      : {}),
   });
   let response: Response;
   try {
@@ -283,15 +297,15 @@ export async function fetchDiscordGatewayMetadataDirect(
   } finally {
     await guarded.release();
   }
-  if (capture) {
+  if (options?.capture) {
     captureHttpExchange({
       url: input,
       method: (init?.method as string | undefined) ?? "GET",
       requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
       requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
       response,
-      flowId: capture.flowId,
-      meta: capture.meta,
+      flowId: options.capture.flowId,
+      meta: options.capture.meta,
     });
   }
   return response;

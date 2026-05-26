@@ -177,7 +177,8 @@ export function parseAt(input: string, tz?: string): string | null {
   if (absolute !== null) {
     return new Date(absolute).toISOString();
   }
-  const dur = parseDurationMs(raw);
+  const durationInput = raw.startsWith("+") ? raw.slice(1) : raw;
+  const dur = parseDurationMs(durationInput);
   if (dur !== null) {
     return new Date(Date.now() + dur).toISOString();
   }

@@ -1,6 +1,9 @@
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { SessionKind } from "../sessions/classify-session-kind.js";
-import type { TaskAuditSummary } from "../tasks/task-registry.audit.js";
+import type {
+  RetainedLostTaskAuditSummary,
+  TaskAuditSummary,
+} from "../tasks/task-registry.audit.js";
 import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 export type SessionStatus = {
@@ -59,6 +62,7 @@ export type StatusSummary = {
   queuedSystemEvents: string[];
   tasks: TaskRegistrySummary;
   taskAudit: TaskAuditSummary;
+  taskAuditRetainedLost?: RetainedLostTaskAuditSummary;
   sessions: {
     paths: string[];
     count: number;

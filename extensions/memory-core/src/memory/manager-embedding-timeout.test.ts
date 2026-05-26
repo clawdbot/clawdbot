@@ -4,6 +4,10 @@ import {
   resolveMemoryIndexConcurrency,
   runEmbeddingOperationWithTimeout,
 } from "./manager-embedding-ops.js";
+import {
+  isLocalEmbeddingWorkerFailure,
+  LOCAL_EMBEDDING_WORKER_ERROR_CODES,
+} from "./manager-local-worker-errors.js";
 
 describe("memory embedding timeout resolution", () => {
   it("uses hosted defaults for inline embedding calls", () => {
@@ -35,6 +39,34 @@ describe("memory embedding timeout resolution", () => {
         configuredBatchTimeoutSeconds: 45,
       }),
     ).toBe(45_000);
+  });
+});
+
+describe("local embedding worker failure detection", () => {
+  it("matches structured local worker failure codes", () => {
+    expect(
+      isLocalEmbeddingWorkerFailure(
+        Object.assign(new Error("Local embedding worker exited unexpectedly (exit code 134)"), {
+          code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.exited,
+          reason: "exit",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isLocalEmbeddingWorkerFailure(
+        Object.assign(new Error("Local embedding worker process failed"), {
+          code: LOCAL_EMBEDDING_WORKER_ERROR_CODES.processError,
+          reason: "process-error",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      isLocalEmbeddingWorkerFailure(
+        Object.assign(new Error("Local embedding request aborted"), {
+          code: "ABORT_ERR",
+        }),
+      ),
+    ).toBe(false);
   });
 });
 

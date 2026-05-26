@@ -1,3 +1,4 @@
+import { sortUniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 
 export type TokenEfficiencyRuntimeUsage = {
@@ -113,9 +114,7 @@ function runtimeUsage(cell: RuntimeParityCell): TokenEfficiencyRuntimeUsage {
 }
 
 function toolNamesForCells(pi: RuntimeParityCell, codex: RuntimeParityCell): string[] {
-  return [...new Set([...pi.toolCalls, ...codex.toolCalls].map((call) => call.tool))].toSorted(
-    (left, right) => left.localeCompare(right),
-  );
+  return sortUniqueStrings([...pi.toolCalls, ...codex.toolCalls].map((call) => call.tool));
 }
 
 function buildRow(params: {

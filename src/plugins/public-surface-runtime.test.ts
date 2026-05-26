@@ -70,6 +70,45 @@ describe("bundled plugin public surface runtime", () => {
     ).toBe(sourceModulePath);
   });
 
+  it("prefers source public surfaces over stale auto-resolved dist artifacts in source checkouts", () => {
+    const packageRoot = createTempDir();
+    const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
+    const staleDistModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
+    fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
+    fs.mkdirSync(path.dirname(staleDistModulePath), { recursive: true });
+    fs.writeFileSync(sourceModulePath, "export const marker = 'source';\n", "utf8");
+    fs.writeFileSync(staleDistModulePath, "export const marker = 'stale-dist';\n", "utf8");
+
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        rootDir: packageRoot,
+        bundledPluginsDir: path.join(packageRoot, "dist", "extensions"),
+        bundledPluginsDirMode: "auto",
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toBe(sourceModulePath);
+  });
+
+  it("keeps explicit bundled dist roots ahead of source public surfaces", () => {
+    const packageRoot = createTempDir();
+    const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
+    const distModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");
+    fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
+    fs.mkdirSync(path.dirname(distModulePath), { recursive: true });
+    fs.writeFileSync(sourceModulePath, "export const marker = 'source';\n", "utf8");
+    fs.writeFileSync(distModulePath, "export const marker = 'dist';\n", "utf8");
+
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        rootDir: packageRoot,
+        bundledPluginsDir: path.join(packageRoot, "dist", "extensions"),
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toBe(distModulePath);
+  });
+
   it("falls back from an incomplete package dist-runtime override to packaged dist", () => {
     const packageRoot = createTempDir();
     const distModulePath = path.join(packageRoot, "dist", "extensions", "demo", "api.js");

@@ -10,6 +10,7 @@ import {
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProviderCapabilities,
@@ -159,7 +160,7 @@ export function extractDashscopeVideoUrls(payload: DashscopeVideoGenerationRespo
     ...(payload.output?.results?.map((entry) => entry.video_url).filter(Boolean) ?? []),
     payload.output?.video_url,
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
-  return [...new Set(urls)];
+  return uniqueStrings(urls);
 }
 
 export async function pollDashscopeVideoTaskUntilComplete(params: {

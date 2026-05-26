@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
@@ -233,10 +234,7 @@ function parseNpmPackJsonOutput(
 }
 
 function parsePackedArchiveFromStdout(stdout: string): string | undefined {
-  const lines = stdout
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(stdout.split(/\r?\n/));
 
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];

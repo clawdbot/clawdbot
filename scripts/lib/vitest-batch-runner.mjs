@@ -16,15 +16,7 @@ export async function runVitestBatch(params) {
       cwd: repoRoot,
       detached: shouldUseDetachedVitestProcessGroup(),
       env: params.env,
-      pnpmArgs: [
-        "exec",
-        "vitest",
-        "run",
-        "--config",
-        params.config,
-        ...params.targets,
-        ...params.args,
-      ],
+      pnpmArgs: buildVitestBatchPnpmArgs(params),
       stdio: "inherit",
     });
     const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
@@ -42,6 +34,10 @@ export async function runVitestBatch(params) {
       resolve(code ?? 1);
     });
   });
+}
+
+export function buildVitestBatchPnpmArgs(params) {
+  return ["exec", "vitest", "run", "--config", params.config, ...params.args, ...params.targets];
 }
 
 export function isDirectScriptRun(metaUrl) {

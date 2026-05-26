@@ -606,6 +606,16 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("sets the OpenClaw-owned launchd marker for macOS gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user" },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
+  });
+
   it("passes through OPENCLAW_WRAPPER for gateway services", () => {
     const env = buildServiceEnvironment({
       env: {
@@ -673,6 +683,16 @@ describe("buildServiceEnvironment", () => {
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
     }
+  });
+
+  it("sets a profile-specific launchd marker for macOS gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", OPENCLAW_PROFILE: "work" },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
   });
 
   it("does not persist ambient proxy environment variables for launchd/systemd runtime", () => {
@@ -754,6 +774,15 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.HOME).toBe("/home/user");
+  });
+
+  it("sets the OpenClaw-owned launchd marker for macOS node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user" },
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.node");
   });
 
   it("passes through OPENCLAW_GATEWAY_TOKEN for node services", () => {

@@ -1,6 +1,18 @@
 const TELEPHONY_SAMPLE_RATE = 8000;
 const RESAMPLE_FILTER_TAPS = 31;
 const RESAMPLE_CUTOFF_GUARD = 0.94;
+const RESAMPLE_MAX_PRECOMPUTED_PHASES = 4096;
+const RESAMPLE_HALF_TAPS = Math.floor(RESAMPLE_FILTER_TAPS / 2);
+const RESAMPLE_WINDOW = Array.from(
+  { length: RESAMPLE_FILTER_TAPS },
+  (_, tapIndex) => 0.5 - 0.5 * Math.cos((2 * Math.PI * tapIndex) / (RESAMPLE_FILTER_TAPS - 1)),
+);
+
+type ResampleKernel = {
+  coefficients: readonly Float64Array[];
+  inputStep: number;
+  phaseCount: number;
+};
 
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
@@ -13,18 +25,83 @@ function sinc(x: number): number {
   return Math.sin(Math.PI * x) / (Math.PI * x);
 }
 
+function gcd(left: number, right: number): number {
+  let a = Math.abs(Math.trunc(left));
+  let b = Math.abs(Math.trunc(right));
+  while (b !== 0) {
+    const next = a % b;
+    a = b;
+    b = next;
+  }
+  return a || 1;
+}
+
+function buildResampleKernel(
+  inputSampleRate: number,
+  outputSampleRate: number,
+  cutoffCyclesPerSample: number,
+): ResampleKernel | undefined {
+  if (!Number.isInteger(inputSampleRate) || !Number.isInteger(outputSampleRate)) {
+    return undefined;
+  }
+  const divisor = gcd(inputSampleRate, outputSampleRate);
+  const inputStep = inputSampleRate / divisor;
+  const phaseCount = outputSampleRate / divisor;
+  if (phaseCount > RESAMPLE_MAX_PRECOMPUTED_PHASES) {
+    return undefined;
+  }
+  const coefficients = Array.from({ length: phaseCount }, (_, phaseIndex) => {
+    const phase = phaseIndex / phaseCount;
+    const phaseCoefficients = new Float64Array(RESAMPLE_FILTER_TAPS);
+    for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
+      const distance = tap - phase;
+      const lowPass = 2 * cutoffCyclesPerSample * sinc(2 * cutoffCyclesPerSample * distance);
+      const tapIndex = tap + RESAMPLE_HALF_TAPS;
+      phaseCoefficients[tapIndex] = lowPass * (RESAMPLE_WINDOW[tapIndex] ?? 0);
+    }
+    return phaseCoefficients;
+  });
+  return { coefficients, inputStep, phaseCount };
+}
+
+function sampleBandlimitedWithCoefficients(
+  input: Buffer,
+  inputSamples: number,
+  center: number,
+  coefficients: Float64Array,
+): number {
+  let weighted = 0;
+  let weightSum = 0;
+
+  for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
+    const sampleIndex = center + tap;
+    if (sampleIndex < 0 || sampleIndex >= inputSamples) {
+      continue;
+    }
+    const coeff = coefficients[tap + RESAMPLE_HALF_TAPS] ?? 0;
+    weighted += input.readInt16LE(sampleIndex * 2) * coeff;
+    weightSum += coeff;
+  }
+
+  if (weightSum === 0) {
+    const nearest = Math.max(0, Math.min(inputSamples - 1, center));
+    return input.readInt16LE(nearest * 2);
+  }
+
+  return weighted / weightSum;
+}
+
 function sampleBandlimited(
   input: Buffer,
   inputSamples: number,
   srcPos: number,
   cutoffCyclesPerSample: number,
 ): number {
-  const half = Math.floor(RESAMPLE_FILTER_TAPS / 2);
   const center = Math.floor(srcPos);
   let weighted = 0;
   let weightSum = 0;
 
-  for (let tap = -half; tap <= half; tap += 1) {
+  for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
     const sampleIndex = center + tap;
     if (sampleIndex < 0 || sampleIndex >= inputSamples) {
       continue;
@@ -32,9 +109,7 @@ function sampleBandlimited(
 
     const distance = sampleIndex - srcPos;
     const lowPass = 2 * cutoffCyclesPerSample * sinc(2 * cutoffCyclesPerSample * distance);
-    const tapIndex = tap + half;
-    const window = 0.5 - 0.5 * Math.cos((2 * Math.PI * tapIndex) / (RESAMPLE_FILTER_TAPS - 1));
-    const coeff = lowPass * window;
+    const coeff = lowPass * (RESAMPLE_WINDOW[tap + RESAMPLE_HALF_TAPS] ?? 0);
     weighted += input.readInt16LE(sampleIndex * 2) * coeff;
     weightSum += coeff;
   }
@@ -66,10 +141,19 @@ export function resamplePcm(
   const maxCutoff = 0.5;
   const downsampleCutoff = ratio > 1 ? maxCutoff / ratio : maxCutoff;
   const cutoffCyclesPerSample = Math.max(0.01, downsampleCutoff * RESAMPLE_CUTOFF_GUARD);
+  const kernel = buildResampleKernel(inputSampleRate, outputSampleRate, cutoffCyclesPerSample);
 
   for (let i = 0; i < outputSamples; i += 1) {
     const sample = Math.round(
-      sampleBandlimited(input, inputSamples, i * ratio, cutoffCyclesPerSample),
+      kernel
+        ? sampleBandlimitedWithCoefficients(
+            input,
+            inputSamples,
+            Math.floor((i * inputSampleRate) / outputSampleRate),
+            kernel.coefficients[(i * kernel.inputStep) % kernel.phaseCount] ??
+              kernel.coefficients[0],
+          )
+        : sampleBandlimited(input, inputSamples, i * ratio, cutoffCyclesPerSample),
     );
     output.writeInt16LE(clamp16(sample), i * 2);
   }

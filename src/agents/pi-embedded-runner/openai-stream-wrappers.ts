@@ -3,6 +3,7 @@ import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { streamSimple } from "@earendil-works/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import {
   patchCodexNativeWebSearchPayload,
@@ -208,10 +209,6 @@ function shouldStripOpenAICompletionMessageKeys(model: {
       ? (model.compat as { strictMessageKeys?: unknown })
       : undefined;
   return model.api === "openai-completions" && compat?.strictMessageKeys === true;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function hasResponsesWebSearchTool(tools: unknown): boolean {

@@ -1,4 +1,4 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import { parseAccessGroupAllowFromEntry } from "../allow-from.js";
 import type {
   AccessGroupMembershipFact,
@@ -22,7 +22,7 @@ function emptyMatch(): RedactedIngressMatch {
 }
 
 function mergeMatches(matches: readonly RedactedIngressMatch[]): RedactedIngressMatch {
-  const matchedEntryIds = Array.from(new Set(matches.flatMap((match) => match.matchedEntryIds)));
+  const matchedEntryIds = uniqueStrings(matches.flatMap((match) => match.matchedEntryIds));
   return {
     matched: matches.some((match) => match.matched) || matchedEntryIds.length > 0,
     matchedEntryIds,

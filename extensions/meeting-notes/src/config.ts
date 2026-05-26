@@ -1,3 +1,5 @@
+import { normalizeOptionalString as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type MeetingNotesAutoStartConfig = {
   enabled: boolean;
   providerId: string;
@@ -14,10 +16,6 @@ export type MeetingNotesConfig = {
   maxUtterances: number;
   autoStart: MeetingNotesAutoStartConfig[];
 };
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function resolveAutoStart(raw: unknown): MeetingNotesAutoStartConfig[] {
   if (!Array.isArray(raw)) {

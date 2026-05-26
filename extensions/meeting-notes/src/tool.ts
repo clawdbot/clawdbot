@@ -12,6 +12,7 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import { type MeetingNotesAutoStartConfig, resolveMeetingNotesConfig } from "./config.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
@@ -363,7 +364,8 @@ async function statusMeetingNotes(api: OpenClawPluginApi) {
   const providers = [
     manualTranscriptSourceProvider.id,
     ...listMeetingNotesSourceProviders(api.config).map((provider) => provider.id),
-  ].filter((value, index, values) => values.indexOf(value) === index);
+  ];
+  const uniqueProviders = uniqueStrings(providers);
   const active = [...activeSessions.values()].map((entry) => ({
     sessionId: entry.session.sessionId,
     providerId: entry.providerId,
@@ -372,10 +374,10 @@ async function statusMeetingNotes(api: OpenClawPluginApi) {
   }));
   return toolText(
     [
-      `Meeting notes providers: ${providers.length ? providers.join(", ") : "none"}`,
+      `Meeting notes providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
       `Active sessions: ${active.length}`,
     ].join("\n"),
-    { providers, active },
+    { providers: uniqueProviders, active },
   );
 }
 

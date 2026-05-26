@@ -32,6 +32,7 @@ import {
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "../plugins/installs.js";
 import type { PluginPackageInstall } from "../plugins/manifest.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { withTimeout } from "../utils/with-timeout.js";
 import { VERSION } from "../version.js";
@@ -145,7 +146,7 @@ function hasGitWorkspace(workspaceDir?: string): boolean {
 
 function addPluginLoadPath(cfg: OpenClawConfig, pluginPath: string): OpenClawConfig {
   const existing = cfg.plugins?.load?.paths ?? [];
-  const merged = Array.from(new Set([...existing, pluginPath]));
+  const merged = uniqueStrings([...existing, pluginPath]);
   return {
     ...cfg,
     plugins: {

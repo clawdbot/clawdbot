@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearActiveSessionsForShutdownTracker } from "../active-sessions-shutdown-tracker.js";
 
 const configMocks = vi.hoisted(() => ({
   storePath: "",
@@ -62,6 +63,7 @@ describe("agent handler session create events", () => {
   });
 
   afterEach(async () => {
+    clearActiveSessionsForShutdownTracker();
     await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });

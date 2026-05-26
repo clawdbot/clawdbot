@@ -1,3 +1,4 @@
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -171,12 +172,6 @@ function isNotificationForTurn(
 
 function readNotificationTurnId(params: JsonObject): string | undefined {
   return readCodexNotificationTurnId(params);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readString(record: Record<string, unknown> | JsonObject | undefined, key: string) {

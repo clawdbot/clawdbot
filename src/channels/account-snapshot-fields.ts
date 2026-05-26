@@ -1,6 +1,9 @@
 import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
+import { asBoolean } from "../utils/boolean.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
 
 // Read-only status commands project a safe subset of account fields into snapshots
@@ -18,12 +21,12 @@ const CREDENTIAL_STATUS_KEYS = [
 type CredentialStatusKey = (typeof CREDENTIAL_STATUS_KEYS)[number];
 
 function readBoolean(record: Record<string, unknown>, key: string): boolean | undefined {
-  return typeof record[key] === "boolean" ? record[key] : undefined;
+  return asBoolean(record[key]);
 }
 
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function readNullableNumber(
@@ -41,10 +44,9 @@ function readStringArray(record: Record<string, unknown>, key: string): string[]
   if (!Array.isArray(value)) {
     return undefined;
   }
-  const normalized = value
-    .map((entry) => (typeof entry === "string" || typeof entry === "number" ? String(entry) : ""))
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const normalized = normalizeStringEntries(
+    value.map((entry) => (typeof entry === "string" || typeof entry === "number" ? entry : "")),
+  );
   return normalized.length > 0 ? normalized : undefined;
 }
 

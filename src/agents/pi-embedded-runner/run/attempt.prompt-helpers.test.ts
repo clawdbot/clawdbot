@@ -130,6 +130,32 @@ describe("resolvePromptSubmissionSkipReason", () => {
     ).toBe("blank_user_prompt");
   });
 
+  it("treats system/tool-only replay as empty history for blank submissions", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "   ",
+        messages: [
+          { role: "system", content: "runtime-only policy" },
+          { role: "toolResult", content: "old tool output", toolCallId: "call-1" },
+        ],
+        imageCount: 0,
+      }),
+    ).toBe("empty_prompt_history_images");
+  });
+
+  it("treats empty user and assistant placeholders as empty history", () => {
+    expect(
+      resolvePromptSubmissionSkipReason({
+        prompt: "   ",
+        messages: [
+          { role: "user", content: "   " },
+          { role: "assistant", content: [] },
+        ],
+        imageCount: 0,
+      }),
+    ).toBe("empty_prompt_history_images");
+  });
+
   it("allows text or image prompt submissions", () => {
     expect(
       resolvePromptSubmissionSkipReason({

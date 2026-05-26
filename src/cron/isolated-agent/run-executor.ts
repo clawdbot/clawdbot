@@ -190,6 +190,7 @@ export function createCronPromptExecutor(params: {
           const result = await runCliAgent({
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
+            sessionEntry: params.cronSession.sessionEntry,
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,

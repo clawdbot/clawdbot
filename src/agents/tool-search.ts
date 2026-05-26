@@ -9,6 +9,12 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import { isRecord } from "../shared/record-coerce.js";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+  uniqueValues,
+} from "../shared/string-normalization.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -370,10 +376,6 @@ const sessionCatalogs =
   globalToolSearchState[SESSION_CATALOGS_KEY] ??
   (globalToolSearchState[SESSION_CATALOGS_KEY] = new Map<string, ToolSearchCatalogSession>());
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function readToolSearchConfig(config?: OpenClawConfig): Record<string, unknown> {
   const tools = isRecord(config?.tools) ? config.tools : undefined;
   const toolSearch = tools?.toolSearch;
@@ -450,7 +452,7 @@ function sessionCatalogKeys(input: {
   if (input.agentId?.trim()) {
     keys.push(`agent:${input.agentId.trim()}`);
   }
-  return [...new Set(keys)];
+  return uniqueStrings(keys);
 }
 
 function sessionCatalogKey(input: {
@@ -802,7 +804,7 @@ export function registerToolSearchCatalog(params: {
     byId.set(entry.name, entry);
   }
   const next = {
-    entries: [...new Set(byId.values())].toSorted((a, b) => a.id.localeCompare(b.id)),
+    entries: uniqueValues(byId.values()).toSorted((a, b) => a.id.localeCompare(b.id)),
     searchCount: prior?.searchCount ?? 0,
     describeCount: prior?.describeCount ?? 0,
     callCount: prior?.callCount ?? 0,
@@ -850,7 +852,7 @@ function resolveCatalog(ctx: ToolSearchToolContext): ToolSearchCatalogSession {
   if (ctx.runId?.trim()) {
     throw new ToolInputError("Tool Search catalog is unavailable for this run.");
   }
-  const uniqueCatalogs = [...new Set(sessionCatalogs.values())];
+  const uniqueCatalogs = uniqueValues(sessionCatalogs.values());
   if (uniqueCatalogs.length === 1) {
     const catalog = uniqueCatalogs[0];
     if (catalog) {
@@ -879,11 +881,7 @@ function describeEntry(entry: ToolSearchCatalogEntry) {
 }
 
 function tokenize(input: string): string[] {
-  return input
-    .toLowerCase()
-    .split(/[^a-z0-9_./:-]+/u)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9_./:-]+/u));
 }
 
 function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {

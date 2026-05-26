@@ -136,6 +136,39 @@ describe("maybeSendAckReaction", () => {
     expectAckReactionSent("work", cfg);
   });
 
+  it("uses the agent identity emoji when WhatsApp ackReaction has no emoji", async () => {
+    const cfg = {
+      agents: {
+        list: [{ id: "agent", identity: { emoji: "🔥" } }],
+      },
+      channels: {
+        whatsapp: {
+          reactionLevel: "ack",
+          ackReaction: {
+            direct: true,
+            group: "mentions",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const ackReaction = await runAckReaction({ cfg });
+
+    expect(ackReaction?.ackReactionValue).toBe("🔥");
+    await expect(ackReaction?.ackReactionPromise).resolves.toBe(true);
+    expect(hoisted.sendReactionWhatsApp).toHaveBeenCalledWith(
+      "15551234567@s.whatsapp.net",
+      "msg-1",
+      "🔥",
+      {
+        verbose: false,
+        fromMe: false,
+        accountId: "default",
+        cfg,
+      },
+    );
+  });
+
   it("returns a handle that removes the ack with an empty reaction", async () => {
     const cfg = createConfig("ack");
     const ackReaction = await runAckReaction({ cfg });

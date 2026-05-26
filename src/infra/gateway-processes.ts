@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fsSync from "node:fs";
+import { uniqueValues } from "../shared/string-normalization.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import {
@@ -46,7 +47,7 @@ export function findVerifiedGatewayListenerPidsOnPortSync(port: number): number[
       ? readWindowsListeningPidsOnPortSync(port)
       : findUnixGatewayPidsOnPortSync(port);
 
-  return Array.from(new Set(rawPids))
+  return uniqueValues(rawPids)
     .filter((pid): pid is number => Number.isFinite(pid) && pid > 0 && pid !== process.pid)
     .filter((pid) => {
       const args = readGatewayProcessArgsSync(pid);

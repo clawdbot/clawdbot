@@ -3,10 +3,15 @@ import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildConfiguredModelCatalog,
+  resolveThinkingDefault,
+} from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
@@ -81,6 +86,40 @@ const silentRuntime = {
     throw new Error(`embedded tui runtime exit ${String(code)}`);
   },
 };
+
+function hasProviderWildcardModelAllowlist(cfg: OpenClawConfig) {
+  const modelMaps = [
+    cfg.agents?.defaults?.models,
+    ...(cfg.agents?.list?.map((agent) => agent?.models) ?? []),
+  ];
+  return modelMaps.some((models) =>
+    Object.keys(models ?? {}).some((key) => key.trim().endsWith("/*")),
+  );
+}
+
+function resolveConfiguredReplaceModeCatalog(cfg: OpenClawConfig) {
+  if (cfg.models?.mode !== "replace") {
+    return undefined;
+  }
+  if (hasProviderWildcardModelAllowlist(cfg)) {
+    return undefined;
+  }
+  return buildConfiguredModelCatalog({ cfg });
+}
+
+function shouldLoadFullGatewayCatalogForReplaceMode(cfg: OpenClawConfig) {
+  return cfg.models?.mode === "replace" && hasProviderWildcardModelAllowlist(cfg);
+}
+
+async function loadEmbeddedTuiModelCatalog(cfg: OpenClawConfig) {
+  const configuredCatalog = resolveConfiguredReplaceModeCatalog(cfg);
+  if (configuredCatalog !== undefined) {
+    return configuredCatalog;
+  }
+  return await loadGatewayModelCatalog(
+    shouldLoadFullGatewayCatalogForReplaceMode(cfg) ? { readOnly: false } : undefined,
+  );
+}
 
 function resolveBtwQuestion(message: string): string | undefined {
   const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
@@ -338,7 +377,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
     let thinkingLevel = entry?.thinkingLevel;
     if (!thinkingLevel) {
-      const catalog = await loadGatewayModelCatalog();
+      const catalog = await loadEmbeddedTuiModelCatalog(cfg);
       thinkingLevel = resolveThinkingDefault({
         cfg,
         provider: resolvedSessionModel.provider,
@@ -388,7 +427,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
         store,
         storeKey: primaryKey,
         patch: opts,
-        loadGatewayModelCatalog,
+        loadGatewayModelCatalog: () => loadEmbeddedTuiModelCatalog(cfg),
       });
     });
     if (!applied.ok) {
@@ -429,8 +468,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listModels(): Promise<TuiModelChoice[]> {
-    const catalog = await loadGatewayModelCatalog();
     const cfg = getRuntimeConfig();
+    const catalog = await loadEmbeddedTuiModelCatalog(cfg);
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,

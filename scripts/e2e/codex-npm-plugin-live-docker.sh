@@ -20,6 +20,20 @@ PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFI
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-}"
 CODEX_PLUGIN_MOUNT=()
 CODEX_PLUGIN_PACK_DIR=""
+run_log=""
+
+cleanup() {
+  if [ -n "${CODEX_PLUGIN_PACK_DIR:-}" ]; then
+    rm -rf "$CODEX_PLUGIN_PACK_DIR"
+  fi
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-npm-plugin-live "$CANDIDATE_ROOT/scripts/e2e/Dockerfile" "$CANDIDATE_ROOT" "$DOCKER_TARGET"
 
@@ -299,10 +313,8 @@ fi
 echo "Codex npm plugin live Docker E2E passed"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
 awk '/TRANSCRIPT_BEGIN/{printing=1} printing{print} /TRANSCRIPT_END/{printing=0}' "$run_log"
-rm -f "$run_log"
 echo "Codex npm plugin live Docker E2E passed"

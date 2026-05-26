@@ -321,4 +321,95 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(first).not.toHaveProperty("responseFormat");
     expect(first.temperature).toBe(0.4);
   });
+
+  it("forwards frequency_penalty, presence_penalty, and seed from override into stream options", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {}),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(agent, undefined, "openai", "gpt-5.4", {
+      frequencyPenalty: 0.8,
+      presencePenalty: 0.3,
+      seed: 12345,
+    });
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
+      { messages: [], tools: [] } as never,
+      undefined,
+    );
+
+    expect(underlying).toHaveBeenCalledTimes(1);
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as
+      | {
+          frequencyPenalty?: number;
+          presencePenalty?: number;
+          seed?: number;
+        }
+      | undefined;
+    expect(callOptions?.frequencyPenalty).toBe(0.8);
+    expect(callOptions?.presencePenalty).toBe(0.3);
+    expect(callOptions?.seed).toBe(12345);
+  });
+
+  it("prefers camelCase runtime overrides over snake_case config for penalty params", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {}),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  frequency_penalty: 0.1,
+                  presence_penalty: 0.1,
+                },
+              },
+            },
+          },
+        },
+      },
+      "openai",
+      "gpt-5.4",
+      {
+        frequencyPenalty: 0.9,
+        presencePenalty: 0.7,
+      },
+    );
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      { id: "gpt-5.4", api: "openai-completions", provider: "openai" } as never,
+      { messages: [], tools: [] } as never,
+      undefined,
+    );
+
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as
+      | {
+          frequencyPenalty?: number;
+          presencePenalty?: number;
+        }
+      | undefined;
+    expect(callOptions?.frequencyPenalty).toBe(0.9);
+    expect(callOptions?.presencePenalty).toBe(0.7);
+  });
 });

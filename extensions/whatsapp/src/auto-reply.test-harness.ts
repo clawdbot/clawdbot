@@ -107,6 +107,13 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
+  resolveAgentIdentity: (
+    cfg: { agents?: { list?: Array<{ id: string; identity?: unknown }> } },
+    agentId: string,
+  ) =>
+    cfg.agents?.list?.find(
+      (entry) => entry.id.trim().toLowerCase() === agentId.trim().toLowerCase(),
+    )?.identity,
   resolveIdentityNamePrefix: (cfg: { messages?: { responsePrefix?: string } }, _agentId: string) =>
     cfg.messages?.responsePrefix,
   resolveMessagePrefix: (cfg: { messages?: { messagePrefix?: string } }) =>

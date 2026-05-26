@@ -180,6 +180,31 @@ function expectProbeAuthFields(
   }
 }
 
+let probeUrlSeq = 0;
+
+function nextProbeUrl(label: string): string {
+  probeUrlSeq += 1;
+  return `ws://127.0.0.1:18789/${label}-${probeUrlSeq}`;
+}
+
+function setDeviceRequiredProbeMode(): void {
+  deviceIdentityState.cachedToken = null;
+  gatewayClientState.startMode = "close";
+  gatewayClientState.close = { code: 1008, reason: "device identity required" };
+}
+
+function lastGatewayClientOptions(): Record<string, unknown> | null {
+  return gatewayClientState.options;
+}
+
+async function runLightweightProbe(url: string): Promise<Awaited<ReturnType<typeof probeGateway>>> {
+  return await probeGateway({
+    url,
+    timeoutMs: 1_000,
+    includeDetails: false,
+  });
+}
+
 describe("probeGateway", () => {
   beforeEach(() => {
     deviceIdentityState.throwOnLoad = false;
@@ -535,5 +560,161 @@ describe("probeGateway", () => {
       error: null,
       close: null,
     });
+  });
+
+  it("short-circuits later unpaired probes after repeated device-required closes", async () => {
+    setDeviceRequiredProbeMode();
+    const url = nextProbeUrl("device-required");
+
+    for (let i = 0; i < 3; i += 1) {
+      gatewayClientState.options = null;
+      const result = await runLightweightProbe(url);
+
+      expectProbeResultFields(result, {
+        ok: false,
+        error: "gateway closed (1008): device identity required",
+        close: { code: 1008, reason: "device identity required" },
+      });
+      expect(lastGatewayClientOptions()?.url).toBe(url);
+    }
+
+    const startCalls = gatewayClientState.startCalls;
+    gatewayClientState.options = null;
+
+    const result = await runLightweightProbe(url);
+
+    expectProbeResultFields(result, {
+      ok: false,
+      connectLatencyMs: null,
+      error: "gateway closed (1008): device identity required",
+      close: {
+        code: 1008,
+        reason: "device identity required",
+        hint: "probe short-circuited by recent device-required rejections",
+      },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    expectProbeAuthFields(result, {
+      role: null,
+      scopes: [],
+      capability: "unknown",
+    });
+    expect(gatewayClientState.startCalls).toBe(startCalls);
+    expect(lastGatewayClientOptions()).toBeNull();
+  });
+
+  it("does not cache other policy-close reasons", async () => {
+    deviceIdentityState.cachedToken = null;
+    gatewayClientState.startMode = "close";
+    gatewayClientState.close = { code: 1008, reason: "pairing required" };
+    const url = nextProbeUrl("pairing-required");
+
+    for (let i = 0; i < 4; i += 1) {
+      gatewayClientState.options = null;
+      const result = await runLightweightProbe(url);
+
+      expect(result.close).toEqual({ code: 1008, reason: "pairing required" });
+      expect(lastGatewayClientOptions()?.url).toBe(url);
+    }
+  });
+
+  it("keeps device-required probe cache entries per URL", async () => {
+    setDeviceRequiredProbeMode();
+    const firstUrl = nextProbeUrl("first-device-required");
+    const secondUrl = nextProbeUrl("second-device-required");
+
+    for (let i = 0; i < 3; i += 1) {
+      await runLightweightProbe(firstUrl);
+    }
+
+    gatewayClientState.options = null;
+    const result = await runLightweightProbe(secondUrl);
+
+    expect(result.close).toEqual({ code: 1008, reason: "device identity required" });
+    expect(result.close?.hint).toBeUndefined();
+    expect(lastGatewayClientOptions()?.url).toBe(secondUrl);
+  });
+
+  it("expires device-required probe cache entries after the TTL", async () => {
+    setDeviceRequiredProbeMode();
+    const url = nextProbeUrl("ttl-device-required");
+    let nowMs = 1_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    try {
+      for (let i = 0; i < 3; i += 1) {
+        await runLightweightProbe(url);
+      }
+
+      nowMs += 5 * 60_000;
+      gatewayClientState.options = null;
+      const result = await runLightweightProbe(url);
+
+      expect(result.close).toEqual({ code: 1008, reason: "device identity required" });
+      expect(result.close?.hint).toBeUndefined();
+      expect(lastGatewayClientOptions()?.url).toBe(url);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("lets paired probes clear prior device-required failures", async () => {
+    setDeviceRequiredProbeMode();
+    const url = nextProbeUrl("paired-device-required");
+
+    for (let i = 0; i < 3; i += 1) {
+      await runLightweightProbe(url);
+    }
+
+    deviceIdentityState.cachedToken = {
+      token: "cached-operator-token",
+      role: "operator",
+      scopes: ["operator.read"],
+      updatedAtMs: 1,
+    };
+    gatewayClientState.startMode = "hello";
+    gatewayClientState.options = null;
+
+    const success = await runLightweightProbe(url);
+
+    expect(success.ok).toBe(true);
+    expect(lastGatewayClientOptions()?.url).toBe(url);
+    expect(lastGatewayClientOptions()?.deviceIdentity).toEqual(deviceIdentityState.value);
+
+    setDeviceRequiredProbeMode();
+    gatewayClientState.options = null;
+    const afterSuccess = await runLightweightProbe(url);
+
+    expect(afterSuccess.close).toEqual({ code: 1008, reason: "device identity required" });
+    expect(afterSuccess.close?.hint).toBeUndefined();
+    expect(lastGatewayClientOptions()?.url).toBe(url);
+  });
+
+  it("does not short-circuit explicit-auth probes after unauthenticated failures", async () => {
+    setDeviceRequiredProbeMode();
+    const url = nextProbeUrl("explicit-auth-device-required");
+
+    for (let i = 0; i < 3; i += 1) {
+      await runLightweightProbe(url);
+    }
+
+    gatewayClientState.startMode = "hello";
+    gatewayClientState.helloAuth = {};
+    gatewayClientState.options = null;
+
+    const result = await probeGateway({
+      url,
+      auth: { token: "explicit-token" },
+      timeoutMs: 1_000,
+      includeDetails: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expectProbeAuthFields(result, { capability: "connected_no_operator_scope" });
+    expect(lastGatewayClientOptions()?.url).toBe(url);
+    expect(lastGatewayClientOptions()?.token).toBe("explicit-token");
+    expect(lastGatewayClientOptions()?.deviceIdentity).toBeNull();
   });
 });

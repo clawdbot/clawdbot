@@ -237,5 +237,10 @@ function isKnownXHighCodexModel(modelId: string): boolean {
 // CLI default. (#71946)
 export function isModernCodexModel(modelId: string): boolean {
   const lower = modelId.trim().toLowerCase();
-  return lower === "gpt-5.5" || lower === "gpt-5.4" || lower === "gpt-5.4-mini";
+  return (
+    lower === "gpt-5.5" ||
+    lower === "gpt-5.4" ||
+    lower === "gpt-5.4-mini" ||
+    lower === "gpt-5.3-codex-spark"
+  );
 }

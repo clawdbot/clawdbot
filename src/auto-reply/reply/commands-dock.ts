@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import { resolveTextCommand } from "../commands-registry.js";
 import { resolveCommandSurfaceChannel } from "./channel-context.js";
 import { persistSessionEntry } from "./commands-session-store.js";
@@ -91,7 +92,7 @@ function resolveLinkedDockTarget(params: {
     if (!Array.isArray(ids)) {
       continue;
     }
-    const normalizedIds = ids.map((id) => normalizeLowercaseStringOrEmpty(id)).filter(Boolean);
+    const normalizedIds = normalizeTrimmedStringList(ids).map((id) => id.toLowerCase());
     if (!normalizedIds.some((id) => params.sourceCandidates.has(id))) {
       continue;
     }

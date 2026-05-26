@@ -7,6 +7,7 @@ import {
   shouldRetrySameKeyProviderOperation,
   type TransientProviderRetryConfig,
 } from "../provider-runtime/operation-retry.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
 
 type ApiKeyRetryParams = {
@@ -25,17 +26,7 @@ type ExecuteWithApiKeyRotationOptions<T> = {
 };
 
 function dedupeApiKeys(raw: string[]): string[] {
-  const seen = new Set<string>();
-  const keys: string[] = [];
-  for (const value of raw) {
-    const apiKey = value.trim();
-    if (!apiKey || seen.has(apiKey)) {
-      continue;
-    }
-    seen.add(apiKey);
-    keys.push(apiKey);
-  }
-  return keys;
+  return normalizeUniqueStringEntries(raw);
 }
 
 export function collectProviderApiKeysForExecution(params: {

@@ -108,6 +108,8 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("context window") ||
     lower.includes("context length") ||
     lower.includes("maximum context length");
+  const hasContextWindowOutOfRoom =
+    hasContextWindow && (lower.includes("ran out of room") || lower.includes("ran out of space"));
   return (
     lower.includes("request_too_large") ||
     (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
@@ -119,6 +121,7 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("exceeds model context window") ||
     lower.includes("model token limit") ||
     (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
+    hasContextWindowOutOfRoom ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
     lower.includes("exceed context limit") ||
@@ -209,13 +212,33 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 
 const OBSERVED_OVERFLOW_TOKEN_PATTERNS = [
   /prompt is too long:\s*([\d,]+)\s+tokens\s*>\s*[\d,]+\s+maximum/i,
+  /prompt is too long:\s*([\d,]+)\s*,\s*model maximum context length\s*:\s*[\d,]+/i,
   /requested\s+([\d,]+)\s+tokens/i,
+  /token limit\s*:\s*[\d,]+\s*\(requested\s*:\s*([\d,]+)\)/i,
   /resulted in\s+([\d,]+)\s+tokens/i,
+];
+
+const OBSERVED_OVERFLOW_TOKEN_SUM_PATTERNS = [
+  /input length(?:\s+and\s+max_tokens)?\s+exceed\s+context(?:\s+limit|\s+window)?\s*\(i\.e\s*([\d,]+)\s*\+\s*([\d,]+)\s*>\s*[\d,]+\)/i,
 ];
 
 export function extractObservedOverflowTokenCount(errorMessage?: string): number | undefined {
   if (!errorMessage) {
     return undefined;
+  }
+
+  for (const pattern of OBSERVED_OVERFLOW_TOKEN_SUM_PATTERNS) {
+    const match = errorMessage.match(pattern);
+    const rawLeft = match?.[1]?.replaceAll(",", "");
+    const rawRight = match?.[2]?.replaceAll(",", "");
+    if (!rawLeft || !rawRight) {
+      continue;
+    }
+    const left = Number(rawLeft);
+    const right = Number(rawRight);
+    if (Number.isFinite(left) && left > 0 && Number.isFinite(right) && right >= 0) {
+      return Math.floor(left + right);
+    }
   }
 
   for (const pattern of OBSERVED_OVERFLOW_TOKEN_PATTERNS) {

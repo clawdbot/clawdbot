@@ -1,3 +1,5 @@
+import { escapeRegExp } from "../../shared/regexp.js";
+
 export type SessionArchiveReason = "bak" | "reset" | "deleted";
 
 const ARCHIVE_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:\.\d{3})?Z$/;
@@ -24,6 +26,36 @@ export function isSessionArchiveArtifactName(fileName: string): boolean {
     hasArchiveSuffix(fileName, "reset") ||
     hasArchiveSuffix(fileName, "bak")
   );
+}
+
+// Compiled-pattern cache keyed by store basename. A disk sweep calls the matcher
+// once per file, so compiling the per-store pattern once (basenames are few — one
+// per agent store) keeps the hot path allocation-free.
+const SESSION_STORE_TEMP_RE_CACHE = new Map<string, RegExp>();
+
+function sessionStoreTempPattern(storeBasename: string): RegExp {
+  let pattern = SESSION_STORE_TEMP_RE_CACHE.get(storeBasename);
+  if (!pattern) {
+    pattern = new RegExp(
+      `^${escapeRegExp(storeBasename)}\\.(?:\\d+\\.)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$`,
+      "i",
+    );
+    SESSION_STORE_TEMP_RE_CACHE.set(storeBasename, pattern);
+  }
+  return pattern;
+}
+
+// Atomic writes of the session store stage into `<store>.<pid>.<uuid>.tmp`
+// (legacy: `<store>.<uuid>.tmp`) and rename into place. A crash between write and
+// rename orphans the temp; these accumulate and waste disk (#56827). They are
+// never the live store, so a stale one is safe to reclaim. `storeBasename` is the
+// store filename (the atomic write's temp prefix, e.g. `sessions.json`), so a
+// custom-named `session.store` is matched too.
+export function isSessionStoreTempArtifactName(fileName: string, storeBasename: string): boolean {
+  if (!storeBasename) {
+    return false;
+  }
+  return sessionStoreTempPattern(storeBasename).test(fileName);
 }
 
 export function parseCompactionCheckpointTranscriptFileName(fileName: string): {

@@ -856,6 +856,52 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
+  it("prefers active Claude CLI OAuth over selected env API-key labels for runtime aliases", async () => {
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-claude-cli-env-key-shadow",
+        updatedAt: 0,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-7",
+        modelProvider: "claude-cli",
+        model: "claude-opus-4-7",
+        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
+        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
+        fallbackNoticeReason: "selected model unavailable",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      contextTokens: 32_000,
+      resolvedHarness: "claude-cli",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key (env: ANTHROPIC_API_KEY)",
+      activeModelAuthOverride: "oauth (claude-cli)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Session selected: anthropic/claude-opus-4-7");
+    expect(normalized).toContain("oauth (claude-cli)");
+    expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
+    expect(normalized).not.toContain("Usage:");
+  });
+
   it("uses Codex OAuth context overrides for openai models running on the Codex harness", async () => {
     registerStatusCodexHarness();
 

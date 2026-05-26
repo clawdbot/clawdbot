@@ -55,6 +55,58 @@ describe("shouldSupersedeTelegramReplyFence", () => {
       }),
     ).toBe(true);
   });
+
+  it("keeps normal direct turns deliverable while preserving direct aborts", () => {
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "answer this",
+        CommandAuthorized: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/stop",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/diagnostics confirm abc123def456",
+        CommandAuthorized: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/diagnostics confirm abc123def456",
+        CommandAuthorized: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/var/log error",
+        CommandAuthorized: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldSupersedeTelegramReplyFence({
+        ChatType: "direct",
+        CommandBody: "/plugin_command",
+        CommandAuthorized: true,
+        CommandTurn: {
+          kind: "text-slash",
+          source: "text",
+          authorized: true,
+          commandName: "plugin_command",
+          body: "/plugin_command",
+        },
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("telegram reply fence supersede", () => {

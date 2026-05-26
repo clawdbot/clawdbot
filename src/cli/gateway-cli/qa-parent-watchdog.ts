@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 
 export const QA_PARENT_PID_ENV = "OPENCLAW_QA_PARENT_PID";
 export const QA_TEMP_ROOT_ENV = "OPENCLAW_QA_TEMP_ROOT";
@@ -59,12 +60,12 @@ function resolveQaCleanupRoot(rawValue: string | undefined): string | null {
 }
 
 function resolveQaCleanupRoots(env: NodeJS.ProcessEnv): string[] {
-  return [
-    resolveQaCleanupRoot(env[QA_TEMP_ROOT_ENV]),
-    resolveQaCleanupRoot(env[QA_STAGED_RUNTIME_ROOT_ENV]),
-  ].filter((target, index, array): target is string => {
-    return target !== null && array.indexOf(target) === index;
-  });
+  return uniqueStrings(
+    [
+      resolveQaCleanupRoot(env[QA_TEMP_ROOT_ENV]),
+      resolveQaCleanupRoot(env[QA_STAGED_RUNTIME_ROOT_ENV]),
+    ].filter((target): target is string => target !== null),
+  );
 }
 
 function pathContains(root: string, candidate: string): boolean {

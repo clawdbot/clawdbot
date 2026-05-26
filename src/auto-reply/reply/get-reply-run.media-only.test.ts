@@ -293,6 +293,7 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     const paths = cleanupPaths.splice(0);
     return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
@@ -878,7 +879,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
-  it("hydrates current MediaPaths into queued followup images", async () => {
+  it("hydrates current image MediaPaths by extension when MediaTypes are missing", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-followup-image-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "inbound.png");
@@ -897,7 +898,6 @@ describe("runPreparedReply media-only handling", () => {
           RawBody: "describe this",
           CommandBody: "describe this",
           MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
           MediaWorkspaceDir: tmpDir,
           OriginatingChannel: "discord",
           OriginatingTo: "C123",
@@ -911,7 +911,6 @@ describe("runPreparedReply media-only handling", () => {
           OriginatingTo: "C123",
           ChatType: "group",
           MediaPaths: [imagePath],
-          MediaTypes: ["image/png"],
           MediaWorkspaceDir: tmpDir,
         },
       }),
@@ -1480,6 +1479,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.sessionId).toBe("session-after-rotation");
   });
   it("reports still shutting down when a new owner appears after waiting", async () => {
+    vi.useFakeTimers();
     const queueSettings = await import("./queue/settings-runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "interrupt" });
     const previousRun = createReplyOperation({
@@ -1507,9 +1507,11 @@ describe("runPreparedReply media-only handling", () => {
     });
     nextRun.setPhase("running");
 
-    await expect(runPromise).resolves.toEqual({
+    const assertion = expect(runPromise).resolves.toEqual({
       text: "⚠️ Previous run is still shutting down. Please try again in a moment.",
     });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await assertion;
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
 
     nextRun.complete();

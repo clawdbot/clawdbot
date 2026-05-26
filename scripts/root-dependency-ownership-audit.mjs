@@ -28,6 +28,10 @@ const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
     "playwright-core",
     "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
   ],
+  [
+    "@silvia-odwyer/photon-node",
+    "keep at root; the internal media understanding runtime is shipped with packaged image-processing surfaces even though the bundled plugin also declares it",
+  ],
 ]);
 
 function readJson(filePath) {

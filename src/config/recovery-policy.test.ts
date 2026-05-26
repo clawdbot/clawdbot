@@ -1,16 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  isPluginPackagingRuntimeOutputInvalidConfigSnapshot,
   isPluginLocalInvalidConfigSnapshot,
   shouldAttemptLastKnownGoodRecovery,
 } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
-type PolicySnapshot = Pick<ConfigFileSnapshot, "valid" | "issues" | "legacyIssues">;
+type PolicySnapshot = Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">;
 
 function snapshot(params: Partial<PolicySnapshot>): PolicySnapshot {
   return {
     valid: false,
     issues: [],
+    warnings: [],
     legacyIssues: [],
     ...params,
   };
@@ -83,5 +85,69 @@ describe("config recovery policy", () => {
 
     expect(isPluginLocalInvalidConfigSnapshot(current)).toBe(false);
     expect(shouldAttemptLastKnownGoodRecovery(current)).toBe(true);
+  });
+
+  it("classifies plugin packaging compiled-output failures with plugin-not-found fallout", () => {
+    const current = snapshot({
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: source-only-pack",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
+        },
+      ],
+    });
+
+    expect(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(current)).toBe(true);
+  });
+
+  it("does not classify mixed core invalidity as a plugin packaging-only failure", () => {
+    const current = snapshot({
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: source-only-pack",
+        },
+        {
+          path: "gateway.mode",
+          message: "Expected 'local' or 'remote'",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+      ],
+    });
+
+    expect(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(current)).toBe(false);
+  });
+
+  it("does not classify unrelated missing plugins as packaging fallout", () => {
+    const current = snapshot({
+      issues: [
+        {
+          path: "plugins.slots.memory",
+          message: "plugin not found: missing-memory",
+        },
+      ],
+      warnings: [
+        {
+          path: "plugins",
+          message:
+            "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+      ],
+    });
+
+    expect(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(current)).toBe(false);
   });
 });

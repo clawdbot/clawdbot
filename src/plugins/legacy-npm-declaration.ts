@@ -1,6 +1,7 @@
 import path from "node:path";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { validatePluginId } from "./install-paths.js";
 
 export const LEGACY_NPM_DECLARATION_FILE = "openclaw.extension.json";
@@ -10,10 +11,6 @@ export type LegacyNpmPluginDeclaration = {
   npmSpec: string;
   source: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function readLegacyNpmPluginDeclaration(
   pluginDir: string,

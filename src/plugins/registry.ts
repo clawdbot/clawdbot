@@ -37,6 +37,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "../shared/string-normalization.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -537,7 +542,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.runtimes = [...new Set([...existing.runtimes, ...runtimes])];
+      existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
       return;
     }
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
@@ -625,8 +630,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     config: OpenClawPluginApi["config"],
     pluginConfig: unknown,
   ) => {
-    const eventList = Array.isArray(events) ? events : [events];
-    const normalizedEvents = eventList.map((event) => event.trim()).filter(Boolean);
+    const normalizedEvents = normalizeStringEntries(Array.isArray(events) ? events : [events]);
     const entry = opts?.entry ?? null;
     const hookName = requireRegistrationValue(
       entry?.hook.name ?? opts?.name?.trim(),
@@ -1485,12 +1489,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   ]);
 
   const registerReload = (record: PluginRecord, registration: OpenClawPluginReloadRegistration) => {
-    const normalize = (values?: string[]) =>
-      (values ?? []).map((value) => value.trim()).filter(Boolean);
     const normalized: OpenClawPluginReloadRegistration = {
-      restartPrefixes: normalize(registration.restartPrefixes),
-      hotPrefixes: normalize(registration.hotPrefixes),
-      noopPrefixes: normalize(registration.noopPrefixes),
+      restartPrefixes: normalizeStringEntries(registration.restartPrefixes),
+      hotPrefixes: normalizeStringEntries(registration.hotPrefixes),
+      noopPrefixes: normalizeStringEntries(registration.noopPrefixes),
     };
     if (
       (normalized.restartPrefixes?.length ?? 0) === 0 &&
@@ -1567,9 +1569,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     policy: OpenClawPluginNodeInvokePolicy,
     pluginConfig?: Record<string, unknown>,
   ) => {
-    const commands = Array.isArray(policy.commands)
-      ? policy.commands.map((command) => command.trim()).filter(Boolean)
-      : [];
+    const commands = normalizeUniqueStringEntries(
+      Array.isArray(policy.commands) ? policy.commands : [],
+    );
     if (commands.length === 0) {
       pushDiagnostic({
         level: "error",

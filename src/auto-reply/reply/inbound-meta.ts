@@ -3,6 +3,7 @@ import { getLoadedChannelPluginById } from "../../channels/plugins/registry-load
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { resolveSenderLabel } from "../../channels/sender-label.js";
+import { isRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { EnvelopeFormatOptions } from "../envelope.js";
@@ -74,10 +75,6 @@ function sanitizeUntrustedJsonValue(value: unknown): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [key, sanitizeUntrustedJsonValue(entry)]),
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function truncateUntrustedTranscriptField(value: string): string {

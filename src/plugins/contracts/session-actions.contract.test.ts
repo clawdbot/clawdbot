@@ -186,6 +186,18 @@ describe("plugin session actions", () => {
           { id: "bad-scope", requiredScopes: ["not-a-scope"] as never },
           { id: "bad-schema-shape", schema: "not-an-object" as never },
           { id: "bad-schema-compile", schema: { type: "not-a-json-schema-type" } as never },
+          {
+            id: "bad-schema-keyword",
+            schema: {
+              type: "object",
+              properties: { id: { type: "string" } },
+              required: "id",
+            } as never,
+          },
+          {
+            id: "bad-schema-ref",
+            schema: { $ref: "#/$defs/Missing" } as never,
+          },
           { id: "" },
         ]) {
           api.registerSessionAction({
@@ -201,7 +213,7 @@ describe("plugin session actions", () => {
       expect(diagnostic.pluginId).toBe("invalid-session-actions");
       return diagnostic.message;
     });
-    expect(diagnosticMessages).toHaveLength(5);
+    expect(diagnosticMessages).toHaveLength(7);
     expect(diagnosticMessages).toContain("session action already registered: dup");
     expect(diagnosticMessages).toContain(
       "session action requiredScopes contains unknown operator scope: not-a-scope",
@@ -212,6 +224,16 @@ describe("plugin session actions", () => {
     expect(
       diagnosticMessages?.some((message) =>
         message.includes("session action schema is not valid JSON Schema: bad-schema-compile"),
+      ),
+    ).toBe(true);
+    expect(
+      diagnosticMessages?.some((message) =>
+        message.includes("session action schema is not valid JSON Schema: bad-schema-keyword"),
+      ),
+    ).toBe(true);
+    expect(
+      diagnosticMessages?.some((message) =>
+        message.includes("session action schema is not valid JSON Schema: bad-schema-ref"),
       ),
     ).toBe(true);
     expect(diagnosticMessages).toContain(

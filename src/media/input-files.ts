@@ -154,7 +154,7 @@ export function parseContentType(value: string | undefined): {
 
 export function normalizeMimeList(values: string[] | undefined, fallback: string[]): Set<string> {
   const input = values && values.length > 0 ? values : fallback;
-  return new Set(input.map((value) => normalizeMimeType(value)).filter(Boolean) as string[]);
+  return new Set(input.flatMap((value) => normalizeMimeType(value) ?? []));
 }
 
 export function resolveInputFileLimits(config?: InputFileLimitsConfig): InputFileLimits {

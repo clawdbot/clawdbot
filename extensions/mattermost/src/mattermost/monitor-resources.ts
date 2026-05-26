@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fetchMattermostChannel,
   fetchMattermostUser,
@@ -52,7 +53,7 @@ export function createMattermostMonitorResources(params: {
   const resolveMattermostMedia = async (
     fileIds?: string[] | null,
   ): Promise<MattermostMediaInfo[]> => {
-    const ids = (fileIds ?? []).map((id) => id?.trim()).filter(Boolean);
+    const ids = normalizeStringEntries(fileIds ?? []);
     if (ids.length === 0) {
       return [];
     }

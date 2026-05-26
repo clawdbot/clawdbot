@@ -509,6 +509,90 @@ describe("mattermost inbound user posts", () => {
     const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
     expect(ctx?.BodyForAgent).toBe("hello /status");
     expect(ctx?.CommandAuthorized).toBe(false);
+    // Inline non-control text must not be tagged as an explicit text-slash command turn —
+    // only authorized control commands take the source-reply suppression bypass.
+    expect(ctx?.CommandSource).toBeUndefined();
+  });
+
+  // Regression for issue #86664: typed `/reset` (and `/new`) on a Mattermost DM under
+  // message_tool_only source delivery (e.g. Codex harness default) silently dropped the
+  // acknowledgement because the inbound context was not tagged as an explicit text-slash
+  // command turn. The explicit-command exception in source-reply-delivery-mode.ts only
+  // fires when CommandSource is "text" (or "native") AND CommandAuthorized is true. Mirrors
+  // the iMessage fix from #82642.
+  it("tags authorized typed text-slash control commands with CommandSource: text", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const directConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "allowlist",
+          groupPolicy: "open",
+          allowFrom: ["user-1"],
+        },
+      },
+    };
+    const isControlCommandMessage = vi.fn((text?: string) =>
+      ["/reset", "/new"].includes(text?.trim() ?? ""),
+    );
+    const shouldComputeCommandAuthorized = vi.fn(() => true);
+    mockState.runtimeCore = createRuntimeCore(directConfig, undefined, {
+      isControlCommandMessage,
+      shouldComputeCommandAuthorized,
+      shouldHandleTextCommands: () => true,
+    });
+    mockState.resolveChannelInfo.mockResolvedValue({
+      id: "dm-1",
+      name: "",
+      display_name: "",
+      team_id: "team-1",
+      type: "D",
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: directConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "dm-1",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-reset",
+          channel_id: "dm-1",
+          user_id: "user-1",
+          message: " /reset",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "dm-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("/reset");
+    expect(ctx?.CommandBody).toBe("/reset");
+    expect(ctx?.CommandAuthorized).toBe(true);
+    expect(ctx?.CommandSource).toBe("text");
   });
 
   it("uses websocket channel type when REST channel lookup fails", async () => {

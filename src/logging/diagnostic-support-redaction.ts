@@ -2,6 +2,7 @@ import path from "node:path";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
+import { asOptionalRecord } from "../shared/record-coerce.js";
 import { redactSensitiveText } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
@@ -59,13 +60,6 @@ type LimitedSupportArray = {
   count: number;
   items: unknown[];
 };
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
 
 function isPrivateSupportField(key: string): boolean {
   return (
@@ -398,7 +392,7 @@ export function sanitizeSupportSnapshotValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }
@@ -447,7 +441,7 @@ export function sanitizeSupportConfigValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }

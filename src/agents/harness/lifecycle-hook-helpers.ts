@@ -10,6 +10,7 @@ import type {
 } from "../../plugins/hook-types.js";
 import type { VoidHookRunOptions } from "../../plugins/hooks.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { normalizeOptionalString as normalizeTrimmedString } from "../../shared/string-coerce.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -226,12 +227,4 @@ function isBeforeAgentFinalizeRetry(
   value: unknown,
 ): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "description": "OpenClaw ACP runtime backend",
   "repository": {
     "type": "git",
@@ -8,9 +8,9 @@
   },
   "type": "module",
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.36.1",
-    "@zed-industries/codex-acp": "0.14.0",
-    "acpx": "0.8.0",
+    "@agentclientprotocol/claude-agent-acp": "0.37.0",
+    "@zed-industries/codex-acp": "0.15.0",
+    "acpx": "0.10.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -26,10 +26,10 @@
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.5.24"
+      "pluginApi": ">=2026.5.26"
     },
     "build": {
-      "openclawVersion": "2026.5.24",
+      "openclawVersion": "2026.5.26",
       "staticAssets": [
         {
           "source": "./src/runtime-internals/mcp-proxy.mjs",

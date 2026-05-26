@@ -1,3 +1,7 @@
+import {
+  isRecord,
+  normalizeOptionalString as trimToUndefined,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeGoogleApiBaseUrl } from "../provider-policy.js";
 
 const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-2.5-flash";
@@ -9,14 +13,6 @@ export type GeminiConfig = {
   providerApiKey?: unknown;
   providerBaseUrl?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function trimToUndefined(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
 
 export function resolveGeminiConfig(searchConfig?: Record<string, unknown>): GeminiConfig {
   const gemini = searchConfig?.gemini;

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { parseBooleanValue } from "./boolean.js";
+import { asBoolean, parseBooleanValue } from "./boolean.js";
 import { splitShellArgs } from "./shell-argv.js";
+
+describe("asBoolean", () => {
+  it("accepts booleans only", () => {
+    expect(asBoolean(true)).toBe(true);
+    expect(asBoolean(false)).toBe(false);
+    expect(asBoolean("true")).toBeUndefined();
+    expect(asBoolean(1)).toBeUndefined();
+  });
+});
 
 describe("parseBooleanValue", () => {
   it("handles boolean inputs", () => {

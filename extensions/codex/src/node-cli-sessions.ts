@@ -8,6 +8,7 @@ import type {
   OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   materializeWindowsSpawnProgram,
@@ -704,8 +705,4 @@ function readNodeId(node: CodexCliSessionNodeInfo): string {
 
 function formatNodeLabel(node: CodexCliSessionNodeInfo): string {
   return [node.displayName, node.nodeId, node.remoteIp].filter(Boolean).join(" / ") || "node";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }

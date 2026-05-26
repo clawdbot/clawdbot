@@ -482,6 +482,15 @@ jobs:
             rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6 \
             bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install.sh --install-method npm --version latest --no-onboard --no-prompt --verify && openclaw --version'
 
+      - name: Run Rocky Linux CLI installer smoke
+        run: |
+          timeout 20m docker run --rm \
+            -e OPENCLAW_NO_ONBOARD=1 \
+            -e OPENCLAW_NO_PROMPT=1 \
+            -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
+            rockylinux:9@sha256:d7be1c094cc5845ee815d4632fe377514ee6ebcf8efaed6892889657e5ddaaa6 \
+            bash -lc 'dnf install -y -q ca-certificates tar gzip xz findutils which sudo >/dev/null && bash /tmp/install-cli.sh --prefix /tmp/openclaw-cli --version latest --no-onboard && /tmp/openclaw-cli/bin/openclaw --version'
+
   bun_global_install_smoke:
     needs: [preflight, root_dockerfile_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'

@@ -19,6 +19,7 @@ import {
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
+  type DiagnosticEventPrivateData,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   clearInternalHooks,
@@ -27,7 +28,10 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { clearPluginCommands, registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
-import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createMockPluginRegistry,
+  onTrustedInternalDiagnosticEvent,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
@@ -360,7 +364,7 @@ function createAppServerHarness(
   } = {},
 ) {
   const requests: Array<{ method: string; params: unknown }> = [];
-  let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+  let notifyHandler: ((notification: CodexServerNotification) => Promise<void>) | undefined;
   let handleServerRequest: AppServerRequestHandler | undefined;
   const closeHandlers = new Set<() => void>();
   const request = vi.fn(async (method: string, params?: unknown, requestOptions?: unknown) => {
@@ -373,9 +377,15 @@ function createAppServerHarness(
     return {
       getServerVersion: () => "0.132.0",
       request,
-      addNotificationHandler: (handler: typeof notify) => {
-        notify = handler;
-        return () => undefined;
+      addNotificationHandler: (
+        handler: (notification: CodexServerNotification) => Promise<void>,
+      ) => {
+        notifyHandler = handler;
+        return () => {
+          if (notifyHandler === handler) {
+            notifyHandler = undefined;
+          }
+        };
       },
       addRequestHandler: (handler: AppServerRequestHandler) => {
         handleServerRequest = handler;
@@ -394,6 +404,18 @@ function createAppServerHarness(
       timeout: appServerHarnessWait.timeout,
     });
     return handleServerRequest!;
+  };
+
+  const waitForNotificationHandler = async () => {
+    await vi.waitFor(() => expect(notifyHandler).toBeTypeOf("function"), {
+      interval: 1,
+      timeout: appServerHarnessWait.timeout,
+    });
+    return notifyHandler!;
+  };
+  const sendNotification = async (notification: CodexServerNotification) => {
+    const handler = notifyHandler ?? (await waitForNotificationHandler());
+    await handler(notification);
   };
 
   return {
@@ -415,7 +437,7 @@ function createAppServerHarness(
       );
     },
     async notify(notification: CodexServerNotification) {
-      await notify(notification);
+      await sendNotification(notification);
     },
     waitForServerRequestHandler,
     async handleServerRequest(request: Parameters<AppServerRequestHandler>[0]) {
@@ -423,7 +445,7 @@ function createAppServerHarness(
       return handler(request);
     },
     async completeTurn(params: { threadId: string; turnId: string }) {
-      await notify({
+      await sendNotification({
         method: "turn/completed",
         params: {
           threadId: params.threadId,
@@ -2844,11 +2866,17 @@ describe("runCodexAppServerAttempt", () => {
     expect(report?.provider).toBe("codex");
     expect(report?.model).toBe("gpt-5.4-codex");
     expect(report?.systemPrompt.chars).toBeGreaterThan(0);
+    expect(report?.systemPrompt.hash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(report?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
 
     const message = report?.tools.entries.find((tool) => tool.name === "message");
     const webSearch = report?.tools.entries.find((tool) => tool.name === "web_search");
     expect(message?.schemaChars).toBeGreaterThan(0);
+    expect(message?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(message?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(webSearch?.schemaChars).toBe(0);
+    expect(webSearch?.summaryHash).toMatch(/^[a-f0-9]{64}$/u);
+    expect(webSearch?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
     expect(report?.tools.schemaChars).toBe(message?.schemaChars);
   });
 
@@ -6574,7 +6602,8 @@ describe("runCodexAppServerAttempt", () => {
       input?: Array<{ text?: string }>;
     };
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
-    expect(result.systemPromptReport?.skills).toEqual({ promptChars: 0, entries: [] });
+    expect(result.systemPromptReport?.skills).toMatchObject({ promptChars: 0, entries: [] });
+    expect(result.systemPromptReport?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
@@ -6735,6 +6764,145 @@ describe("runCodexAppServerAttempt", () => {
     expect(agentEndPayload.messages?.some((message) => message.role === "assistant")).toBe(true);
     expect(agentEndContext.runId).toBe("run-1");
     expect(agentEndContext.sessionId).toBe("session-1");
+  });
+
+  it("emits gated model-call content diagnostics for codex turns", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const diagnosticContentByType = new Map<string, DiagnosticEventPrivateData>();
+    let diagnosticTypesAtLlmOutput: string[] = [];
+    const llmOutput = vi.fn(() => {
+      diagnosticTypesAtLlmOutput = diagnosticEvents.map((event) => event.type);
+    });
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "llm_output", handler: llmOutput }]),
+    );
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type.startsWith("model.call.")) {
+        diagnosticEvents.push(event);
+        diagnosticContentByType.set(event.type, privateData);
+      }
+    });
+    try {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      testing.setOpenClawCodingToolsFactoryForTests(() => [createRuntimeDynamicTool("message")]);
+      const harness = createAppServerHarness(async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          return {
+            turn: {
+              ...turnStartResult("turn-1", "completed").turn,
+              items: [
+                {
+                  id: "msg-1",
+                  type: "agentMessage",
+                  text: "hello back",
+                  status: "completed",
+                },
+              ],
+            },
+          };
+        }
+        return {};
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.config = {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            traces: true,
+            captureContent: {
+              enabled: true,
+              inputMessages: true,
+              outputMessages: true,
+              systemPrompt: true,
+              toolDefinitions: true,
+            },
+          },
+        },
+      } as never;
+      const run = runCodexAppServerAttempt(params);
+      await harness.waitForMethod("turn/start", 180_000);
+      await run;
+      await vi.waitFor(
+        () =>
+          expect(diagnosticEvents.some((event) => event.type === "model.call.completed")).toBe(
+            true,
+          ),
+        fastWait,
+      );
+
+      const startedEvent = diagnosticEvents.find((event) => event.type === "model.call.started");
+      const completedEvent = diagnosticEvents.find(
+        (event) => event.type === "model.call.completed",
+      );
+      expect(startedEvent?.callId).toBe("run-1:codex-model:1");
+      expect(startedEvent?.trace?.traceId).toBeTypeOf("string");
+      expect(JSON.stringify(startedEvent)).not.toContain("hello");
+      const startedContent = diagnosticContentByType.get("model.call.started")?.modelContent;
+      expect(JSON.stringify(startedContent?.inputMessages)).toContain("hello");
+      expect(startedContent?.systemPrompt).toContain(
+        "You are a personal agent running inside OpenClaw.",
+      );
+      expect(startedContent?.toolDefinitions).toContainEqual(
+        expect.objectContaining({
+          name: "message",
+          parameters: expect.objectContaining({
+            type: "object",
+            additionalProperties: false,
+          }),
+        }),
+      );
+      expect(completedEvent?.callId).toBe("run-1:codex-model:1");
+      expect(JSON.stringify(completedEvent)).not.toContain("hello back");
+      expect(
+        JSON.stringify(diagnosticContentByType.get("model.call.completed")?.modelContent),
+      ).toContain("hello back");
+      expect(completedEvent?.requestPayloadBytes).toBeGreaterThan(0);
+      expect(llmOutput).toHaveBeenCalledTimes(1);
+      expect(diagnosticTypesAtLlmOutput).toContain("model.call.completed");
+      expect(diagnosticTypesAtLlmOutput).not.toContain("model.call.error");
+    } finally {
+      stopDiagnostics();
+    }
+  }, 240_000);
+
+  it("classifies codex model-call timeout diagnostics", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if (event.type.startsWith("model.call.")) {
+        diagnosticEvents.push(event);
+      }
+    });
+    try {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const harness = createStartedThreadHarness();
+      const params = createParams(sessionFile, workspaceDir);
+      params.config = {
+        diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
+      } as never;
+      params.timeoutMs = 200;
+
+      const run = runCodexAppServerAttempt(params, { turnCompletionIdleTimeoutMs: 5 });
+      await harness.waitForMethod("turn/start");
+      const result = await run;
+      await flushDiagnosticEvents();
+
+      const errorEvent = diagnosticEvents.find((event) => event.type === "model.call.error") as
+        | ({ failureKind?: string; errorCategory?: string } & DiagnosticEventPayload)
+        | undefined;
+      expect(result.timedOut).toBe(true);
+      expect(errorEvent?.failureKind).toBe("timeout");
+      expect(errorEvent?.errorCategory).toBe("timeout");
+    } finally {
+      stopDiagnostics();
+    }
   });
 
   it("waits for agent_end hooks before resolving local codex turns", async () => {
@@ -6971,6 +7139,7 @@ describe("runCodexAppServerAttempt", () => {
       },
       threadId: "thread-1",
       turnId: "turn-1",
+      autoApprove: true,
     });
     expect(approvalArgs?.nativeHookRelay).toMatchObject({
       relayId,
@@ -9442,6 +9611,12 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("times out turn start before the active run handle is installed", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if (event.type.startsWith("model.call.")) {
+        diagnosticEvents.push(event);
+      }
+    });
     const request = vi.fn(
       async (method: string, _params?: unknown, options?: { timeoutMs?: number }) => {
         if (method === "thread/start") {
@@ -9468,9 +9643,23 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "workspace"),
     );
     params.timeoutMs = 1;
+    params.config = {
+      diagnostics: { enabled: true, otel: { enabled: true, traces: true } },
+    } as never;
 
-    await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn/start timed out");
-    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
+    try {
+      await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn/start timed out");
+      await flushDiagnosticEvents();
+
+      const errorEvent = diagnosticEvents.find((event) => event.type === "model.call.error") as
+        | ({ failureKind?: string; errorCategory?: string } & DiagnosticEventPayload)
+        | undefined;
+      expect(errorEvent?.failureKind).toBe("timeout");
+      expect(errorEvent?.errorCategory).toBe("timeout");
+      expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
+    } finally {
+      stopDiagnostics();
+    }
   });
 
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {
@@ -11389,6 +11578,7 @@ describe("runCodexAppServerAttempt", () => {
       },
       sandbox: "danger-full-access",
       serviceTier: "flex",
+      personality: "none",
       developerInstructions: resumeParams.developerInstructions,
       persistExtendedHistory: true,
     });

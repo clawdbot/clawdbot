@@ -10,6 +10,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { buildTimeoutAbortSignal, fetchWithTimeout } from "./fetch-timeout.js";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "./timer-delay.js";
 
 function requireWarnCall(callIndex: number): [string, Record<string, unknown>] {
   const call = warn.mock.calls[callIndex];
@@ -165,6 +166,27 @@ describe("buildTimeoutAbortSignal", () => {
     await assertion;
   });
 
+  it("clamps oversized fetchWithTimeout delays before fetch starts", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const response = new Response("ok");
+    const fetchFn = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.signal?.aborted).toBe(false);
+      return response;
+    });
+
+    try {
+      await expect(
+        fetchWithTimeout("https://example.com/v1/slow", {}, MAX_SAFE_TIMEOUT_DELAY_MS + 1, fetchFn),
+      ).resolves.toBe(response);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(timeoutSpy.mock.calls[0]?.[1]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+      expect(timeoutSpy.mock.calls[0]?.[3]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("does not log when a parent signal aborts first", async () => {
     const parent = new AbortController();
     const { signal, cleanup } = buildTimeoutAbortSignal({
@@ -219,5 +241,26 @@ describe("buildTimeoutAbortSignal", () => {
     expect(warn).toHaveBeenCalledTimes(1);
 
     cleanup();
+  });
+
+  it("clamps oversized timeouts before arming Node timers", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+    const { signal, cleanup } = buildTimeoutAbortSignal({
+      timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS + 1,
+      operation: "unit-test",
+    });
+
+    try {
+      expect(timeoutSpy.mock.calls[0]?.[1]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+      expect(timeoutSpy.mock.calls[0]?.[3]).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(signal?.aborted).toBe(false);
+    } finally {
+      cleanup();
+      timeoutSpy.mockRestore();
+    }
   });
 });

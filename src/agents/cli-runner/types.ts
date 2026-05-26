@@ -3,7 +3,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
-import type { CliSessionBinding } from "../../config/sessions.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -24,6 +24,7 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  sessionEntry?: SessionEntry;
   agentId?: string;
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;

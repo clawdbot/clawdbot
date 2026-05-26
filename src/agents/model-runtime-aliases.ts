@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
@@ -179,6 +180,26 @@ function normalizeRuntimeModelRefForComparison(raw: string): string {
 export function areRuntimeModelRefsEquivalent(left: string, right: string): boolean {
   return (
     normalizeRuntimeModelRefForComparison(left) === normalizeRuntimeModelRefForComparison(right)
+  );
+}
+
+export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
+  runtimeAliasModelEquivalent: boolean;
+  selectedAuthLabel?: string;
+  activeAuthLabel?: string;
+}): boolean {
+  if (!params.runtimeAliasModelEquivalent) {
+    return false;
+  }
+  const selectedAuth = normalizeOptionalLowercaseString(params.selectedAuthLabel);
+  const activeAuth = normalizeOptionalLowercaseString(params.activeAuthLabel);
+  if (!activeAuth || activeAuth === "unknown") {
+    return false;
+  }
+  return (
+    selectedAuth === "unknown" ||
+    (Boolean(selectedAuth?.startsWith("api-key")) &&
+      (activeAuth.startsWith("oauth") || activeAuth.startsWith("token")))
   );
 }
 

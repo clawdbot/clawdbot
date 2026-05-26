@@ -1,3 +1,4 @@
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
@@ -17,25 +18,30 @@ function normalizeRequiredPluginIds(ids?: readonly string[]): string[] | undefin
   if (ids === undefined) {
     return undefined;
   }
-  return [...new Set(ids.map((id) => id.trim()).filter(Boolean))].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
+  return normalizeSortedUniqueStringEntries(ids);
 }
 
-function registryContainsPluginIds(
+export function registryContainsRuntimePluginIds(
   registry: PluginRegistry,
   pluginIds: readonly string[] | undefined,
 ): boolean {
   if (pluginIds === undefined) {
     return true;
   }
+  const present = new Set<string>();
   const loaded = new Set<string>();
+  const pluginStatusById = new Map<string, string | undefined>();
   for (const plugin of registry.plugins ?? []) {
+    present.add(plugin.id);
+    pluginStatusById.set(plugin.id, plugin.status);
     if (plugin.status === undefined || plugin.status === "loaded") {
       loaded.add(plugin.id);
     }
   }
-  for (const value of Object.values(registry)) {
+  for (const [key, value] of Object.entries(registry)) {
+    if (key === "diagnostics" || key === "channelSetups") {
+      continue;
+    }
     if (!Array.isArray(value)) {
       continue;
     }
@@ -43,13 +49,17 @@ function registryContainsPluginIds(
       if (entry && typeof entry === "object" && "pluginId" in entry) {
         const pluginId = entry.pluginId;
         if (typeof pluginId === "string" && pluginId.length > 0) {
-          loaded.add(pluginId);
+          present.add(pluginId);
+          const status = pluginStatusById.get(pluginId);
+          if (status === undefined || status === "loaded") {
+            loaded.add(pluginId);
+          }
         }
       }
     }
   }
   if (pluginIds.length === 0) {
-    return loaded.size === 0;
+    return present.size === 0;
   }
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
@@ -83,7 +93,7 @@ export function getLoadedRuntimePluginRegistry(
   );
   if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
     const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
-    if (!compatible || !registryContainsPluginIds(compatible, requiredPluginIds)) {
+    if (!compatible || !registryContainsRuntimePluginIds(compatible, requiredPluginIds)) {
       return undefined;
     }
     return compatible;
@@ -98,7 +108,7 @@ export function getLoadedRuntimePluginRegistry(
   if (!registry) {
     return undefined;
   }
-  if (!registryContainsPluginIds(registry, requiredPluginIds)) {
+  if (!registryContainsRuntimePluginIds(registry, requiredPluginIds)) {
     return undefined;
   }
   return registry;

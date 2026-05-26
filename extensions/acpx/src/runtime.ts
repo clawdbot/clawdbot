@@ -19,7 +19,9 @@ import {
   type AcpRuntimeTurnResult,
 } from "acpx/runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import { splitCommandParts } from "./command-line.js";
 import {
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
@@ -32,7 +34,6 @@ import {
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import { splitCommandParts } from "./command-line.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
@@ -189,7 +190,7 @@ function selectCurrentSessionLease(params: {
   sessionKeys: string[];
   rootPid?: number;
 }): AcpxProcessLease | undefined {
-  const sessionKeys = new Set(params.sessionKeys.map((entry) => entry.trim()).filter(Boolean));
+  const sessionKeys = new Set(normalizeStringEntries(params.sessionKeys));
   const candidates = params.leases.filter((lease) => sessionKeys.has(lease.sessionKey));
   if (params.rootPid) {
     return candidates.find((lease) => lease.rootPid === params.rootPid);

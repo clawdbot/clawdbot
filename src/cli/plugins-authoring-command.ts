@@ -14,6 +14,7 @@ import {
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 type JsonObject = Record<string, unknown>;
@@ -197,7 +198,7 @@ export function buildToolPluginPackageManifest(params: {
   const existingExtensions = Array.isArray(openclaw.extensions)
     ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
     : [];
-  const extensions = [...new Set([...existingExtensions, params.entry])];
+  const extensions = uniqueStrings([...existingExtensions, params.entry]);
   return {
     ...params.packageManifest,
     openclaw: {

@@ -60,9 +60,8 @@ export function fillPixel(
   buf[idx + 3] = a;
 }
 
-/** Encode an RGBA buffer as a PNG image. */
-export function encodePngRgba(buffer: Buffer, width: number, height: number): Buffer {
-  const stride = width * 4;
+function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 4): Buffer {
+  const stride = width * channels;
   const raw = Buffer.alloc((stride + 1) * height);
   for (let row = 0; row < height; row += 1) {
     const rawOffset = row * (stride + 1);
@@ -76,7 +75,7 @@ export function encodePngRgba(buffer: Buffer, width: number, height: number): Bu
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; // bit depth
-  ihdr[9] = 6; // color type RGBA
+  ihdr[9] = channels === 4 ? 6 : 2; // color type RGB/RGBA
   ihdr[10] = 0; // compression
   ihdr[11] = 0; // filter
   ihdr[12] = 0; // interlace
@@ -87,4 +86,14 @@ export function encodePngRgba(buffer: Buffer, width: number, height: number): Bu
     pngChunk("IDAT", compressed),
     pngChunk("IEND", Buffer.alloc(0)),
   ]);
+}
+
+/** Encode an RGB buffer as a PNG image. */
+export function encodePngRgb(buffer: Buffer, width: number, height: number): Buffer {
+  return encodePng(buffer, width, height, 3);
+}
+
+/** Encode an RGBA buffer as a PNG image. */
+export function encodePngRgba(buffer: Buffer, width: number, height: number): Buffer {
+  return encodePng(buffer, width, height, 4);
 }

@@ -31,6 +31,17 @@ type AssistantLikeMessage = {
   }>;
 };
 
+function getToolFunction(tool: Record<string, unknown>): Record<string, unknown> | undefined {
+  const nested = tool.function;
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    return nested as Record<string, unknown>;
+  }
+  if (tool.type === "function" && typeof tool.name === "string") {
+    return tool;
+  }
+  return undefined;
+}
+
 function resolveLiveXaiModel() {
   return getModel("xai", "grok-4.3") ?? getModel("xai", "grok-4.20-0309-reasoning");
 }
@@ -141,11 +152,13 @@ describeLive("xai live", () => {
         ? (payload.tools as Array<Record<string, unknown>>)
         : [];
       expect(payloadTools.length).toBeGreaterThan(0);
-      const firstFunction = payloadTools[0]?.function;
-      requireLiveValue(firstFunction, "first xAI tool function");
+      const firstFunction = requireLiveValue(
+        payloadTools[0] ? getToolFunction(payloadTools[0]) : undefined,
+        "first xAI tool function",
+      );
       expect(typeof firstFunction).toBe("object");
       expect(Array.isArray(firstFunction)).toBe(false);
-      expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
+      expect([undefined, false]).toContain(firstFunction.strict);
     });
   }, 90_000);
 

@@ -7,7 +7,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
-  - "@openclaw/fs-safe@0.2.7"
+  - "@openclaw/fs-safe@0.3.0"
   - "@openclaw/proxyline@0.3.3"
   - "acpx"
   - "tokenjuice"
@@ -16,6 +16,7 @@ minimumReleaseAgeExclude:
   - "basic-ftp"
   - "baileys@7.0.0-rc13"
   - "hono"
+  - "libopus-wasm@0.0.1"
   - "libsignal@6.0.0"
   - "openclaw"
   - "protobufjs"
@@ -23,25 +24,26 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
-  - "@aws-sdk/client-bedrock-runtime@3.1051.0"
-  - "@aws-sdk/client-bedrock@3.1051.0"
+  - "@aws-sdk/client-bedrock-runtime@3.1053.0"
+  - "@aws-sdk/client-bedrock@3.1053.0"
   - "@aws-sdk/client-cognito-identity@3.1051.0"
-  - "@aws-sdk/client-s3@3.1051.0"
+  - "@aws-sdk/client-s3@3.1053.0"
   - "@aws-sdk/core"
   - "@aws-sdk/credential-providers@3.1051.0"
-  - "@aws-sdk/s3-request-presigner@3.1051.0"
-  - "@aws-sdk/token-providers@3.1051.0"
-  - "@copilotkit/aimock@1.27.0"
+  - "@aws-sdk/s3-request-presigner@3.1053.0"
+  - "@aws-sdk/token-providers@3.1052.0"
+  - "@aws-sdk/token-providers@3.1053.0"
+  - "@copilotkit/aimock@1.27.1"
   - "@earendil-works/pi-agent-core"
   - "@earendil-works/pi-ai"
   - "@earendil-works/pi-coding-agent"
   - "@earendil-works/pi-tui"
-  - "@google/genai@2.5.0"
+  - "@google/genai@2.6.0"
   - "@larksuiteoapi/node-sdk@1.65.0"
   - "@openai/codex"
   - "@openai/codex-*"
-  - "@pierre/diffs@1.2.1"
-  - "@smithy/shared-ini-file-loader@4.5.1"
+  - "@pierre/diffs@1.2.2"
+  - "@smithy/shared-ini-file-loader@4.5.4"
   - "@typescript/native-preview*"
   - "@types/node"
   - "@rolldown/*"
@@ -54,15 +56,16 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "rastermill"
 
 nodeLinker: hoisted
 blockExoticSubdeps: true
 
 overrides:
-  "@anthropic-ai/sdk": 0.97.1
+  "@anthropic-ai/sdk": 0.98.0
   hono: 4.12.18
   "@hono/node-server": 1.19.14
-  "@aws-sdk/client-bedrock-runtime": 3.1051.0
+  "@aws-sdk/client-bedrock-runtime": 3.1053.0
   axios: 1.16.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
@@ -76,7 +79,7 @@ overrides:
   ip-address: 10.2.0
   minimatch: 10.2.5
   path-to-regexp: 8.4.0
-  qs: 6.14.2
+  qs: 6.15.2
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.1.38
   tar: 7.5.15
@@ -100,19 +103,19 @@ allowBuilds:
   koffi: false
   node-llama-cpp: true
   protobufjs: true
-  sharp: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
+  rastermill: true
 
 packageExtensions:
+  baileys:
+    peerDependenciesMeta:
+      sharp:
+        optional: true
   "@earendil-works/pi-coding-agent":
     dependencies:
       strip-ansi: 7.2.0
 
-peerDependencyRules:
-  allowedVersions:
-    "prism-media>opusscript": "^0.0.8 || ^0.1.1"
-
 patchedDependencies:
-  "@agentclientprotocol/claude-agent-acp@0.36.1": "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch"
+  '@agentclientprotocol/claude-agent-acp@0.37.0': patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch

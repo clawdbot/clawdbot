@@ -1,4 +1,7 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { createGuildEmoji, createGuildSticker, listGuildEmojis } from "./internal/discord.js";
 import { normalizeEmojiName, resolveDiscordRest } from "./send.shared.js";
@@ -21,7 +24,7 @@ export async function uploadEmojiDiscord(payload: DiscordEmojiUpload, opts: Disc
     throw new Error("Discord emoji uploads require a PNG, JPG, or GIF image");
   }
   const image = `data:${contentType};base64,${media.buffer.toString("base64")}`;
-  const roleIds = (payload.roleIds ?? []).map((id) => id.trim()).filter(Boolean);
+  const roleIds = normalizeStringEntries(payload.roleIds ?? []);
   return await createGuildEmoji(rest, payload.guildId, {
     body: {
       name: normalizeEmojiName(payload.name, "Emoji name"),

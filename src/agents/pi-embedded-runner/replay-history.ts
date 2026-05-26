@@ -17,6 +17,7 @@ import {
   hasInterSessionUserProvenance,
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
+import { asFiniteNumber } from "../../shared/number-coercion.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
@@ -536,7 +537,7 @@ function normalizeAssistantUsageCost(usage: unknown): AssistantUsageSnapshot["co
 }
 
 function toFiniteCostNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function ensureAssistantUsageSnapshots(messages: AgentMessage[]): AgentMessage[] {

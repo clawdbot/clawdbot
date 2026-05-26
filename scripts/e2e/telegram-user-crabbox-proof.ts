@@ -1641,20 +1641,21 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   }
 
   requireUserDriverScript(opts);
-  const credential = await leaseCredential({ localRoot, opts, root });
-  const sut = opts.sutUsername
-    ? { id: "", username: opts.sutUsername }
-    : await sutIdentity(credential.sutToken);
-  const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+  let credential: Awaited<ReturnType<typeof leaseCredential>> | undefined;
   let leaseId = opts.leaseId;
   let createdLease = false;
-  if (!leaseId) {
-    leaseId = await warmupCrabbox(opts, root);
-    createdLease = true;
-  }
-  const inspect = await inspectCrabbox(opts, root, leaseId);
   let localSut: Awaited<ReturnType<typeof startLocalSutDaemon>> | undefined;
   try {
+    credential = await leaseCredential({ localRoot, opts, root });
+    const sut = opts.sutUsername
+      ? { id: "", username: opts.sutUsername }
+      : await sutIdentity(credential.sutToken);
+    const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+    if (!leaseId) {
+      leaseId = await warmupCrabbox(opts, root);
+      createdLease = true;
+    }
+    const inspect = await inspectCrabbox(opts, root, leaseId);
     await writeRemoteSessionScripts({
       inspect,
       localRoot,
@@ -1720,7 +1721,9 @@ async function startSession(root: string, opts: Options, outputDir: string) {
   } catch (error) {
     killPidTree(localSut?.gatewayPid);
     killPidTree(localSut?.mockPid);
-    await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    if (credential) {
+      await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    }
     if (leaseId && createdLease) {
       await stopCrabbox(root, opts, leaseId).catch(() => {});
     }

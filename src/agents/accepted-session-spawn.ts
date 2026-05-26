@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export type AcceptedSessionSpawn = {
@@ -5,14 +6,8 @@ export type AcceptedSessionSpawn = {
   childSessionKey: string;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSessionSpawn | null {
-  const details = asRecord(asRecord(result)?.details);
+  const details = asOptionalRecord(asOptionalRecord(result)?.details);
   if (!details || details.status !== "accepted") {
     return null;
   }
@@ -26,7 +21,7 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
 
 export function hasAcceptedSessionSpawn(acceptedSessionSpawns?: readonly unknown[]): boolean {
   return (acceptedSessionSpawns ?? []).some((spawn) => {
-    const record = asRecord(spawn);
+    const record = asOptionalRecord(spawn);
     if (!record) {
       return false;
     }

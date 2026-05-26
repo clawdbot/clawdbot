@@ -5,7 +5,10 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { danger, warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type GetPluginCommandSpecs =
   typeof import("openclaw/plugin-sdk/plugin-runtime").getPluginCommandSpecs;
@@ -32,9 +35,7 @@ async function appendPluginCommandSpecs(params: {
   getPluginCommandSpecs?: GetPluginCommandSpecs;
 }): Promise<NativeCommandSpec[]> {
   const merged = [...params.commandSpecs];
-  const existingNames = new Set(
-    merged.map((spec) => normalizeLowercaseStringOrEmpty(spec.name)).filter(Boolean),
-  );
+  const existingNames = new Set(normalizeStringEntriesLower(merged.map((spec) => spec.name)));
   const getPluginCommandSpecs =
     params.getPluginCommandSpecs ?? (await loadPluginRuntime()).getPluginCommandSpecs;
   for (const pluginCommand of getPluginCommandSpecs("discord", { config: params.cfg })) {

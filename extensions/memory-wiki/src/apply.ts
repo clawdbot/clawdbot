@@ -4,6 +4,7 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
@@ -115,11 +116,7 @@ function normalizeUniqueStrings(values: string[] | undefined): string[] | undefi
   if (!values) {
     return undefined;
   }
-  const normalized = values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value, index, all) => all.indexOf(value) === index);
-  return normalized;
+  return uniqueStrings(normalizeStringEntries(values));
 }
 
 function ensureHumanNotesBlock(body: string): string {

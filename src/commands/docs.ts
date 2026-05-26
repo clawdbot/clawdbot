@@ -2,6 +2,7 @@ import { hasBinary } from "../agents/skills.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 
@@ -88,10 +89,7 @@ function firstParagraph(text: string): string {
 
 function parseSearchOutput(raw: string): DocResult[] {
   const normalized = raw.replace(/\r/g, "");
-  const blocks = normalized
-    .split(/\n(?=Title: )/g)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
+  const blocks = normalizeStringEntries(normalized.split(/\n(?=Title: )/g));
 
   const results: DocResult[] = [];
   for (const block of blocks) {

@@ -64,6 +64,7 @@ const rootBundledPluginRuntimeDependencies = [
   "@grammyjs/transformer-throttler",
   "@homebridge/ciao",
   "@mozilla/readability",
+  "@silvia-odwyer/photon-node",
   "@slack/bolt",
   "@slack/types",
   "@slack/web-api",
@@ -159,7 +160,12 @@ const config = {
       ],
     },
     ui: {
-      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
+      entry: [
+        "index.html!",
+        "src/main.ts!",
+        "vite.config.ts!",
+        "vitest*.ts!",
+      ],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {

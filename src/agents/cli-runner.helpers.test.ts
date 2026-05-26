@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ImageContent } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -269,13 +270,7 @@ describe("writeCliImages", () => {
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-"),
     );
     const sourceImage = path.join(tempDir, "bb-image.png");
-    await fs.writeFile(
-      sourceImage,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+    await fs.writeFile(sourceImage, createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 }));
 
     try {
       const prepared = await prepareCliPromptImagePayload({
@@ -321,13 +316,7 @@ describe("writeCliImages", () => {
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-prompt-image-generic-"),
     );
     const sourceImage = path.join(tempDir, "claude-image.png");
-    await fs.writeFile(
-      sourceImage,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+    await fs.writeFile(sourceImage, createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 }));
 
     try {
       const prompt = `[media attached: ${sourceImage} (image/png)]\n\n<media:image>`;
@@ -407,13 +396,7 @@ describe("writeCliImages", () => {
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-explicit-images-"),
     );
     const sourceImage = path.join(tempDir, "ignored-prompt-image.png");
-    await fs.writeFile(
-      sourceImage,
-      Buffer.from(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
-        "base64",
-      ),
-    );
+    await fs.writeFile(sourceImage, createSolidPngBuffer(1, 1, { r: 255, g: 255, b: 255 }));
     const explicitImage: ImageContent = {
       type: "image",
       data: "c29tZS1leHBsaWNpdC1pbWFnZQ==",

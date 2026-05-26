@@ -1,3 +1,8 @@
+import {
+  isRecord,
+  normalizeOptionalString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export type GatewayLogSentinelKind =
   | "plugin-hook-failure"
   | "plugin-contract-error"
@@ -136,14 +141,6 @@ function lineNumberForOffset(logs: string, offset: number) {
     return 1;
   }
   return logs.slice(0, offset).split(/\r?\n/u).length;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function extractMessageText(message: Record<string, unknown>) {

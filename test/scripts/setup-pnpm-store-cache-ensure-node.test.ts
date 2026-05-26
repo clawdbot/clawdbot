@@ -29,12 +29,14 @@ exit 0
 
 function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.ProcessEnv = {}) {
   const githubPath = join(root, "github-path");
+  const pathOverride = extraEnv.PATH;
   const result = spawnSync(
     "bash",
     [
       "-c",
       [
         "set -e",
+        ...(pathOverride ? [`export PATH=${JSON.stringify(pathOverride)}`] : []),
         `source "${ensureNodeScript}"`,
         `openclaw_ensure_node "${requested}"`,
         "command -v node",
@@ -87,6 +89,27 @@ describe("setup-pnpm-store-cache ensure-node", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(`Using Node 24.15.0 from ${toolcacheNode}`);
       expect(result.stdout).toContain(`${toolcacheNode}\n24.15.0`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs PATH from the container-mounted GitHub Actions toolcache", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "20.20.0");
+      const toolcacheBin = join(root, "__t", "node", "24.99.99", "x64", "bin");
+      const toolcacheNode = writeFakeNode(toolcacheBin, "24.99.99");
+      const result = runEnsureNode(root, "24.99.99", {
+        PATH: `${activeBin}:${process.env.PATH ?? ""}`,
+        OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "__t"),
+        RUNNER_TOOL_CACHE: join(root, "hostedtoolcache"),
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`Using Node 24.99.99 from ${toolcacheNode}`);
+      expect(result.stdout).toContain(`${toolcacheNode}\n24.99.99`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

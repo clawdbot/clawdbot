@@ -161,14 +161,26 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs assert-agent-turn "$SUC
 
 echo "Installing first external plugin..."
 plugin_a_dir="$(mktemp -d "/tmp/openclaw-release-journey-plugin-a.XXXXXX")"
+plugin_a_install_path_file="/tmp/openclaw-release-user-journey-plugin-a-install-path.txt"
+plugin_a_source_path_file="/tmp/openclaw-release-user-journey-plugin-a-source-path.txt"
 write_journey_plugin "$plugin_a_dir" journey-plugin-a 0.0.1 journey.a "Journey Plugin A" journey-a "journey-plugin-a:pong"
 openclaw plugins install "$plugin_a_dir" >/tmp/openclaw-release-user-journey-plugin-a-install.log 2>&1
+node scripts/e2e/lib/release-user-journey/assertions.mjs \
+  remember-plugin-install-path \
+  journey-plugin-a \
+  "$plugin_a_install_path_file" \
+  "$plugin_a_source_path_file" \
+  "$plugin_a_dir"
 openclaw journey-a ping >/tmp/openclaw-release-user-journey-plugin-a-cli.log 2>&1
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-file-contains /tmp/openclaw-release-user-journey-plugin-a-cli.log "journey-plugin-a:pong"
 
 echo "Uninstalling first external plugin..."
 openclaw plugins uninstall journey-plugin-a --force >/tmp/openclaw-release-user-journey-plugin-a-uninstall.log 2>&1
-node scripts/e2e/lib/release-user-journey/assertions.mjs assert-plugin-uninstalled journey-plugin-a
+node scripts/e2e/lib/release-user-journey/assertions.mjs \
+  assert-plugin-uninstalled \
+  journey-plugin-a \
+  "$plugin_a_install_path_file" \
+  "$plugin_a_source_path_file"
 
 echo "Installing replacement external plugin..."
 plugin_b_dir="$(mktemp -d "/tmp/openclaw-release-journey-plugin-b.XXXXXX")"

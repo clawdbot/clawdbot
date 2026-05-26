@@ -5,7 +5,7 @@ description: Inspect, patch, validate, publish, or confirm OpenClaw GHSA securit
 
 # OpenClaw GHSA Maintainer
 
-Use this skill for repo security advisory workflow only. Keep general release work in `openclaw-release-maintainer`.
+Use this skill for repo security advisory workflow only. Keep general release work in `release-openclaw-maintainer`.
 
 ## Respect advisory guardrails
 

@@ -9,7 +9,7 @@ export function assertSafeCronSessionTargetId(sessionId: string): string {
   if (!trimmed) {
     throw new Error(INVALID_CRON_SESSION_TARGET_ID_ERROR);
   }
-  if (trimmed.includes("/") || trimmed.includes("\\") || trimmed.includes("\0")) {
+  if (trimmed.includes("\0")) {
     throw new Error(INVALID_CRON_SESSION_TARGET_ID_ERROR);
   }
   return trimmed;

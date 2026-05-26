@@ -513,7 +513,24 @@ jobs:
         run: pnpm test:build:singleton
 
       - name: Check CLI startup memory
-        run: pnpm test:startup:memory
+        shell: bash
+        run: |
+          set +e
+          pnpm test:startup:memory
+          status=$?
+          if [[ -f .artifacts/startup-memory/summary.md ]]; then
+            cat .artifacts/startup-memory/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
+
+      - name: Upload startup memory report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: startup-memory
+          path: .artifacts/startup-memory/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Run built artifact checks
         id: built_artifact_checks

@@ -1,3 +1,4 @@
+import { isRecord } from "../shared/record-coerce.js";
 import type {
   DocumentExtractorPlugin,
   PluginDocumentExtractorEntry,
@@ -8,10 +9,6 @@ const DOCUMENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "document-extractor.js",
   "document-extractor-api.js",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isDocumentExtractorPlugin(value: unknown): value is DocumentExtractorPlugin {
   return (

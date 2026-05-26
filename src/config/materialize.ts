@@ -3,6 +3,7 @@ import {
   applyCompactionDefaults,
   applyContextPruningDefaults,
   applyAgentDefaults,
+  applyCronDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
@@ -63,6 +64,7 @@ export function materializeRuntimeConfig(
   }
   next = applySessionDefaults(next);
   next = applyAgentDefaults(next);
+  next = applyCronDefaults(next);
   if (profile.includeContextPruningDefaults) {
     next = applyContextPruningDefaults(next, { manifestRegistry: options.manifestRegistry });
   }

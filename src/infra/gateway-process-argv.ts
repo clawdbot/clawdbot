@@ -1,14 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 function normalizeProcArg(arg: string): string {
   return normalizeLowercaseStringOrEmpty(arg.replaceAll("\\", "/"));
 }
 
 export function parseProcCmdline(raw: string): string[] {
-  return raw
-    .split("\0")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(raw.split("\0"));
 }
 
 /**

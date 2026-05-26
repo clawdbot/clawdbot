@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { formatTaskStatusDetail } from "../../tasks/task-status.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -132,11 +133,15 @@ function expectTaskRun(params: {
   runtime: string;
   status: string;
   sourceId: string;
+  progressSummary?: string;
 }) {
   const task = findTaskByRunId(params.runId);
   expect(task?.runtime).toBe(params.runtime);
   expect(task?.status).toBe(params.status);
   expect(task?.sourceId).toBe(params.sourceId);
+  if (params.progressSummary !== undefined) {
+    expect(task?.progressSummary).toBe(params.progressSummary);
+  }
 }
 
 function createMissedIsolatedJob(now: number): CronJob {
@@ -373,6 +378,7 @@ describe("cron service ops seam coverage", () => {
         runtime: "cron",
         status: "succeeded",
         sourceId: "isolated-timeout",
+        progressSummary: "Running cron job.",
       });
       expect(findTaskByRunId(manualRunId)).toBeUndefined();
     } finally {
@@ -546,7 +552,51 @@ describe("cron service ops seam coverage", () => {
         runtime: "cron",
         status: "timed_out",
         sourceId: "startup-timeout",
+        progressSummary: "Running cron job.",
       });
+    } finally {
+      restoreStateDir();
+    }
+  });
+
+  it("seeds active manual cron task progress for status surfaces", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const restoreStateDir = withStateDirForStorePath(storePath);
+
+    try {
+      await writeDueIsolatedJobSnapshot(storePath, now);
+      let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob: vi.fn(
+          () =>
+            new Promise<{ status: "ok"; summary: string }>((resolve) => {
+              resolveRun = resolve;
+            }),
+        ),
+      });
+
+      const manualRun = run(state, "isolated-timeout");
+      await vi.waitFor(() => {
+        expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
+      });
+
+      const task = findTaskByRunId(`cron:isolated-timeout:${now}`);
+      if (!task) {
+        throw new Error("expected active manual cron task ledger record");
+      }
+      expect(task.status).toBe("running");
+      expect(task.progressSummary).toBe("Running cron job.");
+      expect(formatTaskStatusDetail(task)).toBe("Running cron job.");
+
+      resolveRun?.({ status: "ok", summary: "done" });
+      await manualRun;
     } finally {
       restoreStateDir();
     }

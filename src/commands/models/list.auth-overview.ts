@@ -5,7 +5,7 @@ import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persis
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveProfileUnusableUntilForDisplay } from "../../agents/auth-profiles/usage.js";
-import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
+import { isNonSecretApiKeyMarker, isOAuthApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
@@ -176,6 +176,9 @@ export function resolveProviderAuthOverview(params: {
     }
     if (params.syntheticAuth) {
       return { kind: "synthetic", detail: params.syntheticAuth.source };
+    }
+    if (customKey && isOAuthApiKeyMarker(customKey)) {
+      return { kind: "models.json", detail: formatMarkerOrSecret(customKey) };
     }
     return { kind: "missing", detail: "missing" };
   })();

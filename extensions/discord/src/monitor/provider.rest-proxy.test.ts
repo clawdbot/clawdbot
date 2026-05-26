@@ -65,7 +65,10 @@ const { undiciFetchMock, agentSpy, envHttpProxyAgentSpy, proxyAgentSpy, createMo
 
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 
-vi.mock("undici", () => createMockUndiciRuntime());
+vi.mock("undici", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("undici")>()),
+  ...createMockUndiciRuntime(),
+}));
 
 let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
 

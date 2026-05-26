@@ -1,5 +1,7 @@
 import fs from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -18,6 +20,27 @@ import {
 } from "./transcript.js";
 
 describe("appendAssistantMessageToSessionTranscript", () => {
+  beforeAll(async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-warm-"));
+    try {
+      const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const storePath = path.join(sessionsDir, "sessions.json");
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({ warm: { sessionId: "warm-session", chatType: "direct" } }),
+        "utf-8",
+      );
+      await appendAssistantMessageToSessionTranscript({
+        sessionKey: "warm",
+        text: "warm",
+        storePath,
+      });
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   const fixture = useTempSessionsFixture("transcript-test-");
   const sessionId = "test-session-id";
   const sessionKey = "test-session";

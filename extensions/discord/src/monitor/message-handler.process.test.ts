@@ -5,6 +5,7 @@ import {
   type ChannelBotLoopProtectionFacts,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
@@ -211,6 +212,7 @@ let createDiscordDirectMessageContextOverrides: typeof import("./message-handler
 let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
+let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
 let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
@@ -373,7 +375,8 @@ beforeAll(async () => {
     await import("./message-handler.test-harness.js"));
   ({ testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
-  ({ processDiscordMessage } = await import("./message-handler.process.js"));
+  ({ processDiscordMessage, formatDiscordReplySkip } =
+    await import("./message-handler.process.js"));
   ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
 });
 
@@ -2743,5 +2746,57 @@ describe("processDiscordMessage draft streaming", () => {
     await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("processDiscordMessage deliver-lambda abort logging", () => {
+  it("emits logVerbose with formatDiscordReplySkip when deliver fires on a pre-aborted signal", async () => {
+    // Capture logVerbose calls via the ESM namespace binding. We rely on the
+    // same vi.spyOn pattern used in native-command.model-picker.test.ts so the
+    // production module keeps its real logVerbose import while the test still
+    // sees every invocation that the deliver lambda surfaces.
+    const verboseSpy = vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => {});
+
+    const abortController = new AbortController();
+    // Drive the dispatcher so deliver actually runs: abort the signal inside
+    // the dispatch mock and then queue a single block reply via the captured
+    // dispatcher. The mocked createReplyDispatcherWithTyping (see line ~229)
+    // routes sendBlockReply straight into the deliver lambda, where the very
+    // first gate is `if (isProcessAborted(abortSignal)) return;` — the line
+    // the PR added the logVerbose call to.
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      abortController.abort();
+      await params?.dispatcher.sendBlockReply({ text: "post-abort block payload" });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      abortSignal: abortController.signal,
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    // The base test harness routes through guild g1 / channel c1 (see
+    // createBaseDiscordMessageContext) so the deliver lambda receives the
+    // matching deliver target and session key from ctxPayload.SessionKey.
+    const dispatchedSessionKey = getLastDispatchCtx()?.SessionKey;
+    expect(dispatchedSessionKey).toBeTypeOf("string");
+    const expectedLog = formatDiscordReplySkip({
+      kind: "block",
+      reason: "aborted before delivery",
+      target: "channel:c1",
+      sessionKey: dispatchedSessionKey,
+    });
+    const verboseCalls = verboseSpy.mock.calls.map((call) => call[0]);
+    expect(verboseCalls).toContain(expectedLog);
+    // Restore so other tests sharing this worker (isolate=false) keep the
+    // real logVerbose binding.
+    verboseSpy.mockRestore();
   });
 });

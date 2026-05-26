@@ -12,6 +12,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+import { normalizeSortedUniqueStringEntries } from "../shared/string-normalization.js";
 
 type StartupThinkLevel =
   | "off"
@@ -151,9 +152,7 @@ function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,
 ) {
-  const pluginIds = [...new Set(loadedPluginIds.map((id) => id.trim()).filter(Boolean))].toSorted(
-    (a, b) => a.localeCompare(b),
-  );
+  const pluginIds = normalizeSortedUniqueStringEntries(loadedPluginIds);
   const pluginSummary =
     pluginIds.length === 0
       ? "0 plugins"

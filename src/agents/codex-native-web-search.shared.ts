@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeUniqueTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 export type CodexNativeSearchMode = "cached" | "live";
@@ -20,16 +21,7 @@ export type ResolvedCodexNativeWebSearchConfig = {
 };
 
 function normalizeAllowedDomains(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const deduped = [
-    ...new Set(
-      value
-        .map((entry) => (typeof entry === "string" ? entry.trim() : null))
-        .filter((entry): entry is string => Boolean(entry)),
-    ),
-  ];
+  const deduped = normalizeUniqueTrimmedStringList(value);
   return deduped.length > 0 ? deduped : undefined;
 }
 

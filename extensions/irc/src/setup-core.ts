@@ -83,7 +83,7 @@ export function setIrcGroupAccess(
     return updateIrcAccountConfig(cfg, accountId, { enabled: true, groupPolicy: policy });
   }
   const normalizedEntries = [
-    ...new Set(entries.map((entry) => normalizeGroupEntry(entry)).filter(Boolean)),
+    ...new Set(entries.flatMap((entry) => normalizeGroupEntry(entry) ?? [])),
   ];
   const groups = Object.fromEntries(normalizedEntries.map((entry) => [entry, {}]));
   return updateIrcAccountConfig(cfg, accountId, {

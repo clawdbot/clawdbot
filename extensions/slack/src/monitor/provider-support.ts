@@ -1,3 +1,4 @@
+import { asOptionalRecord as asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SlackChannelResolution } from "../resolve-channels.js";
 import type { SlackUserResolution } from "../resolve-users.js";
 import { formatUnknownError, waitForSlackSocketDisconnect } from "./reconnect-policy.js";
@@ -263,12 +264,6 @@ export function createSlackSocketModeLogger(
     },
     getLastMessage: () => lastMessage,
   };
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 export function shouldSkipOpenClawSlackSelfEvent(args: SlackSelfFilterArgs): boolean {

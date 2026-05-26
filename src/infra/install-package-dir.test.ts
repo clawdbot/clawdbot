@@ -149,6 +149,11 @@ async function createExistingInstallFixture(fixtureRoot: string) {
   return { installBaseDir, sourceDir, targetDir };
 }
 
+async function addHardlinkedFile(filePath: string, linkPath: string): Promise<void> {
+  await fs.mkdir(path.dirname(linkPath), { recursive: true });
+  await fs.link(filePath, linkPath);
+}
+
 async function createReboundInstallFixture(params: {
   fixtureRoot: string;
   withExistingInstall?: boolean;
@@ -295,6 +300,156 @@ describe("installPackageDir", () => {
       listMatchingDirs(installBaseDir, ".openclaw-install-stage-"),
     ).resolves.toHaveLength(0);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "updates package-manager installs that contain hardlinked package files",
+    async () => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+      await addHardlinkedFile(
+        path.join(targetDir, "marker.txt"),
+        path.join(fixtureRoot, "cache", "existing-marker.txt"),
+      );
+
+      vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, optionsOrTimeout) => {
+        const cwd = typeof optionsOrTimeout === "number" ? undefined : optionsOrTimeout.cwd;
+        if (cwd === undefined) {
+          throw new Error("expected staged package install cwd");
+        }
+        const depFile = path.join(cwd, "node_modules", "demo-dep", "index.js");
+        await fs.mkdir(path.dirname(depFile), { recursive: true });
+        await fs.writeFile(depFile, "module.exports = 1;\n", "utf8");
+        await addHardlinkedFile(depFile, path.join(fixtureRoot, "cache", "staged-dep.js"));
+        return {
+          stdout: "",
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      });
+
+      const result = await installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "update",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: true,
+        sourceHardlinks: "package-manager",
+        depsLogMessage: "Installing deps…",
+      });
+
+      expect(result).toEqual({ ok: true });
+      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("new");
+      await expect(
+        fs.lstat(path.join(targetDir, "node_modules", "demo-dep", "index.js")),
+      ).resolves.toMatchObject({ nlink: 2 });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "requires explicit package-manager hardlink allowance for dependency installs",
+    async () => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+      await addHardlinkedFile(
+        path.join(targetDir, "marker.txt"),
+        path.join(fixtureRoot, "cache", "existing-marker.txt"),
+      );
+
+      vi.mocked(runCommandWithTimeout).mockResolvedValue({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+
+      const result = await installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "update",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: true,
+        depsLogMessage: "Installing deps…",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Hardlinked source file is not allowed");
+      }
+      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps hardlinked existing installs rejected for dependency-free updates",
+    async () => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+      await addHardlinkedFile(
+        path.join(targetDir, "marker.txt"),
+        path.join(fixtureRoot, "cache", "existing-marker.txt"),
+      );
+
+      const result = await installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "update",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "Installing deps…",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Hardlinked source file is not allowed");
+      }
+      await expect(fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).resolves.toBe("old");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "keeps hardlinked staged installs rejected for dependency-free publishes",
+    async () => {
+      await fixtureRootTracker.setup();
+      const fixtureRoot = await fixtureRootTracker.make("case");
+      const sourceDir = path.join(fixtureRoot, "source");
+      const targetDir = path.join(fixtureRoot, "plugins", "demo");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "marker.txt"), "new");
+
+      const result = await installPackageDir({
+        sourceDir,
+        targetDir,
+        mode: "install",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "Installing deps…",
+        afterCopy: async (installedDir) => {
+          await addHardlinkedFile(
+            path.join(installedDir, "marker.txt"),
+            path.join(fixtureRoot, "cache", "staged-marker.txt"),
+          );
+        },
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("Hardlinked source file is not allowed");
+      }
+      await expectMissingPath(path.join(targetDir, "marker.txt"));
+    },
+  );
 
   it("aborts without outside writes when the install base is rebound before publish", async () => {
     await fixtureRootTracker.setup();

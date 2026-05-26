@@ -96,12 +96,19 @@ export async function ensureConfigReady(params: {
     return;
   }
 
-  const [{ colorize, isRich, theme }, { shortenHomePath }, { formatCliCommand }] =
-    await Promise.all([
-      import("../../terminal/theme.js"),
-      import("../../utils.js"),
-      import("../command-format.js"),
-    ]);
+  const [
+    { colorize, isRich, theme },
+    { shortenHomePath },
+    { formatCliCommand },
+    { isPluginPackagingRuntimeOutputInvalidConfigSnapshot },
+    { formatPluginPackagingRuntimeOutputRecoveryHint },
+  ] = await Promise.all([
+    import("../../terminal/theme.js"),
+    import("../../utils.js"),
+    import("../command-format.js"),
+    import("../../config/recovery-policy.js"),
+    import("../config-recovery-hints.js"),
+  ]);
   const rich = isRich();
   const muted = (value: string) => colorize(rich, theme.muted, value);
   const error = (value: string) => colorize(rich, theme.error, value);
@@ -119,9 +126,10 @@ export async function ensureConfigReady(params: {
     params.runtime.error(legacyIssues.map((issue) => `  ${error(issue)}`).join("\n"));
   }
   params.runtime.error("");
-  params.runtime.error(
-    `${muted("Fix:")} ${commandText(formatCliCommand("openclaw doctor --fix"))}`,
-  );
+  const fixHint = isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+    ? formatPluginPackagingRuntimeOutputRecoveryHint()
+    : commandText(formatCliCommand("openclaw doctor --fix"));
+  params.runtime.error(`${muted("Fix:")} ${fixHint}`);
   params.runtime.error(
     `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
   );

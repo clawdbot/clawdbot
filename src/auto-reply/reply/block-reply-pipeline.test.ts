@@ -192,6 +192,60 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(sent).toEqual([{ presentation }]);
   });
 
+  it("merges coalesced text into a following media payload", async () => {
+    const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue({ text: "Preview" });
+    pipeline.enqueue({ text: "below" });
+    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "Preview below", mediaUrls: ["file:///photo.png"] }]);
+    expect(pipeline.getSentMediaUrls()).toEqual(["file:///photo.png"]);
+    expect(pipeline.hasSentPayload({ text: "Preview below" })).toBe(true);
+  });
+
+  it("keeps media separate across assistant message boundaries", async () => {
+    const sent: Array<{ text?: string; mediaUrls?: string[] }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, mediaUrls: payload.mediaUrls });
+      },
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ text: "First block" }, { assistantMessageIndex: 0 }),
+    );
+    pipeline.enqueue(
+      setReplyPayloadMetadata({ mediaUrls: ["file:///photo.png"] }, { assistantMessageIndex: 1 }),
+    );
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([
+      { text: "First block", mediaUrls: undefined },
+      { text: undefined, mediaUrls: ["file:///photo.png"] },
+    ]);
+  });
+
   it("does not track media when text-only blocks are delivered", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},

@@ -92,4 +92,10 @@ describe("exitCodeFromFindings", () => {
     expect(exitCodeFromFindings(findings, "warning")).toBe(1);
     expect(exitCodeFromFindings(findings, "error")).toBe(0);
   });
+
+  it("does not fail default lint for informational findings", () => {
+    const findings = [{ checkId: "a", severity: "info" as const, message: "info" }];
+
+    expect(exitCodeFromFindings(findings)).toBe(0);
+  });
 });

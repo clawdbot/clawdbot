@@ -1003,8 +1003,8 @@ function buildAssistantText(
         : scenarioToolOutput;
   const orbitCode = extractOrbitCode(memorySnippet) ?? extractOrbitCode(allInputText);
   const mediaPath = /MEDIA:([^\n]+)/.exec(toolOutput)?.[1]?.trim();
-  const exactReplyDirective =
-    extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
+  const promptExactReplyDirective = extractExactReplyDirective(prompt);
+  const exactReplyDirective = promptExactReplyDirective ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const finishExactlyDirective =
@@ -1041,6 +1041,9 @@ function buildAssistantText(
   }
   if (/\bmarker\b/i.test(allInputText) && exactMarkerDirective) {
     return exactMarkerDirective;
+  }
+  if (promptExactReplyDirective) {
+    return promptExactReplyDirective;
   }
   if (/visible skill marker/i.test(prompt)) {
     return "VISIBLE-SKILL-OK";

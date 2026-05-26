@@ -1,4 +1,5 @@
 import type { Api, AssistantMessage, Context, Model } from "@earendil-works/pi-ai";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";
 
@@ -60,11 +61,9 @@ export function isLiveModelProbeEnabled(
 }
 
 export function extractAssistantText(message: Pick<AssistantMessage, "content">): string {
-  return message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text.trim())
-    .filter(Boolean)
-    .join(" ");
+  return normalizeStringEntries(
+    message.content.filter((block) => block.type === "text").map((block) => block.text),
+  ).join(" ");
 }
 
 export function modelSupportsImageInput(model: Pick<Model<Api>, "input">): boolean {

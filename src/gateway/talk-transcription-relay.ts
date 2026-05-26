@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionProviderConfig } from "../realtime-transcription/provider-types.js";
+import { parseFiniteNumber as readFiniteNumber } from "../shared/number-coercion.js";
 import { recordTalkObservabilityEvent } from "../talk/observability.js";
 import {
   type TalkEvent,
@@ -102,16 +103,6 @@ function normalizeRelayInputEncoding(
     return "pcm16";
   }
   return undefined;
-}
-
-function readFiniteNumber(value: unknown): number | undefined {
-  const next =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? Number.parseFloat(value)
-        : undefined;
-  return Number.isFinite(next) ? next : undefined;
 }
 
 function inferSampleRateFromAudioFormat(value: unknown): number | undefined {

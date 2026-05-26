@@ -403,7 +403,7 @@ async function resolveCodexAppServerEnvApiKeyLoginParams(params: {
   const response = await params.client.request<CodexGetAccountResponse>("account/read", {
     refreshToken: false,
   });
-  if (response.account || !response.requiresOpenaiAuth) {
+  if (response.account) {
     return undefined;
   }
   return { type: "apiKey", apiKey };

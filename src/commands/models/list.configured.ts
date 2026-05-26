@@ -73,6 +73,9 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   });
 
   for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
+    if (key.trim().endsWith("/*")) {
+      continue;
+    }
     const resolved = resolveModelRefFromString({
       cfg,
       raw: key,

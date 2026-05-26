@@ -72,4 +72,38 @@ describe("model-selection plugin runtime normalization", () => {
     });
     expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
   });
+
+  it("keeps provider plugin normalization when inferring provider for bare defaults", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+
+    const { resolveConfiguredModelRef } = await import("./model-selection.js");
+
+    expect(
+      resolveConfiguredModelRef({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "custom-legacy-model" },
+              models: {
+                "custom-provider/custom-legacy-model": {},
+              },
+            },
+          },
+        },
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+      }),
+    ).toEqual({
+      provider: "custom-provider",
+      model: "custom-modern-model",
+    });
+  });
 });

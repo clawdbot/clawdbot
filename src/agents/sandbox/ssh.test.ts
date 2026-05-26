@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildExecRemoteCommand,
+  buildValidatedExecRemoteCommand,
   createSshSandboxSessionFromSettings,
   disposeSshSandboxSession,
   type SshSandboxSession,
@@ -108,6 +109,67 @@ describe("sandbox ssh helpers", () => {
     expect(command).toContain(`'env'`);
     expect(command).toContain(`'TOKEN=abc 123'`);
     expect(command).toContain(`'cd '"'"'/sandbox/project'"'"' && pwd && printenv TOKEN'`);
+  });
+
+  it("keeps the public exec command builder quote-only for compatibility", () => {
+    const command = buildExecRemoteCommand({
+      command: "workflow run <workflow-id> --ref main",
+      env: {},
+    });
+
+    expect(command).toContain(`'/bin/sh'`);
+    expect(command).toContain(`'workflow run <workflow-id> --ref main'`);
+  });
+
+  it.each([
+    ["workflow install <name>", /unresolved placeholder token <name>/],
+    ["workflow run <workflow-id> --ref main", /unresolved placeholder token <workflow-id>/],
+    ["echo $(workflow run <workflow-id> --ref main)", /unresolved placeholder token <workflow-id>/],
+    ["WORKFLOW_ID=<workflow-id> workflow run", /unresolved placeholder token <workflow-id>/],
+    ['echo "unterminated', /unclosed double quote/],
+    ["printf '%s", /unclosed single quote/],
+    ["echo foo\\", /trailing backslash escape/],
+    ["echo `date", /unterminated backtick command substitution/],
+    ["echo $(date", /unterminated command substitution/],
+    ["echo $((1 << 2)", /unterminated arithmetic expansion/],
+    ["cat <<EOF", /unterminated here-doc EOF/],
+    ["cat <<EOF\nstill open", /unterminated here-doc EOF/],
+  ])("rejects malformed generated exec commands: %s", (rawCommand, message) => {
+    expect(() =>
+      buildValidatedExecRemoteCommand({
+        command: rawCommand,
+        env: {},
+      }),
+    ).toThrow(message);
+  });
+
+  it("allows shell features and quoted placeholder-looking text", () => {
+    expect(() =>
+      buildValidatedExecRemoteCommand({
+        command: [
+          "cat < input.txt > output.txt",
+          "cat <in>out",
+          "cat <input> output",
+          "cat = <input-file> output.txt",
+          'cat <input-file> "output file"',
+          "cat <<'EOF' > literal.txt",
+          "<workflow-id>",
+          '"unterminated quote text is data here',
+          "`unterminated backtick text is data here",
+          "EOF",
+          ": <<EOF $(printf '%s' hi\n)\nbody\nEOF",
+          "echo $(cat <<EOF\ninside\nEOF\n)",
+          "cat <<EOF\r\nwindows line endings\r\nEOF\r\n",
+          "echo $(printf '%s' ok)",
+          "echo `date`",
+          "diff <(sort left.txt) <(sort right.txt)",
+          "echo $((1 << 2))",
+          'printf "%s\\n" "<name>"',
+          "# workflow run <workflow-id>",
+        ].join("\n"),
+        env: {},
+      }),
+    ).not.toThrow();
   });
 
   it.runIf(process.platform !== "win32")(

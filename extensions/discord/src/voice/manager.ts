@@ -1563,25 +1563,50 @@ export class DiscordVoiceManager {
     });
     const generation = beginVoiceCapture(entry.capture, userId, stream);
     let streamAborted = false;
-    stream.on("error", (err) => {
-      streamAborted = analyzeVoiceReceiveError(err).isAbortLike;
+    let receiveFailureHandled = false;
+    let receiveStreamEndHandled = false;
+    const handleStreamError = (err: unknown) => {
+      const analysis = analyzeVoiceReceiveError(err);
+      if (analysis.isAbortLike && !analysis.countsAsDecryptFailure) {
+        if (receiveStreamEndHandled) {
+          return;
+        }
+        receiveStreamEndHandled = true;
+        streamAborted = true;
+        this.handleReceiveError(entry, err);
+        return;
+      }
+      if (receiveFailureHandled) {
+        return;
+      }
+      receiveFailureHandled = true;
       this.handleReceiveError(entry, err);
-    });
+    };
+    stream.on("error", handleStreamError);
 
     try {
       if (realtime && realtimeIngress) {
         const turn = realtime.beginSpeakerTurn(realtimeIngress, userId);
         try {
-          await this.processRealtimeAudioCapture({ entry, stream, turn });
+          await this.processRealtimeAudioCapture({
+            entry,
+            onReceiveError: handleStreamError,
+            stream,
+            turn,
+          });
         } finally {
           turn.close();
         }
         return;
       }
       const pcm = await decodeOpusStream(stream, {
+        onError: handleStreamError,
         onVerbose: logVoiceVerbose,
         onWarn: (message) => logger.warn(message),
       });
+      if (receiveFailureHandled) {
+        return;
+      }
       if (pcm.length === 0) {
         logVoiceVerbose(
           `capture empty: guild ${entry.guildId} channel ${entry.channelId} user ${userId}`,
@@ -1603,17 +1628,27 @@ export class DiscordVoiceManager {
       this.enqueueProcessing(entry, async () => {
         await this.processSegment({ entry, wavPath, userId, durationSeconds });
       });
+    } catch (err) {
+      if (!receiveFailureHandled) {
+        this.handleReceiveError(entry, err);
+      }
+      throw err;
     } finally {
-      finishVoiceCapture(entry.capture, userId, generation);
+      stream.off?.("error", handleStreamError);
+      const finishedActiveCapture = finishVoiceCapture(entry.capture, userId, generation);
+      if (finishedActiveCapture && !stream.destroyed) {
+        stream.destroy();
+      }
     }
   }
 
   private async processRealtimeAudioCapture(params: {
     entry: VoiceSessionEntry;
+    onReceiveError: (err: unknown) => void;
     stream: import("node:stream").Readable;
     turn: import("./session.js").VoiceRealtimeSpeakerTurn;
   }): Promise<void> {
-    const { entry, stream, turn } = params;
+    const { entry, onReceiveError, stream, turn } = params;
     let resetReceiveRecovery = false;
     await decodeOpusStreamChunks(stream, {
       onChunk: (pcm) => {
@@ -1623,6 +1658,7 @@ export class DiscordVoiceManager {
         }
         turn.sendInputAudio(pcm);
       },
+      onError: onReceiveError,
       onVerbose: logVoiceVerbose,
       onWarn: (message) => logger.warn(message),
     });

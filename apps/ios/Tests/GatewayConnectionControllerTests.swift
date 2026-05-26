@@ -1,5 +1,5 @@
-import OpenClawKit
 import Foundation
+import OpenClawKit
 import Testing
 import UIKit
 @testable import OpenClaw
@@ -52,6 +52,7 @@ import UIKit
             #expect(commands.contains(OpenClawLocationCommand.get.rawValue))
         }
     }
+
     @Test @MainActor func currentCommandsExcludeDangerousSystemExecCommands() {
         withUserDefaults([
             "node.instanceId": "ios-test",
@@ -87,8 +88,23 @@ import UIKit
         #expect(withoutApprovalScope.scopes.contains("operator.write"))
         #expect(!withoutApprovalScope.scopes.contains("operator.approvals"))
         #expect(withoutApprovalScope.scopes.contains("operator.talk.secrets"))
+        #expect(!withoutApprovalScope.scopesAreExplicit)
 
         #expect(withApprovalScope.scopes.contains("operator.approvals"))
+    }
+
+    @Test @MainActor func operatorTalkPermissionUpgradeUsesExplicitScopes() {
+        let appModel = NodeAppModel()
+        let options = appModel._test_makeOperatorConnectOptions(
+            clientId: "openclaw-ios",
+            displayName: "OpenClaw iOS",
+            includeApprovalScope: false,
+            forceExplicitScopes: true)
+
+        #expect(options.scopesAreExplicit)
+        #expect(options.scopes.contains("operator.read"))
+        #expect(options.scopes.contains("operator.write"))
+        #expect(options.scopes.contains("operator.talk.secrets"))
     }
 
     @Test func operatorApprovalScopeRequestsStayBackwardCompatible() {
@@ -96,8 +112,7 @@ import UIKit
             !NodeAppModel._test_shouldRequestOperatorApprovalScope(
                 token: nil,
                 password: nil,
-                storedOperatorScopes: ["operator.read", "operator.write", "operator.talk.secrets"])
-        )
+                storedOperatorScopes: ["operator.read", "operator.write", "operator.talk.secrets"]))
         #expect(
             NodeAppModel._test_shouldRequestOperatorApprovalScope(
                 token: nil,
@@ -107,14 +122,12 @@ import UIKit
                     "operator.read",
                     "operator.write",
                     "operator.talk.secrets",
-                ])
-        )
+                ]))
         #expect(
             NodeAppModel._test_shouldRequestOperatorApprovalScope(
                 token: "shared-token",
                 password: nil,
-                storedOperatorScopes: [])
-        )
+                storedOperatorScopes: []))
     }
 
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
@@ -134,7 +147,11 @@ import UIKit
             useTLS: true,
             stableID: "manual|gateway.example.com|443")
         let loaded = GatewaySettingsStore.loadLastGatewayConnection()
-        #expect(loaded == .manual(host: "gateway.example.com", port: 443, useTLS: true, stableID: "manual|gateway.example.com|443"))
+        #expect(loaded == .manual(
+            host: "gateway.example.com",
+            port: 443,
+            useTLS: true,
+            stableID: "manual|gateway.example.com|443"))
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {

@@ -238,6 +238,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       testDir,
       "fresh-session.checkpoint.22222222-2222-4222-8222-222222222222.jsonl",
     );
+    const referencedPostCompactionPath = path.join(testDir, "fresh-session-compacted.jsonl");
     const store: Record<string, SessionEntry> = {
       fresh: {
         sessionId: "fresh-session",
@@ -254,7 +255,10 @@ describe("Integration: saveSessionStore with pruning", () => {
               sessionFile: referencedCheckpointPath,
               leafId: "leaf",
             },
-            postCompaction: { sessionId: "fresh-session" },
+            postCompaction: {
+              sessionId: "fresh-session",
+              sessionFile: referencedPostCompactionPath,
+            },
           },
         ],
       },
@@ -271,6 +275,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
     await fs.writeFile(referencedTranscript, "referenced", "utf-8");
     await fs.writeFile(referencedCheckpointPath, "referenced checkpoint", "utf-8");
+    await fs.writeFile(referencedPostCompactionPath, "referenced post-compaction", "utf-8");
     await fs.writeFile(oldOrphanTranscript, "orphan transcript", "utf-8");
     await fs.writeFile(freshOrphanTranscript, "fresh orphan", "utf-8");
     await fs.writeFile(orphanRuntime, "orphan runtime", "utf-8");
@@ -279,6 +284,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     for (const file of [
       referencedTranscript,
       referencedCheckpointPath,
+      referencedPostCompactionPath,
       oldOrphanTranscript,
       orphanRuntime,
       orphanPointer,
@@ -312,6 +318,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathMissing(orphanCheckpoint);
     await expectPathExists(referencedTranscript);
     await expectPathExists(referencedCheckpointPath);
+    await expectPathExists(referencedPostCompactionPath);
     await expectPathExists(freshOrphanTranscript);
   });
 

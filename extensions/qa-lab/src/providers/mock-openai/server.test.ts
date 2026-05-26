@@ -397,6 +397,51 @@ describe("qa mock openai server", () => {
     expect(final.output[0]?.content?.[0]?.text).toBe("TOOL_PROGRESS_MARKER_OK");
   });
 
+  it("honors exact replies after QA kickoff reads without marker wording", async () => {
+    const server = await startMockServer();
+    const prompt =
+      "Gateway restart in-flight QA check. Read QA_KICKOFF_TASK.md, then reply exactly: RESTART-INFLIGHT-MAYBE-OK";
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
+        },
+      ],
+    });
+
+    expect(final.output[0]?.content?.[0]?.text).toBe("RESTART-INFLIGHT-MAYBE-OK");
+  });
+
+  it("does not use stale exact replies from instructions after QA reads", async () => {
+    const server = await startMockServer();
+
+    const final = await expectResponsesJson<{
+      output: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      instructions: "If this is a heartbeat check, reply exactly: HEARTBEAT_OK",
+      input: [
+        makeUserInput("Read QA_KICKOFF_TASK.md, then summarize what you found."),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_read_1",
+          output: JSON.stringify({ text: "QA mission: understand this OpenClaw repo." }),
+        },
+      ],
+    });
+
+    const text = final.output[0]?.content?.[0]?.text ?? "";
+    expect(text).toContain("Protocol note: I reviewed the requested material.");
+    expect(text).not.toContain("HEARTBEAT_OK");
+  });
+
   it("requires deterministic tool-progress error prompts to observe a failed tool", async () => {
     const server = await startMockServer();
     const prompt =

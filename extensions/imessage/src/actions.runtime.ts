@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
@@ -222,10 +223,7 @@ async function runIMessageCliJson(
       if (killEscalation) {
         clearTimeout(killEscalation);
       }
-      const lines = stdout
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean);
+      const lines = normalizeStringEntries(stdout.split(/\r?\n/));
       const last = lines.at(-1);
       let parsed: Record<string, unknown> | null = null;
       if (last) {

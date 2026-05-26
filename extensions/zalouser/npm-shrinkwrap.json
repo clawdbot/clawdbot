@@ -1,19 +1,19 @@
 {
   "name": "@openclaw/zalouser",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/zalouser",
-      "version": "2026.5.24",
+      "version": "2026.5.26",
       "dependencies": {
         "typebox": "1.1.38",
         "zca-js": "2.1.2",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.24"
+        "openclaw": ">=2026.5.26"
       },
       "peerDependenciesMeta": {
         "openclaw": {
@@ -414,9 +414,9 @@
       }
     },
     "node_modules/ws": {
-      "version": "8.20.1",
-      "resolved": "https://registry.npmjs.org/ws/-/ws-8.20.1.tgz",
-      "integrity": "sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==",
+      "version": "8.21.0",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.0.tgz",
+      "integrity": "sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==",
       "license": "MIT",
       "engines": {
         "node": ">=10.0.0"

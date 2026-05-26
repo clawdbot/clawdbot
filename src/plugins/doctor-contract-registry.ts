@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import type { DoctorSessionRouteStateOwner } from "./doctor-session-route-state-owner-types.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import {
@@ -92,15 +93,6 @@ function coerceNormalizeCompatibilityConfig(
   value: unknown,
 ): PluginDoctorCompatibilityNormalizer | undefined {
   return typeof value === "function" ? (value as PluginDoctorCompatibilityNormalizer) : undefined;
-}
-
-function normalizeTrimmedStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => entry.trim());
 }
 
 function isDoctorSessionRouteStateOwner(value: unknown): value is DoctorSessionRouteStateOwner {

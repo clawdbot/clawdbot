@@ -204,7 +204,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
-      forceMessageTool: true,
+      forceMessageTool: false,
     });
   }
 
@@ -229,7 +229,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
-      forceMessageTool: true,
+      forceMessageTool: false,
       messageChannel: "messagechat",
       messageTo: "123",
       currentChannelId: "123",
@@ -335,7 +335,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       timeoutMs: 60_000,
       suppressExecNotifyOnExit: true,
       sourceDelivery: createSourceDeliveryPlan({
-        owner: "message_tool_then_direct_fallback",
+        owner: "direct_fallback",
         reason: "cron_announce",
         target: {
           channel: resolvedDelivery.channel ?? "messagechat",
@@ -344,7 +344,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
           threadId: resolvedDelivery.threadId,
         },
         messageToolEnabled: true,
-        messageToolForced: true,
+        messageToolForced: false,
         directFallback: true,
       }),
       skillsSnapshot: emptySkillsSnapshot,
@@ -388,7 +388,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const embeddedRun = expectEmbeddedRunFields({
       disableMessageTool: false,
-      forceMessageTool: true,
+      forceMessageTool: false,
     });
     expect(embeddedRun.messageChannel).toBeUndefined();
     expect(embeddedRun.messageTo).toBeUndefined();
@@ -425,7 +425,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
-      forceMessageTool: true,
+      forceMessageTool: false,
       messageChannel: "topicchat",
       messageTo: "room#42",
       messageThreadId: 42,
@@ -568,7 +568,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const embeddedRun = expectEmbeddedRunFields({
       disableMessageTool: false,
-      forceMessageTool: true,
+      forceMessageTool: false,
     });
     expect(embeddedRun.messageChannel).toBeUndefined();
     expect(embeddedRun.messageTo).toBeUndefined();
@@ -643,7 +643,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
-  it("keeps cron announce source replies message-tool-only", async () => {
+  it("keeps cron announce delivery out of message-tool-only source replies", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
 
@@ -654,8 +654,8 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
-      sourceReplyDeliveryMode: "message_tool_only",
-      forceMessageTool: true,
+      sourceReplyDeliveryMode: undefined,
+      forceMessageTool: false,
       messageChannel: "messagechat",
       messageTo: "123",
       currentChannelId: "123",
@@ -1155,6 +1155,103 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toContain("Use the message tool");
     expect(prompt).toContain("Return your response as plain text");
+  });
+
+  it("does not prompt for the message tool when toolsAllow is explicitly empty", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        { kind: "agentTurn", message: "send a message", toolsAllow: [] },
+      ),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expectEmbeddedRunFields({
+      disableMessageTool: false,
+      forceMessageTool: false,
+      toolsAllow: [],
+    });
+    const prompt = expectEmbeddedRunPrompt();
+    expect(prompt).not.toContain("Use the message tool");
+    expect(prompt).toContain("Return your response as plain text");
+  });
+
+  it("prompts for the message tool when toolsAllow uses wildcard access", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        { kind: "agentTurn", message: "send a message", toolsAllow: ["*"] },
+      ),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt = expectEmbeddedRunPrompt();
+    expect(prompt).toContain("Use the message tool");
+    expect(prompt).toContain("will be delivered automatically");
+  });
+
+  it("prompts for the message tool when toolsAllow uses a group containing message", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        { kind: "agentTurn", message: "send a message", toolsAllow: ["group:messaging"] },
+      ),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt = expectEmbeddedRunPrompt();
+    expect(prompt).toContain("Use the message tool");
+    expect(prompt).toContain("will be delivered automatically");
+  });
+
+  it("prompts for the message tool when toolsAllow names message with different casing", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "123",
+    });
+
+    await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeMessageToolPolicyJob(
+        { mode: "announce", channel: "messagechat", to: "123" },
+        { kind: "agentTurn", message: "send a message", toolsAllow: ["MESSAGE"] },
+      ),
+    });
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const prompt = expectEmbeddedRunPrompt();
+    expect(prompt).toContain("Use the message tool");
+    expect(prompt).toContain("will be delivered automatically");
   });
 
   it("does not append a delivery instruction when delivery is not requested", async () => {

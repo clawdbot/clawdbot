@@ -21,7 +21,7 @@ import {
   hasCurrentAuthProfileConfigConflict,
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
-import { readText } from "./helpers.js";
+import { isRecord, readString, readText } from "./helpers.js";
 import {
   HERMES_REASON_AUTH_PROFILE_EXISTS,
   HERMES_REASON_AUTH_PROFILE_WRITE_FAILED,
@@ -66,14 +66,6 @@ type CodexIdentity = {
   email?: string;
   profileName?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readTimestamp(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) {

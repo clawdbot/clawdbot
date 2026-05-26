@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isDirectScriptExecution,
+  resolvePnpmSpawnCall,
   resolveSpawnCall,
   shouldUseCmdExeForCommand,
 } from "../../scripts/ui.js";
@@ -73,6 +74,42 @@ describe("scripts/ui windows spawn behavior", () => {
         platform: "win32",
       }),
     ).toThrow(/unsafe windows cmd\.exe argument/i);
+  });
+
+  it("routes Windows Corepack pnpm entrypoints through node", () => {
+    expect(
+      resolvePnpmSpawnCall(
+        ["run", "build"],
+        {
+          npm_execpath:
+            "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
+          ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        },
+        {
+          cwd: "C:\\repo\\ui",
+          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+          platform: "win32",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: [
+        "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
+        "run",
+        "build",
+      ],
+      options: {
+        cwd: "C:\\repo\\ui",
+        stdio: "inherit",
+        env: {
+          npm_execpath:
+            "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
+          ComSpec: "C:\\Windows\\System32\\cmd.exe",
+        },
+        shell: false,
+        windowsVerbatimArguments: undefined,
+      },
+    });
   });
 
   it("keeps non-Windows launches direct even with shell metacharacters", () => {

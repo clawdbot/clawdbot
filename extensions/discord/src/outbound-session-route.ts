@@ -68,5 +68,5 @@ function resolveDiscordOutboundTargetKindHint(params: {
   if (/^(user:|discord:|@|<@!?)/i.test(target)) {
     return "user";
   }
-  return undefined;
+  return "channel";
 }

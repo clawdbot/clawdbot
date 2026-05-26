@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeUniqueSingleOrTrimmedStringList } from "../shared/string-normalization.js";
 
 export type ChannelMatchSource = "direct" | "parent" | "wildcard";
 
@@ -41,20 +42,7 @@ export function normalizeChannelSlug(value: string): string {
 }
 
 export function buildChannelKeyCandidates(...keys: Array<string | undefined | null>): string[] {
-  const seen = new Set<string>();
-  const candidates: string[] = [];
-  for (const key of keys) {
-    if (typeof key !== "string") {
-      continue;
-    }
-    const trimmed = key.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    candidates.push(trimmed);
-  }
-  return candidates;
+  return normalizeUniqueSingleOrTrimmedStringList(keys);
 }
 
 export function resolveChannelEntryMatch<T>(params: {

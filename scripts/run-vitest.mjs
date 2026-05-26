@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { isUiTestTarget, isUnitUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
@@ -16,6 +17,60 @@ const ANSI_CSI_SUFFIX_RE = /^[0-?]*[ -/]*[@-~]/u;
 const SUPPRESSED_VITEST_STDERR_PATTERNS = ["[PLUGIN_TIMINGS]"];
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
 const UNIT_UI_VITEST_CONFIG = "test/vitest/vitest.unit-ui.config.ts";
+const EXPLICIT_TEST_FILE_RE = /\.(?:test|e2e|live)\.(?:[cm]?[jt]sx?)$/u;
+const GLOB_PATTERN_CHARS_RE = /[*?[\]{}]/u;
+const VITEST_OPTIONS_WITH_VALUE = new Set([
+  "--attachmentsDir",
+  "--bail",
+  "--browser",
+  "--config",
+  "--configLoader",
+  "-c",
+  "--changed",
+  "--dir",
+  "--environment",
+  "--exclude",
+  "--execArgv",
+  "--hookTimeout",
+  "--inspect",
+  "--inspect-brk",
+  "--listTags",
+  "--maxConcurrency",
+  "--maxWorkers",
+  "--mergeReports",
+  "--mode",
+  "--outputFile",
+  "--pool",
+  "--project",
+  "--reporter",
+  "--reporters",
+  "--retry",
+  "--root",
+  "-r",
+  "--sequence.shuffle.seed",
+  "--shard",
+  "--silent",
+  "--slowTestThreshold",
+  "--tagsFilter",
+  "--teardownTimeout",
+  "--testNamePattern",
+  "-t",
+  "--testTimeout",
+  "--update",
+  "-u",
+  "--vmMemoryLimit",
+]);
+const VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES = [
+  "--browser.",
+  "--coverage.",
+  "--diff.",
+  "--expect.",
+  "--experimental.",
+  "--outputFile.",
+  "--retry.",
+  "--sequence.",
+  "--typecheck.",
+];
 const require = createRequire(import.meta.url);
 
 function isTruthyEnvValue(value) {
@@ -97,6 +152,69 @@ export function resolveDirectNodeVitestArgs(pnpmArgs) {
 
 function hasExplicitVitestConfigArg(argv) {
   return argv.some((arg) => arg === "--config" || arg === "-c" || arg.startsWith("--config="));
+}
+
+function optionConsumesNextArg(arg) {
+  if (arg.includes("=")) {
+    return false;
+  }
+  return (
+    VITEST_OPTIONS_WITH_VALUE.has(arg) ||
+    VITEST_DOTTED_OPTIONS_WITH_VALUE_PREFIXES.some((prefix) => arg.startsWith(prefix))
+  );
+}
+
+function isExplicitTestFileArg(arg) {
+  if (!EXPLICIT_TEST_FILE_RE.test(arg) || GLOB_PATTERN_CHARS_RE.test(arg)) {
+    return false;
+  }
+  return (
+    path.isAbsolute(arg) || arg.startsWith("./") || arg.startsWith("../") || /[/\\]/u.test(arg)
+  );
+}
+
+function collectExplicitTestFileArgs(argv) {
+  const files = [];
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--") {
+      break;
+    }
+    if (optionConsumesNextArg(arg)) {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    if (isExplicitTestFileArg(arg)) {
+      files.push(arg);
+    }
+  }
+  return files;
+}
+
+function hasAlternateVitestRootArg(argv) {
+  return argv.some(
+    (arg) =>
+      arg === "--root" ||
+      arg === "-r" ||
+      arg === "--dir" ||
+      arg.startsWith("--root=") ||
+      arg.startsWith("--dir="),
+  );
+}
+
+export function resolveMissingExplicitTestFiles(argv, cwd = process.cwd(), fsImpl = fs) {
+  if (hasExplicitVitestConfigArg(argv) || hasAlternateVitestRootArg(argv)) {
+    return [];
+  }
+  return collectExplicitTestFileArgs(argv)
+    .filter((arg) => {
+      const filePath = path.isAbsolute(arg) ? arg : path.resolve(cwd, arg);
+      return !fsImpl.existsSync(filePath);
+    })
+    .map((arg) => toRepoRelativeArg(arg, cwd));
 }
 
 function toRepoRelativeArg(arg, cwd) {
@@ -306,6 +424,17 @@ export function spawnWatchedVitestProcess({
 function main(argv = process.argv.slice(2), env = process.env) {
   if (argv.length === 0) {
     console.error("usage: node scripts/run-vitest.mjs <vitest args...>");
+    process.exit(1);
+  }
+
+  const missingTestFiles = resolveMissingExplicitTestFiles(argv);
+  if (missingTestFiles.length > 0) {
+    console.error(
+      [
+        "[vitest] explicit test file(s) not found:",
+        ...missingTestFiles.map((file) => `  - ${file}`),
+      ].join("\n"),
+    );
     process.exit(1);
   }
 

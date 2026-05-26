@@ -34,8 +34,9 @@ function usage() {
     "  --output <path>       JSON report path (default: .artifacts/test-perf/group-report.json)",
     "  --limit <count>       Number of groups/configs to print (default: 25)",
     "  --top-files <count>   Number of files to print (default: 25)",
+    "  --max-test-ms <ms>    Fail when any individual test exceeds this duration",
     "  --allow-failures      Write a report even when a Vitest run exits non-zero",
-    "  --no-rss              Skip macOS max RSS measurement",
+    "  --no-rss              Skip max RSS measurement",
     "  --help                Show this help",
     "",
     "Examples:",
@@ -58,9 +59,10 @@ export function parseTestGroupReportArgs(argv) {
     fullSuite: false,
     groupBy: "area",
     limit: 25,
+    maxTestMs: null,
     output: null,
     reports: [],
-    rss: process.platform === "darwin",
+    rss: process.platform !== "win32",
     topFiles: 25,
     vitestArgs: [],
   };
@@ -120,6 +122,11 @@ export function parseTestGroupReportArgs(argv) {
       index += 1;
       continue;
     }
+    if (arg === "--max-test-ms") {
+      args.maxTestMs = parsePositiveInt(argv[index + 1], args.maxTestMs);
+      index += 1;
+      continue;
+    }
     if (arg === "--top-files") {
       args.topFiles = parsePositiveInt(argv[index + 1], args.topFiles);
       index += 1;
@@ -156,9 +163,26 @@ function sanitizePathSegment(value) {
   );
 }
 
+function resolveTimeArgs(command) {
+  if (process.platform === "darwin") {
+    return { command: "/usr/bin/time", args: ["-l", ...command] };
+  }
+  if (process.platform === "linux") {
+    return { command: "/usr/bin/time", args: ["-v", ...command] };
+  }
+  return { command: command[0], args: command.slice(1) };
+}
+
 function parseMaxRssBytes(output) {
-  const match = output.match(/(\d+)\s+maximum resident set size/u);
-  return match ? Number.parseInt(match[1], 10) : null;
+  const macMatch = output.match(/(\d+)\s+maximum resident set size/u);
+  if (macMatch) {
+    return Number.parseInt(macMatch[1], 10);
+  }
+  const linuxMatch = output.match(/Maximum resident set size \(kbytes\):\s*(\d+)/u);
+  if (linuxMatch) {
+    return Number.parseInt(linuxMatch[1], 10) * 1024;
+  }
+  return null;
 }
 
 function runVitestJsonReport(params) {
@@ -177,24 +201,23 @@ function runVitestJsonReport(params) {
     ...params.vitestArgs,
   ];
   const startedAt = process.hrtime.bigint();
-  const result = spawnSync(
-    params.rss ? "/usr/bin/time" : command[0],
-    params.rss ? ["-l", ...command] : command.slice(1),
-    {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        NODE_OPTIONS: [
-          process.env.NODE_OPTIONS?.trim(),
-          ...resolveVitestNodeArgs(process.env).filter((arg) => arg !== "--no-maglev"),
-        ]
-          .filter(Boolean)
-          .join(" "),
-      },
-      maxBuffer: 1024 * 1024 * 64,
+  const spawnCommand = params.rss
+    ? resolveTimeArgs(command)
+    : { command: command[0], args: command.slice(1) };
+  const result = spawnSync(spawnCommand.command, spawnCommand.args, {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_OPTIONS: [
+        process.env.NODE_OPTIONS?.trim(),
+        ...resolveVitestNodeArgs(process.env).filter((arg) => arg !== "--no-maglev"),
+      ]
+        .filter(Boolean)
+        .join(" "),
     },
-  );
+    maxBuffer: 1024 * 1024 * 64,
+  });
   const elapsedMs = Number.parseFloat(String(process.hrtime.bigint() - startedAt)) / 1_000_000;
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   fs.writeFileSync(params.logPath, output, "utf8");
@@ -253,13 +276,27 @@ function withUniqueLabels(plans) {
   });
 }
 
+function buildFullSuiteLeafRunPlans() {
+  const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+  process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
+  try {
+    return buildFullSuiteVitestRunPlans([], process.cwd());
+  } finally {
+    if (previousLeafShards === undefined) {
+      delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    } else {
+      process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeafShards;
+    }
+  }
+}
+
 export function resolveRunPlans(args) {
   if (args.reports.length > 0) {
     return [];
   }
   if (args.fullSuite) {
     return withUniqueLabels(
-      buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => ({
+      buildFullSuiteLeafRunPlans().map((plan) => ({
         config: plan.config,
         forwardedArgs: plan.forwardedArgs ?? [],
         label: normalizeConfigLabel(plan.config),
@@ -367,6 +404,7 @@ async function main() {
     .map(readReportInput);
   const report = buildGroupedTestReport({
     groupBy: args.groupBy,
+    maxTestMs: args.maxTestMs,
     reports: reportInputs,
   });
   const envelope = {
@@ -387,6 +425,13 @@ async function main() {
   fs.writeFileSync(output, `${JSON.stringify(envelope, null, 2)}\n`, "utf8");
   console.log(renderGroupedTestReport(report, { limit: args.limit, topFiles: args.topFiles }));
   console.log(`[test-group-report] wrote ${path.relative(process.cwd(), output)}`);
+
+  if (args.maxTestMs !== null && report.slowTests.length > 0) {
+    console.error(
+      `[test-group-report] ${report.slowTests.length} tests exceeded ${formatMs(args.maxTestMs)}`,
+    );
+    process.exit(1);
+  }
 
   if (failed && !args.allowFailures) {
     process.exit(1);

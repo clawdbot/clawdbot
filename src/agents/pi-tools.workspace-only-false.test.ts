@@ -165,6 +165,40 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(JSON.stringify(result.content)).toContain("test read content");
   });
 
+  it("returns optional not-found context for missing date-only daily memory reads", async () => {
+    const result = await runFsTool(
+      "read",
+      "test-call-missing-daily-memory",
+      {
+        path: "memory/2026-05-15.md",
+      },
+      undefined,
+    );
+    expect(result).toStrictEqual({
+      content: [
+        {
+          type: "text",
+          text: "No daily memory file exists yet at memory/2026-05-15.md.",
+        },
+      ],
+      details: {
+        status: "not_found",
+        path: "memory/2026-05-15.md",
+        optional: true,
+      },
+    });
+  });
+
+  it("still throws for ordinary missing read paths", async () => {
+    const readTool = requireTool(toolsFor(undefined), "read");
+
+    await expect(
+      readTool.execute("test-call-missing-ordinary-file", {
+        path: "notes/missing.md",
+      }),
+    ).rejects.toThrow(/ENOENT|no such file|not found/i);
+  });
+
   it("should allow write outside workspace when workspaceOnly is unset", async () => {
     const outsideUnsetFile = path.join(tmpDir, "outside-unset-write.txt");
     await runFsTool(

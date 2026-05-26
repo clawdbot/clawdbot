@@ -5,6 +5,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   expandToolGroups,
+  normalizeToolList,
   normalizeToolName,
 } from "../../tool-policy.js";
 
@@ -140,7 +141,7 @@ function resolveCodingToolConstructionPlanForAllowlist(
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
   const expanded = expandToolGroups(toolsAllow);
-  const normalized = expanded.map((entry) => normalizeToolName(entry)).filter(Boolean);
+  const normalized = normalizeToolList(expanded);
   const includeBaseCodingTools = normalized.some((name) =>
     BASE_CODING_TOOL_FACTORY_NAMES.has(name),
   );

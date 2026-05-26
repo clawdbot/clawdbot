@@ -1,4 +1,12 @@
 import {
+  isExplicitCommandTurn,
+  type CommandTurnContext,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  maybeResolveTextAlias,
+  normalizeCommandBody,
+} from "openclaw/plugin-sdk/command-auth-native";
+import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -190,11 +198,17 @@ export function releaseTelegramReplyFenceAbortController(
   maybeDeleteTelegramReplyFenceState(key, state);
 }
 
+function isRecognizedTelegramTextCommand(rawText: string): boolean {
+  return maybeResolveTextAlias(normalizeCommandBody(rawText)) != null;
+}
+
 export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   Body?: string;
+  ChatType?: string;
   RawBody?: string;
   CommandBody?: string;
   CommandAuthorized: boolean;
+  CommandTurn?: CommandTurnContext;
 }): boolean {
   const dispatchText = ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "";
   if (isAbortRequestText(dispatchText)) {
@@ -204,6 +218,16 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
     isBtwRequestText(dispatchText) ||
     isTelegramReadOnlyControlLaneText({ rawText: dispatchText })
   ) {
+    return false;
+  }
+  if (ctxPayload.ChatType === "direct") {
+    if (
+      ctxPayload.CommandAuthorized &&
+      (isExplicitCommandTurn(ctxPayload.CommandTurn) ||
+        isRecognizedTelegramTextCommand(dispatchText))
+    ) {
+      return true;
+    }
     return false;
   }
   return true;

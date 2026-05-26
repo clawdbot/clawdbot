@@ -6,6 +6,8 @@ import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
@@ -101,7 +103,13 @@ type CodeModeRunState = {
 
 type CodeModeToolContext = ToolSearchToolContext;
 
-type CodeModeFailureCode = "invalid_input" | "runtime_unavailable" | "timeout" | "internal_error";
+type CodeModeFailureCode =
+  | "invalid_input"
+  | "runtime_unavailable"
+  | "timeout"
+  | "output_limit_exceeded"
+  | "snapshot_limit_exceeded"
+  | "internal_error";
 
 type CodeModeWorkerResult =
   | {
@@ -125,10 +133,7 @@ type CodeModeWorkerResult =
 const activeRuns = new Map<string, CodeModeRunState>();
 const resumingRunIds = new Set<string>();
 let typescriptRuntimePromise: Promise<typeof import("typescript")> | null = null;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
+let typescriptRuntimeForTest: typeof import("typescript") | null = null;
 
 function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
   const codeMode = value;
@@ -170,7 +175,7 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
   const languages = value.filter(
     (entry): entry is CodeModeLanguage => entry === "javascript" || entry === "typescript",
   );
-  return languages.length > 0 ? [...new Set(languages)] : ["javascript", "typescript"];
+  return languages.length > 0 ? uniqueValues(languages) : ["javascript", "typescript"];
 }
 
 export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
@@ -278,9 +283,29 @@ function jsonByteLength(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(toJsonSafe(value)) ?? "null", "utf8");
 }
 
+class CodeModeLimitError extends ToolInputError {
+  readonly code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">;
+
+  constructor(
+    code: Extract<CodeModeFailureCode, "output_limit_exceeded" | "snapshot_limit_exceeded">,
+    message: string,
+  ) {
+    super(message);
+    this.name = "CodeModeLimitError";
+    this.code = code;
+  }
+}
+
+function codeModeFailureCode(error: unknown): CodeModeFailureCode {
+  if (error instanceof CodeModeLimitError) {
+    return error.code;
+  }
+  return error instanceof ToolInputError ? "invalid_input" : "internal_error";
+}
+
 function enforceOutputLimit(output: unknown[], config: CodeModeConfig): void {
   if (jsonByteLength(output) > config.maxOutputBytes) {
-    throw new ToolInputError("code mode output limit exceeded");
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
   }
 }
 
@@ -291,7 +316,7 @@ function enforceResultLimit(params: {
 }): void {
   enforceOutputLimit(params.output, params.config);
   if (params.value !== undefined && jsonByteLength(params.value) > params.config.maxOutputBytes) {
-    throw new ToolInputError("code mode output limit exceeded");
+    throw new CodeModeLimitError("output_limit_exceeded", "code mode output limit exceeded");
   }
 }
 
@@ -388,6 +413,9 @@ function rejectsModuleAccess(code: string): boolean {
 }
 
 async function loadTypeScriptRuntime(): Promise<typeof import("typescript")> {
+  if (typescriptRuntimeForTest) {
+    return typescriptRuntimeForTest;
+  }
   typescriptRuntimePromise ??= import("typescript");
   return await typescriptRuntimePromise;
 }
@@ -598,7 +626,7 @@ function snapshotState(params: {
 }) {
   enforceActiveRunLimit();
   if (params.snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
-    throw new ToolInputError("code mode snapshot limit exceeded");
+    throw new CodeModeLimitError("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   enforceOutputLimit(params.output, params.config);
   const runId = `cm_${randomUUID()}`;
@@ -680,7 +708,7 @@ async function runExec(params: {
     return {
       status: "failed" as const,
       error: errorMessage(error),
-      code: error instanceof ToolInputError ? "invalid_input" : "internal_error",
+      code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
     };
@@ -721,7 +749,7 @@ async function runExec(params: {
     return {
       status: "failed" as const,
       error: errorMessage(error),
-      code: error instanceof ToolInputError ? "invalid_input" : "internal_error",
+      code: codeModeFailureCode(error),
       output: [],
       telemetry: telemetry(runtime),
     };
@@ -833,7 +861,7 @@ async function runWait(params: {
     return {
       status: "failed" as const,
       error: errorMessage(error),
-      code: error instanceof ToolInputError ? "invalid_input" : "internal_error",
+      code: codeModeFailureCode(error),
       output: state.output,
       telemetry: telemetry(state.runtime),
     };
@@ -968,5 +996,8 @@ export const testing = {
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
+  setTypescriptRuntimeForTest: (runtime: typeof import("typescript") | null) => {
+    typescriptRuntimeForTest = runtime;
+  },
 };
 export { testing as __testing };

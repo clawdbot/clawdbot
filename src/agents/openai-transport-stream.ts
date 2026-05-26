@@ -29,6 +29,8 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
@@ -40,6 +42,7 @@ import {
   resolveModelSseDebugMode,
 } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
+import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   flattenCompletionMessagesToStringContent,
@@ -121,6 +124,9 @@ type BaseStreamOptions = {
   headers?: Record<string, string>;
   openclawCodeModeToolSurface?: boolean;
   responseFormat?: Record<string, unknown>;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  seed?: number;
 };
 
 type ModelStreamCooperativeScheduler = {
@@ -1859,10 +1865,6 @@ function resolveOpenAIReasoningEffort(
   ) as OpenAIApiReasoningEffort;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function hasResponsesWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
@@ -2290,6 +2292,19 @@ function hasToolHistory(messages: Context["messages"]): boolean {
   );
 }
 
+function assertOpenAICompletionsPayloadHasConversationTurn(
+  params: Record<string, unknown>,
+  model: Model<Api>,
+): void {
+  const messages = params.messages;
+  if (!Array.isArray(messages) || hasOpenAICompatibleConversationTurn(messages)) {
+    return;
+  }
+  throw new Error(
+    `OpenAI-compatible chat payload for ${model.provider}/${model.id} contains no non-empty user or assistant messages after compaction and transport transforms; refusing to send a system/tool-only request. Start a new user turn or repair the compacted session history.`,
+  );
+}
+
 function createOpenAICompletionsClient(
   model: Model<Api>,
   context: Context,
@@ -2404,6 +2419,10 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         ) {
           enforceCodeModeResponsesToolSurface(params);
           assertCodeModeResponsesToolSurface(params);
+        }
+        const compat = getCompat(model as OpenAIModeModel);
+        if (compat.requiresNonEmptyUserOrAssistantMessage) {
+          assertOpenAICompletionsPayloadHasConversationTurn(params, model);
         }
         const responseStream = (await client.chat.completions.create(
           params as never,
@@ -2854,6 +2873,7 @@ function detectCompat(model: OpenAIModeModel) {
     supportsStrictMode: compatDefaults.supportsStrictMode,
     requiresReasoningContentOnAssistantMessages:
       compatDefaults.requiresReasoningContentOnAssistantMessages,
+    requiresNonEmptyUserOrAssistantMessage: compatDefaults.requiresNonEmptyUserOrAssistantMessage,
   };
 }
 
@@ -2876,6 +2896,7 @@ function getCompat(model: OpenAIModeModel): {
   strictMessageKeys: boolean;
   visibleReasoningDetailTypes: string[];
   requiresReasoningContentOnAssistantMessages: boolean;
+  requiresNonEmptyUserOrAssistantMessage: boolean;
 } {
   const detected = detectCompat(model);
   const compat = model.compat ?? {};
@@ -2909,6 +2930,7 @@ function getCompat(model: OpenAIModeModel): {
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
     requiresReasoningContentOnAssistantMessages:
       detected.requiresReasoningContentOnAssistantMessages,
+    requiresNonEmptyUserOrAssistantMessage: detected.requiresNonEmptyUserOrAssistantMessage,
   };
 }
 
@@ -3379,7 +3401,7 @@ function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] 
   if (colonParts.length > 1) {
     candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
   }
-  return [...new Set(candidates.filter(Boolean))];
+  return uniqueStrings(candidates.filter(Boolean));
 }
 
 function shouldPreserveReasoningContentReplay(
@@ -3483,6 +3505,15 @@ export function buildOpenAICompletionsParams(
   }
   if (options?.responseFormat !== undefined) {
     params.response_format = options.responseFormat;
+  }
+  if (options?.frequencyPenalty !== undefined) {
+    params.frequency_penalty = options.frequencyPenalty;
+  }
+  if (options?.presencePenalty !== undefined) {
+    params.presence_penalty = options.presencePenalty;
+  }
+  if (options?.seed !== undefined) {
+    params.seed = options.seed;
   }
   if (supportsModelTools(model)) {
     if (context.tools) {

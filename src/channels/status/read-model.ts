@@ -1,6 +1,7 @@
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { asRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
 
@@ -111,12 +112,10 @@ export async function resolveChannelAccountStatusRows(params: {
     source: "gateway" | "config";
   }>
 > {
-  const mergedAccountIds = [
-    ...new Set([
-      ...params.localAccountIds,
-      ...params.runtimeAccounts.map((account) => account.accountId),
-    ]),
-  ];
+  const mergedAccountIds = uniqueStrings([
+    ...params.localAccountIds,
+    ...params.runtimeAccounts.map((account) => account.accountId),
+  ]);
   const rows: Array<{
     accountId: string;
     snapshot: ChannelAccountSnapshot;

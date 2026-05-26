@@ -11,6 +11,7 @@ import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexComputerUseConfig,
   resolveCodexPluginsPolicy,
+  shouldAutoApproveCodexAppServerApprovals,
 } from "./config.js";
 
 type RuntimeOptionsParams = NonNullable<Parameters<typeof resolveCodexAppServerRuntimeOptions>[0]>;
@@ -56,6 +57,27 @@ function expectUiHintLabel(manifest: { uiHints: Record<string, unknown> }, key: 
 }
 
 describe("Codex app-server config", () => {
+  it("only auto-approves app-server approvals for full yolo runtime policy", () => {
+    expect(
+      shouldAutoApproveCodexAppServerApprovals({
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+      }),
+    ).toBe(true);
+    expect(
+      shouldAutoApproveCodexAppServerApprovals({
+        approvalPolicy: "never",
+        sandbox: "workspace-write",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAutoApproveCodexAppServerApprovals({
+        approvalPolicy: "on-request",
+        sandbox: "danger-full-access",
+      }),
+    ).toBe(false);
+  });
+
   it("parses typed plugin config before falling back to environment knobs", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {
@@ -624,7 +646,8 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
       resolveRuntimeForTest({
         pluginConfig: {
           appServer: {
-            command: "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+            command:
+              "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
           },
         },
       }),

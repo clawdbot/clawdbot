@@ -199,6 +199,9 @@ describe("config validation SecretRef policy guards", () => {
             entry.message.includes("webhookTokne"),
         ),
       ).toBe(true);
+      const schemaIssue = requireIssue(result.issues, "channels.discord.threadBindings");
+      expect(schemaIssue.message).toContain("webhookTokne");
+      expect(schemaIssue.message).not.toContain("webhookToken");
     }
   });
 });

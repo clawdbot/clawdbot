@@ -52,6 +52,7 @@ import {
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
+  uniqueValues,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
@@ -1120,7 +1121,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.qmd.limits.maxResults,
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
-    const requestedSources = opts?.sources?.length ? [...new Set(opts.sources)] : undefined;
+    const requestedSources = opts?.sources?.length ? uniqueValues(opts.sources) : undefined;
     const collectionNames = this.listManagedCollectionNames(requestedSources);
     const limit = resultLimit;
     if (collectionNames.length === 0) {
@@ -1401,6 +1402,8 @@ export class QmdMemoryManager implements MemorySearchManager {
         qmd: {
           collections: this.qmd.collections.length,
           lastUpdateAt: this.lastUpdateAt,
+          embedFailures: this.embedFailureCount,
+          embedBackoffUntil: this.embedBackoffUntil,
         },
       },
     };

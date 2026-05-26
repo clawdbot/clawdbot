@@ -98,7 +98,7 @@ barrels, package-boundary tests, or extension suites.
    - add `--keep`/`--id <id-or-slug>` only when several commands must share one
      warmed box; stop it with `pnpm crabbox:stop -- <id-or-slug>`.
 5. If plugin performance is package-artifact sensitive, switch to
-   `openclaw-pre-release-plugin-testing` and Package Acceptance rather than
+   `release-openclaw-plugin-testing` and Package Acceptance rather than
    trusting source-only timing.
 
 ## Metric Collection

@@ -4,6 +4,7 @@ import type {
   Agent,
 } from "@earendil-works/pi-agent-core";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
+import { hasNonEmptyString as hasStringValue } from "../../../shared/string-coerce.js";
 import { isMessageToolSendActionName } from "../../pi-embedded-messaging.js";
 import { isToolResultError } from "../../pi-embedded-subscribe.tools.js";
 import { normalizeToolName } from "../../tool-policy.js";
@@ -29,10 +30,6 @@ function argsRecordForToolCall(context: AfterToolCallContext): Record<string, un
   return fallbackArgs && typeof fallbackArgs === "object" && !Array.isArray(fallbackArgs)
     ? (fallbackArgs as Record<string, unknown>)
     : {};
-}
-
-function hasStringValue(value: unknown): boolean {
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {

@@ -1,3 +1,5 @@
+import { isRecord } from "../../shared/record-coerce.js";
+
 const DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
 const MIN_DUPLICATE_USER_MESSAGE_CHARS = 24;
 
@@ -16,10 +18,6 @@ type EntryLike = {
 type DuplicateUserMessageOptions = {
   windowMs?: number;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 function normalizeUserMessageContent(content: unknown): string | undefined {
   if (typeof content === "string") {

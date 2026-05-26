@@ -1,4 +1,5 @@
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
@@ -39,15 +40,11 @@ function extractComparableText(message: unknown): string | undefined {
   return normalized || undefined;
 }
 
-function resolveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function resolveComparableTimestamp(message: unknown): number | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
   }
-  return resolveFiniteNumber((message as { timestamp?: unknown }).timestamp);
+  return asFiniteNumber((message as { timestamp?: unknown }).timestamp);
 }
 
 function resolveComparableRole(message: unknown): string | undefined {

@@ -1,3 +1,4 @@
+import { isRecord } from "../shared/record-coerce.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type {
   PluginWebContentExtractorEntry,
@@ -8,10 +9,6 @@ const WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "web-content-extractor.js",
   "web-content-extractor-api.js",
 ] as const;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function isWebContentExtractorPlugin(value: unknown): value is WebContentExtractorPlugin {
   return (

@@ -82,6 +82,26 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
     expect(defaults.supportsReasoningEffort).toBe(false);
     expect(defaults.maxTokensField).toBe("max_tokens");
   });
+
+  it("requires a non-empty user or assistant turn for ModelStudio-compatible providers", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "qwen",
+        endpointClass: "modelstudio-native",
+        knownProviderFamily: "modelstudio",
+      }).requiresNonEmptyUserOrAssistantMessage,
+    ).toBe(true);
+  });
+
+  it("does not require a non-empty user or assistant turn for generic local endpoints", () => {
+    expect(
+      resolveOpenAICompletionsCompatDefaults({
+        provider: "vllm",
+        endpointClass: "local",
+        knownProviderFamily: "vllm",
+      }).requiresNonEmptyUserOrAssistantMessage,
+    ).toBe(false);
+  });
 });
 
 describe("detectOpenAICompletionsCompat", () => {

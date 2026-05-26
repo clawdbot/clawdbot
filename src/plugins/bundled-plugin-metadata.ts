@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tryReadJsonSync } from "../infra/json-files.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { collectBundledChannelConfigs } from "./bundled-channel-config-metadata.js";
 import {
   collectBundledPluginPublicSurfaceArtifacts,
@@ -234,7 +235,7 @@ function listBundledPluginEntryBaseDirs(params: {
     path.resolve(params.rootDir, "dist-runtime", "extensions", params.pluginDirName ?? ""),
     path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
   ];
-  return baseDirs.filter((entry, index, all) => all.indexOf(entry) === index);
+  return uniqueStrings(baseDirs);
 }
 
 export function resolveBundledPluginGeneratedPath(

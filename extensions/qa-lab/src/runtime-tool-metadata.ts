@@ -1,3 +1,8 @@
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaRuntimeParityTier, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export type QaRuntimeToolBucket =
@@ -69,18 +74,6 @@ const DEFAULT_CAPABILITY_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeC
   "openclaw-dynamic-integration": "openclaw-dynamic-searchable",
   "optional-profile-or-plugin": "optional-profile-or-plugin",
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 
 function isQaRuntimeToolBucket(value: string): value is QaRuntimeToolBucket {
   return QA_RUNTIME_TOOL_BUCKETS.includes(value as QaRuntimeToolBucket);

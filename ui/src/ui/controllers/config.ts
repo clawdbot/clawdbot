@@ -113,7 +113,7 @@ export function applyConfigSnapshot(
   const draftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
   state.configSnapshot = snapshot;
   const editableConfig = resolveEditableSnapshotConfig(snapshot);
-  const rawAvailable = typeof snapshot.raw === "string";
+  const rawAvailable = typeof snapshot.raw === "string" || !!editableConfig || !!state.configForm;
   if (!rawAvailable && state.configFormMode === "raw") {
     state.configFormMode = "form";
   }
@@ -123,11 +123,11 @@ export function applyConfigSnapshot(
       : editableConfig
         ? serializeConfigForm(editableConfig)
         : state.configRaw;
-  if (!preservePendingChanges || state.configFormMode === "raw") {
+  if (!preservePendingChanges) {
     state.configRaw = rawFromSnapshot;
-  } else if (state.configForm) {
+  } else if (state.configFormMode !== "raw" && state.configForm) {
     state.configRaw = serializeConfigForm(state.configForm);
-  } else {
+  } else if (state.configFormMode !== "raw") {
     state.configRaw = rawFromSnapshot;
   }
   state.configValid = typeof snapshot.valid === "boolean" ? snapshot.valid : null;
@@ -161,9 +161,6 @@ function asJsonSchema(value: unknown): JsonSchema | null {
  * gateway's Zod validation always sees correctly typed values.
  */
 function serializeFormForSubmit(state: ConfigState): string {
-  if (state.configFormMode === "raw" && typeof state.configSnapshot?.raw !== "string") {
-    throw new Error("Raw config editing is unavailable for this snapshot. Switch to Form mode.");
-  }
   if (state.configFormMode !== "form" || !state.configForm) {
     return state.configRaw;
   }
@@ -391,6 +388,16 @@ export function updateConfigFormValue(
     }
     syncEnabledPluginAllowlist(state, draft, path, value);
   });
+}
+
+export function updateConfigRawValue(state: ConfigState, value: string) {
+  state.configRaw = value;
+  state.configFormDirty = value !== state.configRawOriginal;
+  if (state.configFormDirty) {
+    state.configDraftBaseHash = state.configDraftBaseHash ?? state.configSnapshot?.hash ?? null;
+  } else {
+    state.configDraftBaseHash = state.configSnapshot?.hash ?? null;
+  }
 }
 
 export function stageConfigPreset(state: ConfigState, patch: Record<string, unknown>) {

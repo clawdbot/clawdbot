@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 import { getOptionalDiscordRuntime } from "./runtime.js";
 
@@ -275,7 +276,7 @@ function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] 
     return [entry.id];
   }
   const ids = entry.consumptionGroupEntryIds?.filter((id) => typeof id === "string" && id) ?? [];
-  return ids.length > 0 ? Array.from(new Set(ids)) : [entry.id];
+  return ids.length > 0 ? uniqueStrings(ids) : [entry.id];
 }
 
 function deleteComponentConsumptionGroup(entry: DiscordComponentEntry): void {

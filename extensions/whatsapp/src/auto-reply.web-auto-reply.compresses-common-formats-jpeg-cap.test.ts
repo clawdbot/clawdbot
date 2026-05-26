@@ -1,5 +1,5 @@
-import crypto from "node:crypto";
-import sharp from "sharp";
+import fs from "node:fs/promises";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createMockWebListener,
@@ -150,52 +150,28 @@ describe("web auto-reply", () => {
     });
   }
 
-  it("compresses common formats to jpeg under the cap", async () => {
+  it("sends common in-limit image formats without re-encoding", async () => {
+    const jpeg = await fs.readFile("docs/assets/showcase/roof-camera-sky.jpg");
+    const webp = await fs.readFile("extensions/whatsapp/src/__fixtures__/large-noisy.webp");
     const formats = [
       {
         name: "png",
         mime: "image/png",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .png({ compressionLevel: 0 })
-            .toBuffer(),
+        image: createSolidPngBuffer(64, 64, { r: 80, g: 120, b: 200 }),
       },
       {
         name: "jpeg",
         mime: "image/jpeg",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            // Keep source > cap with fewer pixels so the test runs faster.
-            .jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
-            .toBuffer(),
+        image: jpeg,
       },
       {
         name: "webp",
         mime: "image/webp",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .webp({ quality: 100 })
-            .toBuffer(),
+        image: webp,
       },
     ] as const;
 
-    const width = 320;
-    const height = 320;
-    const sharedRaw = crypto.randomBytes(width * height * 3);
-
-    const renderedFormats = await Promise.all(
-      formats.map(async (fmt) =>
-        Object.assign({}, fmt, { image: await fmt.make(sharedRaw, { width, height }) }),
-      ),
-    );
-
-    await withMediaCap(SMALL_MEDIA_CAP_MB, async () => {
+    await withMediaCap(1, async () => {
       const sendMedia = vi.fn();
       const { reply, dispatch } = await setupSingleInboundMessage({
         resolverValue: {
@@ -207,8 +183,7 @@ describe("web auto-reply", () => {
       let fetchIndex = 0;
 
       const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-        const matched =
-          renderedFormats[Math.min(fetchIndex, renderedFormats.length - 1)] ?? renderedFormats[0];
+        const matched = formats[Math.min(fetchIndex, formats.length - 1)] ?? formats[0];
         fetchIndex += 1;
         const { image, mime } = matched;
         return {
@@ -222,8 +197,7 @@ describe("web auto-reply", () => {
       });
 
       try {
-        for (const [index, fmt] of renderedFormats.entries()) {
-          expect(fmt.image.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
+        for (const [index, fmt] of formats.entries()) {
           const beforeCalls = sendMedia.mock.calls.length;
           await dispatch(`msg-${fmt.name}-${index}`, {
             from: `+1${index}`,
@@ -232,10 +206,11 @@ describe("web auto-reply", () => {
           });
           expect(sendMedia).toHaveBeenCalledTimes(beforeCalls + 1);
           const payload = imagePayloadAt(sendMedia, beforeCalls);
-          expect(payload.image.length).toBeLessThanOrEqual(SMALL_MEDIA_CAP_BYTES);
-          expect(payload.mimetype).toBe("image/jpeg");
+          expect(payload.image.length).toBeGreaterThan(0);
+          expect(payload.image.length).toBeLessThanOrEqual(1024 * 1024);
+          expect(payload.mimetype).toBe(fmt.mime);
         }
-        expect(sendMedia).toHaveBeenCalledTimes(renderedFormats.length);
+        expect(sendMedia).toHaveBeenCalledTimes(formats.length);
         expect(reply).not.toHaveBeenCalled();
       } finally {
         fetchMock.mockRestore();
@@ -244,16 +219,7 @@ describe("web auto-reply", () => {
   });
 
   it("honors channels.whatsapp.mediaMaxMb for outbound auto-replies", async () => {
-    const bigPng = await sharp({
-      create: {
-        width: 256,
-        height: 256,
-        channels: 3,
-        background: { r: 0, g: 0, b: 255 },
-      },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
+    const bigPng = createNoisyPngBuffer(256, 256);
     expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
     await expectCompressedImageWithinCap({
       mediaUrl: "https://example.com/big.png",
@@ -265,16 +231,7 @@ describe("web auto-reply", () => {
   });
 
   it("prefers per-account WhatsApp media caps for outbound auto-replies", async () => {
-    const bigPng = await sharp({
-      create: {
-        width: 256,
-        height: 256,
-        channels: 3,
-        background: { r: 255, g: 0, b: 0 },
-      },
-    })
-      .png({ compressionLevel: 0 })
-      .toBuffer();
+    const bigPng = createNoisyPngBuffer(256, 256);
     expect(bigPng.length).toBeGreaterThan(SMALL_MEDIA_CAP_BYTES);
 
     setLoadConfigMock(() => ({
@@ -345,16 +302,7 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    const smallPng = await sharp({
-      create: {
-        width: 64,
-        height: 64,
-        channels: 3,
-        background: { r: 0, g: 255, b: 0 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const smallPng = createSolidPngBuffer(64, 64, { r: 0, g: 255, b: 0 });
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,
       body: true,
@@ -410,16 +358,7 @@ describe("web auto-reply", () => {
       sendMedia,
     });
 
-    const png = await sharp({
-      create: {
-        width: 64,
-        height: 64,
-        channels: 3,
-        background: { r: 0, g: 0, b: 255 },
-      },
-    })
-      .png()
-      .toBuffer();
+    const png = createSolidPngBuffer(64, 64, { r: 0, g: 0, b: 255 });
 
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
       ok: true,

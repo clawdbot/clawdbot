@@ -1,14 +1,14 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/diffs",
-      "version": "2026.5.24",
+      "version": "2026.5.26",
       "dependencies": {
-        "@pierre/diffs": "1.2.1",
+        "@pierre/diffs": "1.2.2",
         "@pierre/theme": "1.0.3",
         "playwright-core": "1.60.0",
         "typebox": "1.1.38",
@@ -16,9 +16,9 @@
       }
     },
     "node_modules/@pierre/diffs": {
-      "version": "1.2.1",
-      "resolved": "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.2.1.tgz",
-      "integrity": "sha512-T9pYhh1KeaYLTwL1HMiAkeETj9CPjiKq6pqiUWRVJXvIkIvYutMrYyr3kN07cFWX2XPM8eqe6l2dknezs6K2AA==",
+      "version": "1.2.2",
+      "resolved": "https://registry.npmjs.org/@pierre/diffs/-/diffs-1.2.2.tgz",
+      "integrity": "sha512-MvWLv2oSOJOF8oYXWLdhicguHM11G/VNWu6OPR5ZETolp2NM2/KPQG3cZTnKpJ6ImqEHwvw6Gl6z2gmmy2FQmQ==",
       "license": "apache-2.0",
       "dependencies": {
         "@pierre/theme": "1.0.3",

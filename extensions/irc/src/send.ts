@@ -93,6 +93,9 @@ export async function sendMessageIrc(
         connectTimeoutMs: 12000,
       }),
     );
+    if (target.startsWith("#") || target.startsWith("&")) {
+      transient.join(target);
+    }
     transient.sendPrivmsg(target, payload);
     transient.quit("sent");
   }

@@ -1,5 +1,6 @@
 import { fetchProviderDownloadResponse } from "../media-understanding/shared.js";
 import { extensionForMime } from "../media/mime.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { GeneratedMusicAsset } from "./types.js";
 
@@ -8,10 +9,6 @@ export type GeneratedMusicFileCandidate = {
   mimeType?: string;
   fileName?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function normalizeSpecificAudioMimeType(value: unknown): string | undefined {
   const mimeType = normalizeOptionalString(value)?.split(";")[0]?.trim().toLowerCase();

@@ -171,6 +171,47 @@ describe("dispatchOutbound", () => {
     vi.clearAllMocks();
   });
 
+  it("keeps waiting past 300s when a slow provider timeout is configured", async () => {
+    vi.useFakeTimers();
+    try {
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await new Promise<void>((resolve) => setTimeout(resolve, 301_000));
+          await deliver({ text: "late answer" }, { kind: "block" });
+        },
+      });
+      let settled = false;
+
+      const dispatchPromise = dispatchOutbound(makeInbound(), {
+        runtime,
+        cfg: {
+          models: { providers: { ollama: { timeoutSeconds: 1800 } } },
+        },
+        account,
+      }).finally(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(300_000);
+
+      expect(settled).toBe(false);
+      expect(sendTextMock).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await dispatchPromise;
+
+      expect(sendTextMock).toHaveBeenCalledWith(
+        expect.anything(),
+        "late answer",
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it("marks voice-only inbound as audio without adding voice paths to MediaPaths", async () => {
     let finalized: Record<string, unknown> | undefined;
     const runtime = makeRuntime({ onFinalize: (ctx) => (finalized = ctx) });

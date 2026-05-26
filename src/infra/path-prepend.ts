@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "../shared/string-normalization.js";
 
 /**
  * Find the actual key used for PATH in the env object.
@@ -41,20 +45,9 @@ export function mergePathPrepend(existing: string | undefined, prepend: string[]
   if (prepend.length === 0) {
     return existing;
   }
-  const partsExisting = (existing ?? "")
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const merged: string[] = [];
-  const seen = new Set<string>();
-  for (const part of [...prepend, ...partsExisting]) {
-    if (seen.has(part)) {
-      continue;
-    }
-    seen.add(part);
-    merged.push(part);
-  }
-  return merged.join(path.delimiter);
+  return normalizeUniqueStringEntries([...prepend, ...(existing ?? "").split(path.delimiter)]).join(
+    path.delimiter,
+  );
 }
 
 export function removePathPrepend(
@@ -65,15 +58,11 @@ export function removePathPrepend(
     return existing;
   }
 
-  const prependEntries = new Set<string>(
-    prepend.map((part) => part.trim()).filter(Boolean),
-  );
+  const prependEntries = new Set<string>(normalizeStringEntries(prepend));
 
-  const remaining: string[] = (existing ?? "")
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .filter((part) => !prependEntries.has(part));
+  const remaining = normalizeStringEntries((existing ?? "").split(path.delimiter)).filter(
+    (part) => !prependEntries.has(part),
+  );
 
   return remaining.join(path.delimiter);
 }

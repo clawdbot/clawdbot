@@ -19,49 +19,9 @@ export {
   writeJsonSync,
 } from "@openclaw/fs-safe/json";
 
-const RETRY_MAX_ATTEMPTS = 3;
-const RETRY_BASE_DELAY_MS = 50;
-
-/**
- * Recursively walks the error cause chain to detect
- * "File changed during read" errors wrapped inside
- * JsonFileReadError by @openclaw/fs-safe.
- */
-function isFileChangedDuringRead(err: unknown): boolean {
-  let current: unknown = err;
-  while (current) {
-    if (current instanceof Error) {
-      if (
-        typeof current.message === "string" &&
-        current.message.includes("File changed during read")
-      ) {
-        return true;
-      }
-      current = (current as Error & { cause?: unknown }).cause;
-    } else {
-      break;
-    }
-  }
-  return false;
-}
-
-async function withRetryOnFileChanged<T>(fn: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (isFileChangedDuringRead(err) && attempt < RETRY_MAX_ATTEMPTS - 1) {
-        await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * 2 ** attempt));
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
 export async function readJson<T>(filePath: string): Promise<T> {
   try {
-    return await withRetryOnFileChanged(() => readJsonImpl<T>(filePath));
+    return await readJsonImpl<T>(filePath);
   } catch (err) {
     throw err instanceof JsonFileReadError ? err : new JsonFileReadError(filePath, "read", err);
   }
@@ -73,7 +33,7 @@ export async function readJsonFileStrict<T>(filePath: string): Promise<T> {
 
 export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   try {
-    return await withRetryOnFileChanged(() => readJsonIfExistsImpl<T>(filePath));
+    return await readJsonIfExistsImpl<T>(filePath);
   } catch (err) {
     if (err instanceof JsonFileReadError) {
       throw err;
@@ -88,15 +48,9 @@ export async function readDurableJsonFile<T>(filePath: string): Promise<T | null
 
 /**
  * tryReadJson delegates to readJsonIfExists instead of the internal
- * tryReadJsonImpl from @openclaw/fs-safe. The fs-safe implementation
- * swallows all errors internally and returns null, which prevents
- * the retry wrapper from detecting transient "File changed during read"
- * race conditions.
- *
- * By routing through readJsonIfExists, fs-safe propagates errors on
- * race conditions, our retry wrapper intercepts and retries them,
- * and the outer try-catch still handles parse errors / file-not-found
- * gracefully.
+ * tryReadJsonImpl from @openclaw/fs-safe. The fs-safe implementation retries
+ * race conditions before propagating errors; this wrapper keeps the historical
+ * null-on-error contract for callers that intentionally treat reads as optional.
  */
 export async function tryReadJson<T>(filePath: string): Promise<T | null> {
   try {
@@ -117,6 +71,12 @@ export type WriteTextAtomicOptions = {
   dirMode?: number;
   trailingNewline?: boolean;
   durable?: boolean;
+  /**
+   * Prefix for the staged `<prefix>.<pid>.<uuid>.tmp` file. Defaults to the
+   * generic `.fs-safe-replace`; pass a target-specific prefix so an orphaned
+   * temp (from a crash between write and rename) is identifiable and reclaimable.
+   */
+  tempPrefix?: string;
 };
 
 export async function writeTextAtomic(
@@ -133,5 +93,6 @@ export async function writeTextAtomic(
     copyFallbackOnPermissionError: true,
     syncTempFile: options?.durable !== false,
     syncParentDir: options?.durable !== false,
+    ...(options?.tempPrefix ? { tempPrefix: options.tempPrefix } : {}),
   });
 }

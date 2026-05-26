@@ -221,6 +221,48 @@ describe("signal outbound", () => {
     expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
   });
 
+  it("preserves the local approval prompt suppressor through attached-result composition", () => {
+    const suppressor = signalPlugin.outbound?.shouldSuppressLocalPayloadPrompt;
+    if (!suppressor) {
+      throw new Error("signal outbound approval suppressor unavailable");
+    }
+
+    expect(
+      suppressor({
+        cfg: {
+          channels: {
+            signal: {
+              enabled: true,
+              allowFrom: ["+15551230000"],
+            },
+          },
+          approvals: {
+            exec: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        accountId: "default",
+        payload: {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "exec-1",
+              approvalSlug: "exec-1",
+              approvalKind: "exec",
+              sessionKey: "agent:main:signal:+15551230000",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("declares message adapter durable text and media with receipt proofs", async () => {
     const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
       const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";
@@ -299,9 +341,9 @@ describe("classifySignalCliLogLine", () => {
     expect(classifySignalCliLogLine("DEBUG Something")).toBe("log");
   });
 
-  it("treats WARN/ERROR as error", () => {
-    expect(classifySignalCliLogLine("WARN  Something")).toBe("error");
-    expect(classifySignalCliLogLine("WARNING Something")).toBe("error");
+  it("treats routine warnings as logs and errors as error state", () => {
+    expect(classifySignalCliLogLine("WARN  Something")).toBe("log");
+    expect(classifySignalCliLogLine("WARNING Something")).toBe("log");
     expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
   });
 

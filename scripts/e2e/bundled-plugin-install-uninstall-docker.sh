@@ -18,6 +18,7 @@ for env_name in \
   OPENCLAW_BUNDLED_PLUGIN_SWEEP_IDS \
   OPENCLAW_BUNDLED_PLUGIN_RUNTIME_SMOKE \
   OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE \
+  OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS \
   OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS \
   OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS \
   OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS \
@@ -31,16 +32,18 @@ done
 
 echo "Running bundled plugin install/uninstall Docker E2E..."
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-bundled-plugin-install-uninstall.XXXXXX")"
+cleanup() {
+  rm -f "$RUN_LOG"
+}
+trap cleanup EXIT
+
 if ! docker_e2e_run_with_harness \
   "${DOCKER_ENV_ARGS[@]}" \
   "$IMAGE_NAME" \
-  bash scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh >"$RUN_LOG" 2>&1
+  bash scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh 2>&1 |
+  tee "$RUN_LOG"
 then
-  cat "$RUN_LOG"
-  rm -f "$RUN_LOG"
   exit 1
 fi
-cat "$RUN_LOG"
-rm -f "$RUN_LOG"
 
 echo "OK"

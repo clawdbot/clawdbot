@@ -10,6 +10,10 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
+function getFinding(findings: ReturnType<typeof collectHooksHardeningFindings>, checkId: string) {
+  return findings.find((finding) => finding.checkId === checkId);
+}
+
 describe("security audit hooks ingress findings", () => {
   it("evaluates hooks ingress auth and routing findings", () => {
     const unrestrictedBaseHooks = {
@@ -113,5 +117,156 @@ describe("security audit hooks ingress findings", () => {
         ).toBe(true);
       }
     }
+  });
+
+  it("flags hooks token reuse of gateway password auth as critical", () => {
+    const findings = collectHooksHardeningFindings({
+      gateway: {
+        auth: {
+          mode: "password",
+          password: "shared-gateway-password-1234567890", // pragma: allowlist secret
+        },
+      },
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-password-1234567890",
+      },
+    });
+
+    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
+
+    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
+    expect(finding?.title).toContain("Gateway password");
+    expect(finding?.detail).toContain("gateway.auth password");
+    expect(finding?.remediation).toContain("Gateway token/password");
+  });
+
+  it("flags hooks token reuse of trusted-proxy local password fallback as critical", () => {
+    const findings = collectHooksHardeningFindings({
+      gateway: {
+        auth: {
+          mode: "trusted-proxy",
+          trustedProxy: { userHeader: "x-forwarded-user" },
+          password: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
+        },
+      },
+      hooks: {
+        enabled: true,
+        token: "trusted-proxy-local-password-1234567890",
+      },
+    });
+
+    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
+
+    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
+    expect(finding?.title).toContain("Gateway password");
+    expect(finding?.detail).toContain("gateway.auth password");
+  });
+
+  it("flags hooks token reuse of an explicit audit password override as critical", () => {
+    const findings = collectHooksHardeningFindings(
+      {
+        hooks: {
+          enabled: true,
+          token: "runtime-only-gateway-password-1234567890",
+        },
+      },
+      {} as NodeJS.ProcessEnv,
+      {
+        gatewayAuthOverride: {
+          password: "runtime-only-gateway-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
+
+    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
+    expect(finding?.title).toContain("Gateway password");
+    expect(finding?.detail).toContain("gateway.auth password");
+  });
+
+  it("does not flag inactive explicit audit password when config mode is token", () => {
+    const findings = collectHooksHardeningFindings(
+      {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "config-gateway-token-1234567890", // pragma: allowlist secret
+          },
+        },
+        hooks: {
+          enabled: true,
+          token: "runtime-only-gateway-password-1234567890",
+        },
+      },
+      {} as NodeJS.ProcessEnv,
+      {
+        gatewayAuthOverride: {
+          password: "runtime-only-gateway-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(false);
+  });
+
+  it("flags explicit audit password reuse when config mode is token", () => {
+    const findings = collectHooksHardeningFindings(
+      {
+        gateway: {
+          auth: {
+            mode: "token",
+            token: "config-gateway-token-1234567890", // pragma: allowlist secret
+          },
+        },
+        hooks: {
+          enabled: true,
+          token: "runtime-only-gateway-password-1234567890",
+        },
+      },
+      {} as NodeJS.ProcessEnv,
+      {
+        gatewayAuthOverride: {
+          mode: "password",
+          password: "runtime-only-gateway-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
+
+    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
+    expect(finding?.title).toContain("Gateway password");
+    expect(finding?.detail).toContain("gateway.auth password");
+  });
+
+  it("keeps config password reuse finding when explicit audit password differs", () => {
+    const findings = collectHooksHardeningFindings(
+      {
+        gateway: {
+          auth: {
+            mode: "password",
+            password: "config-gateway-password-1234567890", // pragma: allowlist secret
+          },
+        },
+        hooks: {
+          enabled: true,
+          token: "config-gateway-password-1234567890",
+        },
+      },
+      {} as NodeJS.ProcessEnv,
+      {
+        gatewayAuthOverride: {
+          password: "different-runtime-password-1234567890", // pragma: allowlist secret
+        },
+      },
+    );
+
+    expect(hasFinding(findings, "hooks.token_reuse_gateway_token", "critical")).toBe(true);
+
+    const finding = getFinding(findings, "hooks.token_reuse_gateway_token");
+    expect(finding?.title).toContain("Gateway password");
+    expect(finding?.detail).toContain("gateway.auth password");
   });
 });

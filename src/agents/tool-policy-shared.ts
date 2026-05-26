@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   CORE_TOOL_GROUPS,
   resolveCoreToolProfilePolicy,
@@ -40,7 +41,7 @@ export function expandToolGroups(list?: string[]) {
     }
     expanded.push(value);
   }
-  return Array.from(new Set(expanded));
+  return uniqueStrings(expanded);
 }
 
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {

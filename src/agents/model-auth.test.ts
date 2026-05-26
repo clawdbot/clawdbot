@@ -1369,8 +1369,8 @@ describe("applyLocalNoAuthHeaderOverride", () => {
 
 describe("applyAuthHeaderOverride", () => {
   const baseModel: Model<"openai-completions"> = {
-    id: "gemini-3.1-flash-lite-preview",
-    name: "gemini-3.1-flash-lite-preview",
+    id: "gemini-3.1-flash-lite",
+    name: "gemini-3.1-flash-lite",
     api: "openai-completions" as const,
     provider: "google",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",

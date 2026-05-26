@@ -16,6 +16,8 @@ import {
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { isRecord } from "../shared/record-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -211,10 +213,6 @@ function commandRequiresSecurityAuditSuppressionApproval(params: {
 
 function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
   return outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function formatBytes(value: unknown): string | null {
@@ -761,10 +759,10 @@ export async function processGatewayAllowlist(
         trigger: params.trigger,
         outcome,
       });
-      const approvalFollowupText = [params.approvalFollowupText, dynamicFollowupText]
-        .map((text) => text?.trim())
-        .filter(Boolean)
-        .join("\n\n");
+      const approvalFollowupText = normalizeStringEntries([
+        params.approvalFollowupText ?? "",
+        dynamicFollowupText ?? "",
+      ]).join("\n\n");
       const summary = buildGatewayExecApprovalFollowupSummary({
         approvalId,
         sessionId: run.session.id,

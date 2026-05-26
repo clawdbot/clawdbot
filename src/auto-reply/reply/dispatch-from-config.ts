@@ -58,11 +58,9 @@ import { isAbortError } from "../../infra/unhandled-rejections.js";
 import {
   logMessageDispatchCompleted,
   logMessageDispatchStarted,
-  logMessageProcessed,
-  logMessageQueued,
-  logSessionStateChange,
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
+import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { matchPluginCommand } from "../../plugins/commands.js";
 import {
   buildPluginBindingDeclinedText,
@@ -132,7 +130,7 @@ import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from ".
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
@@ -433,6 +431,10 @@ function createReplyDispatchEvent(
     get: shouldSendToolSummaries,
   }) as PluginHookReplyDispatchEvent;
 }
+
+export const testing = {
+  createReplyDispatchEvent,
+};
 
 function resolveHarnessDefaultChannel(params: {
   ctx: FinalizedMsgContext;
@@ -790,6 +792,12 @@ export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+  if (params.replyOptions?.abortSignal?.aborted) {
+    return {
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    };
+  }
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
@@ -798,6 +806,17 @@ export async function dispatchReplyFromConfig(
     normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
+  const messageLifecycle = createDiagnosticMessageLifecycle({
+    enabled: diagnosticsEnabled,
+    channel,
+    chatId,
+    messageId,
+    sessionKey,
+    source: "dispatch",
+    processingReason: "message_start",
+    startedAtMs: startTime,
+    trackSessionState: canTrackSession,
+  });
   const traceAttributes = {
     surface: channel,
     hasSessionKey: Boolean(sessionKey),
@@ -818,19 +837,7 @@ export async function dispatchReplyFromConfig(
       error?: string;
     },
   ) => {
-    if (!diagnosticsEnabled) {
-      return;
-    }
-    logMessageProcessed({
-      channel,
-      chatId,
-      messageId,
-      sessionKey,
-      durationMs: Date.now() - startTime,
-      outcome,
-      reason: opts?.reason,
-      error: opts?.error,
-    });
+    messageLifecycle.markProcessed(outcome, opts);
   };
 
   const recordAgentDispatchStarted = () => {
@@ -867,26 +874,11 @@ export async function dispatchReplyFromConfig(
   };
 
   const markProcessing = () => {
-    if (!canTrackSession || !sessionKey) {
-      return;
-    }
-    logMessageQueued({ sessionKey, channel, source: "dispatch" });
-    logSessionStateChange({
-      sessionKey,
-      state: "processing",
-      reason: "message_start",
-    });
+    messageLifecycle.markProcessing();
   };
 
   const markIdle = (reason: string) => {
-    if (!canTrackSession || !sessionKey) {
-      return;
-    }
-    logSessionStateChange({
-      sessionKey,
-      state: "idle",
-      reason,
-    });
+    messageLifecycle.markIdle(reason);
   };
 
   let inboundDedupeReplayUnsafe = false;
@@ -903,6 +895,16 @@ export async function dispatchReplyFromConfig(
   // ACP routing uses acpDispatchSessionKey.
   const dispatchOperationSessionKey =
     initialSessionStoreEntry.sessionKey ?? sessionKey ?? acpDispatchSessionKey;
+  if (
+    params.replyOptions?.isHeartbeat === true &&
+    dispatchOperationSessionKey &&
+    replyRunRegistry.get(dispatchOperationSessionKey)
+  ) {
+    return {
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    };
+  }
   const markProgress = () => {
     if (!canTrackSession || !sessionKey) {
       return;

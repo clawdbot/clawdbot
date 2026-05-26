@@ -668,9 +668,6 @@
           },
           "type": "array"
         },
-        "bestEffort": {
-          "type": "boolean"
-        },
         "buffer": {
           "description": "Base64 attachment payload; data URL ok.",
           "type": "string"

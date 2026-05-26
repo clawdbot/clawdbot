@@ -3,8 +3,13 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { spawn as spawnPty, type PtyExitEvent, type PtyHandle } from "@lydell/node-pty";
+import * as nodePty from "@lydell/node-pty";
+import type { PtyExitEvent, PtyHandle } from "@lydell/node-pty";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+
+type NodePtyRuntimeModule = typeof nodePty & {
+  default?: Partial<typeof nodePty>;
+};
 
 type KillablePtyHandle = PtyHandle & {
   kill?: (signal?: string) => void;
@@ -29,6 +34,19 @@ const OUTPUT_TIMEOUT_MS = 2_000;
 const EXIT_TIMEOUT_MS = 4_000;
 const TEST_TIMEOUT_MS = 5_000;
 const STARTUP_TEST_TIMEOUT_MS = 10_000;
+
+function resolveSpawnPty() {
+  const runtime = nodePty as NodePtyRuntimeModule;
+  if (typeof runtime.spawn === "function") {
+    return runtime.spawn;
+  }
+  if (typeof runtime.default?.spawn === "function") {
+    return runtime.default.spawn;
+  }
+  throw new TypeError("@lydell/node-pty spawn export is unavailable");
+}
+
+const spawnPty = resolveSpawnPty();
 
 function waitFor<T>(params: {
   timeoutMs: number;
@@ -462,7 +480,8 @@ describe.sequential("TUI PTY harness", () => {
     for (const run of activeRuns.splice(0)) {
       run.dispose();
     }
-    await fixture.cleanup();
+    const startedFixture = fixture as Awaited<ReturnType<typeof startTuiFixture>> | undefined;
+    await startedFixture?.cleanup();
   });
 
   it("renders local ready on startup", () => {

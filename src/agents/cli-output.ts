@@ -1,6 +1,7 @@
 import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
 type CliUsage = {
@@ -510,10 +511,7 @@ export function parseCliJsonl(
   backend: CliBackendConfig,
   providerId: string,
 ): CliOutput | null {
-  const lines = raw
-    .split(/\r?\n/g)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split(/\r?\n/g));
   if (lines.length === 0) {
     return null;
   }

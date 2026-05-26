@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   envInvocationUsesModifiers,
   parseEnvInvocationPrelude,
@@ -132,7 +133,7 @@ export function extractEnvAssignmentKeysFromDispatchWrappers(
     }
     current = unwrap.argv;
   }
-  return Array.from(new Set(assignmentKeys)).toSorted((a, b) => a.localeCompare(b));
+  return sortUniqueStrings(assignmentKeys);
 }
 
 function unwrapDashOptionInvocation(

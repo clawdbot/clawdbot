@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,6 +18,16 @@ const OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH =
 const OPENAI_WEB_SEARCH_MINIMAL_CLIENT_PATH =
   "scripts/e2e/lib/openai-web-search-minimal/client.mjs";
 const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
+const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
+const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
+const KITCHEN_SINK_RPC_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-rpc-docker.sh";
+const CODEX_ON_DEMAND_DOCKER_E2E_PATH = "scripts/e2e/codex-on-demand-docker.sh";
+const CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH =
+  "scripts/e2e/codex-npm-plugin-live-docker.sh";
+const LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH = "scripts/e2e/live-plugin-tool-docker.sh";
+const NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH =
+  "scripts/e2e/npm-onboard-channel-agent-docker.sh";
+const SKILL_INSTALL_DOCKER_E2E_PATH = "scripts/e2e/skill-install-docker.sh";
 const PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH =
   "scripts/e2e/plugin-binding-command-escape-docker.sh";
 const PLUGIN_BINDING_COMMAND_ESCAPE_DOCKERFILE_PATH =
@@ -60,6 +70,18 @@ const CENTRALIZED_BUILD_SCRIPTS = [
   "scripts/test-install-sh-e2e-docker.sh",
   "scripts/test-live-build-docker.sh",
 ] as const;
+
+function packageBackedDockerRunnerPaths(): string[] {
+  return readdirSync("scripts/e2e")
+    .filter((entry) => entry.endsWith("-docker.sh"))
+    .map((entry) => join("scripts/e2e", entry))
+    .filter((path) => readFileSync(path, "utf8").includes("docker_e2e_prepare_package_tgz"))
+    .sort();
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
 
 describe("docker build helper", () => {
   it("forces BuildKit for centralized Docker builds", () => {
@@ -108,10 +130,376 @@ describe("docker build helper", () => {
     );
   });
 
+  it("removes functional Docker build package inputs after the build", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-cleanup-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+node() {
+  local script="$1"
+  shift
+  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+    command node "$script" "$@"
+    return
+  fi
+
+  local output_dir=""
+  local output_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-dir)
+        output_dir="$2"
+        shift 2
+        ;;
+      --output-name)
+        output_name="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  mkdir -p "$output_dir"
+  printf fixture >"$output_dir/$output_name"
+  printf "%s\\n" "$output_dir/$output_name"
+}
+export -f node
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+docker_build_run() {
+  local build_context=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      openclaw_package=*)
+        build_context="\${arg#openclaw_package=}"
+        ;;
+    esac
+  done
+
+  test -n "$build_context"
+  test -f "$build_context/openclaw-current.tgz"
+  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
+}
+
+docker_e2e_build_or_reuse \\
+  openclaw-test-image \\
+  cleanup-proof \\
+  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
+  "$ROOT_DIR" \\
+  functional
+
+test -f "$TMPDIR/build-context-seen"
+leftovers="$(find "$TMPDIR" -maxdepth 1 \\( \\
+  -name 'openclaw-docker-e2e-pack.*' \\
+  -o -name 'openclaw-docker-e2e-package-context.*' \\
+\\) -print)"
+if [[ -n "$leftovers" ]]; then
+  printf 'leftover functional build inputs:\\n%s\\n' "$leftovers" >&2
+  exit 1
+fi
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps caller-provided functional Docker build packages", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-external-package-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+external_dir="$TMPDIR/external-package"
+mkdir -p "$external_dir"
+printf fixture >"$external_dir/openclaw-current.tgz"
+OPENCLAW_CURRENT_PACKAGE_TGZ="$external_dir/openclaw-current.tgz"
+export OPENCLAW_CURRENT_PACKAGE_TGZ
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+
+docker_build_run() {
+  local build_context=""
+  local arg
+  for arg in "$@"; do
+    case "$arg" in
+      openclaw_package=*)
+        build_context="\${arg#openclaw_package=}"
+        ;;
+    esac
+  done
+
+  test -n "$build_context"
+  test -f "$build_context/openclaw-current.tgz"
+  printf "%s\\n" "$build_context" >"$TMPDIR/build-context-seen"
+}
+
+docker_e2e_build_or_reuse \\
+  openclaw-test-image \\
+  external-package-proof \\
+  "$ROOT_DIR/scripts/e2e/Dockerfile" \\
+  "$ROOT_DIR" \\
+  functional
+
+test -f "$TMPDIR/build-context-seen"
+test -f "$OPENCLAW_CURRENT_PACKAGE_TGZ"
+leftovers="$(find "$TMPDIR" -maxdepth 1 -name 'openclaw-docker-e2e-package-context.*' -print)"
+if [[ -n "$leftovers" ]]; then
+  printf 'leftover functional build context:\\n%s\\n' "$leftovers" >&2
+  exit 1
+fi
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans generated package mounts after harness Docker runs", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-mount-cleanup-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export DOCKER_COMMAND_TIMEOUT=3s
+
+mkdir -p "$TMPDIR/bin"
+cat >"$TMPDIR/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+printf "%s\\n" "$1" >"$TMPDIR/docker-timeout-seen"
+shift
+"$@"
+SH
+chmod +x "$TMPDIR/bin/timeout"
+export PATH="$TMPDIR/bin:$PATH"
+
+node() {
+  local script="$1"
+  shift
+  if [[ "$script" != "$ROOT_DIR/scripts/package-openclaw-for-docker.mjs" ]]; then
+    command node "$script" "$@"
+    return
+  fi
+
+  local output_dir=""
+  local output_name=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --output-dir)
+        output_dir="$2"
+        shift 2
+        ;;
+      --output-name)
+        output_name="$2"
+        shift 2
+        ;;
+      *)
+        shift
+        ;;
+    esac
+  done
+
+  mkdir -p "$output_dir"
+  printf fixture >"$output_dir/$output_name"
+  printf "%s\\n" "$output_dir/$output_name"
+}
+export -f node
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker() {
+  local mount_path=""
+  local expect_volume_path=0
+  local arg
+  for arg in "$@"; do
+    if [[ "$expect_volume_path" == "1" ]]; then
+      mount_path="\${arg%%:*}"
+      expect_volume_path=0
+      continue
+    fi
+    if [[ "$arg" == "-v" ]]; then
+      expect_volume_path=1
+    fi
+  done
+
+  test -n "$mount_path"
+  test -f "$mount_path"
+  printf "%s\\n" "$mount_path" >"$TMPDIR/package-mount-seen"
+  return "\${DOCKER_STUB_STATUS:-0}"
+}
+export -f docker
+
+package_tgz="$(docker_e2e_prepare_package_tgz mount-cleanup)"
+pack_dir="$(dirname "$package_tgz")"
+docker_e2e_package_mount_args "$package_tgz"
+DOCKER_STUB_STATUS=7 docker_e2e_run_with_harness image-name bash -lc true || run_status="$?"
+test "\${run_status:-0}" = "7"
+test "$(cat "$TMPDIR/docker-timeout-seen")" = "3s"
+test -f "$TMPDIR/package-mount-seen"
+test ! -e "$pack_dir"
+
+external_dir="$TMPDIR/external-package"
+mkdir -p "$external_dir"
+printf fixture >"$external_dir/openclaw-current.tgz"
+docker_e2e_package_mount_args "$external_dir/openclaw-current.tgz"
+unset DOCKER_COMMAND_TIMEOUT
+rm -f "$TMPDIR/docker-timeout-seen"
+docker_e2e_run_with_harness image-name bash -lc true
+test ! -e "$TMPDIR/docker-timeout-seen"
+test -f "$external_dir/openclaw-current.tgz"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the harness run wrapper available with pre-sourced Docker command helpers", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-helper-guard-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+docker_e2e_docker_cmd() {
+  printf "%s\\n" "$*" >"$TMPDIR/docker-cmd-seen"
+}
+
+docker() {
+  printf "%s\\n" "$*" >"$TMPDIR/docker-run-seen"
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker_e2e_run_with_harness image-name bash -lc true
+test -f "$TMPDIR/docker-run-seen"
+
+docker_e2e_run_detached_with_harness image-name
+test -f "$TMPDIR/docker-cmd-seen"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans Codex npm plugin live package artifacts on every exit path", () => {
+    const runner = readFileSync(CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain('CODEX_PLUGIN_PACK_DIR=""');
+    expect(runner).toContain('run_log=""');
+    expect(runner).toMatch(
+      /cleanup\(\) \{[\s\S]*rm -rf "\$CODEX_PLUGIN_PACK_DIR"[\s\S]*docker_e2e_cleanup_package_tgz "\$PACKAGE_TGZ"[\s\S]*rm -f "\$run_log"/u,
+    );
+    expect(runner).toContain("trap cleanup EXIT");
+    expect(runner).not.toContain('rm -f "$run_log"\n  exit 1');
+  });
+
+  it("cleans package-backed onboarding and plugin Docker artifacts on every exit path", () => {
+    for (const path of [
+      CODEX_ON_DEMAND_DOCKER_E2E_PATH,
+      LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH,
+      NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
+    ]) {
+      const runner = readFileSync(path, "utf8");
+
+      expect(runner, path).toContain('run_log=""');
+      expect(runner, path).toMatch(
+        /cleanup\(\) \{[\s\S]*docker_e2e_cleanup_package_tgz "\$PACKAGE_TGZ"[\s\S]*rm -f "\$run_log"/u,
+      );
+      expect(runner, path).toContain("trap cleanup EXIT");
+      expect(runner, path).not.toContain('rm -f "$run_log"\n  exit 1');
+    }
+  });
+
+  it("cleans every prepared Docker package tarball on every runner exit path", () => {
+    const paths = packageBackedDockerRunnerPaths();
+
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      const runner = readFileSync(path, "utf8");
+
+      expect(runner, path).toMatch(
+        /docker_e2e_cleanup_package_tgz "\$\{PACKAGE_TGZ:-\}"|docker_e2e_cleanup_package_tgz "\$PACKAGE_TGZ"/u,
+      );
+      expect(runner, path).toMatch(/trap cleanup(?:_outer)? EXIT/u);
+      expect(runner, path).not.toContain('rm -f "$run_log"\n  exit 1');
+    }
+  });
+
+  it("runs skill install through the package-cleaning Docker harness", () => {
+    const runner = readFileSync(SKILL_INSTALL_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain('docker_e2e_package_mount_args "$PACKAGE_TGZ"');
+    expect(runner).toMatch(
+      /run_logged_print \\\n\s+skill-install-run \\\n\s+docker_e2e_run_with_harness \\/u,
+    );
+    expect(runner).not.toContain("docker_e2e_harness_mount_args");
+    expect(runner).not.toContain("docker run --rm");
+  });
+
   it("includes procps in the shared Docker E2E image for process watchdogs", () => {
     const dockerfile = readFileSync("scripts/e2e/Dockerfile", "utf8");
 
     expect(dockerfile).toContain("procps");
+  });
+
+  it("keeps onboarding Docker E2E resource-guarded", () => {
+    const runner = readFileSync(ONBOARD_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain("OPENCLAW_ONBOARD_MAX_MEMORY_MIB");
+    expect(runner).toContain("OPENCLAW_ONBOARD_MAX_CPU_PERCENT");
+    expect(runner).toContain("--name \"$CONTAINER_NAME\"");
+    expect(runner).toContain("docker_e2e_docker_cmd stats --no-stream");
+    expect(runner).toContain("assert-resource-ceiling.mjs");
+    expect(runner).not.toContain("docker_e2e_run_with_harness -t");
+  });
+
+  it("cleans resource-sampled Docker E2E temp logs on every exit path", () => {
+    for (const path of [
+      ONBOARD_DOCKER_E2E_PATH,
+      KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH,
+      KITCHEN_SINK_RPC_DOCKER_E2E_PATH,
+    ]) {
+      const runner = readFileSync(path, "utf8");
+
+      expect(runner, path).toContain('RUN_LOG="$(mktemp');
+      expect(runner, path).toContain('STATS_LOG="$(mktemp');
+      expect(runner, path).toContain('docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME"');
+      expect(runner, path).toContain('docker_e2e_docker_cmd inspect "$CONTAINER_NAME"');
+      expect(runner, path).toContain("docker_e2e_docker_cmd stats --no-stream");
+      expect(runner, path).not.toMatch(/(^|\n)docker run --name "\$CONTAINER_NAME"/u);
+      expect(runner, path).not.toMatch(/(^|\n)docker (?:inspect|stats) /u);
+      expect(runner, path).toMatch(/cleanup\(\) \{[\s\S]*rm -f "\$RUN_LOG" "\$STATS_LOG"/u);
+    }
   });
 
   it("copies root lifecycle scripts before cleanup-smoke installs dependencies", () => {
@@ -335,6 +723,8 @@ describe("docker build helper", () => {
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX");
     expect(runner).toContain("OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
     expect(runner).toContain("scripts/e2e/lib/bundled-plugin-install-uninstall/sweep.sh");
+    expect(runner).toContain('tee "$RUN_LOG"');
+    expect(runner).not.toContain('cat "$RUN_LOG"');
     expect(probe).toContain('"openclaw.plugin.json"');
     expect(runtimeSmoke).toContain("process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS");
     expect(runtimeSmoke).toContain("900000");

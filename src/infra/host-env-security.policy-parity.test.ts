@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { loadHostEnvSecurityPolicy } from "./host-env-security-policy.js";
 
 function parseSwiftStringArray(source: string, marker: string): string[] {
@@ -11,10 +12,6 @@ function parseSwiftStringArray(source: string, marker: string): string[] {
     throw new Error(`Failed to parse Swift array for marker: ${marker}`);
   }
   return Array.from(match[1].matchAll(/"([^"]+)"/g), (m) => m[1]);
-}
-
-function sortUnique(values: string[]): string[] {
-  return Array.from(new Set(values)).toSorted((a, b) => a.localeCompare(b));
 }
 
 describe("host env security policy parity", () => {
@@ -95,10 +92,12 @@ describe("host env security policy parity", () => {
       ),
     );
 
-    expect(policy.blockedKeys).toEqual(sortUnique([...policy.blockedEverywhereKeys]));
-    expect(policy.blockedOverrideKeys).toEqual(sortUnique([...policy.blockedOverrideOnlyKeys]));
+    expect(policy.blockedKeys).toEqual(sortUniqueStrings([...policy.blockedEverywhereKeys]));
+    expect(policy.blockedOverrideKeys).toEqual(
+      sortUniqueStrings([...policy.blockedOverrideOnlyKeys]),
+    );
     expect(policy.blockedInheritedKeys).toEqual(
-      sortUnique([
+      sortUniqueStrings([
         ...policy.blockedEverywhereKeys,
         ...policy.blockedOverrideOnlyKeys.filter(
           (value) => !allowedInheritedOverrideOnlyKeys.has(value.toUpperCase()),
@@ -106,7 +105,7 @@ describe("host env security policy parity", () => {
       ]),
     );
     expect(policy.blockedInheritedPrefixes).toEqual(
-      sortUnique(rawPolicy.blockedInheritedPrefixes ?? rawPolicy.blockedPrefixes ?? []),
+      sortUniqueStrings(rawPolicy.blockedInheritedPrefixes ?? rawPolicy.blockedPrefixes ?? []),
     );
   });
 });

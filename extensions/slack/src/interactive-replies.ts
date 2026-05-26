@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
 
 const SLACK_BUTTON_MAX_ITEMS = 5;
@@ -98,10 +102,7 @@ function buildButtonsBlock(
 function buildSelectBlock(
   raw: string,
 ): NonNullable<ReplyPayload["interactive"]>["blocks"][number] | null {
-  const parts = raw
-    .split("|")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const parts = normalizeStringEntries(raw.split("|"));
   if (parts.length === 0) {
     return null;
   }
@@ -127,17 +128,14 @@ function hasSlackBlocks(payload: ReplyPayload): boolean {
 }
 
 function parseSimpleSlackOptions(raw: string): SlackChoice[] | null {
-  const entries = raw
-    .split(",")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const entries = normalizeStringEntries(raw.split(","));
   if (entries.length < 2 || entries.length > SLACK_AUTO_SELECT_MAX_ITEMS) {
     return null;
   }
   if (!entries.every((entry) => SLACK_SIMPLE_OPTION_RE.test(entry))) {
     return null;
   }
-  const deduped = new Set(entries.map((entry) => normalizeLowercaseStringOrEmpty(entry)));
+  const deduped = new Set(normalizeStringEntriesLower(entries));
   if (deduped.size !== entries.length) {
     return null;
   }

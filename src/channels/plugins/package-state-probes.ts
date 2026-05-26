@@ -14,6 +14,7 @@ import {
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
@@ -60,15 +61,6 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
     });
     return loader(params.modulePath);
   }
-}
-
-function normalizeStringList(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value
-    .map((entry) => normalizeOptionalString(entry))
-    .filter((entry): entry is string => Boolean(entry));
 }
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
@@ -160,8 +152,8 @@ function resolveChannelPackageStateMetadata(
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
   const envMetadata = "env" in metadata ? metadata.env : undefined;
-  const allOf = normalizeStringList(envMetadata?.allOf);
-  const anyOf = normalizeStringList(envMetadata?.anyOf);
+  const allOf = normalizeTrimmedStringList(envMetadata?.allOf);
+  const anyOf = normalizeTrimmedStringList(envMetadata?.anyOf);
   const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
   if ((!specifier || !exportName) && !env) {
     return null;

@@ -81,6 +81,13 @@ function readGatewayRunLoopSource(): string {
   return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
+function readPiModelDiscoveryCacheSource(): string {
+  return readFileSync(
+    new URL("../agents/pi-embedded-runner/model-discovery-cache.ts", import.meta.url),
+    "utf8",
+  );
+}
+
 describe("tsdown config", () => {
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
     const distGraph = requireUnifiedDistGraph();
@@ -105,6 +112,7 @@ describe("tsdown config", () => {
       "plugins/provider-discovery.runtime",
       "plugins/provider-runtime.runtime",
       "plugins/runtime/index",
+      "plugins/synthetic-auth.runtime",
       "web-fetch/runtime",
       "plugin-sdk/compat",
       "plugin-sdk/index",
@@ -146,6 +154,20 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["plugins/hook-runner-global"]).toBe(
       "src/plugins/hook-runner-global.ts",
+    );
+  });
+
+  it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+    const importSpecifiers = [
+      ...readPiModelDiscoveryCacheSource().matchAll(
+        /from ["']([^"']*synthetic-auth\.runtime\.js)["']/gu,
+      ),
+    ].map((match) => match[1]);
+
+    expect(importSpecifiers).toEqual(["../../plugins/synthetic-auth.runtime.js"]);
+    expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
+      "src/plugins/synthetic-auth.runtime.ts",
     );
   });
 

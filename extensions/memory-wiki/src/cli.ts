@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  isRecord,
+  normalizeStringEntries,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation } from "./apply.js";
 import {
@@ -196,10 +201,6 @@ function shouldRouteBridgeRuntimeThroughGateway(config: ResolvedMemoryWikiConfig
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function isBoundedGatewayString(
   value: unknown,
   maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
@@ -336,11 +337,8 @@ function normalizeCliStringList(values?: string[]): string[] | undefined {
   if (!values) {
     return undefined;
   }
-  const normalized = values
-    .map((value) => value.trim())
-    .filter(Boolean)
-    .filter((value, index, all) => all.indexOf(value) === index);
-  return normalized.length > 0 ? normalized : undefined;
+  const uniqueValues = uniqueStrings(normalizeStringEntries(values));
+  return uniqueValues.length > 0 ? uniqueValues : undefined;
 }
 
 function collectCliValues(value: string, acc: string[] = []) {

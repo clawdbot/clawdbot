@@ -9,6 +9,7 @@ const bundledRuntimeFragments = (pluginDir) => [
   `/dist/extensions/${pluginDir}`,
   `/dist-runtime/extensions/${pluginDir}`,
 ];
+const bundledRuntimeRootFragments = ["/dist/extensions/", "/dist-runtime/extensions/"];
 
 function resolveStateDir() {
   if (process.env.OPENCLAW_STATE_DIR) {
@@ -20,6 +21,11 @@ function resolveStateDir() {
 function pathReferencesBundledRuntime(value, pluginDir) {
   const normalized = normalizePathForProbe(value);
   return bundledRuntimeFragments(pluginDir).some((fragment) => normalized.includes(fragment));
+}
+
+function pathReferencesPackagedBundledRoot(value) {
+  const normalized = normalizePathForProbe(value);
+  return bundledRuntimeRootFragments.some((fragment) => normalized.includes(fragment));
 }
 
 function resolveOpenClawEntry() {
@@ -68,7 +74,7 @@ async function loadPackagedBundledEntries() {
       const rootDir = typeof plugin.rootDir === "string" ? plugin.rootDir.trim() : "";
       const source = typeof plugin.source === "string" ? plugin.source.trim() : "";
       const pluginDir = rootDir || (source ? path.dirname(source) : "");
-      if (!id || !pluginDir) {
+      if (!id || !pluginDir || !pathReferencesPackagedBundledRoot(pluginDir)) {
         return null;
       }
       return {

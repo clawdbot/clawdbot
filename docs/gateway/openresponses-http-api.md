@@ -261,7 +261,7 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
-- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
+- HEIC/HEIF `input_image` sources are accepted when a system converter is available and are normalized to JPEG before provider delivery. Supported converters are macOS `sips`, ImageMagick, GraphicsMagick, or ffmpeg.
 
 Security note:
 

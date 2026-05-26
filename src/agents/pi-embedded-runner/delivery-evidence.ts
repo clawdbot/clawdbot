@@ -1,3 +1,4 @@
+import { normalizeStringEntries, uniqueStrings } from "../../shared/string-normalization.js";
 import { hasAcceptedSessionSpawn } from "../accepted-session-spawn.js";
 
 type AgentPayloadLike = {
@@ -107,9 +108,7 @@ export function hasDeliveredExpectedMedia(
   result: AgentDeliveryEvidence,
   expectedMediaUrls: readonly string[],
 ): boolean {
-  const expected = Array.from(
-    new Set(expectedMediaUrls.map((url) => url.trim()).filter((url) => url.length > 0)),
-  );
+  const expected = uniqueStrings(normalizeStringEntries(expectedMediaUrls));
   if (expected.length === 0) {
     return true;
   }

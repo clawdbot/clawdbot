@@ -11,6 +11,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -40,10 +41,6 @@ const GOOGLE_SUPPORTED_ASPECT_RATIOS = [
 ] as const;
 
 const GOOGLE_IMAGE_MALFORMED_RESPONSE = "Google image generation response malformed";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function normalizeGoogleImageModel(model: string | undefined): string {
   const trimmed = model?.trim();

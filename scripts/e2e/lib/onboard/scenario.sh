@@ -80,33 +80,62 @@ run_wizard_cmd() {
   local send_fn="$4"
   local with_gateway="${5:-false}"
   local validate_fn="${6:-}"
+  local input_fifo_dir=""
+  local input_fifo=""
+  local wizard_pid=""
+  local gw_pid=""
+  local wizard_status=0
 
   echo "== Wizard case: $case_name =="
   set_isolated_openclaw_env "$state_ref"
 
-  input_fifo="$(mktemp -u "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
-  mkfifo "$input_fifo"
+  input_fifo_dir="$(mktemp -d "/tmp/openclaw-onboard-${case_name}.XXXXXX")"
+  input_fifo="$input_fifo_dir/stdin.fifo"
+  if ! mkfifo "$input_fifo"; then
+    rm -rf "$input_fifo_dir"
+    return 1
+  fi
   local log_path="/tmp/openclaw-onboard-${case_name}.log"
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
   # Run under script to keep an interactive TTY for clack prompts.
   openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
   wizard_pid=$!
-  exec 3>"$input_fifo"
+  if ! exec 3>"$input_fifo"; then
+    openclaw_e2e_stop_process "$wizard_pid"
+    rm -rf "$input_fifo_dir"
+    return 1
+  fi
 
-  local gw_pid=""
   if [ "$with_gateway" = "true" ]; then
     start_gateway
     gw_pid="$GATEWAY_PID"
-    wait_for_gateway
+    if ! wait_for_gateway; then
+      exec 3>&-
+      openclaw_e2e_stop_process "$wizard_pid"
+      rm -rf "$input_fifo_dir"
+      stop_gateway "$gw_pid"
+      exit 1
+    fi
   fi
 
-  "$send_fn"
-
-  if ! wait "$wizard_pid"; then
-    wizard_status=$?
+  "$send_fn" || wizard_status=$?
+  if [ "$wizard_status" -ne 0 ]; then
     exec 3>&-
-    rm -f "$input_fifo"
+    openclaw_e2e_stop_process "$wizard_pid"
+    rm -rf "$input_fifo_dir"
+    stop_gateway "$gw_pid"
+    echo "Wizard input driver exited with status $wizard_status"
+    if [ -f "$log_path" ]; then
+      tail -n 160 "$log_path" || true
+    fi
+    exit "$wizard_status"
+  fi
+
+  wait "$wizard_pid" || wizard_status=$?
+  if [ "$wizard_status" -ne 0 ]; then
+    exec 3>&-
+    rm -rf "$input_fifo_dir"
     stop_gateway "$gw_pid"
     echo "Wizard exited with status $wizard_status"
     if [ -f "$log_path" ]; then
@@ -115,7 +144,7 @@ run_wizard_cmd() {
     exit "$wizard_status"
   fi
   exec 3>&-
-  rm -f "$input_fifo"
+  rm -rf "$input_fifo_dir"
   stop_gateway "$gw_pid"
   if [ -n "$validate_fn" ]; then
     "$validate_fn" "$log_path"

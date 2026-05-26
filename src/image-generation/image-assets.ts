@@ -1,4 +1,5 @@
 import { canonicalizeBase64 } from "../media/base64.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -22,10 +23,6 @@ export type OpenAiCompatibleImageResponseEntry = {
 export type OpenAiCompatibleImageResponsePayload = {
   data?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function throwMalformedImageResponse(message: string | undefined): never | undefined {
   if (message) {

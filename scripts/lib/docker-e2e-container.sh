@@ -11,6 +11,14 @@ docker_e2e_docker_cmd() {
   docker "$@"
 }
 
+docker_e2e_docker_run_cmd() {
+  if [ -n "${DOCKER_COMMAND_TIMEOUT:-}" ] && command -v timeout >/dev/null 2>&1; then
+    timeout "$DOCKER_COMMAND_TIMEOUT" docker "$@"
+    return
+  fi
+  docker "$@"
+}
+
 docker_e2e_container_running() {
   local container_name="$1"
   [ "$(docker_e2e_docker_cmd inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || echo false)" = "true" ]

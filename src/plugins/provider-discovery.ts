@@ -2,6 +2,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { listManifestProviderContributionIds } from "./manifest-contribution-ids.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
 import { type LoadPluginRegistryParams, type PluginRegistrySnapshot } from "./plugin-registry.js";
@@ -49,10 +50,6 @@ export type ResolveInstalledPluginProviderContributionIdsParams = LoadPluginRegi
   includeDisabled?: boolean;
 };
 
-function sortedValues(values: Iterable<string>): string[] {
-  return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
-}
-
 export function resolveInstalledPluginProviderContributionIds(
   params: ResolveInstalledPluginProviderContributionIdsParams = {},
 ): string[] {
@@ -60,7 +57,7 @@ export function resolveInstalledPluginProviderContributionIds(
     params.candidates && params.preferPersisted === undefined
       ? { ...params, preferPersisted: false }
       : params;
-  return sortedValues(
+  return sortUniqueStrings(
     listManifestProviderContributionIds({
       ...registryParams,
       index: params.index,

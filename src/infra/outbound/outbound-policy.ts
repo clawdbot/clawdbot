@@ -7,6 +7,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageToolsConfig } from "../../config/types.tools.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
+import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
@@ -152,8 +153,8 @@ export function resolveAllowedMessageActions(params: {
   if (!allow) {
     return undefined;
   }
-  const normalized = allow.map((entry) => entry.trim()).filter(Boolean);
-  return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+  const normalized = normalizeUniqueStringEntries(allow);
+  return normalized.length > 0 ? normalized : undefined;
 }
 
 export function enforceMessageActionAllowlist(params: {

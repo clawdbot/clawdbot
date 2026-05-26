@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
+import { isRecord } from "../../../shared/record-coerce.js";
 import { estimateStringChars } from "../../../utils/cjk-chars.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
 import {
@@ -73,10 +74,6 @@ function estimateIdentifierTokenPressure(
     return estimateStringTokenPressure(String(value), charsPerToken);
   }
   return estimateJsonPayloadTokenPressure(value, charsPerToken);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function estimateContentBlockTokenPressure(

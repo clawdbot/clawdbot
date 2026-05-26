@@ -1,4 +1,5 @@
 import path from "node:path";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizePluginId } from "./config-state.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
@@ -40,7 +41,7 @@ function filterAllowlistedBundledPluginIds(
     return [...pluginIds];
   }
   const allowedPluginIds = new Set(
-    allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean),
+    normalizeUniqueStringEntries(allow.map((pluginId) => normalizePluginId(pluginId))),
   );
   return pluginIds.filter((pluginId) => allowedPluginIds.has(pluginId));
 }

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/tlon",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "description": "OpenClaw Tlon/Urbit channel plugin",
   "repository": {
     "type": "git",
@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "@aws-sdk/client-s3": "3.1051.0",
-    "@aws-sdk/s3-request-presigner": "3.1051.0",
+    "@aws-sdk/client-s3": "3.1053.0",
+    "@aws-sdk/s3-request-presigner": "3.1053.0",
     "@tloncorp/tlon-skill": "0.4.0",
     "@urbit/aura": "3.0.0",
     "zod": "4.4.3"
@@ -19,7 +19,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.24"
+    "openclaw": ">=2026.5.26"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -73,10 +73,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.5.24"
+      "pluginApi": ">=2026.5.26"
     },
     "build": {
-      "openclawVersion": "2026.5.24"
+      "openclawVersion": "2026.5.26"
     },
     "release": {
       "publishToClawHub": true,

@@ -1069,6 +1069,7 @@ async function installPluginDirectoryIntoExtensions(params: {
   dryRun: boolean;
   copyErrorPrefix: string;
   hasDeps: boolean;
+  sourceHardlinks?: "package-manager" | "reject";
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => Promise<void>;
   afterInstall?: (
@@ -1117,6 +1118,7 @@ async function installPluginDirectoryIntoExtensions(params: {
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,
+    sourceHardlinks: params.sourceHardlinks ?? "reject",
     depsLogMessage: params.depsLogMessage,
     afterCopy: params.afterCopy,
     afterInstall: async (installedDir) => {
@@ -1619,6 +1621,10 @@ async function installPluginFromPackageDir(
 
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
   const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
+  const shouldInstallRuntimeDeps =
+    plugin.hasRuntimeDependencies &&
+    !hasBundleManifest &&
+    params.installPolicyRequest?.kind === "plugin-archive";
 
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
@@ -1633,10 +1639,8 @@ async function installPluginFromPackageDir(
     mode: preparedTarget.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps:
-      plugin.hasRuntimeDependencies &&
-      !hasBundleManifest &&
-      params.installPolicyRequest?.kind === "plugin-archive",
+    hasDeps: shouldInstallRuntimeDeps,
+    sourceHardlinks: shouldInstallRuntimeDeps ? "package-manager" : "reject",
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterInstall: async (installedDir) => {

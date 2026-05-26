@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { createRequire } from "node:module";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -10,10 +9,14 @@ import type {
   JsonSchemaValidator,
   jsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
-import type { ErrorObject, ValidateFunction } from "ajv";
+import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import {
+  findJsonSchemaShapeError,
+  normalizeJsonSchemaForTypeBox,
+} from "../shared/json-schema-defaults.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
@@ -42,40 +45,111 @@ type CreateSessionMcpRuntime = (
   params: Parameters<typeof createSessionMcpRuntime>[0] & { configFingerprint?: string },
 ) => SessionMcpRuntime;
 
-const require = createRequire(import.meta.url);
 const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const DRAFT_2020_12_SCHEMA = "https://json-schema.org/draft/2020-12/schema";
 const DEFAULT_SESSION_MCP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
 const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
 const BUNDLE_MCP_CATALOG_LIST_TIMEOUT_MS = 1_500;
 
-type Ajv2020Like = {
-  compile: (schema: JsonSchemaType) => ValidateFunction;
-  errorsText: (errors?: ErrorObject[] | null) => string;
-};
-
 function isDraft202012Schema(schema: JsonSchemaType): boolean {
   return (schema as { $schema?: unknown }).$schema === DRAFT_2020_12_SCHEMA;
 }
 
+function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: string }>): string {
+  return (
+    errors
+      .map((error) => {
+        const message = error.message?.trim() || "schema validation failed";
+        return error.instancePath ? `${error.instancePath} ${message}` : message;
+      })
+      .join(", ") || "schema validation failed"
+  );
+}
+
+const schemaMapKeywords = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+const schemaValueKeywords = new Set([
+  "additionalItems",
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+  "unevaluatedItems",
+  "unevaluatedProperties",
+]);
+const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+
+function stripSchemaMapFormats(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [key, stripJsonSchemaFormats(entry)]),
+  );
+}
+
+function expandJsonSchemaTypeArray(schema: Record<string, unknown>): Record<string, unknown> {
+  const { type, ...rest } = schema;
+  if (!Array.isArray(type)) {
+    return schema;
+  }
+  return {
+    anyOf: type.map((entry) => Object.assign({}, rest, { type: entry })),
+  };
+}
+
+function stripJsonSchemaFormats(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => stripJsonSchemaFormats(entry));
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  const normalizedSchema = expandJsonSchemaTypeArray(schema as Record<string, unknown>);
+  return Object.fromEntries(
+    Object.entries(normalizedSchema)
+      .filter(([key]) => key !== "format")
+      .map(([key, value]) => {
+        if (schemaMapKeywords.has(key)) {
+          return [key, stripSchemaMapFormats(value)];
+        }
+        if (key === "dependencies") {
+          return [key, stripSchemaMapFormats(value)];
+        }
+        if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
+          return [key, stripJsonSchemaFormats(value)];
+        }
+        return [key, value];
+      }),
+  );
+}
+
 export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
   const defaultValidator = new AjvJsonSchemaValidator();
-  const Ajv2020Ctor = require("ajv/dist/2020") as new (opts?: object) => Ajv2020Like;
-  const ajv2020 = new Ajv2020Ctor({
-    strict: false,
-    validateFormats: false,
-    validateSchema: false,
-    allErrors: true,
-  });
 
   return {
     getValidator<T>(schema: JsonSchemaType): JsonSchemaValidator<T> {
       if (!isDraft202012Schema(schema)) {
         return defaultValidator.getValidator<T>(schema);
       }
-      const ajvValidator = ajv2020.compile(schema);
+      const schemaError = findJsonSchemaShapeError(schema as never);
+      if (schemaError) {
+        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${schemaError}`);
+      }
+      const validator = Compile(
+        normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
+      );
       return (input: unknown) => {
-        const valid = ajvValidator(input);
+        const valid = validator.Check(input);
         if (valid) {
           return {
             valid: true,
@@ -86,7 +160,7 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
         return {
           valid: false,
           data: undefined,
-          errorMessage: ajv2020.errorsText(ajvValidator.errors),
+          errorMessage: formatTypeBoxErrors([...validator.Errors(input)]),
         };
       };
     },

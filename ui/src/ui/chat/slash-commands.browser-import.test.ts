@@ -64,6 +64,7 @@ describe("slash command browser import", () => {
     ]);
     expect(importLines(sharedRegistry)).toEqual([
       'import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";',
+      'import { normalizeStringEntries } from "../shared/string-normalization.js";',
       'import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";',
       "import type {",
       'import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";',

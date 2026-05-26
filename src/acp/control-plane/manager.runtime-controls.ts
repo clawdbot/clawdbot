@@ -1,3 +1,4 @@
+import { asNullableRecord } from "../../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type {
@@ -18,12 +19,6 @@ import {
 
 const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
 function extractConfigOptionKeys(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -33,14 +28,14 @@ function extractConfigOptionKeys(value: unknown): string[] {
       if (typeof entry === "string") {
         return normalizeText(entry);
       }
-      const record = asRecord(entry);
+      const record = asNullableRecord(entry);
       return normalizeText(record?.id ?? record?.key);
     })
     .filter(Boolean) as string[];
 }
 
 function extractRuntimeStatusConfigOptionKeys(status: AcpRuntimeStatus | undefined): string[] {
-  const details = asRecord(status?.details);
+  const details = asNullableRecord(status?.details);
   return [
     ...extractConfigOptionKeys(details?.configOptions),
     ...extractConfigOptionKeys(details?.config_options),

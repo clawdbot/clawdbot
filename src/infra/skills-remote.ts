@@ -9,6 +9,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { listNodePairing, updatePairedNodeMetadata } from "./node-pairing.js";
 
 type RemoteNodeRecord = {
@@ -276,7 +277,7 @@ function parseBinProbePayload(payloadJSON: string | null | undefined, payload?: 
       ? (JSON.parse(payloadJSON) as { stdout?: unknown; bins?: unknown })
       : (payload as { stdout?: unknown; bins?: unknown });
     if (Array.isArray(parsed.bins)) {
-      return parsed.bins.map((bin) => normalizeOptionalString(String(bin)) ?? "").filter(Boolean);
+      return normalizeStringEntries(parsed.bins);
     }
     if (parsed.bins && typeof parsed.bins === "object") {
       return Object.entries(parsed.bins)

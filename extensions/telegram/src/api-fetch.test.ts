@@ -52,11 +52,15 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-vi.mock("undici", () => ({
-  ProxyAgent: proxyMocks.ProxyAgent,
-  fetch: proxyMocks.undiciFetch,
-  setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    ProxyAgent: proxyMocks.ProxyAgent,
+    fetch: proxyMocks.undiciFetch,
+    setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
+  };
+});
 
 describe("fetchTelegramChatId", () => {
   const cases = [

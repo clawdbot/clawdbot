@@ -455,6 +455,25 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
   const variants = record[unionKey] as unknown[];
   const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
   const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
+  const hasNullVariant = nonNullVariants.length < normalizedVariants.length;
+
+  // Preserve string-const unions as a flat string enum so DeepSeek tool
+  // callers still see every allowed literal. Without this, a Typebox
+  // `Type.Union([Type.Literal("a"), Type.Literal("b"), ...])` collapses to
+  // only the first const and the model can never pick any other value.
+  if (nonNullVariants.length > 1 && nonNullVariants.every((entry) => isStringConstVariant(entry))) {
+    const enumValues = nonNullVariants.map((entry) => (entry as { const: string }).const);
+    const merged: Record<string, unknown> = {
+      ...normalized,
+      type: "string",
+      enum: enumValues,
+    };
+    if (hasNullVariant) {
+      merged.nullable = true;
+    }
+    return merged;
+  }
+
   const selected = nonNullVariants[0] ?? normalizedVariants[0];
   if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
     return normalized;
@@ -464,10 +483,18 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     ...(selected as Record<string, unknown>),
     ...normalized,
   };
-  if (nonNullVariants.length < normalizedVariants.length) {
+  if (hasNullVariant) {
     merged.nullable = true;
   }
   return merged;
+}
+
+function isStringConstVariant(entry: unknown): entry is { const: string } {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  const record = entry as Record<string, unknown>;
+  return typeof record.const === "string";
 }
 
 export function normalizeDeepSeekToolSchemas(

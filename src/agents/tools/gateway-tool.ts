@@ -15,6 +15,7 @@ import {
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
+import { isRecord as isPlainObject } from "../../shared/record-coerce.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
@@ -122,10 +123,6 @@ function parseGatewayConfigMutationRaw(
     throw new Error(`${action} raw must be an object.`);
   }
   return parsedRes.parsed;
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeGatewayConfigPath(path: string): string {

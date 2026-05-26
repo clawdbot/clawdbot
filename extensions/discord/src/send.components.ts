@@ -4,6 +4,7 @@ import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/conf
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { registerDiscordComponentEntries } from "./components-registry.js";
 import {
@@ -21,7 +22,7 @@ import {
   type MessagePayloadObject,
   type RequestClient,
 } from "./internal/discord.js";
-import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
@@ -218,7 +219,7 @@ async function buildDiscordComponentPayload(params: {
   }
 
   const attachmentNames = extractComponentAttachmentNames(spec);
-  const uniqueAttachmentNames = [...new Set(attachmentNames)];
+  const uniqueAttachmentNames = uniqueStrings(attachmentNames);
   if (uniqueAttachmentNames.length > 1) {
     throw new Error(
       "Discord component attachments currently support a single file. Use media-gallery for multiple files.",
@@ -290,7 +291,7 @@ export async function sendDiscordComponentMessage(
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component send");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   const channelType = await resolveDiscordChannelType(rest, channelId);
@@ -353,7 +354,7 @@ export async function editDiscordComponentMessage(
   const cfg = requireRuntimeConfig(opts.cfg, "Discord component edit");
   const accountInfo = resolveDiscordAccount({ cfg, accountId: opts.accountId });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   const { body, buildResult } = await buildDiscordComponentPayload({
     spec,

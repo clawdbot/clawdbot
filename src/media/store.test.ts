@@ -3,8 +3,8 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
@@ -644,11 +644,7 @@ describe("media store", () => {
     {
       name: "saves jpeg buffers with the detected extension",
       bufferFactory: async () => {
-        return await sharp({
-          create: { width: 2, height: 2, channels: 3, background: "#123456" },
-        })
-          .jpeg({ quality: 80 })
-          .toBuffer();
+        return createTinyJpegBuffer();
       },
       contentType: "image/jpeg",
       expectedContentType: "image/jpeg",
@@ -845,11 +841,7 @@ describe("media store", () => {
       name: "renames media based on detected mime even when extension is wrong",
       relativeSourcePath: "image-wrong.bin",
       contentsFactory: async () => {
-        return await sharp({
-          create: { width: 2, height: 2, channels: 3, background: "#00ff00" },
-        })
-          .png()
-          .toBuffer();
+        return createSolidPngBuffer(2, 2, { r: 0, g: 255, b: 0 });
       },
       expectedContentType: "image/png",
       expectedExtension: ".png",

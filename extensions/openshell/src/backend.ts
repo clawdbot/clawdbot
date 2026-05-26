@@ -20,7 +20,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenShellSandboxBackend } from "./backend.types.js";
 import {
-  buildExecRemoteCommand,
+  buildValidatedExecRemoteCommand,
   buildRemoteCommand,
   createOpenShellSshSession,
   runOpenShellCli,
@@ -211,6 +211,11 @@ class OpenShellSandboxBackendImpl {
     env: Record<string, string>;
     usePty: boolean;
   }): Promise<{ argv: string[]; token: PendingExec }> {
+    const remoteCommand = buildValidatedExecRemoteCommand({
+      command: params.command,
+      workdir: params.workdir ?? this.params.remoteWorkspaceDir,
+      env: params.env,
+    });
     await this.ensureSandboxExists();
     if (this.params.execContext.config.mode === "mirror") {
       await this.syncWorkspaceToRemote();
@@ -219,11 +224,6 @@ class OpenShellSandboxBackendImpl {
     }
     const sshSession = await createOpenShellSshSession({
       context: this.params.execContext,
-    });
-    const remoteCommand = buildExecRemoteCommand({
-      command: params.command,
-      workdir: params.workdir ?? this.params.remoteWorkspaceDir,
-      env: params.env,
     });
     return {
       argv: [

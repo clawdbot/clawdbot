@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 // but tsgo cannot resolve the chain. Use the dist subpath directly (type-only import).
 import type { IHttpServerAdapter } from "@microsoft/teams.apps/dist/http/index.js";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
@@ -683,10 +684,9 @@ function getAudienceClaims(payload: unknown): string[] {
     return trimmed ? [trimmed] : [];
   }
   if (Array.isArray(audience)) {
-    return audience
-      .filter((value): value is string => typeof value === "string")
-      .map((value) => value.trim())
-      .filter(Boolean);
+    return normalizeStringEntries(
+      audience.filter((value): value is string => typeof value === "string"),
+    );
   }
   return [];
 }

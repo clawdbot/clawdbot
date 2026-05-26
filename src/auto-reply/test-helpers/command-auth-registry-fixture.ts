@@ -1,24 +1,18 @@
 import { afterEach, beforeEach } from "vitest";
 import { normalizeE164 } from "../../plugin-sdk/account-resolution.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import {
-  lowercasePreservingWhitespace,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import { lowercasePreservingWhitespace } from "../../shared/string-coerce.js";
+import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 function formatDiscordAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => normalizeOptionalString(String(entry)) ?? "")
-    .filter(Boolean)
+  return normalizeStringEntries(allowFrom)
     .map((entry) => entry.replace(/^(discord|user|pk):/i, "").replace(/^<@!?(\d+)>$/, "$1"))
     .map((entry) => lowercasePreservingWhitespace(entry));
 }
 
 function normalizePhoneAllowFromEntries(allowFrom: Array<string | number>): string[] {
-  return allowFrom
-    .map((entry) => normalizeOptionalString(String(entry)) ?? "")
-    .filter((entry): entry is string => Boolean(entry))
+  return normalizeStringEntries(allowFrom)
     .map((entry) => {
       if (entry === "*") {
         return entry;

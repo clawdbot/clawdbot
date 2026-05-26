@@ -385,15 +385,26 @@ const writeOpenAiCodexAuthStore = async (agentDir: string) => {
 const buildCopilotAssistant = (overrides: Partial<AssistantMessage> = {}) =>
   buildAssistant({ provider: "github-copilot", model: copilotModelId, ...overrides });
 
+const makeErrorAttempt = (
+  overrides: Partial<AssistantMessage> = {},
+  opts?: { currentAttempt?: boolean },
+) => {
+  const assistant = buildAssistant({
+    stopReason: "error",
+    ...overrides,
+  });
+  return makeAttempt({
+    assistantTexts: [],
+    lastAssistant: assistant,
+    ...(opts?.currentAttempt ? { currentAttemptAssistant: assistant } : {}),
+  });
+};
+
 const mockFailedThenSuccessfulAttempt = (errorMessage = "rate limit") => {
   runEmbeddedAttemptMock
     .mockResolvedValueOnce(
-      makeAttempt({
-        assistantTexts: [],
-        lastAssistant: buildAssistant({
-          stopReason: "error",
-          errorMessage,
-        }),
+      makeErrorAttempt({
+        errorMessage,
       }),
     )
     .mockResolvedValueOnce(
@@ -540,15 +551,14 @@ function mockSingleErrorAttempt(params: {
   model?: string;
 }) {
   runEmbeddedAttemptMock.mockResolvedValueOnce(
-    makeAttempt({
-      assistantTexts: [],
-      lastAssistant: buildAssistant({
-        stopReason: "error",
+    makeErrorAttempt(
+      {
         errorMessage: params.errorMessage,
         ...(params.provider ? { provider: params.provider } : {}),
         ...(params.model ? { model: params.model } : {}),
-      }),
-    }),
+      },
+      { currentAttempt: true },
+    ),
   );
 }
 

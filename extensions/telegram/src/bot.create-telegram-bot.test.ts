@@ -2588,13 +2588,29 @@ describe("createTelegramBot", () => {
 
   it("reloads topic agent overrides between messages without recreating the bot", async () => {
     let topicAgentId = "topic-a";
-    const resolveTopicConfig = () =>
-      resolveTelegramScopedGroupConfig(
-        {
-          groupPolicy: "open",
-          groups: {
-            "-1001234567890": {
-              requireMention: false,
+    const configForTopicAgent = () => ({
+      session: {
+        typingMode: "never",
+      },
+      messages: {
+        inbound: {
+          debounceMs: 0,
+        },
+      },
+      channels: {
+        telegram: {
+          botToken: "tok",
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          direct: {
+            "123": {
+              topics: {
+                "99": {
+                  agentId: topicAgentId,
+                },
+              },
+            },
+            "124": {
               topics: {
                 "99": {
                   agentId: topicAgentId,
@@ -2603,13 +2619,42 @@ describe("createTelegramBot", () => {
             },
           },
         },
-        -1001234567890,
-        99,
-      ).topicConfig;
+      },
+      agents: {
+        list: [{ id: "topic-a" }, { id: "topic-b" }],
+      },
+    });
+    loadConfig.mockImplementation(configForTopicAgent);
 
-    expect(resolveTopicConfig()?.agentId).toBe("topic-a");
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    replySpy.mockImplementation(async () => undefined);
+
+    const sendTopicMessage = async (chatId: number, messageId: number, text: string) => {
+      await handler({
+        message: {
+          chat: { id: chatId, type: "private" },
+          from: { id: chatId, username: `user${chatId}` },
+          text,
+          date: 1736380800 + messageId,
+          message_id: messageId,
+          message_thread_id: 99,
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+    };
+
+    await sendTopicMessage(123, 44, "topic one");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(replySpy.mock.calls.at(0)?.[0].SessionKey).toContain("agent:topic-a:");
+    expect(replySpy.mock.calls.at(0)?.[0].SessionKey).toContain("thread:123:99");
+
     topicAgentId = "topic-b";
-    expect(resolveTopicConfig()?.agentId).toBe("topic-b");
+    await sendTopicMessage(124, 45, "topic two");
+    expect(replySpy).toHaveBeenCalledTimes(2);
+    expect(replySpy.mock.calls.at(1)?.[0].SessionKey).toContain("agent:topic-b:");
+    expect(replySpy.mock.calls.at(1)?.[0].SessionKey).toContain("thread:124:99");
   });
 
   it("routes non-default account DMs to the per-account fallback session without explicit bindings", async () => {

@@ -4,7 +4,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  uniqueStrings,
+} from "../shared/string-normalization.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
@@ -355,9 +358,11 @@ function mergeContractLists(
   left: readonly string[] | undefined,
   right: readonly string[] | undefined,
 ): string[] | undefined {
-  const merged = [...(left ?? []), ...(right ?? [])]
-    .map((value) => value.trim())
-    .filter((value, index, all) => value.length > 0 && all.indexOf(value) === index);
+  const merged = uniqueStrings(
+    [...(left ?? []), ...(right ?? [])]
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0),
+  );
   return merged.length > 0 ? merged : undefined;
 }
 

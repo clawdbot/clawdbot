@@ -63,6 +63,29 @@ describe("buildStatusCommandReportData", () => {
     ]);
   });
 
+  it("surfaces retained lost task cleanup timing only for detailed reports", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const summary = {
+      ...baseParams.summary,
+      taskAuditRetainedLost: {
+        count: 1,
+        nextCleanupAfter: Date.parse("2026-03-30T01:00:00.000Z"),
+      },
+    };
+
+    const deepResult = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({ summary, opts: { deep: true } }),
+    );
+    const fastResult = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({ summary, opts: {} }),
+    );
+
+    expect(deepResult.retainedLostTaskLine).toBe(
+      "muted(1 lost task retained until 2026-03-30T01:00:00.000Z)",
+    );
+    expect(fastResult.retainedLostTaskLine).toBeNull();
+  });
+
   it("adds model-pricing degradation from gateway probe health to overview rows", async () => {
     const baseParams = createStatusCommandReportDataParams();
     const result = await buildStatusCommandReportData(

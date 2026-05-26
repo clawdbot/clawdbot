@@ -4,6 +4,11 @@ import {
   cosineSimilarity,
   parseEmbedding,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  normalizeStringEntries,
+  normalizeStringEntriesLower,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const vectorToBlob = (embedding: number[]): Buffer =>
   Buffer.from(new Float32Array(embedding).buffer);
@@ -36,12 +41,7 @@ type SearchRowResult = {
 };
 
 function normalizeSearchTokens(raw: string): string[] {
-  return (
-    raw
-      .match(FTS_QUERY_TOKEN_RE)
-      ?.map((token) => token.trim().toLowerCase())
-      .filter(Boolean) ?? []
-  );
+  return normalizeStringEntriesLower(raw.match(FTS_QUERY_TOKEN_RE) ?? []);
 }
 
 function scoreFallbackKeywordResult(params: {
@@ -50,7 +50,7 @@ function scoreFallbackKeywordResult(params: {
   text: string;
   ftsScore: number;
 }): number {
-  const queryTokens = [...new Set(normalizeSearchTokens(params.query))];
+  const queryTokens = uniqueStrings(normalizeSearchTokens(params.query));
   if (queryTokens.length === 0) {
     return params.ftsScore;
   }
@@ -105,11 +105,7 @@ function planKeywordSearch(params: {
     };
   }
 
-  const tokens =
-    params.query
-      .match(FTS_QUERY_TOKEN_RE)
-      ?.map((token) => token.trim())
-      .filter(Boolean) ?? [];
+  const tokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
   if (tokens.length === 0) {
     return { matchQuery: null, substringTerms: [] };
   }
@@ -375,12 +371,8 @@ export async function searchKeyword(params: {
       // Log the root cause, then fall back to per-token LIKE-based substring
       // search so results are still returned instead of being silently dropped.
       console.warn(`memory search: FTS5 MATCH failed, falling back to LIKE: ${String(matchErr)}`);
-      const queryTokens =
-        params.query
-          .match(FTS_QUERY_TOKEN_RE)
-          ?.map((t) => t.trim())
-          .filter(Boolean) ?? [];
-      const allTerms = [...new Set([...queryTokens, ...plan.substringTerms])];
+      const queryTokens = normalizeStringEntries(params.query.match(FTS_QUERY_TOKEN_RE) ?? []);
+      const allTerms = uniqueStrings([...queryTokens, ...plan.substringTerms]);
       const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
       const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
       rows = params.db

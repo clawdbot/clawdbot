@@ -53,6 +53,7 @@ import { normalizeInputProvenance, type InputProvenance } from "../../sessions/i
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import {
   stripInlineDirectiveTagsForDisplay,
@@ -1848,7 +1849,7 @@ function resolvePreRegisteredAgentDedupeKeys(
       keys.push(normalized);
     }
   }
-  return [...new Set(keys)];
+  return uniqueStrings(keys);
 }
 
 function writePreRegisteredAgentAbort(params: {

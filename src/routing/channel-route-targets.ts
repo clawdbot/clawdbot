@@ -1,6 +1,7 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { listRouteBindings } from "../config/bindings.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord as hasRecord } from "../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveAgentRoute } from "./resolve-route.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId, normalizeAgentId } from "./session-key.js";
@@ -11,10 +12,6 @@ export type ChannelRouteTarget = {
 };
 
 const CHANNELS_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function normalizeConfiguredChannelKey(raw?: string | null): string {
   return normalizeChatChannelId(raw) ?? normalizeLowercaseStringOrEmpty(raw);

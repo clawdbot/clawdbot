@@ -8,6 +8,7 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import { stripAnsi, visibleWidth } from "../../terminal/ansi.js";
 import { findWordBoundaryIndex, fuzzyFilterLower } from "./fuzzy-filter.js";
 
@@ -179,7 +180,7 @@ export class SearchableSelectList implements Component {
       return text;
     }
 
-    const uniqueTokens = Array.from(new Set(tokens)).toSorted((a, b) => b.length - a.length);
+    const uniqueTokens = uniqueStrings(tokens).toSorted((a, b) => b.length - a.length);
     let parts = this.splitAnsiParts(text);
     for (const token of uniqueTokens) {
       const regex = this.getCachedRegex(token);

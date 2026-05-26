@@ -1,5 +1,5 @@
 import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
-import type { ResolvedIMessageAccount } from "./accounts.js";
+import { resolveIMessageDuplicateSourceOwner, type ResolvedIMessageAccount } from "./accounts.js";
 import { PAIRING_APPROVED_MESSAGE, resolveChannelMediaMaxBytes } from "./channel-api.js";
 import type { ChannelPlugin } from "./channel-api.js";
 import { monitorIMessageProvider } from "./monitor.js";
@@ -72,6 +72,23 @@ export async function startIMessageGatewayAccount(
     cliPath,
     dbPath: dbPath ?? null,
   });
+  const ownerAccountId = resolveIMessageDuplicateSourceOwner({ cfg: ctx.cfg, account });
+  if (ownerAccountId) {
+    // openclaw/openclaw#65141: this account shares a local Messages source with
+    // an already-owning account, so spawning a second `imsg rpc` would deliver
+    // every inbound twice. Keep the account enabled for outbound sends, status,
+    // and capability surfaces; just park the watcher slot until shutdown.
+    ctx.log?.info?.(
+      `[${account.accountId}] skipping watcher: duplicate iMessage source; using account "${ownerAccountId}"`,
+    );
+    if (ctx.abortSignal.aborted) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      ctx.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    return;
+  }
   ctx.log?.info?.(
     `[${account.accountId}] starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
   );

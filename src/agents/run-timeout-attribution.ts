@@ -20,6 +20,4 @@ export function normalizeAgentRunTimeoutPhase(value: unknown): AgentRunTimeoutPh
     : undefined;
 }
 
-export function normalizeProviderStarted(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
+export { asBoolean as normalizeProviderStarted } from "../utils/boolean.js";

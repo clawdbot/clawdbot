@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
 import type { DirectoryConfigParams } from "./directory-types.js";
 import type { ChannelDirectoryEntry } from "./types.public.js";
 
@@ -80,16 +81,7 @@ function collectDirectoryIdsFromMapKeys(params: {
 }
 
 function dedupeDirectoryIds(ids: string[]): string[] {
-  const deduped: string[] = [];
-  const seen = new Set<string>();
-  for (const id of ids) {
-    if (seen.has(id)) {
-      continue;
-    }
-    seen.add(id);
-    deduped.push(id);
-  }
-  return deduped;
+  return uniqueStrings(ids);
 }
 
 export function collectNormalizedDirectoryIds(params: {

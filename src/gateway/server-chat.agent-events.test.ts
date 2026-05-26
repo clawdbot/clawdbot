@@ -79,7 +79,6 @@ describe("agent event handler", () => {
     resolveSessionKeyForRun?: (runId: string) => string | undefined;
     lifecycleErrorRetryGraceMs?: number;
     isChatSendRunActive?: (runId: string) => boolean;
-    shouldBackoffLowPrioritySessionToolEvents?: () => boolean;
   }) {
     const nowSpy =
       params?.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -107,8 +106,6 @@ describe("agent event handler", () => {
       loadGatewaySessionRowForSnapshot: loadGatewaySessionRow,
       lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
       isChatSendRunActive: params?.isChatSendRunActive,
-      shouldBackoffLowPrioritySessionToolEvents:
-        params?.shouldBackoffLowPrioritySessionToolEvents,
     });
 
     return {
@@ -1526,94 +1523,43 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("backs off session-scoped tool mirrors during queued gateway pressure", () => {
+  it("does not duplicate tool events to clients subscribed by run and session", () => {
     const { broadcastToConnIds, sessionEventSubscribers, toolEventRecipients, handler } =
       createHarness({
-        resolveSessionKeyForRun: () => "session-pressure",
-        shouldBackoffLowPrioritySessionToolEvents: () => true,
+        resolveSessionKeyForRun: () => "session-dedupe",
       });
 
-    registerAgentRunContext("run-pressure-tool", {
-      sessionKey: "session-pressure",
+    registerAgentRunContext("run-session-dedupe-tool", {
+      sessionKey: "session-dedupe",
       verboseLevel: "off",
     });
-    toolEventRecipients.add("run-pressure-tool", "conn-run");
-    sessionEventSubscribers.subscribe("conn-session");
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-overlap");
+    toolEventRecipients.add("run-session-dedupe-tool", "conn-run-only");
+    sessionEventSubscribers.subscribe("conn-overlap");
+    sessionEventSubscribers.subscribe("conn-session-only");
 
     handler({
-      runId: "run-pressure-tool",
+      runId: "run-session-dedupe-tool",
       seq: 1,
       stream: "tool",
       ts: 1_234,
       data: {
         phase: "start",
         name: "exec",
-        toolCallId: "tool-pressure-1",
+        toolCallId: "tool-session-dedupe-1",
         args: { command: "echo hi" },
-      },
-    });
-
-    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "run tool event")).toBe("agent");
-    expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
-      new Set(["conn-run"]),
-    );
-  });
-
-  it("keeps terminal session-scoped tool mirrors during queued gateway pressure", () => {
-    let backoffActive = false;
-    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
-      resolveSessionKeyForRun: () => "session-pressure-terminal",
-      shouldBackoffLowPrioritySessionToolEvents: () => backoffActive,
-    });
-
-    registerAgentRunContext("run-pressure-terminal-tool", {
-      sessionKey: "session-pressure-terminal",
-      verboseLevel: "off",
-    });
-    sessionEventSubscribers.subscribe("conn-session");
-
-    handler({
-      runId: "run-pressure-terminal-tool",
-      seq: 1,
-      stream: "tool",
-      ts: 1_234,
-      data: {
-        phase: "start",
-        name: "exec",
-        toolCallId: "tool-pressure-terminal-1",
-        args: { command: "echo hi" },
-      },
-    });
-
-    backoffActive = true;
-    handler({
-      runId: "run-pressure-terminal-tool",
-      seq: 2,
-      stream: "tool",
-      ts: 1_235,
-      data: {
-        phase: "result",
-        name: "exec",
-        toolCallId: "tool-pressure-terminal-1",
-        result: { content: [{ type: "text", text: "done" }] },
       },
     });
 
     expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
-    expect(requireMockArg(broadcastToConnIds, 0, 0, "session tool start event")).toBe(
-      "session.tool",
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "run tool event")).toBe("agent");
+    expect(requireMockArg(broadcastToConnIds, 0, 2, "run tool recipients")).toEqual(
+      new Set(["conn-overlap", "conn-run-only"]),
     );
-    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool result event")).toBe(
-      "session.tool",
+    expect(requireMockArg(broadcastToConnIds, 1, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockArg(broadcastToConnIds, 1, 2, "session tool recipients")).toEqual(
+      new Set(["conn-session-only"]),
     );
-    const resultPayload = requireMockPayload(broadcastToConnIds, 1, 1, "session tool result");
-    expectRecordFields(requireRecord(resultPayload.data, "session tool result data"), {
-      phase: "result",
-      name: "exec",
-      toolCallId: "tool-pressure-terminal-1",
-      result: { content: [{ type: "text", text: "done" }] },
-    });
   });
 
   it("suppresses heartbeat tool events for Control UI and verbose node subscribers", () => {

@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../cron/types.js";
 import { registerCronCli } from "./cron-cli.js";
 
@@ -39,6 +39,10 @@ const defaultGatewayMock = async (
 };
 callGatewayFromCli.mockImplementation(defaultGatewayMock);
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 vi.mock("./gateway-rpc.js", async () => {
   const actual = await vi.importActual<typeof import("./gateway-rpc.js")>("./gateway-rpc.js");
   return {
@@ -75,7 +79,7 @@ type CronUpdatePatch = {
 };
 
 type CronAddParams = {
-  schedule?: { kind?: string; staggerMs?: number };
+  schedule?: { kind?: string; at?: string; staggerMs?: number };
   payload?: {
     model?: string;
     thinking?: string;
@@ -316,16 +320,7 @@ describe("cron cli", () => {
         enqueued: true,
         runId: "manual:job-1:123:0",
         runStatus: status,
-        args: [
-          "cron",
-          "run",
-          "job-1",
-          "--wait",
-          "--wait-timeout",
-          "1s",
-          "--poll-interval",
-          "1ms",
-        ],
+        args: ["cron", "run", "job-1", "--wait", "--wait-timeout", "1s", "--poll-interval", "1ms"],
       });
 
       expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
@@ -455,6 +450,24 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { deleteAfterRun?: boolean };
     expect(params?.deleteAfterRun).toBe(false);
+  });
+
+  it("accepts leading plus relative durations for cron add --at", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Plus duration",
+      "--at",
+      "+30m",
+      "--session",
+      "main",
+      "--system-event",
+      "hello",
+    ]);
+
+    expect(params?.schedule).toEqual({ kind: "at", at: "2026-05-25T00:30:00.000Z" });
   });
 
   it("includes --account on isolated cron add delivery", async () => {

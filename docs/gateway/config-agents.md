@@ -503,16 +503,16 @@ Time format in system prompt. Default: `auto` (OS preference).
 
 **Built-in alias shorthands** (only apply when the model is in `agents.defaults.models`):
 
-| Alias               | Model                                  |
-| ------------------- | -------------------------------------- |
-| `opus`              | `anthropic/claude-opus-4-6`            |
-| `sonnet`            | `anthropic/claude-sonnet-4-6`          |
-| `gpt`               | `openai/gpt-5.5`                       |
-| `gpt-mini`          | `openai/gpt-5.4-mini`                  |
-| `gpt-nano`          | `openai/gpt-5.4-nano`                  |
-| `gemini`            | `google/gemini-3.1-pro-preview`        |
-| `gemini-flash`      | `google/gemini-3-flash-preview`        |
-| `gemini-flash-lite` | `google/gemini-3.1-flash-lite-preview` |
+| Alias               | Model                           |
+| ------------------- | ------------------------------- |
+| `opus`              | `anthropic/claude-opus-4-6`     |
+| `sonnet`            | `anthropic/claude-sonnet-4-6`   |
+| `gpt`               | `openai/gpt-5.5`                |
+| `gpt-mini`          | `openai/gpt-5.4-mini`           |
+| `gpt-nano`          | `openai/gpt-5.4-nano`           |
+| `gemini`            | `google/gemini-3.1-pro-preview` |
+| `gemini-flash`      | `google/gemini-3-flash-preview` |
+| `gemini-flash-lite` | `google/gemini-3.1-flash-lite`  |
 
 Your configured aliases always win over defaults.
 
@@ -575,7 +575,7 @@ Replace the entire OpenClaw-assembled system prompt with a fixed string. Set at 
 
 ### `agents.defaults.promptOverlays`
 
-Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across PI/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model/personality instructions instead of this OpenClaw GPT-5 overlay.
+Provider-independent prompt overlays applied by model family on OpenClaw-assembled prompt surfaces. GPT-5-family model ids receive the shared behavior contract across PI/provider routes; `personality` controls only the friendly interaction-style layer. Native Codex app-server routes keep Codex-owned base/model instructions instead of this OpenClaw GPT-5 overlay, and OpenClaw disables Codex's built-in personality for native threads.
 
 ```json5
 {

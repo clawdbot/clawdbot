@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeTrimmedStringList } from "../../shared/string-normalization.js";
 import {
   resolveExternalCliAuthScopeFromConfig,
   type ExternalCliAuthScope,
@@ -43,9 +44,7 @@ type ProviderSetDiscoveryParams = {
 };
 
 function normalizeStringList(values: Iterable<string | undefined>): string[] {
-  return [...values]
-    .map((value) => value?.trim())
-    .filter((value): value is string => Boolean(value));
+  return normalizeTrimmedStringList([...values]);
 }
 
 export function externalCliDiscoveryNone(params?: {

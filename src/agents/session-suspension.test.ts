@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CommandLane } from "../process/lanes.js";
 
@@ -23,12 +24,12 @@ vi.mock("./command/session.js", () => ({
   }),
 }));
 
-async function suspendMainLane(ttlMs: number, cfg: OpenClawConfig) {
+async function suspendLane(ttlMs: number, cfg: OpenClawConfig, laneId: CommandLane) {
   const { suspendSession } = await import("./session-suspension.js");
   await suspendSession({
     cfg,
     sessionId: "session-1",
-    laneId: CommandLane.Main,
+    laneId,
     reason: "quota_exhausted",
     failedProvider: "anthropic",
     failedModel: "claude-opus-4-6",
@@ -40,6 +41,8 @@ describe("session suspension", () => {
   afterEach(async () => {
     const { cancelLaneAutoResume } = await import("./session-suspension.js");
     cancelLaneAutoResume(CommandLane.Main);
+    cancelLaneAutoResume(CommandLane.Cron);
+    cancelLaneAutoResume(CommandLane.CronNested);
     vi.useRealTimers();
     sessionStoreMocks.updateSessionStoreEntry.mockClear();
     commandQueueMocks.setCommandLaneConcurrency.mockClear();
@@ -51,7 +54,7 @@ describe("session suspension", () => {
       agents: { defaults: { maxConcurrent: 4 } },
     } as OpenClawConfig;
 
-    await suspendMainLane(100, cfg);
+    await suspendLane(100, cfg, CommandLane.Main);
 
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(CommandLane.Main, 0);
 
@@ -60,6 +63,44 @@ describe("session suspension", () => {
     expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
       CommandLane.Main,
       4,
+    );
+  });
+
+  it("auto-resumes cron lanes to the cron concurrency default", async () => {
+    vi.useFakeTimers();
+
+    await suspendLane(100, {} as OpenClawConfig, CommandLane.CronNested);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenCalledWith(
+      CommandLane.CronNested,
+      0,
+    );
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.CronNested,
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    );
+  });
+
+  it("auto-resumes cron lanes to configured and clamped cron concurrency", async () => {
+    vi.useFakeTimers();
+
+    await suspendLane(100, { cron: { maxConcurrentRuns: 3 } } as OpenClawConfig, CommandLane.Cron);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.Cron,
+      3,
+    );
+
+    await suspendLane(100, { cron: { maxConcurrentRuns: 0 } } as OpenClawConfig, CommandLane.Cron);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(commandQueueMocks.setCommandLaneConcurrency).toHaveBeenLastCalledWith(
+      CommandLane.Cron,
+      1,
     );
   });
 

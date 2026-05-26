@@ -742,6 +742,30 @@ describe("runGatewayUpdate", () => {
     expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${betaTag}`);
   });
 
+  it("uses stable tag for stable channel even when a newer alpha tag sorts first", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupUiIndex();
+    const stableTag = "v2026.5.22";
+    const alphaTag = "v2026.5.24-alpha.1";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const { runner, calls } = createRunner({
+      ...buildStableTagResponses(alphaTag, { additionalTags: [stableTag] }),
+      [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+      [`${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`]: {
+        stdout: "",
+      },
+    });
+
+    const result = await runWithRunner(runner, { channel: "stable" });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(`git -C ${tempDir} checkout --detach ${stableTag}`);
+    expect(calls).not.toContain(`git -C ${tempDir} checkout --detach ${alphaTag}`);
+  });
+
   it("bootstraps pnpm via npm when pnpm and corepack are unavailable", async () => {
     await setupGitPackageManagerFixture();
     const stableTag = "v1.0.1-1";

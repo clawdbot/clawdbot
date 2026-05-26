@@ -88,7 +88,7 @@ const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
-export const DEFAULT_PI_PACKAGE_VERSION = "0.75.4";
+export const DEFAULT_PI_PACKAGE_VERSION = "0.75.5";
 const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -1182,9 +1182,12 @@ async function runProcessCommand(
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
   const result = await runProcessCommand(
-    resolveControlUiI18nPnpmCommand(
-      ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
-    ),
+    resolveControlUiI18nPnpmCommand([
+      "exec",
+      "oxfmt",
+      "--stdin-filepath",
+      path.relative(ROOT, filePath),
+    ]),
     {
       input: source,
       rejectOnFailure: true,

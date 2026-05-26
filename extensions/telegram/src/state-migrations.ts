@@ -4,6 +4,7 @@ import { resolveChannelAllowFromPath } from "openclaw/plugin-sdk/channel-pairing
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./account-selection.js";
 import {
   listTelegramLegacyBotInfoCacheEntries,
@@ -56,7 +57,7 @@ function detectTelegramMessageCacheLegacyStateMigration(params: {
   const legacyStorePath = resolveLegacySessionStorePath(params);
   const legacyPersistedPath = resolveTelegramMessageCachePath(legacyStorePath);
   const scopeKey = resolveTelegramMessageCachePersistentScopeKey(runtimePersistedPath);
-  const sourcePaths = Array.from(new Set([runtimePersistedPath, legacyPersistedPath]));
+  const sourcePaths = uniqueStrings([runtimePersistedPath, legacyPersistedPath]);
   return sourcePaths.flatMap((persistedPath) => {
     if (!fileExists(persistedPath)) {
       return [];

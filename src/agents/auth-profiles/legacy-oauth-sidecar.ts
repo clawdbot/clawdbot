@@ -5,6 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
 import { loadJsonFile } from "../../infra/json-file.js";
+import { isRecord } from "../../shared/record-coerce.js";
+import { uniqueStrings } from "../../shared/string-normalization.js";
+import { log } from "./constants.js";
 
 const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
 const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
@@ -34,10 +37,6 @@ type LegacyOAuthEncryptedPayload = {
   tag: string;
   ciphertext: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -163,7 +162,7 @@ function isPathInsideOrEqual(parentDir: string, candidatePath: string): boolean 
 }
 
 function uniquePaths(paths: Array<string | undefined>): string[] {
-  return Array.from(new Set(paths.filter((entry): entry is string => Boolean(entry))));
+  return uniqueStrings(paths.filter((entry): entry is string => Boolean(entry)));
 }
 
 function resolveLegacyOAuthSecretKeyFileCandidates(env: NodeJS.ProcessEnv): string[] {
@@ -333,8 +332,37 @@ function decryptLegacyOAuthSecretMaterial(params: {
   if (keychainSeed && !seeds.includes(keychainSeed)) {
     return decryptLegacyOAuthSecretMaterialWithSeed(params, keychainSeed);
   }
+  if (
+    process.platform === "darwin" &&
+    params.allowKeychainPrompt === false &&
+    params.env.VITEST !== "true" &&
+    params.env.VITEST_WORKER_ID === undefined
+  ) {
+    emitKeychainOnlyMigrationHintOnce(params.profileId);
+  }
   return null;
 }
+
+let keychainOnlyMigrationHintEmitted = false;
+
+function emitKeychainOnlyMigrationHintOnce(profileId: string): void {
+  if (keychainOnlyMigrationHintEmitted) {
+    return;
+  }
+  keychainOnlyMigrationHintEmitted = true;
+  log.warn(
+    "Legacy Codex OAuth credentials are stored only in macOS Keychain on this host. " +
+      "Headless paths cannot prompt for Keychain access; run `openclaw doctor --fix` " +
+      "from an interactive terminal to migrate them back to inline auth-profiles.json credentials.",
+    { profileId },
+  );
+}
+
+export const legacyOAuthSidecarInternalTestUtils = {
+  resetKeychainOnlyMigrationHint(): void {
+    keychainOnlyMigrationHintEmitted = false;
+  },
+};
 
 export function loadLegacyOAuthSidecarMaterial(params: {
   ref: LegacyOAuthRef;

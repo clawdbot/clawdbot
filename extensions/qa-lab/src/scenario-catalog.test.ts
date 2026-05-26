@@ -90,6 +90,9 @@ describe("qa scenario catalog", () => {
     expect(fallbackConfig?.gracefulFallbackAny as string[] | undefined).toContain(
       "will not reveal",
     );
+    expect(JSON.stringify(readQaScenarioById("memory-failure-fallback").execution.flow)).toContain(
+      "liveTurnTimeoutMs(env, 180000)",
+    );
     expect(bundledSkill.title).toBe("Bundled plugin skill runtime");
     expect(bundledSkillConfig?.pluginId).toBe("open-prose");
     expect(bundledSkillConfig?.expectedSkillName).toBe("prose");
@@ -194,6 +197,14 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.md",
     );
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("EmbeddedAttemptSessionTakeoverError");
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("AbortError");
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("This operation was aborted");
+    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
+      .toContain("liveTurnTimeoutMs(env, 180000)");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { installSkillFromSource } from "./skills-source-install.js";
+import { buildWorkspaceSkillStatus } from "./skills-status.js";
 
 async function writeSkill(dir: string, params: { name?: string; description?: string } = {}) {
   await fs.mkdir(dir, { recursive: true });
@@ -96,6 +97,40 @@ describe("installSkillFromSource", () => {
         source: "path",
         targetDir: path.join(workspaceDir, "skills", "custom-name"),
       });
+      const status = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir: path.join(root, "managed-skills"),
+      });
+      const skill = status.skills.find((entry) => entry.skillKey === "custom-name");
+      expect(skill).toMatchObject({
+        name: "frontmatter-skill",
+        skillKey: "custom-name",
+      });
+    });
+  });
+
+  it("ignores oversized source-origin metadata while loading skill keys", async () => {
+    await withTempDir({ prefix: "openclaw-skill-source-origin-cap-" }, async (root) => {
+      const workspaceDir = path.join(root, "workspace");
+      const sourceDir = path.join(root, "source");
+      await writeSkill(sourceDir, { name: "frontmatter-skill" });
+
+      const result = await installSkillFromSource({
+        workspaceDir,
+        spec: sourceDir,
+        slug: "custom-name",
+      });
+
+      expect(result).toMatchObject({ ok: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "skills", "custom-name", ".openclaw", "source-origin.json"),
+        "x".repeat(20 * 1024),
+      );
+
+      const status = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir: path.join(root, "managed-skills"),
+      });
+      expect(status.skills.find((entry) => entry.skillKey === "custom-name")).toBeUndefined();
+      expect(status.skills.find((entry) => entry.skillKey === "frontmatter-skill")).toBeDefined();
     });
   });
 

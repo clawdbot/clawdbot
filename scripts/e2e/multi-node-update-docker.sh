@@ -26,6 +26,10 @@ ARTIFACT_DIR="${OPENCLAW_MULTI_NODE_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/multi-nod
 
 mkdir -p "$ARTIFACT_DIR"
 chmod -R a+rwX "$ARTIFACT_DIR" || true
+cleanup() {
+  docker_e2e_cleanup_package_tgz "${PACKAGE_TGZ:-}"
+}
+trap cleanup EXIT
 
 # Build the bare e2e image and prepare the package tarball.
 docker_e2e_build_or_reuse "$IMAGE_NAME" multi-node-update "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "${OPENCLAW_SKIP_DOCKER_BUILD:-0}"

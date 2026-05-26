@@ -1,6 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderSetupFlowContributions } from "../flows/provider-flow.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   CORE_AUTH_CHOICE_OPTIONS,
   type AuthChoiceGroup,
@@ -88,7 +89,7 @@ export function formatAuthChoiceChoicesForCli(params?: {
     }).map((contribution) => contribution.option.value),
   ];
 
-  return [...new Set(values)].join("|");
+  return uniqueStrings(values).join("|");
 }
 
 export function buildAuthChoiceOptions(params: {

@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseDiscordTarget } from "../targets.js";
 import { resolveChannelIdForBinding } from "./thread-bindings.discord-api.js";
@@ -349,6 +350,6 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
   return {
     checked: acpBindings.length,
     removed,
-    staleSessionKeys: [...new Set(staleSessionKeys)],
+    staleSessionKeys: uniqueStrings(staleSessionKeys),
   };
 }

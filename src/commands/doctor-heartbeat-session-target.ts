@@ -120,7 +120,7 @@ export function describeHeartbeatSessionTargetIssues(cfg: OpenClawConfig): strin
     }
     const storeAgentId = resolvedAgentId;
     const storePath = resolveStorePath(cfg.session?.store, { agentId: storeAgentId });
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(storePath, { skipCache: true, clone: false });
     const entry = store[canonicalSession];
     if (entry) {
       continue;

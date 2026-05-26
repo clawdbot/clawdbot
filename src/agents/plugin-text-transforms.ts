@@ -1,6 +1,7 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { streamSimple, type AssistantMessageEvent } from "@earendil-works/pi-ai";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 
 export function mergePluginTextTransforms(
@@ -29,10 +30,6 @@ export function applyPluginTextReplacements(
     next = next.replace(replacement.from, replacement.to);
   }
   return next;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function transformContentText(content: unknown, replacements?: PluginTextReplacement[]): unknown {

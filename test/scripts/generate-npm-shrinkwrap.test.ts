@@ -1,6 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  applyPackageExtensionPeerMetadata,
   collectOverrideViolations,
   collectPnpmLockViolations,
   createNpmShrinkwrapCommand,
@@ -10,6 +11,7 @@ import {
   normalizeNpmVersionDrift,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
 
@@ -167,6 +169,57 @@ describe("generate-npm-shrinkwrap", () => {
         "node_modules/keeps-peer-false": {
           version: "1.0.0",
           peer: false,
+        },
+      },
+    });
+  });
+
+  it("uses legacy peer resolution when package extensions mark dependency peers optional", () => {
+    expect(
+      shouldUseLegacyPeerDepsForShrinkwrap(
+        { dependencies: { baileys: "7.0.0-rc13" } },
+        { baileys: { peerDependenciesMeta: { sharp: { optional: true } } } },
+      ),
+    ).toBe(true);
+    expect(
+      shouldUseLegacyPeerDepsForShrinkwrap(
+        { dependencies: { "not-baileys": "1.0.0" } },
+        { baileys: { peerDependenciesMeta: { sharp: { optional: true } } } },
+      ),
+    ).toBe(false);
+  });
+
+  it("applies package extension peer metadata to generated shrinkwrap packages", () => {
+    expect(
+      applyPackageExtensionPeerMetadata(
+        {
+          packages: {
+            "node_modules/baileys": {
+              version: "7.0.0-rc13",
+              peerDependencies: {
+                "audio-decode": "^2.1.3",
+                sharp: "*",
+              },
+              peerDependenciesMeta: {
+                "audio-decode": { optional: true },
+              },
+            },
+          },
+        },
+        { baileys: { peerDependenciesMeta: { sharp: { optional: true } } } },
+      ),
+    ).toEqual({
+      packages: {
+        "node_modules/baileys": {
+          version: "7.0.0-rc13",
+          peerDependencies: {
+            "audio-decode": "^2.1.3",
+            sharp: "*",
+          },
+          peerDependenciesMeta: {
+            "audio-decode": { optional: true },
+            sharp: { optional: true },
+          },
         },
       },
     });

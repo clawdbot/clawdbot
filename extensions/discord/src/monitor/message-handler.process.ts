@@ -104,6 +104,23 @@ function formatDiscordReplyDeliveryFailure(params: {
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
 }
 
+type DiscordReplySkipReason = "aborted before delivery" | "reasoning payload";
+
+export function formatDiscordReplySkip(params: {
+  kind: "tool" | "block" | "final";
+  reason: DiscordReplySkipReason;
+  target: string;
+  sessionKey?: string;
+}) {
+  const context = [
+    `target=${params.target}`,
+    params.sessionKey ? `session=${params.sessionKey}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return `discord ${params.kind} reply skipped (${params.reason}): ${context}`;
+}
+
 type DiscordMessageProcessObserver = {
   onFinalReplyStart?: () => void;
   onFinalReplyDelivered?: () => void;
@@ -528,11 +545,29 @@ export async function processDiscordMessage(
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
       deliver: async (payload: ReplyPayload, info) => {
         if (isProcessAborted(abortSignal)) {
+          // Surface so operators don't chase missing replies when an abort
+          // drops a model-produced text payload (see PR for the incident).
+          logVerbose(
+            formatDiscordReplySkip({
+              kind: info.kind,
+              reason: "aborted before delivery",
+              target: deliverTarget,
+              sessionKey: ctxPayload.SessionKey,
+            }),
+          );
           return;
         }
         const isFinal = info.kind === "final";
         if (payload.isReasoning) {
           // Reasoning/thinking payloads should not be delivered to Discord.
+          logVerbose(
+            formatDiscordReplySkip({
+              kind: info.kind,
+              reason: "reasoning payload",
+              target: deliverTarget,
+              sessionKey: ctxPayload.SessionKey,
+            }),
+          );
           return;
         }
         if (isFinal) {
@@ -699,6 +734,16 @@ export async function processDiscordMessage(
           }
         }
         if (isProcessAborted(abortSignal)) {
+          // Mirror the entry-point abort log so a mid-deliver abort (after
+          // the preview path bowed out) does not silently drop the reply.
+          logVerbose(
+            formatDiscordReplySkip({
+              kind: info.kind,
+              reason: "aborted before delivery",
+              target: deliverTarget,
+              sessionKey: ctxPayload.SessionKey,
+            }),
+          );
           return;
         }
 
@@ -732,7 +777,7 @@ export async function processDiscordMessage(
         }
       },
       onError: (err, info) => {
-        runtime.error?.(
+        runtime.error(
           danger(
             formatDiscordReplyDeliveryFailure({
               kind: info.kind,

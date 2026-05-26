@@ -100,6 +100,16 @@ model calls must not export `StreamAbandoned` on successful turns; raw diagnosti
 payloads must not contain the prompt sentinel, response sentinel, or QA session
 key. It writes `otel-smoke-summary.json` next to the QA suite artifacts.
 
+For a collector-backed OpenTelemetry smoke, run:
+
+```bash
+pnpm qa:otel:collector-smoke
+```
+
+That lane puts a real OpenTelemetry Collector Docker container in front of the
+same local receiver. Use it when changing endpoint wiring, collector
+compatibility, or OTLP export behavior that the in-process receiver could mask.
+
 For the protected Prometheus scrape smoke, run:
 
 ```bash
@@ -116,6 +126,13 @@ To run both observability smokes back to back, use:
 
 ```bash
 pnpm qa:observability:smoke
+```
+
+For the collector-backed OpenTelemetry lane plus the protected Prometheus scrape
+smoke, use:
+
+```bash
+pnpm qa:observability:collector-smoke
 ```
 
 Observability QA stays source-checkout only. The npm tarball intentionally omits

@@ -104,6 +104,7 @@
   "experimentalRawEvents": true,
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "serviceName": "OpenClaw"
 }
@@ -122,6 +123,7 @@
   "developerInstructions": "<see Reconstructed Model-Bound Prompt Layers>",
   "model": "gpt-5.5",
   "persistExtendedHistory": true,
+  "personality": "none",
   "sandbox": "danger-full-access",
   "threadId": "thread-telegram-heartbeat-codex-tool"
 }
@@ -151,6 +153,7 @@
     }
   ],
   "model": "gpt-5.5",
+  "personality": "none",
   "sandboxPolicy": {
     "type": "dangerFullAccess"
   },
@@ -219,8 +222,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 41156,
-    "roughTokens": 10289
+    "chars": 41093,
+    "roughTokens": 10274
   },
   "openClawDeveloperInstructions": {
     "chars": 1841,
@@ -231,8 +234,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6745
   },
   "totalWithDynamicToolsJson": {
-    "chars": 68135,
-    "roughTokens": 17034
+    "chars": 68072,
+    "roughTokens": 17018
   },
   "userInputText": {
     "chars": 1367,
@@ -621,9 +624,6 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
             "type": "object"
           },
           "type": "array"
-        },
-        "bestEffort": {
-          "type": "boolean"
         },
         "buffer": {
           "description": "Base64 attachment payload; data URL ok.",

@@ -170,11 +170,19 @@ describe("security CLI", () => {
       title: "forwards --token to deep probe auth without altering command-level resolver mode",
       argv: ["--token", "explicit-token"],
       deepProbeAuth: { token: "explicit-token" },
+      auditGatewayAuthOverride: undefined,
     },
     {
       title: "forwards --password to deep probe auth without altering command-level resolver mode",
       argv: ["--password", "explicit-password"],
       deepProbeAuth: { password: "explicit-password" },
+      auditGatewayAuthOverride: undefined,
+    },
+    {
+      title: "forwards --auth with explicit gateway password",
+      argv: ["--auth", "password", "--password", "explicit-password"],
+      deepProbeAuth: { password: "explicit-password" },
+      auditGatewayAuthOverride: { mode: "password", password: "explicit-password" },
     },
     {
       title: "forwards both --token and --password to deep probe auth",
@@ -183,8 +191,9 @@ describe("security CLI", () => {
         token: "explicit-token",
         password: "explicit-password",
       },
+      auditGatewayAuthOverride: undefined,
     },
-  ])("$title", async ({ argv, deepProbeAuth }) => {
+  ])("$title", async ({ argv, deepProbeAuth, auditGatewayAuthOverride }) => {
     primeDeepAuditConfig();
 
     await createProgram().parseAsync(["security", "audit", "--deep", ...argv, "--json"], {
@@ -194,5 +203,27 @@ describe("security CLI", () => {
     expect(lastSecretResolverOptions()?.mode).toBe("read_only_status");
     expect(lastSecurityAuditOptions()?.deep).toBe(true);
     expect(lastSecurityAuditOptions()?.deepProbeAuth).toEqual(deepProbeAuth);
+    expect(lastSecurityAuditOptions()?.auditGatewayAuthOverride).toEqual(auditGatewayAuthOverride);
   });
+
+  it.each([
+    {
+      argv: ["--auth", "token"],
+      message: /pass --token <token>/i,
+    },
+    {
+      argv: ["--auth", "password"],
+      message: /pass --password <password>/i,
+    },
+  ])(
+    "rejects shared-secret auth override without the matching secret",
+    async ({ argv, message }) => {
+      primeDeepAuditConfig();
+
+      await expect(
+        createProgram().parseAsync(["security", "audit", ...argv, "--json"], { from: "user" }),
+      ).rejects.toThrow(message);
+      expect(runSecurityAudit).not.toHaveBeenCalled();
+    },
+  );
 });

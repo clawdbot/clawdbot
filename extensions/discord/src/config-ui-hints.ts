@@ -239,7 +239,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.wakeNames": {
     label: "Discord Realtime Wake Names",
-    help: "Names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
@@ -284,7 +284,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.captureSilenceGraceMs": {
     label: "Discord Voice Capture Silence Grace (ms)",
-    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2500.",
+    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2000.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",

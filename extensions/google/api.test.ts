@@ -132,7 +132,7 @@ describe("google generative ai helpers", () => {
         {
           contextWindow: 1,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          id: "gemini-3.1-flash-lite-preview",
+          id: "gemini-3.1-flash-lite",
           input: ["text"],
           maxTokens: 1,
           name: "Gemini Flash Lite",

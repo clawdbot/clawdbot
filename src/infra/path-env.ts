@@ -1,6 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "../shared/string-normalization.js";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
 
@@ -31,12 +35,7 @@ function isDirectory(dirPath: string): boolean {
 }
 
 function splitPathParts(pathEnv: string): Set<string> {
-  return new Set(
-    pathEnv
-      .split(path.delimiter)
-      .map((part) => part.trim())
-      .filter(Boolean),
-  );
+  return new Set(normalizeStringEntries(pathEnv.split(path.delimiter)));
 }
 
 function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
@@ -62,22 +61,11 @@ function resolvePathBootstrapBrewDirs(params: {
 }
 
 function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
-  const partsExisting = params.existing
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const partsPrepend = (params.prepend ?? []).map((part) => part.trim()).filter(Boolean);
-  const partsAppend = (params.append ?? []).map((part) => part.trim()).filter(Boolean);
-
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const part of [...partsPrepend, ...partsExisting, ...partsAppend]) {
-    if (!seen.has(part)) {
-      seen.add(part);
-      merged.push(part);
-    }
-  }
-  return merged.join(path.delimiter);
+  return normalizeUniqueStringEntries([
+    ...(params.prepend ?? []),
+    ...params.existing.split(path.delimiter),
+    ...(params.append ?? []),
+  ]).join(path.delimiter);
 }
 
 function candidateBinDirs(

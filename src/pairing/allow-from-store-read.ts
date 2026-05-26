@@ -1,4 +1,4 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeUniqueTrimmedStringList } from "../shared/string-normalization.js";
 import {
   clearAllowFromFileReadCacheForNamespace,
   dedupePreserveOrder,
@@ -13,10 +13,7 @@ import type { PairingChannel } from "./pairing-store.types.js";
 const ALLOW_FROM_STORE_READ_CACHE_NAMESPACE = "allow-from-store-read";
 
 function normalizeRawAllowFromList(store: AllowFromStore): string[] {
-  const list = Array.isArray(store.allowFrom) ? store.allowFrom : [];
-  return dedupePreserveOrder(
-    list.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean),
-  );
+  return normalizeUniqueTrimmedStringList(store.allowFrom);
 }
 
 function readAllowFromEntriesForPathSyncWithExists(filePath: string): {

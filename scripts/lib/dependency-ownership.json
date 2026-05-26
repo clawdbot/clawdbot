@@ -168,11 +168,10 @@
       "class": "default-runtime-initially",
       "risk": ["terminal-rendering", "png-encoding"]
     },
-    "sharp": {
-      "owner": "plugin:media-understanding-core",
-      "class": "plugin-runtime",
-      "activation": ["media-understanding-core.image-ops"],
-      "risk": ["native", "parser", "untrusted-files"]
+    "rastermill": {
+      "owner": "core:media",
+      "class": "core-runtime",
+      "risk": ["wasm", "parser", "untrusted-files", "native-tool-fallback"]
     },
     "sqlite-vec": {
       "owner": "capability:memory-sqlite-vec",

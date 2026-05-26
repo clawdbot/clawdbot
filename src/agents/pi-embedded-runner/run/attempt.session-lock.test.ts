@@ -68,6 +68,45 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["prep", "cleanup"]);
   });
 
+  it("releases the eagerly-held attempt lock on dispose when cleanup is skipped (#86014)", async () => {
+    const releases: string[] = [];
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("held")) });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    // An exception on the post-prompt path skips acquireForCleanup; the run's outer finally
+    // must still release the eagerly-held lock or it leaks to the live process.
+    await controller.dispose();
+    await controller.dispose(); // idempotent
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual(["held"]);
+  });
+
+  it("dispose does not double-release a lock already handed to cleanup", async () => {
+    const releases: string[] = [];
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => releases.push("held")) });
+
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+
+    const cleanupLock = await controller.acquireForCleanup();
+    await cleanupLock.release();
+    await controller.dispose();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(1);
+    expect(releases).toEqual(["held"]);
+  });
+
   it("runs post-prompt transcript writes under a short reacquired lock", async () => {
     const events: string[] = [];
     const acquireSessionWriteLock = vi

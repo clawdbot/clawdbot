@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { listReservedChatSlashCommandNames } from "./skill-commands-base.js";
 export {
   listReservedChatSlashCommandNames,
@@ -69,12 +70,12 @@ export function listSkillCommandsForAgents(params: {
     }
     // An empty allowlist contributes no skills but does not widen the merge to unrestricted.
     if (existing.length === 0) {
-      return Array.from(new Set(incoming));
+      return uniqueStrings(incoming);
     }
     if (incoming.length === 0) {
-      return Array.from(new Set(existing));
+      return uniqueStrings(existing);
     }
-    return Array.from(new Set([...existing, ...incoming]));
+    return uniqueStrings([...existing, ...incoming]);
   };
 
   const agentIds = params.agentIds ?? listAgentIds(params.cfg);

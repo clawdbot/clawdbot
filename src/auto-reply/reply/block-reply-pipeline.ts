@@ -170,7 +170,7 @@ export function createBlockReplyPipeline(params: {
         for (const mediaUrl of reply.mediaUrls) {
           sentMediaUrls.add(mediaUrl);
         }
-        if (!isStatusNotice && !reply.hasMedia && reply.trimmedText) {
+        if (!isStatusNotice && reply.trimmedText) {
           streamedTextFragments.push(reply.trimmedText);
         }
         if (!isStatusNotice) {
@@ -244,9 +244,29 @@ export function createBlockReplyPipeline(params: {
     }
     const reply = resolveSendableOutboundReplyParts(payload);
     const hasNonTextContent = hasOutboundReplyContent(
-      { ...payload, text: undefined },
+      { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
       { trimText: true },
     );
+    if (reply.hasMedia && coalescer && !hasNonTextContent) {
+      const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+      if (
+        assistantMessageIndex !== undefined &&
+        bufferedAssistantMessageIndex !== undefined &&
+        assistantMessageIndex !== bufferedAssistantMessageIndex &&
+        coalescer.hasBuffered()
+      ) {
+        flushBufferedAssistantBlock();
+      }
+      const payloadKey = createBlockReplyPayloadKey(payload);
+      if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
+        return;
+      }
+      seenKeys.add(payloadKey);
+      bufferedKeys.add(payloadKey);
+      bufferedAssistantMessageIndex = assistantMessageIndex;
+      coalescer.enqueue(payload);
+      return;
+    }
     if (reply.hasMedia || hasNonTextContent) {
       void coalescer?.flush({ force: true });
       sendPayload(payload, /* bypassSeenCheck */ false);

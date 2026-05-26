@@ -950,6 +950,12 @@ describe("discoverOpenClawPlugins", () => {
           entry.message.includes("disable/uninstall the plugin"),
       ),
     ).toBe(true);
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.pluginId === "source-only-pack" && entry.message.includes("openclaw doctor --fix"),
+      ),
+    ).toBe(false);
     expect(result.diagnostics).toHaveLength(1);
   });
 

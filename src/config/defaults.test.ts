@@ -4,9 +4,11 @@ import {
   DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
   DEFAULT_SUBAGENT_MAX_CONCURRENT,
 } from "./agent-limits.js";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "./cron-limits.js";
 import {
   applyAgentDefaults,
   applyContextPruningDefaults,
+  applyCronDefaults,
   applyMessageDefaults,
 } from "./defaults.js";
 
@@ -119,6 +121,18 @@ describe("config defaults", () => {
     expect(next.agents?.defaults?.subagents?.archiveAfterMinutes).toBe(
       DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES,
     );
+  });
+
+  it("fills missing cron concurrency default", () => {
+    const next = applyCronDefaults({ messages: {} } as never);
+
+    expect(next.cron?.maxConcurrentRuns).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+  });
+
+  it("preserves explicit cron concurrency", () => {
+    const next = applyCronDefaults({ cron: { maxConcurrentRuns: 3 } } as never);
+
+    expect(next.cron?.maxConcurrentRuns).toBe(3);
   });
 
   it("preserves explicit subagent archive default", () => {

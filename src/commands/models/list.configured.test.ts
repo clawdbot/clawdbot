@@ -73,4 +73,23 @@ describe("resolveConfiguredEntries", () => {
     expect(entries[0]?.aliases).toEqual(["Kilo Gemini"]);
     expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
   });
+
+  it("treats provider wildcard defaults as selectors, not configured model rows", () => {
+    const { entries } = resolveConfiguredEntries({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: {
+            "openai-codex/*": {},
+            "openai/gpt-5.5": { alias: "Primary" },
+          },
+        },
+      },
+      models: { providers: {} },
+    });
+
+    expect(entries.map((entry) => entry.key)).toEqual(["openai/gpt-5.5"]);
+    expect(entries[0]?.aliases).toEqual(["Primary"]);
+    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+  });
 });

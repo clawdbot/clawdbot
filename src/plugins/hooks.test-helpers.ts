@@ -1,3 +1,4 @@
+import { uniqueStrings } from "../shared/string-normalization.js";
 import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -12,7 +13,7 @@ export function createMockPluginRegistry(
 ): PluginRegistry {
   const pluginIds =
     hooks.length > 0
-      ? [...new Set(hooks.map((hook) => hook.pluginId ?? "test-plugin"))]
+      ? uniqueStrings(hooks.map((hook) => hook.pluginId ?? "test-plugin"))
       : ["test-plugin"];
   return {
     plugins: pluginIds.map((pluginId) =>

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/github-copilot-provider",
-  "version": "2026.5.24",
+  "version": "2026.5.26",
   "private": true,
   "description": "OpenClaw GitHub Copilot provider plugin",
   "type": "module",
@@ -8,7 +8,7 @@
     "@clack/prompts": "1.4.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "0.75.4",
+    "@earendil-works/pi-ai": "0.75.5",
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {

@@ -6,6 +6,7 @@ import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
@@ -162,7 +163,7 @@ export function createSubagentRegistryLifecycleController(params: {
       .map((value) => value?.trim())
       .filter((value): value is string => Boolean(value));
     return errors.length > 0
-      ? [...new Set(errors)].join("; ")
+      ? uniqueStrings(errors).join("; ")
       : `delivery path ${delivery.path} did not complete`;
   };
 

@@ -17,6 +17,7 @@ import {
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
+import { isRecord } from "../shared/record-coerce.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
@@ -64,10 +65,6 @@ const MAX_TRAJECTORY_WARNING_ROWS = 20;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function isSessionFileEntry(value: unknown): value is FileEntry {

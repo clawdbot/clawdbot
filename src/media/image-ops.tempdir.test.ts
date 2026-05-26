@@ -1,59 +1,82 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createSolidPngBuffer, createTinyJpegBuffer } from "../../test/helpers/image-fixtures.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { resizeToJpeg } from "./image-ops.js";
 
-const PNG_1X1_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+const fakeSips = vi.hoisted(() => ({
+  logPath: "",
+  path: "",
+}));
+
+vi.mock("../infra/resolve-system-bin.js", () => ({
+  resolveSystemBin: (command: string) => (command === "sips" ? fakeSips.path : null),
+}));
 
 describe("image-ops temp dir", () => {
-  let createdTempDir = "";
+  let fakeRoot = "";
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     process.env.OPENCLAW_IMAGE_BACKEND = "sips";
-    const originalMkdtemp = fs.mkdtemp.bind(fs);
-    vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix) => {
-      createdTempDir = await originalMkdtemp(prefix);
-      return createdTempDir;
-    });
+    fakeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fake-sips-"));
+    fakeSips.path = path.join(fakeRoot, "sips.js");
+    fakeSips.logPath = path.join(fakeRoot, "args.json");
+    const outputJpeg = createTinyJpegBuffer().toString("base64");
+    await fs.writeFile(
+      fakeSips.path,
+      [
+        "#!/usr/bin/env node",
+        "const fs = require('node:fs');",
+        "const args = process.argv.slice(2);",
+        `fs.writeFileSync(${JSON.stringify(fakeSips.logPath)}, JSON.stringify(args));`,
+        "const outIndex = args.indexOf('--out');",
+        "const output = outIndex >= 0 ? args[outIndex + 1] : args.at(-1);",
+        `fs.writeFileSync(output, Buffer.from(${JSON.stringify(outputJpeg)}, 'base64'));`,
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.chmod(fakeSips.path, 0o755);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     delete process.env.OPENCLAW_IMAGE_BACKEND;
-    vi.restoreAllMocks();
+    fakeSips.logPath = "";
+    fakeSips.path = "";
+    await fs.rm(fakeRoot, { recursive: true, force: true });
+    fakeRoot = "";
   });
 
   it.skipIf(process.platform !== "darwin")(
     "creates sips temp dirs under the secured OpenClaw tmp root",
     async () => {
-      const secureRoot = await fs.realpath(resolvePreferredOpenClawTmpDir());
+      const { resizeToJpeg } = await import("./image-ops.js");
+      const secureRoot = path.resolve(resolvePreferredOpenClawTmpDir());
 
       await resizeToJpeg({
-        buffer: Buffer.from(PNG_1X1_BASE64, "base64"),
-        maxSide: 1,
+        buffer: createSolidPngBuffer(2, 2, { r: 255, g: 255, b: 255 }),
+        maxSide: 2,
         quality: 80,
       });
 
-      expect(fs.mkdtemp).toHaveBeenCalledTimes(1);
-      const [mkdtempCall] = vi.mocked(fs.mkdtemp).mock.calls;
-      if (!mkdtempCall) {
-        throw new Error("expected mkdtemp call");
+      const args = JSON.parse(await fs.readFile(fakeSips.logPath, "utf8")) as string[];
+      const outIndex = args.indexOf("--out");
+      if (outIndex < 1) {
+        throw new Error("expected sips input before --out");
       }
-      const [prefix] = mkdtempCall;
-      expect(typeof prefix).toBe("string");
-      const uuidPrefix = path.join(secureRoot, "openclaw-img-");
-      expect(prefix?.startsWith(uuidPrefix)).toBe(true);
-      expect(prefix?.endsWith("-")).toBe(true);
-      const uuid = prefix?.slice(uuidPrefix.length, -1) ?? "";
-      expect(uuid).toHaveLength(36);
-      expect(/^[0-9a-f-]+$/u.test(uuid)).toBe(true);
+      const inputPath = args[outIndex - 1] ?? "";
+      const tempDir = path.dirname(inputPath);
+      const relative = path.relative(secureRoot, tempDir);
+      expect(relative.startsWith("openclaw-img-")).toBe(true);
+      expect(relative.includes("..")).toBe(false);
+      const match = /^openclaw-img-([0-9a-f-]{36})-[A-Za-z0-9]+$/u.exec(path.basename(tempDir));
+      expect(match).not.toBeNull();
+      const uuid = match?.[1] ?? "";
       expect([8, 13, 18, 23].map((index) => uuid[index])).toEqual(["-", "-", "-", "-"]);
-      expect(path.dirname(prefix ?? "")).toBe(secureRoot);
-      expect(createdTempDir.startsWith(prefix ?? "")).toBe(true);
       let accessError: unknown;
       try {
-        await fs.access(createdTempDir);
+        await fs.access(tempDir);
       } catch (error) {
         accessError = error;
       }

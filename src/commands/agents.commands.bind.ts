@@ -8,6 +8,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { describeBinding } from "./agents.binding-format.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./agents.command-shared.js";
 
@@ -115,7 +116,7 @@ async function resolveParsedBindingsOrExit(params: {
   bindings: AgentRouteBinding[];
   errors: string[];
 } | null> {
-  const specs = (params.bindValues ?? []).map((value) => value.trim()).filter(Boolean);
+  const specs = normalizeStringEntries(params.bindValues);
   if (specs.length === 0) {
     params.runtime.error(params.emptyMessage);
     params.runtime.exit(1);

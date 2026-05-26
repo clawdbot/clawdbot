@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isRecord } from "../shared/record-coerce.js";
 import {
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
@@ -16,10 +17,6 @@ export type RemovedTrajectoryArtifact = {
 type TrajectoryPointer = {
   runtimeFile: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function canonicalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);

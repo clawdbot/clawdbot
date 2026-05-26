@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
@@ -57,10 +58,7 @@ function parseKeyList(raw?: string | null): string[] {
   if (!raw) {
     return [];
   }
-  return raw
-    .split(KEY_SPLIT_RE)
-    .map((value) => value.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(raw.split(KEY_SPLIT_RE));
 }
 
 function collectEnvPrefixedKeys(prefix: string, env: NodeJS.ProcessEnv): string[] {

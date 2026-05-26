@@ -8,6 +8,7 @@ import { normalizeProviderConfigForConfigDefaults } from "../config/provider-pol
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -48,10 +49,6 @@ export function pickAuthMethod(
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.label) === normalized) ??
     null
   );
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 // Guard config patches against prototype-pollution payloads if a patch ever

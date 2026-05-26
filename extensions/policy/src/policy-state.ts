@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { POLICY_TOOL_GROUPS } from "./tool-policy-conformance.js";
 
 export type PolicyAttestation = {
@@ -1070,10 +1075,6 @@ function pushToolAlsoAllowPostureList(
 
 const AGENT_WORKSPACE_POLICY_TOOLS = ["exec", "process", "write", "edit", "apply_patch"] as const;
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
-}
-
 function readStringArray(value: unknown): readonly string[] {
   if (!Array.isArray(value)) {
     return [];
@@ -1094,10 +1095,6 @@ function readStringOrNumberArray(value: unknown): readonly string[] {
     }
   }
   return entries;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
 }
 
 function normalizePolicyToolName(value: string): string {
@@ -1700,8 +1697,4 @@ function stableJson(value: unknown): string {
       .join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

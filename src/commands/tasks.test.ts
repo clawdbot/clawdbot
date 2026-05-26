@@ -284,6 +284,32 @@ describe("tasks commands", () => {
     });
   });
 
+  it("explains retained lost task cleanup timing in maintenance text output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const cleanupAfter = Date.now() + 60_000;
+      createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        runId: "run-retained-lost",
+        status: "lost",
+        task: "Retained lost task",
+        cleanupAfter,
+      });
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: false, apply: true }, runtime);
+
+      const joined = vi
+        .mocked(runtime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("\n");
+      expect(joined).toContain(
+        `Retained lost tasks: 1 retained until ${new Date(cleanupAfter).toISOString()}; maintenance will prune after cleanupAfter.`,
+      );
+    });
+  });
+
   it("keeps tasks maintenance JSON additive for TaskFlow state", async () => {
     await withTaskCommandStateDir(async () => {
       const now = Date.now();

@@ -1,4 +1,5 @@
 import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
+import { normalizeOptionalString as normalizeString } from "../../shared/string-coerce.js";
 import type { InboundMediaFacts } from "../turn/types.js";
 
 export type ChannelInboundMediaInput = {
@@ -25,11 +26,6 @@ function alignedStrings(values: Array<string | undefined>): string[] | undefined
     return undefined;
   }
   return values.map((value) => value ?? "");
-}
-
-function normalizeString(value: string | null | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized ? normalized : undefined;
 }
 
 function normalizeKind(value: InboundMediaFacts["kind"] | null | undefined) {

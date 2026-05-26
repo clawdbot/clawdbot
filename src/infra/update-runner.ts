@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { type CommandOptions, runCommandWithTimeout } from "../process/exec.js";
+import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import {
   resolveControlUiDistIndexHealth,
   resolveControlUiDistIndexPathForRoot,
@@ -235,7 +236,7 @@ function buildStartDirs(opts: UpdateRunnerOptions): string[] {
   if (proc) {
     dirs.push(proc);
   }
-  return Array.from(new Set(dirs));
+  return uniqueStrings(dirs);
 }
 
 function resolvePreflightTempRootPrefix() {
@@ -302,10 +303,7 @@ async function listGitTags(
   if (!res || res.code !== 0) {
     return [];
   }
-  return res.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(res.stdout.split("\n"));
 }
 
 async function resolveChannelTag(
@@ -917,10 +915,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
               step("git remote", ["git", "-C", gitRoot, "remote"], gitRoot),
             );
             steps.push(remoteListStep);
-            const remotes = (remoteListStep.stdoutTail ?? "")
-              .split("\n")
-              .map((line) => line.trim())
-              .filter(Boolean);
+            const remotes = normalizeStringEntries((remoteListStep.stdoutTail ?? "").split("\n"));
             let fetchedTag = false;
             for (const remote of remotes) {
               const targetTagFetchStep = await runStep(
@@ -1037,10 +1032,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
           };
         }
 
-        candidates = (revListStep.stdoutTail ?? "")
-          .split("\n")
-          .map((line) => line.trim())
-          .filter(Boolean);
+        candidates = normalizeStringEntries((revListStep.stdoutTail ?? "").split("\n"));
         if (candidates.length === 0) {
           return {
             status: "error",

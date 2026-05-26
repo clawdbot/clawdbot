@@ -5,6 +5,7 @@ import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { asOptionalRecord } from "../shared/record-coerce.js";
 import { VERSION } from "../version.js";
 import {
   readDiagnosticStabilityBundleFileSync,
@@ -165,13 +166,6 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
   return Math.floor(parsed);
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
 function safeScalar(value: unknown): unknown {
   if (typeof value === "boolean") {
     return value;
@@ -187,15 +181,15 @@ function safeScalar(value: unknown): unknown {
 }
 
 function sortedObjectKeys(value: unknown): string[] {
-  return Object.keys(asRecord(value) ?? {}).toSorted((a, b) => a.localeCompare(b));
+  return Object.keys(asOptionalRecord(value) ?? {}).toSorted((a, b) => a.localeCompare(b));
 }
 
 function sanitizeConfigShape(parsed: unknown, configPath: string, stat: fs.Stats): ConfigShape {
-  const root = asRecord(parsed) ?? {};
-  const gateway = asRecord(root.gateway);
-  const auth = asRecord(gateway?.auth);
-  const channels = asRecord(root.channels);
-  const plugins = asRecord(root.plugins);
+  const root = asOptionalRecord(parsed) ?? {};
+  const gateway = asOptionalRecord(root.gateway);
+  const auth = asOptionalRecord(gateway?.auth);
+  const channels = asOptionalRecord(root.channels);
+  const plugins = asOptionalRecord(root.plugins);
   const agents = Array.isArray(root.agents) ? root.agents : undefined;
 
   const shape: ConfigShape = {

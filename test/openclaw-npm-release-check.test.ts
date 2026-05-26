@@ -570,12 +570,12 @@ describe("collectPackedTestCargoErrors", () => {
       collectPackedTestCargoErrors([
         "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts",
         "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js",
-        "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap",
+        "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap",
         "dist/index.js",
       ]),
     ).toEqual([
       'npm package must not include test cargo "dist/extensions/webhooks/node_modules/zod/src/v3/tests/all-errors.test.ts".',
-      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/@jimp/plugin-crop/src/__snapshots__/crop.test.ts.snap".',
+      'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/example-codec/src/__snapshots__/codec.test.ts.snap".',
       'npm package must not include test cargo "dist/extensions/whatsapp/node_modules/pino/test/basic.test.js".',
     ]);
   });

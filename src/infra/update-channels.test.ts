@@ -3,6 +3,7 @@ import {
   channelToNpmTag,
   formatUpdateChannelLabel,
   isBetaTag,
+  isPrereleaseTag,
   isStableTag,
   normalizeUpdateChannel,
   resolveEffectiveUpdateChannel,
@@ -17,12 +18,24 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24-beta.1", beta: true },
     { tag: "v2026.2.24.beta.1", beta: true },
     { tag: "v2026.2.24-BETA-1", beta: true },
+    { tag: "v2026.2.24-alpha.1", beta: false },
     { tag: "v2026.2.24-1", beta: false },
     { tag: "v2026.2.24-alphabeta.1", beta: false },
     { tag: "v2026.2.24", beta: false },
   ])("classifies $tag", ({ tag, beta }) => {
     expect(isBetaTag(tag)).toBe(beta);
-    expect(isStableTag(tag)).toBe(!beta);
+  });
+
+  it.each([
+    { tag: "v2026.2.24-alpha.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-beta.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-rc.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-preview.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-1", prerelease: false, stable: true },
+    { tag: "v2026.2.24", prerelease: false, stable: true },
+  ])("stable/prerelease classification for $tag", ({ tag, prerelease, stable }) => {
+    expect(isPrereleaseTag(tag)).toBe(prerelease);
+    expect(isStableTag(tag)).toBe(stable);
   });
 });
 

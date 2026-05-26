@@ -41,12 +41,50 @@ const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
-const cliArgs = new Set(IS_MAIN ? process.argv.slice(2) : []);
-if (IS_MAIN) {
-  for (const arg of cliArgs) {
-    if (arg !== "--plan-json") {
-      throw new Error(`unknown argument: ${arg}`);
+
+export function dockerAllUsage() {
+  return [
+    "Usage: node scripts/test-docker-all.mjs [--plan-json]",
+    "",
+    "Options:",
+    "  --plan-json    Print the resolved Docker E2E plan as JSON and exit.",
+    "  -h, --help     Show this help.",
+    "",
+    "Lane selection and scheduler settings are configured with OPENCLAW_DOCKER_ALL_* env vars.",
+  ].join("\n");
+}
+
+export function parseDockerAllCliArgs(argv) {
+  const options = {
+    help: false,
+    planJson: false,
+  };
+  for (const arg of argv) {
+    if (arg === "--plan-json") {
+      options.planJson = true;
+    } else if (arg === "--help" || arg === "-h") {
+      options.help = true;
+    } else {
+      throw new Error(`unknown argument: ${arg}\n\n${dockerAllUsage()}`);
     }
+  }
+  return options;
+}
+
+let cliOptions = {
+  help: false,
+  planJson: false,
+};
+if (IS_MAIN) {
+  try {
+    cliOptions = parseDockerAllCliArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  if (cliOptions.help) {
+    console.log(dockerAllUsage());
+    process.exit(0);
   }
 }
 
@@ -1107,7 +1145,7 @@ async function main() {
   const timingsEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_TIMINGS, true);
   const buildEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_BUILD, true);
   const planJson =
-    cliArgs.has("--plan-json") || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
+    cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
   const releaseProfile = normalizeReleaseProfile(

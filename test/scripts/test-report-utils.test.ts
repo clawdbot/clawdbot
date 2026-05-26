@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  collectVitestAssertionDurations,
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
   runVitestJsonReport,
@@ -59,6 +60,31 @@ describe("scripts/test-report-utils collectVitestFileDurations", () => {
         file: "src/alpha.test.ts",
         durationMs: 360,
         testCount: 2,
+      },
+    ]);
+  });
+});
+
+describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
+  it("extracts per-test durations with normalized files", () => {
+    const report = {
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src", "alpha.test.ts"),
+          assertionResults: [
+            { duration: 25, fullName: "alpha fast", status: "passed" },
+            { duration: 0, fullName: "alpha zero", status: "passed" },
+          ],
+        },
+      ],
+    };
+
+    expect(collectVitestAssertionDurations(report, normalizeTrackedRepoPath)).toEqual([
+      {
+        file: "src/alpha.test.ts",
+        durationMs: 25,
+        fullName: "alpha fast",
+        status: "passed",
       },
     ]);
   });

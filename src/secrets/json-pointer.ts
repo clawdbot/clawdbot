@@ -1,12 +1,10 @@
+import { isRecord as isJsonObject } from "../shared/record-coerce.js";
+
 function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: string }): undefined {
   if (params.onMissing === "throw") {
     throw new Error(params.message);
   }
   return undefined;
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function decodeJsonPointerToken(token: string): string {

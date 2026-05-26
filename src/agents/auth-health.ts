@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   type AuthCredentialReasonCode,
@@ -210,7 +211,7 @@ export function buildAuthHealthSummary(params: {
   const now = Date.now();
   const warnAfterMs = params.warnAfterMs ?? DEFAULT_OAUTH_WARN_MS;
   const providerFilter = params.providers
-    ? new Set(params.providers.map((p) => normalizeProviderId(p)).filter(Boolean))
+    ? new Set(normalizeUniqueStringEntries(params.providers.map((p) => normalizeProviderId(p))))
     : null;
 
   const profiles = Object.entries(params.store.profiles)

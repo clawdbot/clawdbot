@@ -138,6 +138,13 @@ export async function buildStatusCommandReportData(
         ),
         params.theme.muted(`Deep probe: ${params.formatCliCommand("openclaw status --deep")}`),
       ];
+  const retainedLost = params.summary.taskAuditRetainedLost;
+  const retainedLostLine =
+    (params.opts.deep || params.opts.verbose) && retainedLost && retainedLost.count > 0
+      ? params.theme.muted(
+          `${retainedLost.count} lost task${retainedLost.count === 1 ? "" : "s"} retained until ${retainedLost.nextCleanupAfter ? new Date(retainedLost.nextCleanupAfter).toISOString() : "cleanupAfter"}`,
+        )
+      : null;
 
   return {
     heading: params.theme.heading,
@@ -147,6 +154,7 @@ export async function buildStatusCommandReportData(
     overviewRows,
     showTaskMaintenanceHint: params.summary.taskAudit.errors > 0,
     taskMaintenanceHint: `Task maintenance: ${params.formatCliCommand("openclaw tasks maintenance --apply")}`,
+    retainedLostTaskLine: retainedLostLine,
     pluginCompatibilityLines: buildStatusPluginCompatibilityLines({
       notices: params.pluginCompatibility,
       formatNotice: params.formatPluginCompatibilityNotice,

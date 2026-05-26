@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 
@@ -169,10 +170,7 @@ function sameSessionFileIdentity(
 }
 
 function splitSessionFileLines(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(text.split(/\r?\n/));
 }
 
 function isJsonRecord(value: unknown): value is Record<string, unknown> {
@@ -336,10 +334,7 @@ async function sessionFenceAdvanceIsBenign(params: {
   if (!text?.endsWith("\n")) {
     return false;
   }
-  const lines = text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split("\n"));
   return lines.length > 0 && lines.every(isTranscriptOnlyOpenClawAssistantLine);
 }
 
@@ -630,6 +625,7 @@ export type EmbeddedAttemptSessionLockController = {
   ): Promise<T>;
   acquireForCleanup(params?: { session?: unknown }): Promise<SessionLock>;
   hasSessionTakeover(): boolean;
+  dispose(): Promise<void>;
 };
 
 export async function createEmbeddedAttemptSessionLockController(params: {
@@ -871,6 +867,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     },
     hasSessionTakeover(): boolean {
       return takeoverDetected;
+    },
+    async dispose(): Promise<void> {
+      if (!heldLock) {
+        return;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
+      await lock.release();
     },
   };
 }

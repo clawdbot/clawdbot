@@ -7,6 +7,7 @@ import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeTrimmedStringList, uniqueStrings } from "../../shared/string-normalization.js";
 import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
 import { resolveSandboxPath } from "../sandbox-paths.js";
 import {
@@ -22,6 +23,7 @@ import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
 import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
 import type {
+  OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
   SkillEntry,
@@ -30,6 +32,8 @@ import type {
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
+const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
+const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 /**
  * Replace the user's home directory prefix with `~` in skill file paths
@@ -61,9 +65,7 @@ function resolveCompactHomePrefixes(): string[] {
   const realHomes = resolvedHomes
     .map((home) => tryRealpath(home))
     .filter((home): home is string => !!home);
-  return [...resolvedHomes, ...realHomes]
-    .filter((home, index, all) => all.indexOf(home) === index)
-    .sort((a, b) => b.length - a.length);
+  return uniqueStrings([...resolvedHomes, ...realHomes]).sort((a, b) => b.length - a.length);
 }
 
 function compactSkillPaths(skills: Skill[]): Skill[] {
@@ -408,6 +410,48 @@ function loadContainedSkillRecords(params: {
     : records;
 }
 
+function readSourceInstallSkillKey(skillDir: string): string | undefined {
+  try {
+    const sourceOriginPath = path.join(skillDir, SKILL_SOURCE_ORIGIN_RELATIVE_PATH);
+    const stat = fs.lstatSync(sourceOriginPath);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > MAX_SKILL_SOURCE_ORIGIN_BYTES) {
+      return undefined;
+    }
+    const skillDirRealPath = tryRealpath(skillDir);
+    const sourceOriginRealPath = tryRealpath(sourceOriginPath);
+    if (
+      !skillDirRealPath ||
+      !sourceOriginRealPath ||
+      !isPathInside(skillDirRealPath, sourceOriginRealPath)
+    ) {
+      return undefined;
+    }
+    const raw = fs.readFileSync(sourceOriginPath, "utf8");
+    const parsed = JSON.parse(raw) as { slug?: unknown };
+    return normalizeOptionalString(parsed.slug);
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSkillEntryMetadata(params: {
+  frontmatter: ParsedSkillFrontmatter;
+  skillDir: string;
+}): OpenClawSkillMetadata | undefined {
+  const metadata = resolveOpenClawMetadata(params.frontmatter);
+  if (metadata?.skillKey) {
+    return metadata;
+  }
+  const sourceInstallSkillKey = readSourceInstallSkillKey(params.skillDir);
+  if (!sourceInstallSkillKey) {
+    return metadata;
+  }
+  return {
+    ...metadata,
+    skillKey: sourceInstallSkillKey,
+  };
+}
+
 function canonicalizeLoadedSkillRecord(
   record: LoadedSkillRecord,
   canonicalSkillDir: string,
@@ -496,20 +540,19 @@ function resolveSkillFilePath(params: {
 }
 
 function resolvePluginSkillRootRealPaths(pluginSkillDirs: readonly string[]): string[] {
-  return pluginSkillDirs
-    .map((dir) => tryRealpath(dir))
-    .filter((dir): dir is string => Boolean(dir))
-    .filter((dir, index, all) => all.indexOf(dir) === index);
+  return uniqueStrings(
+    pluginSkillDirs.map((dir) => tryRealpath(dir)).filter((dir): dir is string => Boolean(dir)),
+  );
 }
 
 function resolveAllowedSymlinkTargetRealPaths(config?: OpenClawConfig): string[] {
   const rawTargets = config?.skills?.load?.allowSymlinkTargets ?? [];
-  return rawTargets
+  const targetPaths = rawTargets
     .map((dir) => normalizeOptionalString(dir) ?? "")
     .filter(Boolean)
     .map((dir) => tryRealpath(resolveUserPath(dir)))
-    .filter((dir): dir is string => Boolean(dir))
-    .filter((dir, index, all) => all.indexOf(dir) === index);
+    .filter((dir): dir is string => Boolean(dir));
+  return uniqueStrings(targetPaths);
 }
 
 function loadGeneratedPluginSkillRecords(params: {
@@ -846,7 +889,7 @@ function loadSkillEntries(
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
   const pluginSkillsDir = opts?.pluginSkillsDir ?? path.join(CONFIG_DIR, "plugin-skills");
   const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
-  const extraDirs = extraDirsRaw.map((d) => normalizeOptionalString(d) ?? "").filter(Boolean);
+  const extraDirs = normalizeTrimmedStringList(extraDirsRaw);
   const pluginSkillDirs = resolvePluginSkillDirs({
     workspaceDir,
     config: opts?.config,
@@ -934,7 +977,7 @@ function loadSkillEntries(
       return {
         skill,
         frontmatter,
-        metadata: resolveOpenClawMetadata(frontmatter),
+        metadata: resolveSkillEntryMetadata({ frontmatter, skillDir: skill.baseDir }),
         invocation,
         ...(record.syncSourceDir !== undefined ? { syncSourceDir: record.syncSourceDir } : {}),
         ...(record.syncDirName !== undefined ? { syncDirName: record.syncDirName } : {}),
@@ -1100,8 +1143,11 @@ function resolveWorkspaceSkillPromptState(
   prompt: string;
   resolvedSkills: Skill[];
 } {
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  if (effectiveSkillFilter !== undefined && effectiveSkillFilter.length === 0) {
+    return { eligible: [], prompt: "", resolvedSkills: [] };
+  }
+  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
     skillEntries,
     opts?.config,

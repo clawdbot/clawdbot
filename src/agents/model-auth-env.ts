@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
+import { normalizeOptionalString as normalizeOptionalPathInput } from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   resolveProviderEnvApiKeyCandidates,
@@ -38,14 +39,6 @@ function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string
     return undefined;
   }
   return trimmed.replaceAll("${HOME}", homeDir).replaceAll("${APPDATA}", appDataDir ?? "");
-}
-
-function normalizeOptionalPathInput(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
 }
 
 function hasRequiredAuthEvidenceEnv(

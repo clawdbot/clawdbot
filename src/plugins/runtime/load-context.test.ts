@@ -52,8 +52,8 @@ vi.mock("../current-plugin-metadata-snapshot.js", () => ({
   clearCurrentPluginMetadataSnapshot: clearCurrentPluginMetadataSnapshotMock,
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
   isReusableCurrentPluginMetadataSnapshot: (
-    snapshot: typeof metadataSnapshot & { registrySource?: "derived" },
-  ) => snapshot.registrySource !== "derived",
+    _snapshot: typeof metadataSnapshot & { registrySource?: "derived" },
+  ) => true,
   setCurrentPluginMetadataSnapshot: setCurrentPluginMetadataSnapshotMock,
 }));
 
@@ -142,7 +142,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
   });
 
-  it("does not store derived metadata as the reusable runtime snapshot", () => {
+  it("stores derived metadata as the reusable runtime snapshot", () => {
     const derivedSnapshot = { ...metadataSnapshot } as typeof metadataSnapshot & {
       registrySource: "derived";
     };
@@ -154,8 +154,13 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
     });
 
-    expect(setCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(clearCurrentPluginMetadataSnapshotMock).toHaveBeenCalledOnce();
+    expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(derivedSnapshot, {
+      config: { plugins: {} },
+      compatibleConfigs: [{ plugins: {} }, { plugins: {} }],
+      env: { HOME: "/tmp/openclaw-home" },
+      workspaceDir: "/resolved-workspace",
+    });
+    expect(clearCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
   it("uses the source runtime snapshot for plugin activation source config", () => {

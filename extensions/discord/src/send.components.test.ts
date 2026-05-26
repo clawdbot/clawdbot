@@ -170,6 +170,34 @@ describe("sendDiscordComponentMessage", () => {
     );
   });
 
+  it("treats bare numeric component edit targets as channels", async () => {
+    const { rest, patchMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "273512430271856640",
+    });
+    patchMock.mockResolvedValueOnce({ id: "msg1", channel_id: "273512430271856640" });
+
+    await editDiscordComponentMessage(
+      "273512430271856640",
+      "msg1",
+      {
+        text: "Updated picker",
+        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        sessionKey: "agent:main:discord:channel:273512430271856640",
+        agentId: "main",
+      },
+    );
+
+    expect(patchMock).toHaveBeenCalledTimes(1);
+    expect(readMockCall(patchMock, 0)[0]).toContain("/channels/273512430271856640/messages/msg1");
+  });
+
   it("registers a prebuilt component message against an edited message id", () => {
     registerBuiltDiscordComponentMessage({
       messageId: "msg1",
@@ -310,6 +338,36 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect(modals[0]?.title).toBe("Feedback");
     expect(modals[0]?.fields).toHaveLength(1);
     expect(modals[0]?.fields?.[0]?.label).toBe("Notes");
+  });
+
+  it("treats bare numeric component send targets as channels", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "273512430271856640",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "273512430271856640" });
+
+    await sendDiscordComponentMessage(
+      "273512430271856640",
+      {
+        text: "report",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+      },
+    );
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(readMockCall(postMock, 0)[0]).toContain("/channels/273512430271856640/messages");
   });
 
   it("keeps spoiler file blocks on the component path", async () => {

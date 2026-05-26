@@ -1,5 +1,8 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createAgendaCard,
   createAppleTvRemoteCard,
@@ -49,10 +52,7 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
 
   const quickRepliesMatch = text.match(/\[\[quick_replies:\s*([^\]]+)\]\]/i);
   if (quickRepliesMatch) {
-    const options = quickRepliesMatch[1]
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const options = normalizeStringEntries(quickRepliesMatch[1].split(","));
     if (options.length > 0) {
       lineData.quickReplies = [...(lineData.quickReplies || []), ...options];
     }

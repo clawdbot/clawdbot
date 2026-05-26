@@ -20,6 +20,7 @@ import {
   uploadBatchJsonlFile,
   withRemoteHttpResponse,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { VoyageEmbeddingClient } from "./embedding-provider.js";
 
 /**
@@ -151,11 +152,9 @@ async function readVoyageBatchError(params: {
           if (!text.trim()) {
             return undefined;
           }
-          const lines = text
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => JSON.parse(line) as VoyageBatchOutputLine);
+          const lines = normalizeStringEntries(text.split("\n")).map(
+            (line) => JSON.parse(line) as VoyageBatchOutputLine,
+          );
           return extractBatchErrorMessage(lines);
         },
       }),

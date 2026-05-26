@@ -1,4 +1,5 @@
 import { createSetupTranslator } from "openclaw/plugin-sdk/setup-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,
@@ -12,10 +13,7 @@ import { isBlockedUrbitHostname, validateUrbitBaseUrl } from "./urbit/base-url.j
 const t = createSetupTranslator();
 
 function parseList(value: string): string[] {
-  return value
-    .split(/[\n,;]+/g)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  return normalizeStringEntries(value.split(/[\n,;]+/g));
 }
 
 export const tlonSetupWizard = createTlonSetupWizardBase({

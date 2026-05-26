@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../config/cron-limits.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { enqueueCommandInLane, resetCommandQueueStateForTest } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
@@ -20,6 +21,44 @@ function createDeferred<T>() {
 describe("applyGatewayLaneConcurrency", () => {
   afterEach(() => {
     resetCommandQueueStateForTest();
+  });
+
+  it("uses the higher cron default when maxConcurrentRuns is unset", async () => {
+    applyGatewayLaneConcurrency({} as OpenClawConfig);
+
+    let activeRuns = 0;
+    let peakActiveRuns = 0;
+    const allRunsStarted = createDeferred<void>();
+    const releaseRuns = createDeferred<void>();
+
+    const run = async () => {
+      activeRuns += 1;
+      peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
+      if (peakActiveRuns >= DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
+        allRunsStarted.resolve();
+      }
+      try {
+        await releaseRuns.promise;
+      } finally {
+        activeRuns -= 1;
+      }
+    };
+
+    const runs = Array.from({ length: DEFAULT_CRON_MAX_CONCURRENT_RUNS }, () =>
+      enqueueCommandInLane(CommandLane.CronNested, run, { warnAfterMs: 10_000 }),
+    );
+    const timeout = setTimeout(() => {
+      allRunsStarted.reject(new Error("timed out waiting for default cron concurrency"));
+    }, 250);
+
+    try {
+      await allRunsStarted.promise;
+      expect(peakActiveRuns).toBe(DEFAULT_CRON_MAX_CONCURRENT_RUNS);
+    } finally {
+      clearTimeout(timeout);
+      releaseRuns.resolve();
+      await Promise.all(runs);
+    }
   });
 
   it("applies cron maxConcurrentRuns to the cron-nested lane used by cron agent turns", async () => {

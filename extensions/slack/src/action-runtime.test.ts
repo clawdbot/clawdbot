@@ -448,6 +448,7 @@ describe("handleSlackAction", () => {
     });
     expect(details.media).toEqual({
       mediaUrl: "/tmp/openclaw-media/report.pdf",
+      outbound: false,
       contentType: "application/pdf",
     });
   });

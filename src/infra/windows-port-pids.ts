@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { parseCmdScriptCommandLine } from "../daemon/cmd-argv.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -91,10 +92,7 @@ export function readWindowsListeningPidsResultSync(
 // ---------------------------------------------------------------------------
 
 function extractWindowsCommandLine(raw: string): string | null {
-  const lines = raw
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(raw.split(/\r?\n/));
   for (const line of lines) {
     if (!normalizeLowercaseStringOrEmpty(line).startsWith("commandline=")) {
       continue;

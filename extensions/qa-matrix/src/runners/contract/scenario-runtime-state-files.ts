@@ -1,15 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 const MATRIX_SYNC_STORE_FILENAME = "bot-storage.json";
 const MATRIX_INBOUND_DEDUPE_FILENAME = "inbound-dedupe.json";
 const MATRIX_STATE_POLL_INTERVAL_MS = 100;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
 
 async function readJsonFile(pathname: string): Promise<unknown> {
   return JSON.parse(await fs.readFile(pathname, "utf8")) as unknown;

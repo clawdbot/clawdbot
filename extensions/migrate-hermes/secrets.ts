@@ -7,7 +7,7 @@ import {
   hasCurrentAuthProfileConfigConflict,
   type HermesAuthProfileConfig,
 } from "./auth-config.js";
-import { parseEnv, readText } from "./helpers.js";
+import { isRecord, parseEnv, readString, readText } from "./helpers.js";
 import {
   createHermesSecretItem,
   HERMES_REASON_AUTH_PROFILE_EXISTS,
@@ -140,14 +140,6 @@ function secretAuthProfileConfig(details: {
     mode: details.mode ?? "api_key",
     displayName: "Hermes import",
   };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function secretMode(mapping: SecretMapping): SecretCredentialMode {

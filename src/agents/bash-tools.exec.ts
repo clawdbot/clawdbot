@@ -26,6 +26,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { markBackgrounded } from "./bash-process-registry.js";
@@ -1190,14 +1191,10 @@ function rejectUnsafeControlShellCommand(command: string): void {
   const analysis = analyzeShellCommand({ command: rawCommand });
   const candidates = analysis.ok
     ? analysis.segments.flatMap((segment) => buildCommandPayloadCandidates(segment.argv))
-    : rawCommand
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .flatMap((line) => {
-          const argv = splitShellArgs(line);
-          return argv ? buildCommandPayloadCandidates(argv) : [line];
-        });
+    : normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
+        const argv = splitShellArgs(line);
+        return argv ? buildCommandPayloadCandidates(argv) : [line];
+      });
   for (const candidate of candidates) {
     if (parseExecApprovalShellCommand(candidate)) {
       throw new Error(

@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
+import { uniqueValues } from "../../shared/string-normalization.js";
 import {
   testing as genericCurrentConversationBindingTesting,
   bindGenericCurrentConversation,
@@ -97,7 +98,7 @@ function resolveAdapterPlacements(adapter: SessionBindingAdapter): SessionBindin
     Boolean(value),
   );
   if (placements && placements.length > 0) {
-    return [...new Set(placements)];
+    return uniqueValues(placements);
   }
   return ["current", "child"];
 }

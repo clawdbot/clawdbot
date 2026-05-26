@@ -341,16 +341,18 @@ describe("sendMessage", () => {
       capability: "reconcileUnknownSend",
     });
 
-    await expect(
-      sendMessage({
-        cfg: {},
-        channel: "forum",
-        to: "123456",
-        content: "fallback text",
-        payloads: [{ text: "prepared", channelData: { forum: { card: true } } }],
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("missing reconcileUnknownSend");
+    const send = sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "fallback text",
+      payloads: [{ text: "prepared", channelData: { forum: { card: true } } }],
+      queuePolicy: "required",
+    });
+
+    await expect(send).rejects.toThrow(
+      /missing reconcileUnknownSend[\s\S]*queuePolicy:"best_effort"[\s\S]*omit bestEffort:false/,
+    );
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });

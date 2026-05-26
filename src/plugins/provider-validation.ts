@@ -1,5 +1,5 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
+import { normalizeUniqueTrimmedStringList } from "../shared/string-normalization.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 import { pushPluginValidationDiagnostic } from "./validation-diagnostics.js";
@@ -11,7 +11,7 @@ type ProviderWizardModelPicker = NonNullable<NonNullable<ProviderPlugin["wizard"
 type ProviderWizardModelAllowlist = NonNullable<ProviderWizardSetup["modelAllowlist"]>;
 
 function normalizeTextList(values: string[] | undefined): string[] | undefined {
-  const normalized = Array.from(new Set(normalizeTrimmedStringList(values)));
+  const normalized = normalizeUniqueTrimmedStringList(values);
   return normalized.length > 0 ? normalized : undefined;
 }
 

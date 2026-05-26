@@ -26,7 +26,6 @@ import {
   setSerializedSessionStore,
   takeMutableSessionStoreCache,
   writeSessionStoreCache,
-  writeSessionStoreSnapshotCache,
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import {
@@ -214,12 +213,7 @@ function updateSessionStoreWriteCaches(params: {
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
   });
-  writeSessionStoreSnapshotCache({
-    storePath: params.storePath,
-    store: params.store,
-    mtimeMs: fileStat?.mtimeMs,
-    sizeBytes: fileStat?.sizeBytes,
-  });
+  dropSessionStoreSnapshotCache(params.storePath);
 }
 
 function loadMutableSessionStoreForWriter(storePath: string): Record<string, SessionEntry> {
@@ -593,7 +587,14 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
-  await writeTextAtomic(params.storePath, params.serialized, { durable: false, mode: 0o600 });
+  // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
+  // `.fs-safe-replace.*`) so a temp orphaned by a crash between write and rename
+  // is identifiable as a session-store temp and reclaimable by cleanup (#56827).
+  await writeTextAtomic(params.storePath, params.serialized, {
+    durable: false,
+    mode: 0o600,
+    tempPrefix: path.basename(params.storePath),
+  });
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
     store: params.store,

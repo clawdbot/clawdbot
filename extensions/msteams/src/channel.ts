@@ -21,7 +21,10 @@ import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-ru
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import type {
   ChannelMessageActionName,
@@ -1092,12 +1095,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
           const graph = teamsProbe?.graph;
           if (graph) {
-            const roles = Array.isArray(graph.roles)
-              ? graph.roles.map((role) => role.trim()).filter(Boolean)
-              : [];
-            const scopes = Array.isArray(graph.scopes)
-              ? graph.scopes.map((scope) => scope.trim()).filter(Boolean)
-              : [];
+            const roles = Array.isArray(graph.roles) ? normalizeStringEntries(graph.roles) : [];
+            const scopes = Array.isArray(graph.scopes) ? normalizeStringEntries(graph.scopes) : [];
             const formatPermission = (permission: string) => {
               const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
               return hint ? `${permission} (${hint})` : permission;

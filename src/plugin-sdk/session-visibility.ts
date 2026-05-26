@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
+import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 
 type GatewayCaller = typeof defaultCallGateway;
 
@@ -58,7 +59,7 @@ export async function listSpawnedSessionKeys(params: {
       },
     });
     const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-    const keys = sessions.map((entry) => normalizeOptionalString(entry?.key) ?? "").filter(Boolean);
+    const keys = normalizeTrimmedStringList(sessions.map((entry) => entry?.key));
     return new Set(keys);
   } catch {
     return new Set();

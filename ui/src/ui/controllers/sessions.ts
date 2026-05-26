@@ -849,7 +849,7 @@ export async function branchSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.branch",
-    "Create a new child session from this pre-compaction checkpoint?",
+    "Create a new child session from this compacted checkpoint?",
   );
   return result?.key ?? null;
 }
@@ -864,6 +864,6 @@ export async function restoreSessionFromCheckpoint(
     key,
     checkpointId,
     "sessions.compaction.restore",
-    "Restore this session to the selected pre-compaction checkpoint?\n\nThis replaces the current active transcript for the session key.",
+    "Restore this session to the selected compacted checkpoint?\n\nThis replaces the current active transcript for the session key.",
   );
 }

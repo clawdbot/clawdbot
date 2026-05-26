@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -26,7 +27,7 @@ export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
-  return [...new Set([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra])];
+  return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
 }
 
 function normalizeQaGatewayModelRef(input: string | undefined, fallback: string) {
@@ -85,21 +86,17 @@ export function buildQaGatewayConfig(params: {
       ]
     : [];
   const selectedPluginIds = provider.usesModelProviderPlugins
-    ? [
-        ...new Set(
-          (params.enabledPluginIds?.length ?? 0) > 0
-            ? params.enabledPluginIds
-            : selectedProviderIds,
-        ),
-      ]
-    : [
-        ...new Set(
-          (params.enabledPluginIds ?? [])
-            .map((pluginId) => pluginId.trim())
-            .filter((pluginId) => pluginId.length > 0),
-        ),
-      ];
-  const transportPluginIds = [...new Set(params.transportPluginIds ?? [])]
+    ? uniqueStrings(
+        (params.enabledPluginIds?.length ?? 0) > 0
+          ? (params.enabledPluginIds ?? [])
+          : selectedProviderIds,
+      )
+    : uniqueStrings(
+        (params.enabledPluginIds ?? [])
+          .map((pluginId) => pluginId.trim())
+          .filter((pluginId) => pluginId.length > 0),
+      );
+  const transportPluginIds = uniqueStrings(params.transportPluginIds ?? [])
     .map((pluginId) => pluginId.trim())
     .filter((pluginId) => pluginId.length > 0);
   const pluginEntries = Object.fromEntries(

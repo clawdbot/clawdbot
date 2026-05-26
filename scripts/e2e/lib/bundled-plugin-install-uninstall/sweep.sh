@@ -20,7 +20,10 @@ probe="scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs"
 runtime_smoke="scripts/e2e/lib/bundled-plugin-install-uninstall/runtime-smoke.mjs"
 node "$probe" select > /tmp/bundled-plugin-sweep-ids
 
-mapfile -t plugin_entries < /tmp/bundled-plugin-sweep-ids
+plugin_entries=()
+while IFS= read -r plugin_entry; do
+  plugin_entries+=("$plugin_entry")
+done < /tmp/bundled-plugin-sweep-ids
 selected_labels=()
 for plugin_entry in "${plugin_entries[@]}"; do
   IFS=$'\t' read -r plugin_id plugin_dir _requires_config _plugin_root <<<"$plugin_entry"

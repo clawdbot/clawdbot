@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,
   resolveExecApprovalAllowedDecisions,
@@ -171,7 +172,7 @@ export function collectExecPolicyScopeSnapshots(params: {
   const approvalAgentIds = Object.keys(params.approvals.agents ?? {}).filter(
     (agentId) => agentId !== "*" && agentId !== "default" && agentId !== DEFAULT_AGENT_ID,
   );
-  const agentIds = Array.from(new Set([...configAgentIds, ...approvalAgentIds])).toSorted();
+  const agentIds = sortUniqueStrings([...configAgentIds, ...approvalAgentIds]);
   for (const agentId of agentIds) {
     const agentConfig = params.cfg.agents?.list?.find((agent) => agent.id === agentId);
     snapshots.push(
