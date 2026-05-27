@@ -11,12 +11,17 @@
  * branches fall through to a bare ACK (backward-compatible).
  */
 
+import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { authorizeQQBotApprovalAction } from "../../exec-approvals.js";
 import { resolveQQBotEffectivePolicies } from "../access/resolve-policy.js";
 import { getPlatformAdapter } from "../adapter/index.js";
 import { parseApprovalButtonData } from "../approval/index.js";
+import {
+  resolveQQBotCommandsAllowFrom,
+  resolveSlashCommandAuth,
+} from "../commands/slash-command-auth.js";
 import { getPluginVersion, getFrameworkVersion } from "../commands/slash-commands-impl.js";
 import { resolveGroupConfig, resolveMentionPatterns } from "../config/group.js";
 import { resolveAccountBase } from "../config/resolve.js";
@@ -25,6 +30,17 @@ import { accountToCreds, acknowledgeInteraction } from "../messaging/sender.js";
 import type { InteractionEvent, QQBotAccountConfigView } from "../types.js";
 import { InteractionType } from "./constants.js";
 import type { GatewayAccount, GatewayPluginRuntime, EngineLogger } from "./types.js";
+
+type QQBotCommandAuthorizationResolver = (params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  isGroup: boolean;
+  senderId: string;
+  conversationId: string;
+  allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
+  commandsAllowFrom?: Array<string | number>;
+}) => boolean | Promise<boolean>;
 
 // ============ claw_cfg snapshot ============
 
@@ -154,7 +170,10 @@ export function createInteractionHandler(
   account: GatewayAccount,
   runtime: GatewayPluginRuntime,
   log?: EngineLogger,
-  options?: { getActiveCfg?: () => OpenClawConfig },
+  options?: {
+    getActiveCfg?: () => OpenClawConfig;
+    resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
+  },
 ): (event: InteractionEvent) => void {
   return (event) => {
     const creds = accountToCreds(account);
@@ -187,12 +206,13 @@ export function createInteractionHandler(
     }
 
     void handleApprovalButtonInteraction({
-      accountId: account.accountId,
+      account,
       creds,
       event,
       getActiveCfg: options?.getActiveCfg ?? runtime.config?.current,
       log,
       parsed,
+      resolveCommandAuthorized: options?.resolveCommandAuthorized,
     });
   };
 }
@@ -200,12 +220,13 @@ export function createInteractionHandler(
 // ============ Helpers ============
 
 async function handleApprovalButtonInteraction(params: {
-  accountId: string;
+  account: GatewayAccount;
   creds: { appId: string; clientSecret: string };
   event: InteractionEvent;
   getActiveCfg?: () => OpenClawConfig | Record<string, unknown>;
   log?: EngineLogger;
   parsed: { approvalId: string; decision: "allow-once" | "allow-always" | "deny" };
+  resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
 }): Promise<void> {
   if (!params.getActiveCfg) {
     await acknowledgeApprovalInteraction(params.creds, params.event, params.log, {
@@ -230,11 +251,12 @@ async function handleApprovalButtonInteraction(params: {
     return;
   }
 
-  const authorization = authorizeApprovalButtonActor({
+  const authorization = await authorizeApprovalButtonActor({
     cfg,
-    accountId: params.accountId,
+    account: params.account,
     event: params.event,
     approvalKind: resolveApprovalKind(params.parsed.approvalId),
+    resolveCommandAuthorized: params.resolveCommandAuthorized,
   });
   if (!authorization.authorized) {
     await acknowledgeApprovalInteraction(params.creds, params.event, params.log, {
@@ -283,36 +305,100 @@ async function acknowledgeApprovalInteraction(
   }
 }
 
-function authorizeApprovalButtonActor(params: {
+async function authorizeApprovalButtonActor(params: {
   cfg: OpenClawConfig;
-  accountId: string;
+  account: GatewayAccount;
   event: InteractionEvent;
   approvalKind: "exec" | "plugin";
-}): { authorized: boolean; reason?: string } {
+  resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
+}): Promise<{ authorized: boolean; reason?: string }> {
   const senderIds = resolveApprovalActorSenderIds(params.event);
   if (senderIds.length === 0) {
-    return authorizeQQBotApprovalAction({
+    const result = authorizeQQBotApprovalAction({
       cfg: params.cfg,
-      accountId: params.accountId,
+      accountId: params.account.accountId,
       senderId: null,
       approvalKind: params.approvalKind,
     });
+    return result.authorized && isImplicitSameChatApprovalAuthorization(result)
+      ? { authorized: false, reason: "You are not authorized to approve this request." }
+      : result;
   }
 
   let denial: { authorized: boolean; reason?: string } | undefined;
   for (const senderId of senderIds) {
     const result = authorizeQQBotApprovalAction({
       cfg: params.cfg,
-      accountId: params.accountId,
+      accountId: params.account.accountId,
       senderId,
       approvalKind: params.approvalKind,
     });
     if (result.authorized) {
-      return result;
+      if (
+        !isImplicitSameChatApprovalAuthorization(result) ||
+        (await isImplicitApprovalButtonActorAuthorized({
+          cfg: params.cfg,
+          account: params.account,
+          event: params.event,
+          senderId,
+          resolveCommandAuthorized: params.resolveCommandAuthorized,
+        }))
+      ) {
+        return result;
+      }
+      denial ??= {
+        authorized: false,
+        reason: "You are not authorized to approve this request.",
+      };
+      continue;
     }
     denial ??= result;
   }
   return denial ?? { authorized: false, reason: "You are not authorized to approve this request." };
+}
+
+async function isImplicitApprovalButtonActorAuthorized(params: {
+  cfg: OpenClawConfig;
+  account: GatewayAccount;
+  event: InteractionEvent;
+  senderId: string;
+  resolveCommandAuthorized?: QQBotCommandAuthorizationResolver;
+}): Promise<boolean> {
+  const accountConfig = resolveApprovalButtonAccountConfig(params.cfg, params.account.accountId);
+  const authInput = {
+    cfg: params.cfg,
+    accountId: params.account.accountId,
+    senderId: params.senderId,
+    isGroup: Boolean(params.event.group_openid),
+    conversationId: params.event.group_openid ?? params.event.user_openid ?? params.senderId,
+    allowFrom: accountConfig.allowFrom,
+    groupAllowFrom: accountConfig.groupAllowFrom,
+    commandsAllowFrom: resolveQQBotCommandsAllowFrom(params.cfg),
+  };
+  return params.resolveCommandAuthorized
+    ? await params.resolveCommandAuthorized(authInput)
+    : resolveSlashCommandAuth(authInput);
+}
+
+function resolveApprovalButtonAccountConfig(
+  cfg: OpenClawConfig,
+  accountId: string,
+): QQBotAccountConfigView {
+  const qqbot = readRecord(readRecord(cfg.channels)?.qqbot);
+  const accounts = readRecord(qqbot?.accounts);
+  if (accountId === "default") {
+    return {
+      ...qqbot,
+      ...readRecord(accounts?.default),
+    } as QQBotAccountConfigView;
+  }
+  return (readRecord(accounts?.[accountId]) ?? {}) as QQBotAccountConfigView;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function resolveApprovalActorSenderIds(event: InteractionEvent): string[] {

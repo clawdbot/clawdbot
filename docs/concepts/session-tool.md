@@ -49,10 +49,12 @@ effective tool list.
 token counts, and timestamps. Filter by kind (`main`, `group`, `cron`, `hook`,
 `node`), exact `label`, exact `agentId`, search text, or recency
 (`activeMinutes`). When you need mailbox-style triage, it can also ask for a
-visibility-scoped derived title, a last-message preview snippet, or bounded
-recent messages on each row. Derived titles and previews are produced only for
-sessions the caller can already see under the configured session tool
-visibility policy, so unrelated sessions stay hidden.
+visibility-scoped derived title, a last-message preview snippet, or bounded recent
+messages on each row. Derived titles and previews are produced only for sessions
+the caller can already see under the configured session tool visibility policy, so
+unrelated sessions stay hidden. When visibility is restricted, `sessions_list`
+returns optional `visibility` metadata showing the effective mode and a warning that
+results may be scope-limited.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.

@@ -7,10 +7,8 @@ import {
 import type {
   OpenClawConfig,
   DmPolicy,
-  TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
-  TelegramDmThreadReplies,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
@@ -90,34 +88,20 @@ export type TelegramThreadSpec = {
   scope: "dm" | "forum" | "none";
 };
 
-function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
-  return value === "off" || value === "inbound" || value === "always" ? value : undefined;
-}
-
-export function resolveTelegramDmThreadReplies(params: {
-  accountConfig?: TelegramAccountConfig;
-  directConfig?: TelegramDirectConfig;
-}): TelegramDmThreadReplies {
-  return (
-    normalizeTelegramDmThreadReplies(params.directConfig?.threadReplies) ??
-    normalizeTelegramDmThreadReplies(params.accountConfig?.dm?.threadReplies) ??
-    "off"
-  );
-}
-
 export function shouldUseTelegramDmThreadSession(params: {
   dmThreadId?: number;
-  accountConfig?: TelegramAccountConfig;
-  directConfig?: TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
+  botHasTopicsEnabled?: boolean;
 }): boolean {
-  if (params.dmThreadId == null) {
-    return false;
-  }
-  if (params.directConfig?.requireTopic === true || params.topicConfig) {
-    return true;
-  }
-  return resolveTelegramDmThreadReplies(params) !== "off";
+  return params.dmThreadId != null && params.botHasTopicsEnabled === true;
+}
+
+export function resolveTelegramBotHasTopicsEnabled(me: unknown): boolean {
+  return (
+    me !== null &&
+    typeof me === "object" &&
+    "has_topics_enabled" in me &&
+    me.has_topics_enabled === true
+  );
 }
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {

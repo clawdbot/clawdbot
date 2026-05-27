@@ -89,7 +89,6 @@ const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
 const REQUIRED_SPAN_NAMES = [
   "openclaw.run",
   "openclaw.harness.run",
-  "openclaw.model.call",
   "openclaw.context.assembled",
   "openclaw.message.delivery",
 ] as const;
@@ -911,6 +910,60 @@ function capturedValueKind(value: string | number | boolean | string[]): string 
   return Array.isArray(value) ? "array" : typeof value;
 }
 
+function isLatestGenAiModelCallSpan(span: CapturedSpan): boolean {
+  const operationName = span.attributes["gen_ai.operation.name"];
+  const modelName = span.attributes["gen_ai.request.model"];
+  if (typeof operationName !== "string" || typeof modelName !== "string") {
+    return false;
+  }
+  return (
+    span.name === `${operationName} ${modelName}` &&
+    typeof span.attributes["openclaw.provider"] === "string" &&
+    typeof span.attributes["openclaw.model"] === "string"
+  );
+}
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function hasRequiredSmokeSignals(receiver: ReturnType<typeof startLocalOtlpReceiver>): boolean {
+  const spanNames = new Set(receiver.capturedSpans.map((span) => span.name));
+  const metricNames = new Set(receiver.capturedMetrics.map((metric) => metric.name));
+  return (
+    REQUIRED_SPAN_NAMES.every((name) => spanNames.has(name)) &&
+    receiver.capturedSpans.some(isLatestGenAiModelCallSpan) &&
+    REQUIRED_METRIC_NAMES.every((name) => metricNames.has(name)) &&
+    receiver.capturedLogRecords.length > 0 &&
+    ["traces", "metrics", "logs"].every((signal) =>
+      receiver.capturedRequests.some((request) => request.signal === signal)
+    )
+  );
+}
+
+async function waitForExpectedTelemetry(
+  receiver: ReturnType<typeof startLocalOtlpReceiver>,
+  timeoutMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (hasRequiredSmokeSignals(receiver)) {
+      return;
+    }
+    await delay(250);
+  }
+}
+
+function formatBoundedList(values: readonly string[], maxItems: number): string {
+  if (values.length === 0) {
+    return "(none)";
+  }
+  const visible = values.slice(0, maxItems);
+  const suffix =
+    values.length > visible.length ? `, ... (${values.length - visible.length} more)` : "";
+  return `${visible.join(", ")}${suffix}`;
+}
+
 function assertSmoke(params: {
   childExitCode: number;
   disallowedBodyNeedles: string[];
@@ -951,6 +1004,13 @@ function assertSmoke(params: {
       failures.push(`missing required span ${name}`);
     }
   }
+  const modelSpans = params.spans.filter(isLatestGenAiModelCallSpan);
+  if (modelSpans.length === 0) {
+    failures.push("missing required GenAI model-call span");
+  }
+  if (spanNames.has("openclaw.model.call")) {
+    failures.push("legacy openclaw.model.call span exported with GenAI semconv opt-in");
+  }
   const metricNames = new Set(params.metrics.map((metric) => metric.name));
   for (const name of REQUIRED_METRIC_NAMES) {
     if (!metricNames.has(name)) {
@@ -975,8 +1035,10 @@ function assertSmoke(params: {
   if (contentKeys.length > 0) {
     failures.push(`content attributes exported with capture disabled: ${contentKeys.join(", ")}`);
   }
+  if (modelSpans.some((span) => Object.hasOwn(span.attributes, "gen_ai.system"))) {
+    failures.push("legacy gen_ai.system attribute exported on GenAI model-call span");
+  }
 
-  const modelSpans = params.spans.filter((span) => span.name === "openclaw.model.call");
   const modelErrorSpans = modelSpans.filter((span) => {
     const serialized = JSON.stringify(span.attributes);
     return (
@@ -985,9 +1047,6 @@ function assertSmoke(params: {
       serialized.includes("StreamAbandoned")
     );
   });
-  if (modelSpans.length === 0) {
-    failures.push("no openclaw.model.call span was exported");
-  }
   if (modelErrorSpans.length > 0) {
     failures.push("successful QA run exported model-call error attributes");
   }
@@ -1057,7 +1116,11 @@ async function main() {
     child.stdout?.on("data", (chunk) => process.stdout.write(chunk));
     child.stderr?.on("data", (chunk) => process.stderr.write(chunk));
     childExitCode = await waitForChild(child);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (childExitCode === 0) {
+      await waitForExpectedTelemetry(receiver, 15_000);
+    } else {
+      await delay(3000);
+    }
   } finally {
     try {
       await collector?.close();
@@ -1118,6 +1181,20 @@ async function main() {
     for (const failure of assertion.failures) {
       process.stderr.write(`qa-otel-smoke: ${failure}\n`);
     }
+    process.stderr.write(
+      `qa-otel-smoke: captured request counts traces=${assertion.signalRequestCounts.traces} ` +
+        `metrics=${assertion.signalRequestCounts.metrics} logs=${assertion.signalRequestCounts.logs}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured decoded counts spans=${receiver.capturedSpans.length} ` +
+        `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured span names: ${formatBoundedList(assertion.spanNames, 40)}\n`,
+    );
+    process.stderr.write(
+      `qa-otel-smoke: captured metric names: ${formatBoundedList(assertion.metricNames, 40)}\n`,
+    );
     for (const [signal, contexts] of Object.entries(assertion.leakContexts)) {
       for (const context of contexts ?? []) {
         process.stderr.write(`qa-otel-smoke: ${signal} leak context: ${context}\n`);

@@ -10,7 +10,7 @@ CONTAINER_NAME="openclaw-pi-bundle-mcp-tools-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-pi-bundle-mcp-tools-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$RUN_LOG"
 }
 trap cleanup EXIT

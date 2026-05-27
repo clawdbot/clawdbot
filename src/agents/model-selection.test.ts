@@ -97,12 +97,17 @@ const manifestNormalizationSnapshot = vi.hoisted(() => ({
   ],
 }));
 
+const providerModelNormalizationMock = vi.hoisted(() => ({
+  normalizeProviderModelIdWithRuntime: vi.fn(() => undefined),
+}));
+
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => manifestNormalizationSnapshot,
 }));
 
 vi.mock("./provider-model-normalization.runtime.js", () => ({
-  normalizeProviderModelIdWithRuntime: () => undefined,
+  normalizeProviderModelIdWithRuntime:
+    providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
 }));
 
 vi.mock("./model-selection-cli.js", () => ({
@@ -849,6 +854,36 @@ describe("model-selection", () => {
       });
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+    });
+
+    it("does not normalize configured model keys that have no alias", () => {
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
+      const models = Object.fromEntries(
+        Array.from({ length: 25 }, (_, index) => [`openai/gpt-5.5-aliasless-${index}`, {}]),
+      );
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            models: {
+              ...models,
+              "openai/gpt-5.5-mini": { alias: "mini" },
+            },
+          },
+        },
+      };
+
+      const index = buildModelAliasIndex({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "openai",
+      });
+
+      expect(index.byAlias.get("mini")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-5.5-mini",
+      });
+      expect(
+        providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+      ).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1768,6 +1803,32 @@ describe("model-selection", () => {
       });
 
       expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+    });
+
+    it("resolves provider-qualified defaults without normalizing every aliasless configured model", () => {
+      providerModelNormalizationMock.normalizeProviderModelIdWithRuntime.mockClear();
+      const models = Object.fromEntries(
+        Array.from({ length: 25 }, (_, index) => [`anthropic/claude-extra-${index}`, {}]),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models,
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(result).toEqual({ provider: "openai", model: "gpt-5.5" });
+      expect(
+        providerModelNormalizationMock.normalizeProviderModelIdWithRuntime,
+      ).toHaveBeenCalledTimes(1);
     });
 
     it("should use default provider/model if config is empty", () => {

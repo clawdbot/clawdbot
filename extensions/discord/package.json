@@ -11,8 +11,7 @@
     "@discordjs/voice": "0.19.2",
     "discord-api-types": "0.38.48",
     "https-proxy-agent": "9.0.0",
-    "libopus-wasm": "0.0.1",
-    "prism-media": "1.3.5",
+    "libopus-wasm": "0.1.0",
     "typebox": "1.1.38",
     "undici": "8.3.0",
     "ws": "8.21.0"
@@ -62,7 +61,7 @@
     "install": {
       "npmSpec": "@openclaw/discord",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10",
+      "minHostVersion": ">=2026.5.26",
       "allowInvalidConfigRecovery": true
     },
     "compat": {

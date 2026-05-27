@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -44,17 +44,11 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
   prepareProviderRuntimeAuth: hoisted.prepareProviderRuntimeAuthMock,
 }));
 
-let completeWithPreparedSimpleCompletionModel: typeof import("./simple-completion-runtime.js").completeWithPreparedSimpleCompletionModel;
-let prepareSimpleCompletionModel: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModel;
-let prepareSimpleCompletionModelForAgent: typeof import("./simple-completion-runtime.js").prepareSimpleCompletionModelForAgent;
-
-beforeAll(async () => {
-  ({
-    completeWithPreparedSimpleCompletionModel,
-    prepareSimpleCompletionModel,
-    prepareSimpleCompletionModelForAgent,
-  } = await import("./simple-completion-runtime.js"));
-});
+import {
+  completeWithPreparedSimpleCompletionModel,
+  prepareSimpleCompletionModel,
+  prepareSimpleCompletionModelForAgent,
+} from "./simple-completion-runtime.js";
 
 beforeEach(() => {
   hoisted.resolveModelMock.mockReset();

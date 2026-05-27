@@ -9,7 +9,7 @@
   "type": "module",
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.75.5",
-    "@openai/codex": "0.133.0",
+    "@openai/codex": "0.134.0",
     "typebox": "1.1.38",
     "ws": "8.21.0",
     "zod": "4.4.3"

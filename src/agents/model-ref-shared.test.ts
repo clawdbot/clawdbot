@@ -16,6 +16,22 @@ describe("normalizeStaticProviderModelId", () => {
       "nvidia/nemotron-3-super-120b-a12b",
     );
   });
+
+  it("keeps OpenRouter bare compatibility ids provider-qualified without manifest lookup", () => {
+    expect(
+      normalizeStaticProviderModelId("openrouter", "auto", {
+        allowManifestNormalization: false,
+      }),
+    ).toBe("openrouter/auto");
+  });
+
+  it("normalizes retired XAI beta ids without manifest lookup", () => {
+    expect(
+      normalizeStaticProviderModelId("xai", "grok-4.20-experimental-beta-0304-reasoning", {
+        allowManifestNormalization: false,
+      }),
+    ).toBe("grok-4.20-beta-latest-reasoning");
+  });
 });
 
 describe("normalizeConfiguredProviderCatalogModelId", () => {

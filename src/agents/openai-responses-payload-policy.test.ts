@@ -173,4 +173,19 @@ describe("openai responses payload policy", () => {
     expect(policy.allowsServiceTier).toBe(true);
     expect(policy.shouldStripStore).toBe(false);
   });
+
+  it("emits store false for aliased native OpenAI Codex responses disable mode", () => {
+    const policy = resolveOpenAIResponsesPayloadPolicy(
+      {
+        api: "openclaw-openai-responses-transport",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+      },
+      { storeMode: "disable" },
+    );
+
+    expect(policy.explicitStore).toBe(false);
+    expect(policy.allowsServiceTier).toBe(true);
+    expect(policy.shouldStripStore).toBe(false);
+  });
 });

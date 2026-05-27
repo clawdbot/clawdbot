@@ -1097,10 +1097,16 @@ describe("GatewayClient connect auth payload", () => {
     firstWs: MockWebSocket;
     connectId: string | undefined;
     failureDetails: Record<string, unknown>;
+    failureMessage?: string;
   }) {
     vi.useFakeTimers();
     try {
-      emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+      emitConnectFailure(
+        params.firstWs,
+        params.connectId,
+        params.failureDetails,
+        params.failureMessage,
+      );
       await vi.advanceTimersByTimeAsync(30_000);
       expect(wsInstances).toHaveLength(1);
     } finally {
@@ -1534,6 +1540,34 @@ describe("GatewayClient connect auth payload", () => {
       code: 1008,
       reason: "connect failed",
       detailCode: "AUTH_TOKEN_MISSING",
+    });
+  });
+
+  it("does not auto-reconnect on CLIENT_VERSION_MISMATCH connect failures", async () => {
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      role: "node",
+      scopes: [],
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: {
+        code: "CLIENT_VERSION_MISMATCH",
+        clientVersion: "2026.5.25",
+        gatewayVersion: "2026.5.26",
+      },
+      failureMessage: "client version mismatch",
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "CLIENT_VERSION_MISMATCH",
     });
   });
 

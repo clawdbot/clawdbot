@@ -2,7 +2,7 @@ import {
   createMessageReceiveContext,
   type MessageAckPolicy,
   type MessageReceiveContext,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTelegramUpdateKey,
   createTelegramUpdateDedupe,

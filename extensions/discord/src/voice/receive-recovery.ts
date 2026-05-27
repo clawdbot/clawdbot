@@ -74,6 +74,7 @@ function isAbortLikeReceiveError(err: unknown): boolean {
       : "";
   return (
     name === "AbortError" ||
+    message === "Premature close" ||
     message.includes("The operation was aborted") ||
     message.includes("aborted")
   );

@@ -1,3 +1,4 @@
+import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordActionConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,12 +28,16 @@ type DiscordChannelInfoTest = {
 };
 
 const discordSendMocks = {
+  addRoleDiscord: vi.fn(async () => ({ ok: true })),
   banMemberDiscord: vi.fn(async () => ({})),
+  canManageGuildRoleDiscord: vi.fn(async () => true),
+  canManageGuildMemberRoleDiscord: vi.fn(async () => true),
   createChannelDiscord: vi.fn(async () => ({
     id: "new-channel",
     name: "test",
     type: 0,
   })),
+  createScheduledEventDiscord: vi.fn(async () => ({ id: "event-1" })),
   createThreadDiscord: vi.fn(async () => ({})),
   deleteChannelDiscord: vi.fn(async () => ({ ok: true, channelId: "C1" })),
   deleteMessageDiscord: vi.fn(async () => ({})),
@@ -49,6 +54,8 @@ const discordSendMocks = {
     id: guildId,
     name: "Guild",
   })),
+  hasAnyChannelPermissionDiscord: vi.fn(async () => true),
+  hasAnyGuildPermissionDiscord: vi.fn(async () => true),
   fetchMessageDiscord: vi.fn(async () => ({})),
   fetchReactionsDiscord: vi.fn(async () => ({})),
   kickMemberDiscord: vi.fn(async () => ({})),
@@ -62,6 +69,7 @@ const discordSendMocks = {
   removeChannelPermissionDiscord: vi.fn(async () => ({ ok: true })),
   removeOwnReactionsDiscord: vi.fn(async () => ({ removed: ["👍"] })),
   removeReactionDiscord: vi.fn(async () => ({})),
+  removeRoleDiscord: vi.fn(async () => ({ ok: true })),
   searchMessagesDiscord: vi.fn(async () => ({})),
   sendDiscordComponentMessage: vi.fn(async () => ({})),
   sendMessageDiscord: vi.fn(async () => ({})),
@@ -74,7 +82,11 @@ const discordSendMocks = {
 };
 
 const {
+  addRoleDiscord,
+  canManageGuildRoleDiscord,
+  canManageGuildMemberRoleDiscord,
   createChannelDiscord,
+  createScheduledEventDiscord,
   createThreadDiscord,
   deleteChannelDiscord,
   editChannelDiscord,
@@ -83,6 +95,8 @@ const {
   fetchGuildInfoDiscord,
   fetchReactionsDiscord,
   fetchMessageDiscord,
+  hasAnyChannelPermissionDiscord,
+  hasAnyGuildPermissionDiscord,
   kickMemberDiscord,
   listGuildChannelsDiscord,
   listPinsDiscord,
@@ -174,6 +188,7 @@ function handleModerationAction(
 const disabledActions = (key: keyof DiscordActionConfig) => key !== "reactions";
 const channelInfoEnabled = (key: keyof DiscordActionConfig) => key === "channelInfo";
 const moderationEnabled = (key: keyof DiscordActionConfig) => key === "moderation";
+const rolesEnabled = (key: keyof DiscordActionConfig) => key === "roles";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1440,6 +1455,246 @@ describe("handleDiscordGuildAction - channel management", () => {
     ).rejects.toThrow(/Discord channel management is disabled/);
   });
 
+  it("preserves trusted owner/manual channel actions without sender ids", async () => {
+    await handleGuildAction("channelDelete", { channelId: "C1" }, channelsEnabled);
+
+    expect(hasAnyChannelPermissionDiscord).not.toHaveBeenCalled();
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
+    expect(deleteChannelDiscord).toHaveBeenCalledWith("C1", { cfg: DISCORD_TEST_CFG });
+  });
+
+  it("rejects Discord sender channel actions when sender lacks MANAGE_CHANNELS", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "G1",
+    });
+    hasAnyChannelPermissionDiscord.mockResolvedValueOnce(false);
+
+    await expect(
+      handleGuildAction(
+        "channelDelete",
+        { channelId: "C1", senderUserId: "sender-1", accountId: "ops" },
+        channelsEnabled,
+      ),
+    ).rejects.toThrow(/required permissions/);
+
+    expect(fetchChannelInfoDiscord).toHaveBeenCalledWith("C1", {
+      cfg: DISCORD_TEST_CFG,
+      accountId: "ops",
+    });
+    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "C1",
+      "sender-1",
+      [PermissionFlagsBits.ManageChannels],
+      { cfg: DISCORD_TEST_CFG, accountId: "ops" },
+    );
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
+    expect(deleteChannelDiscord).not.toHaveBeenCalled();
+  });
+
+  it("uses guild permissions for Discord sender channel create actions", async () => {
+    await handleGuildAction(
+      "channelCreate",
+      { guildId: "G1", name: "test", senderUserId: "sender-1", accountId: "ops" },
+      channelsEnabled,
+    );
+
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "sender-1",
+      [PermissionFlagsBits.ManageChannels],
+      { cfg: DISCORD_TEST_CFG, accountId: "ops" },
+    );
+    expect(hasAnyChannelPermissionDiscord).not.toHaveBeenCalled();
+    expect(createChannelDiscord).toHaveBeenCalled();
+  });
+
+  it("uses thread permissions for Discord sender thread edits", async () => {
+    const threadChannel = {
+      id: "T1",
+      type: ChannelType.GuildPublicThread,
+      guild_id: "G1",
+    };
+    fetchChannelInfoDiscord
+      .mockResolvedValueOnce(threadChannel)
+      .mockResolvedValueOnce(threadChannel);
+
+    await handleGuildAction(
+      "channelEdit",
+      { channelId: "T1", archived: true, senderUserId: "sender-1" },
+      channelsEnabled,
+    );
+
+    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "T1",
+      "sender-1",
+      [PermissionFlagsBits.ManageThreads],
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(editChannelDiscord).toHaveBeenCalled();
+  });
+
+  it("requires ManageThreads for Discord sender thread unlocks", async () => {
+    const threadChannel = {
+      id: "T1",
+      type: ChannelType.GuildPublicThread,
+      guild_id: "G1",
+    };
+    fetchChannelInfoDiscord
+      .mockResolvedValueOnce(threadChannel)
+      .mockResolvedValueOnce(threadChannel);
+
+    await handleGuildAction(
+      "channelEdit",
+      { channelId: "T1", locked: false, senderUserId: "sender-1" },
+      channelsEnabled,
+    );
+
+    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "T1",
+      "sender-1",
+      [PermissionFlagsBits.ManageThreads],
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(editChannelDiscord).toHaveBeenCalled();
+  });
+
+  it("requires ManageThreads to reopen locked Discord sender threads", async () => {
+    const threadChannel = {
+      id: "T1",
+      type: ChannelType.GuildPublicThread,
+      guild_id: "G1",
+      thread_metadata: { locked: true },
+    };
+    fetchChannelInfoDiscord
+      .mockResolvedValueOnce(threadChannel)
+      .mockResolvedValueOnce(threadChannel);
+
+    await handleGuildAction(
+      "channelEdit",
+      { channelId: "T1", archived: false, senderUserId: "sender-1" },
+      channelsEnabled,
+    );
+
+    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "T1",
+      "sender-1",
+      [PermissionFlagsBits.ManageThreads],
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(editChannelDiscord).toHaveBeenCalled();
+  });
+
+  it("allows SendMessagesInThreads for unlocked Discord sender thread reopens", async () => {
+    const threadChannel = {
+      id: "T1",
+      type: ChannelType.GuildPublicThread,
+      guild_id: "G1",
+      thread_metadata: { locked: false },
+    };
+    fetchChannelInfoDiscord
+      .mockResolvedValueOnce(threadChannel)
+      .mockResolvedValueOnce(threadChannel);
+
+    await handleGuildAction(
+      "channelEdit",
+      { channelId: "T1", archived: false, senderUserId: "sender-1" },
+      channelsEnabled,
+    );
+
+    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "T1",
+      "sender-1",
+      [PermissionFlagsBits.ManageThreads, PermissionFlagsBits.SendMessagesInThreads],
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(editChannelDiscord).toHaveBeenCalled();
+  });
+
+  it("uses channel event permissions for Discord sender channel events", async () => {
+    await handleGuildAction(
+      "eventCreate",
+      {
+        guildId: "G1",
+        channelId: "C1",
+        name: "standup",
+        startTime: "2026-05-27T12:00:00.000Z",
+        senderUserId: "sender-1",
+      },
+      (key) => key === "events",
+    );
+
+    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "C1",
+      "sender-1",
+      [PermissionFlagsBits.ManageEvents, PermissionFlagsBits.CreateEvents],
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
+    expect(createScheduledEventDiscord).toHaveBeenCalled();
+  });
+
+  it("reports disabled channel actions before Discord permission lookups", async () => {
+    await expect(
+      handleGuildAction(
+        "channelDelete",
+        { channelId: "C1", senderUserId: "sender-1" },
+        channelsDisabled,
+      ),
+    ).rejects.toThrow(/Discord channel management is disabled/);
+
+    expect(fetchChannelInfoDiscord).not.toHaveBeenCalled();
+    expect(hasAnyChannelPermissionDiscord).not.toHaveBeenCalled();
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
+    expect(deleteChannelDiscord).not.toHaveBeenCalled();
+  });
+
+  it("preserves trusted owner/manual role actions without sender ids", async () => {
+    await handleGuildAction("roleAdd", { guildId: "G1", userId: "U1", roleId: "R1" }, rolesEnabled);
+
+    expect(hasAnyGuildPermissionDiscord).not.toHaveBeenCalled();
+    expect(canManageGuildMemberRoleDiscord).not.toHaveBeenCalled();
+    expect(addRoleDiscord).toHaveBeenCalledWith(
+      { guildId: "G1", userId: "U1", roleId: "R1" },
+      { cfg: DISCORD_TEST_CFG },
+    );
+  });
+
+  it("rejects Discord sender role actions when sender cannot manage the role hierarchy", async () => {
+    canManageGuildMemberRoleDiscord.mockResolvedValueOnce(false);
+
+    await expect(
+      handleGuildAction(
+        "roleAdd",
+        { guildId: "G1", userId: "U1", roleId: "R1", senderUserId: "sender-1" },
+        rolesEnabled,
+      ),
+    ).rejects.toThrow(/cannot manage/);
+
+    expect(hasAnyGuildPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "sender-1",
+      [PermissionFlagsBits.ManageRoles],
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(canManageGuildMemberRoleDiscord).toHaveBeenCalledWith(
+      "G1",
+      "sender-1",
+      "U1",
+      "R1",
+      { cfg: DISCORD_TEST_CFG },
+      { assignablePermissionCeiling: true },
+    );
+    expect(addRoleDiscord).not.toHaveBeenCalled();
+  });
+
   it("forwards accountId for channelList", async () => {
     await handleGuildAction("channelList", { guildId: "G1", accountId: "ops" }, channelInfoEnabled);
     expect(listGuildChannelsDiscord).toHaveBeenCalledWith("G1", {
@@ -1660,6 +1915,63 @@ describe("handleDiscordGuildAction - channel management", () => {
     expect(setChannelPermissionDiscord).toHaveBeenCalledWith(expected, {
       cfg: DISCORD_TEST_CFG,
     });
+  });
+
+  it("uses channel-scoped ManageRoles for Discord sender channel permission edits", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "G1",
+    });
+
+    await handleGuildAction(
+      "channelPermissionSet",
+      {
+        channelId: "C1",
+        targetId: "R1",
+        targetType: "role",
+        allow: "1024",
+        senderUserId: "sender-1",
+      },
+      channelsEnabled,
+    );
+
+    expect(hasAnyChannelPermissionDiscord).toHaveBeenCalledWith(
+      "G1",
+      "C1",
+      "sender-1",
+      [PermissionFlagsBits.ManageRoles],
+      { cfg: DISCORD_TEST_CFG },
+    );
+    expect(setChannelPermissionDiscord).toHaveBeenCalled();
+  });
+
+  it("rejects Discord sender role overwrites above the sender role hierarchy", async () => {
+    fetchChannelInfoDiscord.mockResolvedValueOnce({
+      id: "C1",
+      type: 0,
+      guild_id: "G1",
+    });
+    canManageGuildRoleDiscord.mockResolvedValueOnce(false);
+
+    await expect(
+      handleGuildAction(
+        "channelPermissionSet",
+        {
+          channelId: "C1",
+          targetId: "R1",
+          targetType: "role",
+          allow: "1024",
+          senderUserId: "sender-1",
+        },
+        channelsEnabled,
+      ),
+    ).rejects.toThrow(/role overwrite/);
+
+    expect(canManageGuildRoleDiscord).toHaveBeenCalledWith("G1", "sender-1", "R1", {
+      cfg: DISCORD_TEST_CFG,
+    });
+    expect(setChannelPermissionDiscord).not.toHaveBeenCalled();
   });
 
   it("removes channel permissions", async () => {

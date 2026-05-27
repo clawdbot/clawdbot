@@ -33,6 +33,7 @@ vi.mock("../config/config.js", () => ({
 
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { testing as embeddedRunsTesting, setActiveEmbeddedRun } from "./pi-embedded-runner/runs.js";
 import { testing as agentStepTesting } from "./tools/agent-step.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -224,6 +225,7 @@ function sessionsSendDetails(details: unknown): SessionsSendDetails {
 describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
+    embeddedRunsTesting.resetActiveEmbeddedRuns();
     loadSessionEntryByKeyMock.mockReset();
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
@@ -1294,6 +1296,211 @@ describe("sessions tools", () => {
     expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
     expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
     expect(calls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("sessions_send reroutes run-scoped active deliveries when transcript steering is rejected", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:re-portal:main";
+    const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
+    const durableCallerKey = "agent:leasing-ops:cron:monthly-utility";
+    const queueMessage = vi.fn(async (_text: string, _options?: unknown) => {
+      throw new Error("active session ended before queued steering message was committed");
+    });
+    setActiveEmbeddedRun(
+      "caller-active-session",
+      {
+        queueMessage,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        abort: () => {},
+      },
+      runScopedCallerKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "fallback-run", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        return { runId: params?.runId ?? "fallback-run", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "telegram",
+      config: {
+        ...TEST_CONFIG,
+        session: {
+          ...TEST_CONFIG.session,
+          agentToAgent: { maxPingPongTurns: 0 },
+        },
+      },
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-run-scoped-caller", {
+      sessionKey: runScopedCallerKey,
+      message: "[TASK-COMPLETE] re-portal occupancy ready",
+      timeoutSeconds: 0,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(runScopedCallerKey);
+    expect(details.delivery?.status).toBe("pending");
+    const queuedText = queueMessage.mock.calls[0]?.[0];
+    expect(queuedText).toContain("[Inter-session message]");
+    expect(queuedText).toContain("[TASK-COMPLETE] re-portal occupancy ready");
+    expect(queueMessage).toHaveBeenCalledWith(queuedText, {
+      steeringMode: "all",
+      debounceMs: 0,
+      deliveryTimeoutMs: 30_000,
+      waitForTranscriptCommit: true,
+    });
+
+    await vi.waitFor(() => {
+      const fallbackCall = calls.find(
+        (call) =>
+          call.method === "agent" &&
+          (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCallerKey,
+      );
+      expect(fallbackCall).toBeDefined();
+    });
+
+    const agentCalls = calls.filter((call) => call.method === "agent");
+    expect(
+      agentCalls.some(
+        (call) =>
+          (call.params as { sessionKey?: string } | undefined)?.sessionKey === runScopedCallerKey,
+      ),
+    ).toBe(false);
+    const fallbackParams = agentCalls.find(
+      (call) =>
+        (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCallerKey,
+    )?.params as { inputProvenance?: { sourceSessionKey?: string }; message?: string } | undefined;
+    expect(fallbackParams?.message).toContain("[Inter-session message]");
+    expect(fallbackParams?.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
+    expect(fallbackParams?.inputProvenance?.sourceSessionKey).toBe(requesterKey);
+
+    await vi.waitFor(() => {
+      const waitCall = calls.find(
+        (call) =>
+          call.method === "agent.wait" &&
+          (call.params as { runId?: string } | undefined)?.runId === "fallback-run",
+      );
+      expect(waitCall).toBeDefined();
+    });
+    await vi.waitFor(() => {
+      const historyCall = calls.find(
+        (call) =>
+          call.method === "chat.history" &&
+          (call.params as { sessionKey?: string } | undefined)?.sessionKey === durableCallerKey,
+      );
+      expect(historyCall).toBeDefined();
+    });
+  });
+
+  it("sessions_send preserves active delivery when transcript commit wait is unsupported", async () => {
+    const calls: Array<{ method?: string }> = [];
+    const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "caller-active-session",
+      {
+        queueMessage,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: () => {},
+      },
+      runScopedCallerKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      calls.push(request);
+      if (request.method === "agent") {
+        throw new Error("fallback agent should not start");
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:re-portal:main",
+      agentChannel: "telegram",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-run-scoped-caller", {
+      sessionKey: runScopedCallerKey,
+      message: "[TASK-COMPLETE] re-portal occupancy ready",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("accepted");
+    expect(details.sessionKey).toBe(runScopedCallerKey);
+    expect(queueMessage).toHaveBeenCalledOnce();
+    expect(queueMessage).toHaveBeenCalledWith(expect.stringContaining("[Inter-session message]"), {
+      steeringMode: "all",
+      debounceMs: 0,
+      deliveryTimeoutMs: 30_000,
+    });
+    expect(calls.some((call) => call.method === "agent")).toBe(false);
+  });
+
+  it("sessions_send reports run-scoped fallback admission failures", async () => {
+    const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
+    const queueMessage = vi.fn(async () => {
+      throw new Error("active session ended before queued steering message was committed");
+    });
+    setActiveEmbeddedRun(
+      "caller-active-session",
+      {
+        queueMessage,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        supportsTranscriptCommitWait: true,
+        abort: () => {},
+      },
+      runScopedCallerKey,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        throw new Error("gateway request timeout for agent");
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:re-portal:main",
+      agentChannel: "telegram",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-run-scoped-caller", {
+      sessionKey: runScopedCallerKey,
+      message: "[TASK-COMPLETE] re-portal occupancy ready",
+      timeoutSeconds: 0,
+    });
+
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.sessionKey).toBe(runScopedCallerKey);
+    expect(details.error).toContain("queue_message_failed reason=runtime_rejected");
+    expect(details.error).toContain("fallback_failed error=gateway request timeout for agent");
   });
 
   it("sessions_send preserves terminal timeouts without starting A2A", async () => {

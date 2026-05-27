@@ -100,6 +100,7 @@ describe("handlePluginCommand", () => {
       [params.sessionKey]: {
         sessionId: "target-session",
         sessionFile: "/tmp/target-session.jsonl",
+        authProfileOverride: "openai-codex:owner@example.com",
         updatedAt: Date.now(),
       },
     };
@@ -108,10 +109,11 @@ describe("handlePluginCommand", () => {
 
     expect(executePluginCommandMock).toHaveBeenCalledTimes(1);
     const [[commandParams]] = executePluginCommandMock.mock.calls as unknown as Array<
-      [{ sessionId?: string; sessionFile?: string }]
+      [{ authProfileId?: string; sessionId?: string; sessionFile?: string }]
     >;
     expect(commandParams.sessionId).toBe("target-session");
     expect(commandParams.sessionFile).toBe("/tmp/target-session.jsonl");
+    expect(commandParams.authProfileId).toBe("openai-codex:owner@example.com");
   });
 
   it("continues the agent without leaking continueAgent into the reply payload", async () => {

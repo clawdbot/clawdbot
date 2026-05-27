@@ -1,118 +1,125 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { encodePngRgba } from "./png-encode.js";
-
-function rgbaPng(alpha: number): Buffer {
-  return encodePngRgba(Buffer.from([0x20, 0x80, 0xe0, alpha]), 1, 1);
-}
 
 describe("image ops Rastermill adapter", () => {
   afterEach(() => {
     vi.doUnmock("rastermill");
+    vi.doUnmock("../infra/resolve-system-bin.js");
     vi.resetModules();
   });
 
-  it("falls back to decoding PNG pixels when header alpha is unknown", async () => {
-    const encode = vi.fn(async () => ({
-      data: rgbaPng(64),
-      format: "png",
-      width: 1,
-      height: 1,
-      bytes: 11,
-    }));
+  it("configures Rastermill with OpenClaw limits, temp root, and command resolution", async () => {
+    const encode = vi.fn(async () => ({ data: Buffer.from("jpeg") }));
+    const createRastermill = vi.fn((_options: unknown) => ({ encode }));
+    const resolveSystemBin = vi.fn(() => "/usr/bin/tool");
 
     vi.doMock("rastermill", () => ({
-      RastermillUnavailableError: class RastermillUnavailableError extends Error {},
-      createRastermill: () => ({
-        probe: vi.fn(async () => ({
-          orientation: null,
-          width: 1,
-          height: 1,
-          hasAlpha: null,
-          format: "gif",
-        })),
-        encode,
-      }),
-      isRastermillUnavailableError: () => false,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({
-        width: 1,
-        height: 1,
-        format: "gif",
-        hasAlpha: null,
-        orientation: null,
-      })),
-    }));
-
-    const { hasAlphaChannel } = await import("./image-ops.js");
-
-    await expect(hasAlphaChannel(Buffer.from("maybe-alpha"))).resolves.toBe(true);
-    expect(encode).toHaveBeenCalledWith(Buffer.from("maybe-alpha"), {
-      format: "png",
-      autoOrient: false,
-    });
-  });
-
-  it("does not report opaque decoded fallback PNG pixels as transparent", async () => {
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError: class RastermillUnavailableError extends Error {},
-      createRastermill: () => ({
-        probe: vi.fn(async () => ({
-          orientation: null,
-          width: 1,
-          height: 1,
-          hasAlpha: null,
-          format: "gif",
-        })),
-        encode: vi.fn(async () => ({
-          data: rgbaPng(255),
-          format: "png",
-          width: 1,
-          height: 1,
-          bytes: 70,
-        })),
-      }),
-      isRastermillUnavailableError: () => false,
-      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({
-        width: 1,
-        height: 1,
-        format: "gif",
-        hasAlpha: null,
-        orientation: null,
-      })),
-    }));
-
-    const { hasAlphaChannel } = await import("./image-ops.js");
-
-    await expect(hasAlphaChannel(Buffer.from("opaque-maybe-alpha"))).resolves.toBe(false);
-  });
-
-  it("uses Photon only for header-valid Photon-owned inputs unless a backend is forced", async () => {
-    const createRastermill = vi.fn(() => ({
-      encode: vi.fn(async () => {
-        throw new Error("cannot decode corrupt payload");
-      }),
-    }));
-
-    vi.doMock("rastermill", () => ({
-      RastermillUnavailableError: class RastermillUnavailableError extends Error {},
+      RastermillUnavailableError: class RastermillUnavailableError extends Error {
+        causes = [];
+      },
       createRastermill,
       isRastermillUnavailableError: () => false,
       readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
-      readImageProbeFromHeader: vi.fn(() => ({
-        width: 1,
-        height: 1,
-        format: "png",
-        hasAlpha: true,
-        orientation: null,
-      })),
+      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
+    }));
+    vi.doMock("../infra/resolve-system-bin.js", () => ({
+      resolveSystemBin,
     }));
 
-    const { resizeToJpeg } = await import("./image-ops.js");
+    const { resizeToJpeg, MAX_IMAGE_INPUT_PIXELS } = await import("./image-ops.js");
 
     await expect(
-      resizeToJpeg({ buffer: Buffer.from("corrupt-png"), maxSide: 1, quality: 80 }),
-    ).rejects.toThrow("cannot decode corrupt payload");
-    expect(createRastermill).toHaveBeenCalledWith(expect.objectContaining({ backend: "photon" }));
+      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }),
+    ).resolves.toEqual(Buffer.from("jpeg"));
+
+    expect(createRastermill).toHaveBeenCalledWith({
+      execution: "auto",
+      limits: {
+        inputPixels: MAX_IMAGE_INPUT_PIXELS,
+        outputPixels: MAX_IMAGE_INPUT_PIXELS,
+      },
+      temp: expect.objectContaining({
+        prefix: "openclaw-img-",
+      }),
+      commandResolver: expect.any(Function),
+    });
+    const options = createRastermill.mock.calls[0]?.[0] as {
+      commandResolver: (command: string) => string | null;
+      env?: unknown;
+    };
+    expect(options.env).toBeUndefined();
+    expect(options.commandResolver("powershell")).toBe("/usr/bin/tool");
+    expect(resolveSystemBin).toHaveBeenLastCalledWith("powershell", { trust: "strict" });
+  });
+
+  it("exposes Rastermill unavailable errors through the SDK alias", async () => {
+    class RastermillUnavailableError extends Error {
+      readonly causes = [new Error("missing backend")];
+    }
+    const createRastermill = vi.fn(() => ({
+      encode: vi.fn(async () => {
+        throw new RastermillUnavailableError("Image processor unavailable");
+      }),
+    }));
+
+    vi.doMock("rastermill", () => ({
+      RastermillUnavailableError,
+      createRastermill,
+      isRastermillUnavailableError: (error: unknown) => error instanceof RastermillUnavailableError,
+      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
+      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "png" })),
+    }));
+
+    const { ImageProcessorUnavailableError, resizeToJpeg } = await import("./image-ops.js");
+
+    await expect(
+      resizeToJpeg({ buffer: Buffer.from("input"), maxSide: 1, quality: 80 }),
+    ).rejects.toBeInstanceOf(ImageProcessorUnavailableError);
+  });
+
+  it("returns oriented bytes when EXIF metadata probe is unavailable but encode succeeds", async () => {
+    const encoded = Buffer.from("oriented");
+    const encode = vi.fn(async () => ({ data: encoded }));
+    const probe = vi.fn(async () => null);
+
+    vi.doMock("rastermill", () => ({
+      RastermillUnavailableError: class RastermillUnavailableError extends Error {
+        causes = [];
+      },
+      createRastermill: vi.fn(() => ({ encode, probe })),
+      isRastermillUnavailableError: () => false,
+      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
+      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
+    }));
+
+    const { normalizeExifOrientation } = await import("./image-ops.js");
+
+    await expect(normalizeExifOrientation(Buffer.from("input"))).resolves.toEqual(encoded);
+    expect(encode).toHaveBeenCalledWith(Buffer.from("input"), {
+      format: "jpeg",
+      autoOrient: true,
+    });
+  });
+
+  it("leaves EXIF normalization best-effort when Rastermill is unavailable", async () => {
+    class RastermillUnavailableError extends Error {
+      readonly causes = [new Error("missing backend")];
+    }
+    const source = Buffer.from("input");
+    const encode = vi.fn(async () => {
+      throw new RastermillUnavailableError("Image processor unavailable");
+    });
+    const probe = vi.fn(async () => ({ width: 1, height: 1, orientation: 6 }));
+
+    vi.doMock("rastermill", () => ({
+      RastermillUnavailableError,
+      createRastermill: vi.fn(() => ({ encode, probe })),
+      isRastermillUnavailableError: (error: unknown) => error instanceof RastermillUnavailableError,
+      readImageMetadataFromHeader: vi.fn(() => ({ width: 1, height: 1 })),
+      readImageProbeFromHeader: vi.fn(() => ({ width: 1, height: 1, format: "jpeg" })),
+    }));
+
+    const { normalizeExifOrientation } = await import("./image-ops.js");
+
+    await expect(normalizeExifOrientation(source)).resolves.toBe(source);
   });
 });

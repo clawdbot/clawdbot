@@ -53,8 +53,9 @@ docker_e2e_run_with_harness \
   --user root \
   -e HOME=/root \
   "$IMAGE_NAME" \
-  timeout "$DOCKER_RUN_TIMEOUT" bash -lc '
+  timeout --kill-after=30s "$DOCKER_RUN_TIMEOUT" bash -lc '
 set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 ARTIFACTS=/tmp/artifacts
 exec > >(tee "$ARTIFACTS/run.log") 2>&1
@@ -106,7 +107,7 @@ export npm_config_audit=false
 export PATH="$NPM_PREFIX_A/bin:$NODE_A_DIR:$PATH"
 
 echo "Installing OpenClaw package under node-A prefix: $NPM_PREFIX_A"
-npm install -g /tmp/openclaw-current.tgz --no-fund --no-audit >"$ARTIFACTS/install-a.log" 2>&1
+openclaw_e2e_install_package "$ARTIFACTS/install-a.log" "OpenClaw package under node-A prefix" "$NPM_PREFIX_A"
 echo "Installed. Checking openclaw location..."
 
 OPENCLAW_A="$(command -v openclaw)"

@@ -102,6 +102,17 @@ describe("completion-cli", () => {
     expect(script).not.toContain("'-t,'");
   });
 
+  it("generates valid PowerShell root arrays when commands or options are empty", () => {
+    const commandsOnly = new Command().name("openclaw");
+    commandsOnly.command("status");
+    const optionsOnly = new Command().name("openclaw").option("--json", "JSON output");
+    const empty = new Command().name("openclaw");
+
+    expect(getCompletionScript("powershell", commandsOnly)).toContain("$completions = @('status')");
+    expect(getCompletionScript("powershell", optionsOnly)).toContain("$completions = @('--json')");
+    expect(getCompletionScript("powershell", empty)).toContain("$completions = @()");
+  });
+
   it("generates fish completions for root and nested command contexts", () => {
     const script = getCompletionScript("fish", createCompletionProgram());
 

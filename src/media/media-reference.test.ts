@@ -6,8 +6,10 @@ import {
   classifyMediaReferenceSource,
   MediaReferenceError,
   normalizeMediaReferenceSource,
+  parseInboundMediaUri,
   resolveInboundMediaReference,
   resolveMediaReferenceLocalPath,
+  resolveMediaReferenceSandboxPath,
 } from "./media-reference.js";
 
 async function expectMediaReferenceError(
@@ -104,6 +106,20 @@ describe("media reference helpers", () => {
     }
   });
 
+  it("parses inbound media URIs for sandbox-relative staging", () => {
+    expect(parseInboundMediaUri("MEDIA: media://inbound/photo.png")).toStrictEqual({
+      id: "photo.png",
+      normalizedSource: "media://inbound/photo.png",
+    });
+    expect(resolveMediaReferenceSandboxPath("media://inbound/photo.png")).toStrictEqual({
+      resolved: "media/inbound/photo.png",
+      rewrittenFrom: "media://inbound/photo.png",
+    });
+    expect(resolveMediaReferenceSandboxPath("MEDIA: ./out.png")).toStrictEqual({
+      resolved: "./out.png",
+    });
+  });
+
   it("maps canonical inbound media URIs to local paths for direct file readers", async () => {
     const stateDir = resolveStateDir();
     const id = `ref-local-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
@@ -175,6 +191,10 @@ describe("media reference helpers", () => {
       () => resolveInboundMediaReference("media://inbound/%00.png"),
       "invalid-path",
     );
+    expect(() => parseInboundMediaUri("media://inbound/nested%2Fa.png")).toThrow(
+      MediaReferenceError,
+    );
+    expect(() => parseInboundMediaUri("media://inbound/%00.png")).toThrow(MediaReferenceError);
   });
 
   it("rejects symlinked inbound media files", async () => {

@@ -50,26 +50,38 @@ steps:
       - set: sessionKey
         value:
           expr: "`agent:qa:subagent-direct-fallback:${randomUUID().slice(0, 8)}`"
-      - call: runAgentPrompt
-        args:
-          - ref: env
-          - sessionKey:
-              ref: sessionKey
-            message:
-              expr: config.prompt
-            timeoutMs:
-              expr: liveTurnTimeoutMs(env, 90000)
-      - call: waitForCondition
-        saveAs: outbound
-        args:
-          - lambda:
-              expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && String(message.text ?? '').includes(config.expectedMarker)).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 60000)
-          - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-      - assert:
-          expr: "String(outbound.text ?? '').trim().includes(config.expectedMarker)"
-          message:
-            expr: "`fallback completion marker missing from outbound QA DM: ${recentOutboundSummary(state)}`"
+      - try:
+          actions:
+            - call: runAgentPrompt
+              args:
+                - ref: env
+                - sessionKey:
+                    ref: sessionKey
+                  message:
+                    expr: config.prompt
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 90000)
+            - call: waitForCondition
+              saveAs: outbound
+              args:
+                - lambda:
+                    expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && String(message.text ?? '').includes(config.expectedMarker)).at(-1)"
+                - expr: liveTurnTimeoutMs(env, 180000)
+                - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
+            - assert:
+                expr: "String(outbound.text ?? '').trim().includes(config.expectedMarker)"
+                message:
+                  expr: "`fallback completion marker missing from outbound QA DM: ${recentOutboundSummary(state)}`"
+          catchAs: fallbackError
+          catch:
+            - set: fallbackDebugRequests
+              value:
+                expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(-20).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, prompt: String(request.prompt ?? '').slice(0, 280), allInputText: String(request.allInputText ?? '').slice(0, 280), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 280) : null })) : []"
+            - set: fallbackTasks
+              value:
+                expr: "(await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: String(error?.message ?? error) })))"
+            - throw:
+                expr: "`subagent fallback marker missing: ${fallbackError?.message ?? fallbackError}; outbound=${recentOutboundSummary(state, 8)} tasks=${JSON.stringify(fallbackTasks)} requests=${JSON.stringify(fallbackDebugRequests)}`"
       - if:
           expr: "Boolean(env.mock)"
           then:
@@ -89,7 +101,7 @@ steps:
               args:
                 - lambda:
                     expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === config.expectedLabel && task.deliveryStatus === 'delivered' && task.status === 'succeeded') ?? null; })()"
-                - expr: liveTurnTimeoutMs(env, 30000)
+                - expr: liveTurnTimeoutMs(env, 60000)
                 - 250
             - assert:
                 expr: "deliveredTask.deliveryStatus === 'delivered'"

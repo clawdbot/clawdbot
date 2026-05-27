@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as pluginCommandsModule from "openclaw/plugin-sdk/plugin-runtime";
@@ -138,6 +138,22 @@ describe("Discord native slash commands with commands.allowFrom", () => {
   it("authorizes guild slash commands when commands.allowFrom.discord matches the sender", async () => {
     const { dispatchSpy, interaction } = await runGuildSlashCommand();
     expect(interaction.defer).toHaveBeenCalledWith({ ephemeral: true });
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectNotUnauthorizedReply(interaction);
+  });
+
+  it("authorizes command allowlist users even when commands.ownerAllowFrom is also configured", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ownerAllowFrom: ["user:123456789012345678"],
+          allowFrom: {
+            discord: ["user:999999999999999999"],
+          },
+        };
+      },
+    });
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
     expectNotUnauthorizedReply(interaction);
   });
@@ -319,6 +335,19 @@ describe("Discord native slash commands with commands.allowFrom", () => {
             ...cfg.channels?.discord,
             allowFrom: ["user:123456789012345678"],
           },
+        };
+      },
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectUnauthorizedReply(interaction);
+  });
+
+  it("rejects guild slash commands when commands.ownerAllowFrom fails even if the channel-level native gate allowed the command", async () => {
+    const { dispatchSpy, interaction } = await runGuildSlashCommand({
+      userId: "999999999999999999",
+      mutateConfig: (cfg) => {
+        cfg.commands = {
+          ownerAllowFrom: ["user:123456789012345678"],
         };
       },
     });

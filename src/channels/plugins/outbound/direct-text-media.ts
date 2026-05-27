@@ -1,8 +1,8 @@
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import { sanitizeForPlainText } from "../../../infra/outbound/sanitize-text.js";
 import type { OutboundMediaAccess } from "../../../media/load-options.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.adapters.js";

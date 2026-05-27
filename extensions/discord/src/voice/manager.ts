@@ -80,6 +80,14 @@ const DISCORD_VOICE_FATAL_AUTOJOIN_ERROR_PATTERNS = [
   "forbidden",
 ];
 
+function logFollowUserReconcileVerbose(reason: string, message: string): void {
+  if (reason === "interval") {
+    logger.trace(`discord voice: ${message}`);
+    return;
+  }
+  logVoiceVerbose(message);
+}
+
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
 type DiscordVoiceConnection = ReturnType<DiscordVoiceSdk["joinVoiceChannel"]>;
 type VoiceChannelResidency = {
@@ -419,7 +427,7 @@ export class DiscordVoiceManager {
     params: { guildId: string; channelId: string },
     options?: {
       preserveFollowState?: boolean;
-      meetingNotes?: VoiceSessionEntry["meetingNotes"];
+      transcripts?: VoiceSessionEntry["transcripts"];
     },
   ): Promise<VoiceOperationResult> {
     if (this.destroyed) {
@@ -484,7 +492,7 @@ export class DiscordVoiceManager {
     params: { guildId: string; channelId: string },
     options?: {
       preserveFollowState?: boolean;
-      meetingNotes?: VoiceSessionEntry["meetingNotes"];
+      transcripts?: VoiceSessionEntry["transcripts"];
     },
   ): Promise<VoiceOperationResult> {
     const { guildId, channelId } = params;
@@ -493,10 +501,10 @@ export class DiscordVoiceManager {
 
     const existing = this.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
-      if (options?.meetingNotes) {
-        existing.meetingNotes = options.meetingNotes;
+      if (options?.transcripts) {
+        existing.transcripts = options.transcripts;
       }
-      if (!options?.meetingNotes && isDiscordRealtimeVoiceMode(voiceMode) && !existing.realtime) {
+      if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode) && !existing.realtime) {
         const realtimeResult = await this.attachRealtimeSession(existing, voiceMode, {
           requireLiveEntry: true,
         });
@@ -739,7 +747,7 @@ export class DiscordVoiceManager {
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
       capture: createVoiceCaptureState(),
-      meetingNotes: options?.meetingNotes,
+      transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),
       isStopped: () => stopped,
       stop: () => {
@@ -750,7 +758,7 @@ export class DiscordVoiceManager {
       },
     };
 
-    if (!options?.meetingNotes && isDiscordRealtimeVoiceMode(voiceMode)) {
+    if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
       const realtimeResult = await this.attachRealtimeSession(entry, voiceMode);
       if (!realtimeResult.ok) {
         destroyVoiceConnectionSafely({
@@ -911,7 +919,7 @@ export class DiscordVoiceManager {
 
   async leave(
     params: { guildId: string; channelId?: string },
-    options?: { preserveFollowState?: boolean; meetingNotesSessionId?: string },
+    options?: { preserveFollowState?: boolean; transcriptsSessionId?: string },
   ): Promise<VoiceOperationResult> {
     const guildId = params.guildId.trim();
     logVoiceVerbose(`leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`);
@@ -922,20 +930,20 @@ export class DiscordVoiceManager {
     if (params.channelId && params.channelId !== entry.channelId) {
       return { ok: false, message: "Not connected to that voice channel." };
     }
-    if (options?.meetingNotesSessionId) {
-      if (!entry.meetingNotes || entry.meetingNotes.sessionId !== options.meetingNotesSessionId) {
+    if (options?.transcriptsSessionId) {
+      if (!entry.transcripts || entry.transcripts.sessionId !== options.transcriptsSessionId) {
         return {
           ok: false,
-          message: "Meeting notes session is not active in this voice channel.",
+          message: "Transcripts session is not active in this voice channel.",
           guildId,
           channelId: entry.channelId,
         };
       }
       if (entry.realtime || entry.pendingRealtime) {
-        entry.meetingNotes = undefined;
+        entry.transcripts = undefined;
         return {
           ok: true,
-          message: `Stopped meeting notes for ${formatMention({ channelId: entry.channelId })}.`,
+          message: `Stopped transcripts for ${formatMention({ channelId: entry.channelId })}.`,
           guildId,
           channelId: entry.channelId,
         };
@@ -1161,7 +1169,8 @@ export class DiscordVoiceManager {
       );
       return;
     }
-    logVoiceVerbose(
+    logFollowUserReconcileVerbose(
+      reason,
       `follow user reconcile reason=${reason}: ${this.followUserIds.size} users across ${guildIds.length} guilds`,
     );
     const plans = this.selectFollowUserReconcilePlans(guildIds, reason);
@@ -1178,7 +1187,8 @@ export class DiscordVoiceManager {
             );
             return "transient-error" as const;
           }
-          logVoiceVerbose(
+          logFollowUserReconcileVerbose(
+            reason,
             `follow user reconcile reason=${reason}: no voice state guild ${plan.guildId} user ${userId}: ${formatErrorMessage(err)}`,
           );
           return undefined;
@@ -1416,7 +1426,8 @@ export class DiscordVoiceManager {
         );
         return "transient-error" as const;
       }
-      logVoiceVerbose(
+      logFollowUserReconcileVerbose(
+        reason,
         `follow user reconcile reason=${reason}: no bot voice state guild ${guildId}: ${formatErrorMessage(err)}`,
       );
       return undefined;
@@ -1742,7 +1753,7 @@ export class DiscordVoiceManager {
       ownerAllowFrom: this.ownerAllowFrom,
       runtime: this.params.runtime,
       speakerContext: this.speakerContext,
-      meetingNotes: params.entry.meetingNotes,
+      transcripts: params.entry.transcripts,
       fetchGuildName: async (guildId) => {
         const guild = await this.params.client.fetchGuild(guildId).catch(() => null);
         return guild && typeof guild.name === "string" && guild.name.trim()

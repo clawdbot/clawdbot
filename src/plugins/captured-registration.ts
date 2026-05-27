@@ -28,7 +28,7 @@ import type {
   OpenClawPluginApi,
   ImageGenerationProviderPlugin,
   MediaUnderstandingProviderPlugin,
-  MeetingNotesSourceProviderPlugin,
+  TranscriptSourceProvider,
   MigrationProviderPlugin,
   MusicGenerationProviderPlugin,
   OpenClawPluginCliCommandDescriptor,
@@ -65,7 +65,7 @@ export type CapturedPluginRegistration = {
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
   mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[];
-  meetingNotesSourceProviders: MeetingNotesSourceProviderPlugin[];
+  transcriptSourceProviders: TranscriptSourceProvider[];
   imageGenerationProviders: ImageGenerationProviderPlugin[];
   videoGenerationProviders: VideoGenerationProviderPlugin[];
   musicGenerationProviders: MusicGenerationProviderPlugin[];
@@ -104,7 +104,7 @@ export function createCapturedPluginRegistration(params?: {
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
   const mediaUnderstandingProviders: MediaUnderstandingProviderPlugin[] = [];
-  const meetingNotesSourceProviders: MeetingNotesSourceProviderPlugin[] = [];
+  const transcriptSourceProviders: TranscriptSourceProvider[] = [];
   const imageGenerationProviders: ImageGenerationProviderPlugin[] = [];
   const videoGenerationProviders: VideoGenerationProviderPlugin[] = [];
   const musicGenerationProviders: MusicGenerationProviderPlugin[] = [];
@@ -146,7 +146,7 @@ export function createCapturedPluginRegistration(params?: {
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
     mediaUnderstandingProviders,
-    meetingNotesSourceProviders,
+    transcriptSourceProviders,
     imageGenerationProviders,
     videoGenerationProviders,
     musicGenerationProviders,
@@ -244,8 +244,8 @@ export function createCapturedPluginRegistration(params?: {
         registerMediaUnderstandingProvider(provider: MediaUnderstandingProviderPlugin) {
           mediaUnderstandingProviders.push(provider);
         },
-        registerMeetingNotesSourceProvider(provider: MeetingNotesSourceProviderPlugin) {
-          meetingNotesSourceProviders.push(provider);
+        registerTranscriptSourceProvider(provider: TranscriptSourceProvider) {
+          transcriptSourceProviders.push(provider);
         },
         registerImageGenerationProvider(provider: ImageGenerationProviderPlugin) {
           imageGenerationProviders.push(provider);

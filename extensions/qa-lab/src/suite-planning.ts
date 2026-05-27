@@ -33,12 +33,16 @@ function scenarioMatchesLiveLane(params: {
   providerMode: QaProviderMode;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
+  const provider = getQaProvider(params.providerMode);
+  if (params.scenario.runtimeParityTier === "live-only" && provider.kind !== "live") {
+    return false;
+  }
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
     return false;
   }
-  if (getQaProvider(params.providerMode).kind !== "live") {
+  if (provider.kind !== "live") {
     return true;
   }
   const selected = splitModelRef(params.primaryModel);

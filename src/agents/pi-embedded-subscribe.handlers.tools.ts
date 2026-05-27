@@ -29,6 +29,7 @@ import { truncateUtf16Safe } from "../utils.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
@@ -52,6 +53,7 @@ import {
   sanitizeToolResult,
 } from "./pi-embedded-subscribe.tools.js";
 import { inferToolMetaFromArgs } from "./pi-embedded-utils.js";
+import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./pi-tools.params.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -74,6 +76,11 @@ const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
 );
 const LIVE_EXEC_OUTPUT_MAX_CHARS = 8000;
 const LIVE_EXEC_UPDATE_MIN_INTERVAL_MS = 250;
+const TRACE_REQUIRED_PARAM_GROUPS = {
+  read: [{ keys: ["path", "file_path"], label: "path" }],
+  write: REQUIRED_PARAM_GROUPS.write,
+  edit: REQUIRED_PARAM_GROUPS.edit,
+} satisfies Record<string, readonly RequiredParamGroup[]>;
 
 function isMiddlewareToolResultError(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -103,6 +110,85 @@ function loadMediaParse(): Promise<MediaParseModule> {
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
   return beforeToolCallModuleLoader.load();
 }
+
+function getRequiredParamGroupsForTool(
+  toolName: string,
+): readonly RequiredParamGroup[] | undefined {
+  return TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
+}
+
+function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
+  const groups = getRequiredParamGroupsForTool(toolName);
+  if (!groups?.length) {
+    return [];
+  }
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  if (!record) {
+    return groups.map((group) => group.label ?? group.keys.join(" or "));
+  }
+  return groups
+    .filter((group) => {
+      const satisfied =
+        group.validator?.(record) ??
+        group.keys.some((key) => {
+          const value = record[key];
+          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
+        });
+      return !satisfied;
+    })
+    .map((group) => group.label ?? group.keys.join(" or "));
+}
+
+function buildToolExecutionStartTraceMeta(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+}): Record<string, unknown> {
+  const args = params.args;
+  const argsType = Array.isArray(args) ? "array" : typeof args;
+  const argsKeys =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? Object.keys(args as Record<string, unknown>).toSorted()
+      : undefined;
+  const requiredParamsMissing = collectMissingRequiredParamLabels(params.toolName, args);
+  return {
+    event: "embedded_tool_execution_start",
+    tags: ["tool_start", "embedded", "trace"],
+    runId: params.ctx.params.runId,
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    argsType,
+    ...(argsKeys?.length ? { argsKeys } : {}),
+    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
+    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
+    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
+    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
+  };
+}
+
+function traceToolExecutionStart(params: {
+  ctx: ToolHandlerContext;
+  toolName: string;
+  toolCallId: string;
+  args: unknown;
+}) {
+  if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
+    return;
+  }
+  params.ctx.log.trace(
+    "embedded run tool start",
+    buildToolExecutionStartTraceMeta({
+      ctx: params.ctx,
+      toolName: params.toolName,
+      toolCallId: params.toolCallId,
+      args: params.args,
+    }),
+  );
+}
+
+const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
+const TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS = TOOL_START_WARNING_PREVIEW_MAX_CHARS + 1;
 
 type ToolStartRecord = {
   startTime: number;
@@ -790,6 +876,7 @@ export function handleToolExecutionStart(
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
+    traceToolExecutionStart({ ctx, toolName, toolCallId, args });
 
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
@@ -801,10 +888,50 @@ export function handleToolExecutionStart(
             : "";
       const filePath = filePathValue.trim();
       if (!filePath) {
-        const argsPreview = readStringValue(args)?.slice(0, 200);
-        ctx.log.warn(
-          `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
+        const argsType = typeof args;
+        const rawArgsPreview = readStringValue(args);
+        const argsPreview = sanitizeForConsole(
+          rawArgsPreview?.slice(0, TOOL_START_WARNING_RAW_PREVIEW_MAX_CHARS),
+          TOOL_START_WARNING_PREVIEW_MAX_CHARS,
         );
+        const safeRunId = sanitizeForConsole(runId) ?? "-";
+        const safeSessionKey = sanitizeForConsole(ctx.params.sessionKey);
+        const safeSessionId = sanitizeForConsole(ctx.params.sessionId);
+        const safeAgentId = sanitizeForConsole(ctx.params.agentId);
+        const consoleMessageParts = [
+          "read tool called without path:",
+          `runId=${safeRunId}`,
+          `toolCallId=${sanitizeForConsole(toolCallId) ?? "tool-call"}`,
+          `argsType=${argsType}`,
+        ];
+        if (safeSessionKey) {
+          consoleMessageParts.push(`sessionKey=${safeSessionKey}`);
+        }
+        if (safeSessionId) {
+          consoleMessageParts.push(`sessionId=${safeSessionId}`);
+        }
+        if (safeAgentId) {
+          consoleMessageParts.push(`agentId=${safeAgentId}`);
+        }
+        if (argsPreview) {
+          consoleMessageParts.push(`argsPreview=${argsPreview}`);
+        }
+        const consoleMessage = consoleMessageParts.join(" ");
+        const message = `read tool called without path: toolCallId=${toolCallId} argsType=${argsType}${
+          argsPreview ? ` argsPreview=${argsPreview}` : ""
+        }`;
+        ctx.log.warn(message, {
+          event: "embedded_read_tool_start_warning",
+          tags: ["tool_start", "read", "embedded", "validation"],
+          runId: ctx.params.runId,
+          toolCallId,
+          argsType,
+          ...(safeSessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+          ...(safeSessionId ? { sessionId: ctx.params.sessionId } : {}),
+          ...(safeAgentId ? { agentId: ctx.params.agentId } : {}),
+          ...(argsPreview ? { argsPreview } : {}),
+          consoleMessage,
+        });
       }
     }
 

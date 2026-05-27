@@ -75,14 +75,14 @@ jobs:
 
       - name: install.sh in Docker
         run: |
-          docker run --rm \
+          timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
             node:24-bookworm-slim \
             bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
         run: |
-          docker run --rm \
+          timeout --kill-after=30s 20m docker run --rm \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \

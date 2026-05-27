@@ -29,6 +29,7 @@ import {
   isSystemdUnitActive,
   isSystemdUserServiceAvailable,
   parseSystemdShow,
+  readSystemdServiceRuntime,
   readSystemdServiceExecStart,
   restartSystemdService,
   resolveSystemdUserUnitPath,
@@ -528,6 +529,77 @@ describe("systemd runtime parsing", () => {
       activeState: "inactive",
       subState: "dead",
       execMainCode: "exited",
+    });
+  });
+
+  it("rejects invalid cgroup counters as junk", () => {
+    const output = [
+      "ActiveState=active",
+      "SubState=running",
+      "MainPID=1",
+      "ExecMainStatus=0",
+      "ExecMainCode=running",
+      "KillMode=process",
+      "TasksCurrent=42abc",
+      "MemoryCurrent=11GB",
+    ].join("\n");
+    expect(parseSystemdShow(output)).toEqual({
+      activeState: "active",
+      subState: "running",
+      mainPid: 1,
+      execMainStatus: 0,
+      execMainCode: "running",
+      killMode: "process",
+    });
+  });
+});
+
+describe("readSystemdServiceRuntime", () => {
+  it("surfaces systemd cgroup metrics and KillMode", async () => {
+    execFileMock
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(args, "status");
+        cb(null, "", "");
+      })
+      .mockImplementationOnce((_cmd, args, _opts, cb) => {
+        assertUserSystemctlArgs(
+          args,
+          "show",
+          GATEWAY_SERVICE,
+          "--no-page",
+          "--property",
+          "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+        );
+        cb(
+          null,
+          [
+            "Id=openclaw-gateway.service",
+            "ActiveState=active",
+            "SubState=running",
+            "MainPID=1234",
+            "ExecMainStatus=0",
+            "ExecMainCode=running",
+            "KillMode=process",
+            "TasksCurrent=807",
+            "MemoryCurrent=11918534246",
+          ].join("\n"),
+          "",
+        );
+      });
+    const runtime = await readSystemdServiceRuntime({ HOME: TEST_MANAGED_HOME });
+    expect(runtime).toEqual({
+      status: "running",
+      state: "active",
+      subState: "running",
+      pid: 1234,
+      lastExitStatus: 0,
+      lastExitReason: "running",
+      systemd: {
+        unit: "openclaw-gateway.service",
+        killMode: "process",
+        tasksCurrent: 807,
+        memoryCurrent: 11_918_534_246,
+      },
     });
   });
 });

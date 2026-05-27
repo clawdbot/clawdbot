@@ -245,7 +245,7 @@ jobs:
           DOCKER_BUILDKIT: "1"
         run: |
           set -euo pipefail
-          timeout --foreground --kill-after=30s 35m docker build \
+          timeout --kill-after=30s 35m docker build \
             --target runtime-assets \
             --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
@@ -287,7 +287,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -417,7 +417,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -557,7 +557,7 @@ jobs:
                   printf '%s\n' "$output"
                   return 0
                 fi
-                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+                if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
                   echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                   sleep $((attempt * 10))
                   continue
@@ -859,7 +859,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -975,7 +975,7 @@ jobs:
                 printf '%s\n' "$output"
                 return 0
               fi
-              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* ]]; then
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
                 echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
                 sleep $((attempt * 10))
                 continue
@@ -1089,6 +1089,29 @@ jobs:
         run: |
           set -euo pipefail
 
+          gh_with_retry() {
+            local output status attempt
+            for attempt in 1 2 3 4 5 6; do
+              set +e
+              output="$(gh "$@" 2>&1)"
+              status=$?
+              set -e
+              if [[ "$status" -eq 0 ]]; then
+                printf '%s\n' "$output"
+                return 0
+              fi
+              if [[ "$output" == *"Bad credentials"* || "$output" == *"HTTP 401"* || "$output" == *"secondary rate limit"* || "$output" == *"API rate limit"* || "$output" == *"Sorry. Your account was suspended"* ]]; then
+                echo "::warning::gh $* failed on attempt ${attempt}: ${output}" >&2
+                sleep $((attempt * 10))
+                continue
+              fi
+              printf '%s\n' "$output" >&2
+              return "$status"
+            done
+            printf '%s\n' "$output" >&2
+            return "$status"
+          }
+
           release_check_blocking_job() {
             case "$1" in
               "resolve_target" | \
@@ -1145,7 +1168,7 @@ jobs:
             fi
 
             local run_json status conclusion url attempt head_sha
-            run_json="$(gh run view "$run_id" --json status,conclusion,url,attempt,headSha,jobs)"
+            run_json="$(gh_with_retry run view "$run_id" --json status,conclusion,url,attempt,headSha,jobs)"
             status="$(jq -r '.status' <<< "$run_json")"
             conclusion="$(jq -r '.conclusion' <<< "$run_json")"
             url="$(jq -r '.url' <<< "$run_json")"
@@ -1192,7 +1215,7 @@ jobs:
               fi
 
               local run_json row
-              run_json="$(gh run view "$run_id" --json status,conclusion,url,createdAt,updatedAt,headSha)"
+              run_json="$(gh_with_retry run view "$run_id" --json status,conclusion,url,createdAt,updatedAt,headSha)"
               row="$(
                 jq -r --arg label "$label" '
                   def ts: fromdateiso8601;
@@ -1228,7 +1251,7 @@ jobs:
               echo
               echo "### Slowest jobs: ${label}"
               echo
-              gh run view "$run_id" --json jobs --jq '
+              gh_with_retry run view "$run_id" --json jobs --jq '
                 def ts: fromdateiso8601;
                 "| Job | Result | Minutes |",
                 "| --- | --- | ---: |",
@@ -1245,7 +1268,7 @@ jobs:
               echo
               echo "### Longest queues: ${label}"
               echo
-              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
+              gh_with_retry api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
                 def ts: fromdateiso8601;
                 "| Job | Result | Queue minutes | Run minutes |",
                 "| --- | --- | ---: | ---: |",
@@ -1274,7 +1297,7 @@ jobs:
             fi
 
             local run_json status conclusion artifacts_json
-            run_json="$(gh run view "$run_id" --json status,conclusion,url,jobs)"
+            run_json="$(gh_with_retry run view "$run_id" --json status,conclusion,url,jobs)"
             status="$(jq -r '.status' <<< "$run_json")"
             conclusion="$(jq -r '.conclusion' <<< "$run_json")"
             if [[ "$status" == "completed" && "$conclusion" == "success" ]]; then
@@ -1297,7 +1320,7 @@ jobs:
               echo
               echo "Artifacts:"
               artifacts_json="$(
-                gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" 2>/dev/null || true
+                gh_with_retry api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" 2>/dev/null || true
               )"
               if [[ -n "${artifacts_json// }" ]]; then
                 jq -r '

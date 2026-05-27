@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { chromium, type Browser } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import { createServer } from "vite";
 import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
 import { previewForDevToolLog, redactJsonValueForDevToolLog } from "../lib/dev-tooling-safety.ts";
 
@@ -336,7 +336,7 @@ async function smokeGoogleLiveBrowserWs(browser: Browser, apiKey: string): Promi
 }
 
 async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> {
-  let server: ViteDevServer | undefined;
+  let server: Awaited<ReturnType<typeof createServer>> | undefined;
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
     const repoRoot = process.cwd().replaceAll("\\", "/");

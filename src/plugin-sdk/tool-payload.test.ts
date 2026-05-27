@@ -160,4 +160,28 @@ describe("stripPlainTextToolCallBlocks", () => {
       ),
     ).toBe("before\nafter");
   });
+
+  it("strips serialized tool calls with parameter XML blocks", () => {
+    expect(
+      stripPlainTextToolCallBlocks(
+        [
+          "before",
+          "[tool:exec]",
+          "<parameter=command>",
+          'cat /proc/mounts 2>/dev/null | grep -i "libra|rav|openclaw" | head -20',
+          "</parameter>",
+          "",
+          "<function=exec>",
+          "<parameter=command>",
+          'find / -maxdepth 4 -type d \\( -name "ravdb" -o -name "librav" \\) 2>/dev/null | head -20',
+          "</parameter>",
+          "<parameter=timeout_ms>",
+          "1000",
+          "</parameter>",
+          "</function>",
+          "after",
+        ].join("\n"),
+      ),
+    ).toBe("before\n\nafter");
+  });
 });

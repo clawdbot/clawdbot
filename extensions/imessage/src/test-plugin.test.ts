@@ -2,7 +2,7 @@ import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyDurableFinalCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,

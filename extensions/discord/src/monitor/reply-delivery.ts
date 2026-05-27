@@ -1,17 +1,17 @@
 import { resolveAgentAvatar } from "openclaw/plugin-sdk/agent-runtime";
-import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-message";
+import {
+  buildOutboundSessionContext,
+  sendDurableMessageBatch,
+  type OutboundDeliveryFormattingOptions,
+  type OutboundIdentity,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type {
   MarkdownTableMode,
   OpenClawConfig,
   ReplyToMode,
 } from "openclaw/plugin-sdk/config-contracts";
 import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
-import {
-  buildOutboundSessionContext,
-  type OutboundDeliveryFormattingOptions,
-  type OutboundIdentity,
-  type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";

@@ -24,6 +24,21 @@ vi.mock("./model-auth-env-vars.js", () => ({
       },
     ],
   }),
+  resolveProviderEnvAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {
+      mistral: ["MISTRAL_API_KEY"],
+    },
+    authEvidenceMap: {
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+    },
+  }),
 }));
 
 vi.mock("./model-auth-env.js", () => ({

@@ -13,6 +13,8 @@ import { PROTOCOL_VERSION } from "../../dist/gateway/protocol/index.js";
 import { formatErrorMessage } from "../../dist/infra/errors.js";
 import { rawDataToString } from "../../dist/infra/ws.js";
 import { readStringValue } from "../../dist/shared/string-coerce.js";
+import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
+import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
   method: z.literal("notifications/claude/channel"),
@@ -48,11 +50,20 @@ const GATEWAY_WS_OPEN_TIMEOUT_MS = 45_000;
 const GATEWAY_RPC_TIMEOUT_MS = 60_000;
 const GATEWAY_REQUEST_TIMEOUT_MS = 45_000;
 const GATEWAY_CONNECT_RETRY_WINDOW_MS = 420_000;
+const MCP_CONNECT_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_MCP_CHANNELS_CONNECT_TIMEOUT_MS,
+  60_000,
+);
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function readPositiveInt(raw: string | undefined, fallback: number) {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export function extractTextFromGatewayPayload(
@@ -121,21 +132,7 @@ async function connectGatewayOnce(params: {
   token: string;
 }): Promise<GatewayRpcClient> {
   const ws = new WebSocket(params.url);
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      ws.close();
-      reject(new Error("gateway ws open timeout"));
-    }, GATEWAY_WS_OPEN_TIMEOUT_MS);
-    timeout.unref?.();
-    ws.once("open", () => {
-      clearTimeout(timeout);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-  });
+  await waitForWebSocketOpen(ws, GATEWAY_WS_OPEN_TIMEOUT_MS, "gateway ws open timeout");
 
   const pending = new Map<
     string,
@@ -343,7 +340,7 @@ export async function connectMcpClient(params: {
   };
 
   const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });
-  await client.connect(transport);
+  await connectMcpWithTimeout(client, transport, MCP_CONNECT_TIMEOUT_MS);
   return { client, transport, rawMessages };
 }
 

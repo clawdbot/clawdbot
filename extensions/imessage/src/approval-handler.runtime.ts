@@ -61,7 +61,9 @@ function buildPendingPayload(params: {
   nowMs: number;
   view: PendingApprovalView;
 }): IMessagePendingDelivery {
-  const allowedDecisions = params.view.actions.map((action) => action.decision);
+  const allowedDecisions = params.view.actions.flatMap((action) =>
+    action.kind === "decision" ? [action.decision] : [],
+  );
   const payload =
     params.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({

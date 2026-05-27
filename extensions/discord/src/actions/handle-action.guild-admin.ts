@@ -24,9 +24,20 @@ type Ctx = Pick<
   | "cfg"
   | "accountId"
   | "requesterSenderId"
+  | "toolContext"
   | "mediaLocalRoots"
   | "mediaReadFile"
 >;
+
+function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
+  return ctx.toolContext?.currentChannelProvider?.trim().toLowerCase() === "discord"
+    ? normalizeOptionalString(ctx.requesterSenderId)
+    : undefined;
+}
+
+function senderParam(senderUserId: string | undefined) {
+  return senderUserId ? { senderUserId } : {};
+}
 
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
@@ -35,6 +46,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   const { ctx, resolveChannelId } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
+  const senderUserId = readDiscordRequesterSenderId(ctx);
 
   if (action === "member-info") {
     const userId = readStringParam(actionParams, "userId", { required: true });
@@ -85,6 +97,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         name,
         mediaUrl,
         roleIds,
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -116,6 +129,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         description,
         tags,
         mediaUrl,
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -134,6 +148,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         guildId,
         userId,
         roleId,
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -168,6 +183,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         action: "channelCreate",
         accountId: accountId ?? undefined,
         ...readDiscordChannelCreateParams({ ...actionParams, guildId }),
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -182,6 +198,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         action: "channelEdit",
         accountId: accountId ?? undefined,
         ...readDiscordChannelEditParams({ ...actionParams, channelId }),
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -192,7 +209,12 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     return await handleDiscordAction(
-      { action: "channelDelete", accountId: accountId ?? undefined, channelId },
+      {
+        action: "channelDelete",
+        accountId: accountId ?? undefined,
+        channelId,
+        ...senderParam(senderUserId),
+      },
       cfg,
     );
   }
@@ -209,6 +231,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         action: "channelMove",
         accountId: accountId ?? undefined,
         ...readDiscordChannelMoveParams({ ...actionParams, guildId, channelId }),
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -229,6 +252,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         guildId,
         name,
         position: position ?? undefined,
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -249,6 +273,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         categoryId,
         name: name ?? undefined,
         position: position ?? undefined,
+        ...senderParam(senderUserId),
       },
       cfg,
     );
@@ -259,7 +284,12 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     return await handleDiscordAction(
-      { action: "categoryDelete", accountId: accountId ?? undefined, categoryId },
+      {
+        action: "categoryDelete",
+        accountId: accountId ?? undefined,
+        categoryId,
+        ...senderParam(senderUserId),
+      },
       cfg,
     );
   }
@@ -312,6 +342,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         location,
         entityType,
         image,
+        ...senderParam(senderUserId),
       },
       cfg,
       { mediaLocalRoots: ctx.mediaLocalRoots },

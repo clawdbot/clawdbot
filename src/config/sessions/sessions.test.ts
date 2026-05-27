@@ -16,6 +16,7 @@ import {
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
+import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
 import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
@@ -527,6 +528,57 @@ describe("session store writer queue", () => {
     );
     expect(writeSpy).not.toHaveBeenCalled();
     writeSpy.mockRestore();
+  });
+
+  it("caches unchanged session stores from persisted JSON shape", async () => {
+    const key = "agent:main:no-op-cache";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-noop-cache", updatedAt: Date.now() },
+    });
+
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        (store[key] as Record<string, unknown>).ephemeral = undefined;
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(loadSessionStore(storePath)[key]).not.toHaveProperty("ephemeral");
+  });
+
+  it("clones session store cache hits from cached serialized JSON", () => {
+    const key = "agent:main:serialized-cache";
+    const storePath = "/tmp/openclaw-serialized-cache-test.json";
+    const store = {
+      [key]: {
+        sessionId: "s-serialized-cache",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: "p".repeat(1024),
+          skills: [{ name: "demo" }],
+          version: 1,
+        },
+      },
+    } satisfies Record<string, SessionEntry>;
+    const serialized = JSON.stringify(store);
+    writeSessionStoreCache({
+      storePath,
+      store,
+      mtimeMs: 1,
+      sizeBytes: serialized.length,
+      serialized,
+      takeOwnership: true,
+    });
+    store[key].sessionId = "mutated-cache-object";
+
+    const cached = readSessionStoreCache({
+      storePath,
+      mtimeMs: 1,
+      sizeBytes: serialized.length,
+    });
+
+    expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
   });
 
   it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {

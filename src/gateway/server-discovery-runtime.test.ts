@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 
 type WriteWideAreaGatewayZone = typeof import("../infra/widearea-dns.js").writeWideAreaGatewayZone;
+type ResolveWideAreaDiscoveryDomain =
+  typeof import("../infra/widearea-dns.js").resolveWideAreaDiscoveryDomain;
 
 const mocks = vi.hoisted(() => ({
   pickPrimaryTailnetIPv4: vi.fn(() => "100.64.0.10"),
   pickPrimaryTailnetIPv6: vi.fn(() => undefined as string | undefined),
-  resolveWideAreaDiscoveryDomain: vi.fn(() => "openclaw.internal."),
+  resolveWideAreaDiscoveryDomain: vi.fn<ResolveWideAreaDiscoveryDomain>(() => "openclaw.internal."),
   writeWideAreaGatewayZone: vi.fn<WriteWideAreaGatewayZone>(async () => ({
     changed: true,
     zonePath: "/tmp/openclaw.internal.db",
@@ -241,6 +243,44 @@ describe("startGatewayDiscovery", () => {
     expect(zoneParams.tailnetDns).toBe("gateway.tailnet.example.ts.net");
     expect(logs.info.mock.calls).toEqual([
       ["wide-area DNS-SD updated (openclaw.internal. → /tmp/openclaw.internal.db)"],
+    ]);
+    expect(result.bonjourStop).toBeNull();
+  });
+
+  it("logs a warning and skips zone writes when wide-area config is invalid", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+
+    // Drive the gateway through the REAL resolver so an invalid configured
+    // domain flows through normalizeWideAreaDomain → caught → null, exactly
+    // as it does at runtime when an operator boots the gateway with
+    // discovery.wideArea.domain set to a non-DNS string.
+    const widearea = await vi.importActual<typeof import("../infra/widearea-dns.js")>(
+      "../infra/widearea-dns.js",
+    );
+    mocks.resolveWideAreaDiscoveryDomain.mockImplementationOnce(
+      widearea.resolveWideAreaDiscoveryDomain,
+    );
+
+    const logs = makeLogs();
+
+    const result = await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      gatewayTls: { enabled: false },
+      wideAreaDiscoveryEnabled: true,
+      wideAreaDiscoveryDomain: "foo/bar",
+      tailscaleMode: "serve",
+      mdnsMode: "off",
+      gatewayDiscoveryServices: [],
+      logDiscovery: logs,
+    });
+
+    expect(mocks.writeWideAreaGatewayZone).not.toHaveBeenCalled();
+    expect(logs.warn.mock.calls).toEqual([
+      [
+        "discovery.wideArea.enabled is true, but no domain was configured; set discovery.wideArea.domain to enable unicast DNS-SD",
+      ],
     ]);
     expect(result.bonjourStop).toBeNull();
   });

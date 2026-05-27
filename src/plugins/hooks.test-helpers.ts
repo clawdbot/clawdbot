@@ -39,7 +39,7 @@ export function createMockPluginRegistry(
     embeddingProviders: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
-    meetingNotesSourceProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],

@@ -162,7 +162,7 @@ export function resolveWhatsAppMediaMaxBytes(
     typeof account.mediaMaxMb === "number" && account.mediaMaxMb > 0
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
-  return mediaMaxMb * 1024 * 1024;
+  return Math.floor(mediaMaxMb * 1024 * 1024);
 }
 
 export function listEnabledWhatsAppAccounts(cfg: OpenClawConfig): ResolvedWhatsAppAccount[] {

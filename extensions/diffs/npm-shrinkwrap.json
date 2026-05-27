@@ -212,9 +212,9 @@
       }
     },
     "node_modules/diff": {
-      "version": "8.0.3",
-      "resolved": "https://registry.npmjs.org/diff/-/diff-8.0.3.tgz",
-      "integrity": "sha512-qejHi7bcSD4hQAZE0tNAawRK1ZtafHDmMTMkrrIGgSLl7hTnQHmKCeB45xAcbfTqK2zowkM3j3bHt/4b/ARbYQ==",
+      "version": "8.0.4",
+      "resolved": "https://registry.npmjs.org/diff/-/diff-8.0.4.tgz",
+      "integrity": "sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==",
       "license": "BSD-3-Clause",
       "engines": {
         "node": ">=0.3.1"

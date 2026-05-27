@@ -32,7 +32,7 @@ export {
   resolveInboundDirectDmAccessWithRuntime,
   type DirectDmCommandAuthorizationRuntime,
   type ResolvedInboundDirectDmAccess,
-} from "./direct-dm.js";
+} from "../channels/direct-dm-access.js";
 
 export {
   hasControlCommand,

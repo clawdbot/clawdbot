@@ -24,7 +24,8 @@ Related:
 - `--json`: emit line-delimited JSON events
 - `--plain`: plain text output without styled formatting
 - `--no-color`: disable ANSI colors
-- `--local-time`: render timestamps in your local timezone
+- `--local-time`: render timestamps in your local timezone (default)
+- `--utc`: render timestamps in UTC
 
 ## Shared Gateway RPC options
 
@@ -49,13 +50,14 @@ openclaw logs --plain
 openclaw logs --no-color
 openclaw logs --limit 500
 openclaw logs --local-time
+openclaw logs --utc
 openclaw logs --follow --local-time
 openclaw logs --url ws://127.0.0.1:18789 --token "$OPENCLAW_GATEWAY_TOKEN"
 ```
 
 ## Notes
 
-- Use `--local-time` to render timestamps in your local timezone.
+- Timestamps render in your local timezone by default. Use `--utc` for UTC output.
 - If the implicit local loopback Gateway asks for pairing, closes during connect, or times out before `logs.tail` answers, `openclaw logs` falls back to the configured Gateway file log automatically. Explicit `--url` targets do not use this fallback.
 - `openclaw logs --follow` does not follow configured-file fallbacks after implicit local Gateway RPC failures. On Linux, it uses the active user-systemd Gateway journal by PID when available and prints the selected log source; otherwise it keeps retrying the live Gateway instead of tailing a potentially stale side-by-side file.
 - When using `--follow`, transient gateway disconnects (WebSocket close, timeout, connection drop) trigger automatic reconnection with exponential backoff (up to 8 retries, capped at 30 s between attempts). A warning is printed to stderr on each retry, and a `[logs] gateway reconnected` notice is printed once a poll succeeds. In `--json` mode both the retry warning and the reconnect transition are emitted as `{"type":"notice"}` records on stderr. Non-recoverable errors (auth failure, bad configuration) still exit immediately.

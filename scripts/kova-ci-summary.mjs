@@ -2,7 +2,12 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const args = parseArgs(process.argv.slice(2));
+const rawArgs = process.argv.slice(2);
+if (rawArgs.includes("--help") || rawArgs.includes("-h")) {
+  usage("", 0);
+}
+
+const args = parseArgs(rawArgs);
 if (!args.report) {
   usage("missing --report");
 }
@@ -205,12 +210,16 @@ function parseArgs(argv) {
   };
 }
 
-function usage(message) {
+function usage(message, status = 2) {
+  const text =
+    "usage: node scripts/kova-ci-summary.mjs --report <report.json> [--output <summary.md>] [--lane <name>]\n";
   if (message) {
     console.error(`error: ${message}`);
   }
-  console.error(
-    "usage: node scripts/kova-ci-summary.mjs --report <report.json> [--output <summary.md>] [--lane <name>]",
-  );
-  process.exit(2);
+  if (status === 0 && !message) {
+    process.stdout.write(text);
+  } else {
+    process.stderr.write(text);
+  }
+  process.exit(status);
 }

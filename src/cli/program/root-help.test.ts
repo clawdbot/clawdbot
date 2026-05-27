@@ -80,6 +80,7 @@ describe("root help", () => {
     expect(text).toContain("status");
     expect(text).toContain("config");
     expect(text).toContain("matrix");
+    expect(text).toContain("matrix *");
     expect(text).toContain("Matrix channel utilities");
   });
 

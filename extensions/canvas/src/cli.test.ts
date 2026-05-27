@@ -113,4 +113,21 @@ describe("canvas CLI", () => {
     ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
     expect(writtenFiles).toHaveLength(0);
   });
+
+  it("rejects unsupported snapshot formats before invoking the node", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", "--format", "gif"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid format: gif/i);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+    expect(writtenFiles).toHaveLength(0);
+  });
 });

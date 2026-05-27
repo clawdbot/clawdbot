@@ -6,6 +6,11 @@ import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNames: () => ["OPENAI_API_KEY", "GITHUB_TOKEN", "HF_TOKEN"],
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
   omitEnvKeysCaseInsensitive: (
     baseEnv: NodeJS.ProcessEnv,
     keys: Iterable<string>,

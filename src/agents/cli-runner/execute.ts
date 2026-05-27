@@ -285,7 +285,7 @@ export async function executePreparedCliRun(
     systemPrompt: context.systemPrompt,
   });
   const systemPromptFile =
-    !useResume && systemPromptArg
+    systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
       ? await writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,
@@ -322,15 +322,18 @@ export async function executePreparedCliRun(
   const resolvedArgs = useResume
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
-  const claudeSkillsPlugin = await prepareClaudeCliSkillsPlugin({
-    backendId: context.backendResolved.id,
-    skillsSnapshot: params.skillsSnapshot,
-  });
-  let claudeSkillsPluginCleanupOwned = false;
+  const fallbackClaudeSkillsPlugin =
+    context.claudeSkillsPluginArgs === undefined
+      ? await prepareClaudeCliSkillsPlugin({
+          backendId: context.backendResolved.id,
+          skillsSnapshot: params.skillsSnapshot,
+        })
+      : undefined;
+  let fallbackClaudeSkillsPluginCleanupOwned = false;
+  const claudeSkillsPluginArgs =
+    context.claudeSkillsPluginArgs ?? fallbackClaudeSkillsPlugin?.args ?? [];
   const baseArgsWithSkills =
-    claudeSkillsPlugin.args.length > 0
-      ? [...resolvedArgs, ...claudeSkillsPlugin.args]
-      : resolvedArgs;
+    claudeSkillsPluginArgs.length > 0 ? [...resolvedArgs, ...claudeSkillsPluginArgs] : resolvedArgs;
   const executionBaseArgs =
     context.backendResolved.resolveExecutionArgs?.({
       config: params.config,
@@ -453,7 +456,7 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          claudeSkillsPluginCleanupOwned = true;
+          fallbackClaudeSkillsPluginCleanupOwned = true;
           const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
           context.preparedBackend.cleanup = undefined;
           const liveResult = await runClaudeLiveSessionTurn({
@@ -482,7 +485,7 @@ export async function executePreparedCliRun(
             },
             cleanup: async () => {
               try {
-                await claudeSkillsPlugin.cleanup();
+                await fallbackClaudeSkillsPlugin?.cleanup();
               } finally {
                 await ownedPreparedBackendCleanup?.();
               }
@@ -753,8 +756,8 @@ export async function executePreparedCliRun(
       }
     });
   } finally {
-    if (!claudeSkillsPluginCleanupOwned) {
-      await claudeSkillsPlugin.cleanup();
+    if (!fallbackClaudeSkillsPluginCleanupOwned) {
+      await fallbackClaudeSkillsPlugin?.cleanup();
     }
     if (systemPromptFile) {
       await systemPromptFile.cleanup();

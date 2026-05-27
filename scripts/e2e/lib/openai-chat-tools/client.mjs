@@ -5,56 +5,93 @@ const timeoutSeconds = Number.parseInt(
   process.env.OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS ?? "180",
   10,
 );
+const maxBodyBytes = Number.parseInt(
+  process.env.OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES ?? "1048576",
+  10,
+);
 
 if (!port || !token) {
   throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
+}
+if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+  throw new Error(`invalid OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: ${timeoutSeconds}`);
+}
+if (!Number.isFinite(maxBodyBytes) || maxBodyBytes <= 0) {
+  throw new Error(`invalid OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: ${maxBodyBytes}`);
+}
+
+async function readBoundedResponseText(response, byteLimit) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "";
+  }
+  const chunks = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    totalBytes += value.byteLength;
+    if (totalBytes > byteLimit) {
+      await reader.cancel();
+      throw new Error(`chat completions response body exceeded ${byteLimit} bytes`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
 const controller = new AbortController();
 const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
 const started = Date.now();
-const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
-  method: "POST",
-  headers: {
-    authorization: `Bearer ${token}`,
-    "content-type": "application/json",
-    "x-openclaw-model": backendModel,
-  },
-  body: JSON.stringify({
-    model: "openclaw",
-    stream: false,
-    messages: [
-      {
-        role: "user",
-        content:
-          "Use the get_weather tool exactly once for Paris, France. Return the tool call only.",
-      },
-    ],
-    tool_choice: "auto",
-    tools: [
-      {
-        type: "function",
-        function: {
-          name: "get_weather",
-          description: "Return weather for a city.",
-          strict: true,
-          parameters: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              city: { type: "string", description: "City and country." },
+let response;
+let text;
+try {
+  response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${token}`,
+      "content-type": "application/json",
+      "x-openclaw-model": backendModel,
+    },
+    body: JSON.stringify({
+      model: "openclaw",
+      stream: false,
+      messages: [
+        {
+          role: "user",
+          content:
+            "Use the get_weather tool exactly once for Paris, France. Return the tool call only.",
+        },
+      ],
+      tool_choice: "auto",
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "get_weather",
+            description: "Return weather for a city.",
+            strict: true,
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                city: { type: "string", description: "City and country." },
+              },
+              required: ["city"],
             },
-            required: ["city"],
           },
         },
-      },
-    ],
-  }),
-  signal: controller.signal,
-});
-clearTimeout(timeout);
+      ],
+    }),
+    signal: controller.signal,
+  });
+  text = await readBoundedResponseText(response, maxBodyBytes);
+} finally {
+  clearTimeout(timeout);
+}
 
-const text = await response.text();
 let body;
 try {
   body = text ? JSON.parse(text) : {};

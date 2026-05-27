@@ -11,12 +11,14 @@ import type { CommandRunner, ResolvedGlobalInstallTarget } from "./update-global
 
 async function writePackageRoot(packageRoot: string, version: string): Promise<void> {
   await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-  await fs.writeFile(
-    path.join(packageRoot, "package.json"),
-    JSON.stringify({ name: "openclaw", version }),
-    "utf8",
-  );
-  await fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+  await Promise.all([
+    fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+      "utf8",
+    ),
+    fs.writeFile(path.join(packageRoot, "dist", "index.js"), "export {};\n", "utf8"),
+  ]);
   await writePackageDistInventory(packageRoot);
 }
 

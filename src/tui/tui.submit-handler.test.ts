@@ -66,6 +66,16 @@ describe("createEditorSubmitHandler", () => {
     expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead");
   });
 
+  it("passes the submitted text to the busy gate", () => {
+    const canSubmitMessage = vi.fn((value: string) => value === "please stop");
+    const { sendMessage, onSubmit } = createSubmitHarness({ canSubmitMessage });
+
+    onSubmit("please stop");
+
+    expect(canSubmitMessage).toHaveBeenCalledWith("please stop");
+    expect(sendMessage).toHaveBeenCalledWith("please stop");
+  });
+
   it("restores the real editor value after pi-tui clears a busy submit", () => {
     const tui = { requestRender: vi.fn() } as unknown as TUI;
     const editor = new CustomEditor(tui, editorTheme);

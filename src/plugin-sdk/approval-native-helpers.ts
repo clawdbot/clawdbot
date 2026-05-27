@@ -1,12 +1,31 @@
+import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
+import {
+  getExecApprovalReplyMetadata,
+  type ExecApprovalReplyMetadata,
+} from "../infra/exec-approval-reply.js";
 import type { ExecApprovalSessionTarget } from "../infra/exec-approval-session-target.js";
 import { resolveApprovalRequestOriginTarget } from "../infra/exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
+import type { ChannelApprovalCapability, ChannelOutboundPayloadHint } from "./channel-contract.js";
 import { channelRouteTargetsMatchExact } from "./channel-route.js";
 import type { OpenClawConfig } from "./config-runtime.js";
+import type { ReplyPayload } from "./reply-payload.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalKind = "exec" | "plugin";
+type DeliverySuppressionInput = Parameters<
+  NonNullable<
+    NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
+  >
+>[0];
+type NativeApprovalForwardTarget = DeliverySuppressionInput["target"];
+type LocalNativeExecApprovalConfig = {
+  enabled?: boolean | "auto";
+  mode?: string | null;
+  agentFilter?: string[];
+  sessionFilter?: string[];
+};
 
 type ApprovalResolverParams = {
   cfg: OpenClawConfig;
@@ -19,6 +38,53 @@ type NativeApprovalTargetNormalizer<TTarget> = (
   target: TTarget,
   request: ApprovalRequest,
 ) => TTarget | null | undefined;
+
+type NativeApprovalForwardingFallbackSuppressorParams<TTarget extends NativeApprovalTarget> = {
+  channel: string;
+  normalizeForwardTarget: (target: NativeApprovalForwardTarget) => TTarget | null;
+  resolveAccountId?: (params: {
+    forwardingTarget: TTarget;
+    target: NativeApprovalForwardTarget;
+    request: ApprovalRequest;
+  }) => string | null | undefined;
+  resolveApprovalKind?: (params: {
+    approvalKind?: ApprovalKind;
+    request: ApprovalRequest;
+  }) => ApprovalKind;
+  isSessionRouteEligible: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    approvalKind: ApprovalKind;
+    request: ApprovalRequest;
+  }) => boolean;
+  isExplicitTargetEligible?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    approvalKind: ApprovalKind;
+    request: ApprovalRequest;
+    target: NativeApprovalForwardTarget;
+  }) => boolean;
+  resolveForwardingTargetForMatch?: (params: {
+    forwardingTarget: TTarget;
+    accountId?: string | null;
+    target: NativeApprovalForwardTarget;
+    approvalKind: ApprovalKind;
+    request: ApprovalRequest;
+  }) => TTarget | null;
+  resolveOriginTarget: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    approvalKind: ApprovalKind;
+    request: ApprovalRequest;
+  }) => TTarget | null;
+  resolveApproverDmTargets: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    approvalKind: ApprovalKind;
+    request: ApprovalRequest;
+  }) => readonly TTarget[];
+  targetsMatch?: (left: TTarget, right: TTarget) => boolean;
+};
 
 type NativeOriginResolverParams<TTarget extends NativeApprovalTarget> = {
   channel: string;
@@ -75,6 +141,82 @@ export function nativeApprovalTargetsMatch(params: {
   });
 }
 
+export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  payload: ReplyPayload;
+  hint?: ChannelOutboundPayloadHint;
+  isTransportEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  isNativeDeliveryEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  resolveApprovalConfig?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    metadata: ExecApprovalReplyMetadata;
+  }) => LocalNativeExecApprovalConfig | undefined;
+  requireApprovalConfigEnabled?: boolean;
+  enforceForwardingMode?: boolean;
+  isSessionRouteEligible?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    metadata: ExecApprovalReplyMetadata;
+  }) => boolean;
+  hasExactTargetProof?: boolean;
+  fallbackAgentIdFromSessionKey?: boolean;
+}): boolean {
+  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
+    return false;
+  }
+  if (params.hint.nativeRouteActive !== true) {
+    return false;
+  }
+  const metadata = getExecApprovalReplyMetadata(params.payload);
+  if (!metadata || metadata.approvalKind !== "exec") {
+    return false;
+  }
+  const isDeliveryEnabled = params.isNativeDeliveryEnabled ?? params.isTransportEnabled;
+  if (!isDeliveryEnabled?.({ cfg: params.cfg, accountId: params.accountId })) {
+    return false;
+  }
+  const config =
+    params.resolveApprovalConfig?.({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      metadata,
+    }) ?? params.cfg.approvals?.exec;
+  const requireConfigEnabled =
+    params.requireApprovalConfigEnabled ?? params.resolveApprovalConfig === undefined;
+  if (requireConfigEnabled && !config?.enabled) {
+    return false;
+  }
+  const enforceForwardingMode =
+    params.enforceForwardingMode ?? params.resolveApprovalConfig === undefined;
+  if (enforceForwardingMode) {
+    const mode = config?.mode ?? "session";
+    if (mode !== "session" && mode !== "both" && !params.hasExactTargetProof) {
+      return false;
+    }
+  }
+  if (
+    params.isSessionRouteEligible &&
+    !params.isSessionRouteEligible({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      metadata,
+    })
+  ) {
+    return false;
+  }
+  return matchesApprovalRequestFilters({
+    request: {
+      agentId: metadata.agentId,
+      sessionKey: metadata.sessionKey,
+    },
+    agentFilter: config?.agentFilter,
+    sessionFilter: config?.sessionFilter,
+    fallbackAgentIdFromSessionKey: params.fallbackAgentIdFromSessionKey ?? true,
+  });
+}
+
 function isNativeApprovalTarget(value: unknown): value is NativeApprovalTarget {
   return Boolean(
     value && typeof value === "object" && typeof (value as { to?: unknown }).to === "string",
@@ -86,6 +228,99 @@ function nativeApprovalTargetMatcher(channel: string): (left: unknown, right: un
     isNativeApprovalTarget(left) &&
     isNativeApprovalTarget(right) &&
     nativeApprovalTargetsMatch({ channel, left, right });
+}
+
+function resolveApprovalKind(request: ApprovalRequest, approvalKind?: ApprovalKind): ApprovalKind {
+  if (approvalKind) {
+    return approvalKind;
+  }
+  return "command" in request.request ? "exec" : "plugin";
+}
+
+function normalizeOptionalAccountId(value?: string | null): string | undefined {
+  return value?.trim() || undefined;
+}
+
+export function createNativeApprovalForwardingFallbackSuppressor<
+  TTarget extends NativeApprovalTarget,
+>(
+  params: NativeApprovalForwardingFallbackSuppressorParams<TTarget>,
+): NonNullable<
+  NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
+> {
+  const targetsMatch =
+    params.targetsMatch ??
+    ((left: TTarget, right: TTarget) =>
+      nativeApprovalTargetsMatch({ channel: params.channel, left, right }));
+
+  return (input: DeliverySuppressionInput): boolean => {
+    const forwardingTarget = params.normalizeForwardTarget(input.target);
+    if (!forwardingTarget) {
+      return false;
+    }
+    const accountId =
+      normalizeOptionalAccountId(
+        params.resolveAccountId?.({
+          forwardingTarget,
+          target: input.target,
+          request: input.request,
+        }),
+      ) ??
+      normalizeOptionalAccountId(forwardingTarget.accountId) ??
+      normalizeOptionalAccountId(input.request.request.turnSourceAccountId);
+    const approvalKind =
+      params.resolveApprovalKind?.({
+        approvalKind: input.approvalKind,
+        request: input.request,
+      }) ?? resolveApprovalKind(input.request, input.approvalKind);
+    const explicitTarget = input.target.source === "target";
+    const eligible = explicitTarget
+      ? (params.isExplicitTargetEligible?.({
+          cfg: input.cfg,
+          accountId,
+          approvalKind,
+          request: input.request,
+          target: input.target,
+        }) ?? false)
+      : params.isSessionRouteEligible({
+          cfg: input.cfg,
+          accountId,
+          approvalKind,
+          request: input.request,
+        });
+    if (!eligible) {
+      return false;
+    }
+
+    const forwardingTargetForMatch =
+      params.resolveForwardingTargetForMatch?.({
+        forwardingTarget,
+        accountId,
+        target: input.target,
+        approvalKind,
+        request: input.request,
+      }) ?? forwardingTarget;
+    if (!forwardingTargetForMatch) {
+      return false;
+    }
+    const originTarget = params.resolveOriginTarget({
+      cfg: input.cfg,
+      accountId,
+      approvalKind,
+      request: input.request,
+    });
+    if (originTarget && targetsMatch(forwardingTargetForMatch, originTarget)) {
+      return true;
+    }
+    return params
+      .resolveApproverDmTargets({
+        cfg: input.cfg,
+        accountId,
+        approvalKind,
+        request: input.request,
+      })
+      .some((approverTarget) => targetsMatch(forwardingTargetForMatch, approverTarget));
+  };
 }
 
 function createOriginTargetResolver<TTarget>(

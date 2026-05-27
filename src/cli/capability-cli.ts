@@ -38,6 +38,10 @@ import type {
   ImageGenerationBackground,
   ImageGenerationOutputFormat,
 } from "../image-generation/types.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../infra/parse-finite-number.js";
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
@@ -1156,9 +1160,20 @@ function parseOptionalFiniteNumber(
   if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
     return undefined;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value)) {
+  const value = parseStrictFiniteNumber(raw);
+  if (value === undefined) {
     throw new Error(`${label} must be a finite number`);
+  }
+  return value;
+}
+
+function parseOptionalPositiveInteger(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || (typeof raw === "string" && raw.trim() === "")) {
+    return undefined;
+  }
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
+    throw new Error(`${label} must be a positive integer`);
   }
   return value;
 }
@@ -1933,7 +1948,7 @@ export function registerCapabilityCli(program: Command) {
           capability: "image.generate",
           prompt: String(opts.prompt),
           model: opts.model as string | undefined,
-          count: opts.count ? Number.parseInt(String(opts.count), 10) : undefined,
+          count: parseOptionalPositiveInteger(opts.count, "--count"),
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
           resolution: opts.resolution as "1K" | "2K" | "4K" | undefined,
@@ -2410,7 +2425,7 @@ export function registerCapabilityCli(program: Command) {
         const result = await runWebSearchCommand({
           query: String(opts.query),
           provider: opts.provider as string | undefined,
-          limit: opts.limit ? Number.parseInt(String(opts.limit), 10) : undefined,
+          limit: parseOptionalPositiveInteger(opts.limit, "--limit"),
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
       });

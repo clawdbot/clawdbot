@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
-import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-message";
+import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";

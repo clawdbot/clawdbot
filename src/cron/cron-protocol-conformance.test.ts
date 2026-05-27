@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { MACOS_APP_SOURCES_DIR } from "../compat/legacy-names.js";
-import { CronDeliverySchema, CronJobStateSchema } from "../gateway/protocol/schema.js";
+import {
+  CronDeliverySchema,
+  CronJobStateSchema,
+  CronRunLogEntrySchema,
+} from "../gateway/protocol/schema.js";
 
 type SchemaLike = {
   anyOf?: Array<SchemaLike>;
@@ -30,13 +34,9 @@ function extractDeliveryModes(schema: SchemaLike): string[] {
 }
 
 function extractConstUnionValues(schema: SchemaLike): string[] {
-  return Array.from(
-    new Set(
-      (schema.anyOf ?? [])
-        .map((entry) => entry?.const)
-        .filter((value): value is string => typeof value === "string"),
-    ),
-  );
+  return (schema.anyOf ?? [])
+    .map((entry) => entry?.const)
+    .filter((value): value is string => typeof value === "string");
 }
 
 const UI_FILES = ["ui/src/ui/types.ts", "ui/src/ui/ui-types.ts", "ui/src/ui/views/cron.ts"];
@@ -97,24 +97,32 @@ describe("cron protocol conformance", () => {
     expect(swift).toContain("let jobs:");
   });
 
-  it("cron job state schema keeps the full failover reason set", () => {
-    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
-    const lastErrorReason = properties.lastErrorReason as SchemaLike | undefined;
-    if (lastErrorReason === undefined) {
-      throw new Error("missing lastErrorReason schema");
-    }
-    expect(extractConstUnionValues(lastErrorReason)).toEqual([
+  it("cron public schemas keep the full failover reason set", () => {
+    const expectedReasons = [
       "auth",
+      "auth_permanent",
       "format",
       "rate_limit",
+      "overloaded",
       "billing",
       "server_error",
       "timeout",
       "model_not_found",
+      "session_expired",
       "empty_response",
       "no_error_details",
       "unclassified",
       "unknown",
-    ]);
+    ];
+
+    const stateProperties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    const lastErrorReason = stateProperties.lastErrorReason as SchemaLike | undefined;
+    expect(lastErrorReason).toBeDefined();
+    expect(extractConstUnionValues(lastErrorReason ?? {})).toEqual(expectedReasons);
+
+    const runLogProperties = (CronRunLogEntrySchema as SchemaLike).properties ?? {};
+    const errorReason = runLogProperties.errorReason as SchemaLike | undefined;
+    expect(errorReason).toBeDefined();
+    expect(extractConstUnionValues(errorReason ?? {})).toEqual(expectedReasons);
   });
 });

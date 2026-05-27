@@ -3,8 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 IMAGE_NAME="${OPENCLAW_INSTALL_E2E_IMAGE:-openclaw-install-e2e:local}"
 INSTALL_URL="${OPENCLAW_INSTALL_URL:-https://openclaw.bot/install.sh}"
+DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_INSTALL_E2E_DOCKER_TIMEOUT:-2700s}}"
 
 OPENAI_API_KEY="${OPENAI_API_KEY:-}"
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
@@ -18,7 +20,7 @@ docker_build_run install-e2e-build \
   "$ROOT_DIR/scripts/docker"
 
 echo "==> Run E2E installer test"
-docker run --rm \
+docker_e2e_docker_run_cmd run --rm \
   -e OPENCLAW_INSTALL_URL="$INSTALL_URL" \
   -e OPENCLAW_INSTALL_TAG="${OPENCLAW_INSTALL_TAG:-latest}" \
   -e OPENCLAW_E2E_MODELS="$OPENCLAW_E2E_MODELS" \

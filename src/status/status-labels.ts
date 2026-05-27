@@ -1,6 +1,1 @@
-export const formatFastModeLabel = (enabled: boolean): string | null => {
-  if (!enabled) {
-    return null;
-  }
-  return "Fast";
-};
+export const formatFastModeLabel = (enabled: boolean): string => `Fast: ${enabled ? "on" : "off"}`;

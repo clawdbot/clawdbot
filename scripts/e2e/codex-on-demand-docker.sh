@@ -77,6 +77,7 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 openclaw_e2e_assert_dep_absent "@openclaw/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
 openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"

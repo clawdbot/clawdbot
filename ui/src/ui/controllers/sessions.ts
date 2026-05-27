@@ -452,8 +452,14 @@ export function applySessionsChangedEvent(
       mutableNext[field] = value;
     }
   }
-  if (!hasOwn(source, "hasActiveRun") && nextRow.status && nextRow.status !== "running") {
-    nextRow.hasActiveRun = false;
+  if (!hasOwn(source, "hasActiveRun") && nextRow.status) {
+    if (nextRow.status === "running") {
+      if (payload.phase === "start") {
+        nextRow.hasActiveRun = true;
+      }
+    } else {
+      nextRow.hasActiveRun = false;
+    }
   }
   if (nextRow.totalTokensFresh === false && !hasOwn(source, "totalTokens")) {
     delete nextRow.totalTokens;

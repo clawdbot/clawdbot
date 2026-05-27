@@ -353,6 +353,18 @@ describe("gateway-cli coverage", () => {
     }
   });
 
+  it.each([
+    ["--log-lines", "5000x"],
+    ["--log-bytes", "1mb"],
+  ])("rejects partial gateway diagnostics export %s", async (flag, value) => {
+    callGateway.mockClear();
+
+    await expectGatewayExit(["gateway", "diagnostics", "export", flag, value, "--json"]);
+
+    expect(runtimeErrors.join("\n")).toContain(`${flag} must be a positive integer`);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("registers gateway discover and prints json output", async () => {
     discoverGatewayBeacons.mockClear();
     discoverGatewayBeacons.mockResolvedValueOnce([
@@ -391,6 +403,14 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain("Gateway call failed:");
+  });
+
+  it("validates gateway call timeout before opening a transport", async () => {
+    callGateway.mockClear();
+    await expectGatewayExit(["gateway", "call", "health", "--timeout", "nope", "--json"]);
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runtimeErrors.join("\n")).toContain("Invalid --timeout");
   });
 
   it("validates gateway ports and handles force/start errors", async () => {

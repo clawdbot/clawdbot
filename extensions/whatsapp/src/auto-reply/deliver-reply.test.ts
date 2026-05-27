@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { beforeAll, describe, expect, it, vi } from "vitest";

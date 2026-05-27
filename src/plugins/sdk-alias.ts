@@ -17,6 +17,14 @@ export type LoaderModuleResolveParams = {
   pluginSdkResolution?: PluginSdkResolutionPreference;
 };
 
+export type PluginRuntimeModuleResolution = {
+  modulePath?: string;
+  packageRoot: string | null;
+  candidates: string[];
+  resolvedPath: string | null;
+  error?: string;
+};
+
 type PluginSdkPackageJson = {
   exports?: Record<string, unknown>;
   bin?: string | Record<string, unknown>;
@@ -146,6 +154,105 @@ export function resolveLoaderPackageRoot(
     ...(argv1 ? { argv1 } : {}),
     ...(moduleUrl ? { moduleUrl } : {}),
   });
+}
+
+function createPluginRuntimeModuleCandidateMap(packageRoot: string) {
+  return {
+    src: path.join(packageRoot, "src", "plugins", "runtime", "index.ts"),
+    dist: path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
+  } as const;
+}
+
+function appendPluginRuntimeModuleCandidates(
+  candidates: string[],
+  packageRoot: string,
+  orderedKinds: readonly PluginSdkAliasCandidateKind[],
+): void {
+  const candidateMap = createPluginRuntimeModuleCandidateMap(packageRoot);
+  for (const kind of orderedKinds) {
+    candidates.push(candidateMap[kind]);
+  }
+}
+
+function appendSiblingPluginRuntimeModuleCandidates(
+  candidates: string[],
+  runtimeDir: string,
+  orderedKinds: readonly PluginSdkAliasCandidateKind[],
+): void {
+  const candidateMap = {
+    src: path.join(runtimeDir, "index.ts"),
+    dist: path.join(runtimeDir, "index.js"),
+  } as const;
+  for (const kind of orderedKinds) {
+    candidates.push(candidateMap[kind]);
+  }
+}
+
+function dedupeResolvedPaths(paths: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const candidate of paths) {
+    const resolved = path.resolve(candidate);
+    if (seen.has(resolved)) {
+      continue;
+    }
+    seen.add(resolved);
+    deduped.push(resolved);
+  }
+  return deduped;
+}
+
+function listAncestorPluginRuntimeModuleCandidates(params: {
+  starts: readonly (string | undefined)[];
+  orderedKinds: readonly PluginSdkAliasCandidateKind[];
+  maxDepth?: number;
+}): string[] {
+  const candidates: string[] = [];
+  for (const start of params.starts) {
+    if (!start) {
+      continue;
+    }
+    let cursor = path.resolve(start);
+    const maxDepth = params.maxDepth ?? 12;
+    for (let i = 0; i < maxDepth; i += 1) {
+      appendPluginRuntimeModuleCandidates(candidates, cursor, params.orderedKinds);
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+  }
+  return dedupeResolvedPaths(candidates);
+}
+
+function listArgvRuntimeFallbackStartDirs(argv1: string | undefined): string[] {
+  if (!argv1) {
+    return [];
+  }
+  const normalized = path.resolve(argv1);
+  const starts: string[] = [];
+  const parts = normalized.split(path.sep);
+  const binIndex = parts.lastIndexOf(".bin");
+  if (binIndex > 0 && parts[binIndex - 1] === "node_modules") {
+    const binName = path.basename(normalized);
+    const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
+    starts.push(path.join(nodeModulesDir, binName));
+  }
+  try {
+    const resolved = fs.realpathSync(normalized);
+    if (resolved !== normalized) {
+      starts.push(path.dirname(resolved));
+    }
+  } catch {
+    // Keep the unresolved argv path; startup shims may not exist in tests.
+  }
+  starts.push(path.dirname(normalized));
+  return dedupeResolvedPaths(starts);
+}
+
+function formatResolutionError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveLoaderPluginSdkPackageRoot(
@@ -794,6 +901,7 @@ const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
   MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
 );
 const normalizedJitiAliasMapByInput = new WeakMap<Record<string, string>, Record<string, string>>();
+const pluginLoaderModuleCacheKeyByAliasMap = new WeakMap<Record<string, string>, string>();
 const pluginLoaderModuleConfigCache = new PluginLruCache<{
   tryNative: boolean;
   aliasMap: Record<string, string>;
@@ -805,9 +913,10 @@ function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
 }
 
 function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
-  return JSON.stringify(
-    Object.entries(aliasMap).toSorted(([left], [right]) => left.localeCompare(right)),
-  );
+  return Object.entries(aliasMap)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `${key}\0${value}`)
+    .join("\0");
 }
 
 function normalizePluginLoaderAliasMapForJiti(
@@ -826,9 +935,19 @@ function normalizePluginLoaderAliasMapForJiti(
     normalizedJitiAliasMapByInput.set(aliasMap, cached);
     return cached;
   }
+  const aliasDepth = new Map<string, number>();
+  const getAliasDepth = (key: string) => {
+    const cachedDepth = aliasDepth.get(key);
+    if (cachedDepth !== undefined) {
+      return cachedDepth;
+    }
+    const depth = key.split("/").length;
+    aliasDepth.set(key, depth);
+    return depth;
+  };
   const normalizedAliasMap = Object.fromEntries(
     Object.entries(aliasMap).toSorted(
-      ([left], [right]) => right.split("/").length - left.split("/").length,
+      ([left], [right]) => getAliasDepth(right) - getAliasDepth(left),
     ),
   );
   for (const aliasKey in normalizedAliasMap) {
@@ -946,33 +1065,65 @@ export function buildPluginLoaderAliasMap(
 export function resolvePluginRuntimeModulePath(
   params: LoaderModuleResolveParams = {},
 ): string | null {
+  return resolvePluginRuntimeModulePathWithDiagnostics(params).resolvedPath;
+}
+
+export function resolvePluginRuntimeModulePathWithDiagnostics(
+  params: LoaderModuleResolveParams = {},
+): PluginRuntimeModuleResolution {
+  let modulePath: string | undefined;
+  let packageRoot: string | null = null;
+  const candidates: string[] = [];
   try {
-    const modulePath = resolveLoaderModulePath(params);
+    modulePath = resolveLoaderModulePath(params);
     const orderedKinds = resolvePluginSdkAliasCandidateOrder({
       modulePath,
       isProduction: process.env.NODE_ENV === "production",
       pluginSdkResolution: params.pluginSdkResolution,
     });
-    const packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
-    const candidates = packageRoot
-      ? orderedKinds.map((kind) =>
-          kind === "src"
-            ? path.join(packageRoot, "src", "plugins", "runtime", "index.ts")
-            : path.join(packageRoot, "dist", "plugins", "runtime", "index.js"),
-        )
-      : [
-          path.join(path.dirname(modulePath), "runtime", "index.ts"),
-          path.join(path.dirname(modulePath), "runtime", "index.js"),
-        ];
-    for (const candidate of candidates) {
+    packageRoot = resolveLoaderPackageRoot({ ...params, modulePath });
+    if (packageRoot) {
+      appendPluginRuntimeModuleCandidates(candidates, packageRoot, orderedKinds);
+    } else {
+      const argv1 = params.argv1 ?? process.argv[1];
+      candidates.push(
+        ...listAncestorPluginRuntimeModuleCandidates({
+          starts: listArgvRuntimeFallbackStartDirs(argv1),
+          orderedKinds,
+        }),
+      );
+      appendSiblingPluginRuntimeModuleCandidates(
+        candidates,
+        path.join(path.dirname(modulePath), "runtime"),
+        orderedKinds,
+      );
+    }
+    const dedupedCandidates = dedupeResolvedPaths(candidates);
+    for (const candidate of dedupedCandidates) {
       if (fs.existsSync(candidate)) {
-        return candidate;
+        return {
+          modulePath,
+          packageRoot,
+          candidates: dedupedCandidates,
+          resolvedPath: candidate,
+        };
       }
     }
-  } catch {
-    // ignore
+  } catch (error) {
+    return {
+      modulePath,
+      packageRoot,
+      candidates: dedupeResolvedPaths(candidates),
+      resolvedPath: null,
+      error: formatResolutionError(error),
+    };
   }
-  return null;
+  return {
+    modulePath,
+    packageRoot,
+    candidates: dedupeResolvedPaths(candidates),
+    resolvedPath: null,
+  };
 }
 
 export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
@@ -1037,12 +1188,11 @@ export function createPluginLoaderModuleCacheKey(params: {
   tryNative: boolean;
   aliasMap: Record<string, string>;
 }): string {
-  return JSON.stringify({
-    tryNative: params.tryNative,
-    aliasMap: Object.entries(params.aliasMap).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
-  });
+  const aliasMapKey =
+    pluginLoaderModuleCacheKeyByAliasMap.get(params.aliasMap) ??
+    createJitiAliasContentCacheKey(params.aliasMap);
+  pluginLoaderModuleCacheKeyByAliasMap.set(params.aliasMap, aliasMapKey);
+  return `${params.tryNative ? "native" : "transform"}\0${aliasMapKey}`;
 }
 
 export function resolvePluginLoaderModuleConfig(params: {

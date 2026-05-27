@@ -555,9 +555,8 @@ export async function runDiscordGatewayLifecycle(params: {
     );
     if (params.voiceManager) {
       await params.voiceManager.destroy();
-      const { setDiscordMeetingNotesVoiceManager } =
-        await import("../voice/meeting-notes-source.js");
-      setDiscordMeetingNotesVoiceManager({
+      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
+      setDiscordTranscriptsVoiceManager({
         accountId: params.accountId,
         manager: null,
       });

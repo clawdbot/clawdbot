@@ -95,11 +95,14 @@ async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: 
 }
 
 function registerStatusCodexHarness(): void {
+  const codexProviders = new Set(["codex", "openai", "openai-codex"]);
   const harness: AgentHarness = {
     id: "codex",
     label: "Codex",
     supports: (ctx) =>
-      ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+      codexProviders.has(ctx.provider.trim().toLowerCase())
+        ? { supported: true, priority: 100 }
+        : { supported: false },
     runAttempt: async () => {
       throw new Error("not used in status tests");
     },

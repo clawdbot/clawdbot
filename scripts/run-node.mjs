@@ -414,6 +414,37 @@ const listRequiredBundledPluginRuntimeOverlayOutputs = (deps) => {
   return [...new Set(runtimePaths)].toSorted((left, right) => left.localeCompare(right));
 };
 
+const isSafePluginSdkSubpathSegment = (subpath) => /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
+
+const readPackageJsonPluginSdkAliasFileNames = (deps) => {
+  let packageJson;
+  try {
+    packageJson = JSON.parse(deps.fs.readFileSync(path.join(deps.cwd, "package.json"), "utf8"));
+  } catch {
+    return null;
+  }
+  const packageExports = packageJson?.exports;
+  if (!packageExports || typeof packageExports !== "object" || Array.isArray(packageExports)) {
+    return null;
+  }
+
+  const fileNames = new Set();
+  for (const exportKey of Object.keys(packageExports)) {
+    if (exportKey === "./plugin-sdk") {
+      fileNames.add("index.js");
+      continue;
+    }
+    if (!exportKey.startsWith("./plugin-sdk/")) {
+      continue;
+    }
+    const subpath = exportKey.slice("./plugin-sdk/".length);
+    if (isSafePluginSdkSubpathSegment(subpath)) {
+      fileNames.add(`${subpath}.js`);
+    }
+  }
+  return fileNames.size > 0 ? fileNames : null;
+};
+
 const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
   const distExtensionsRoot = path.join(distRoot, "extensions");
@@ -428,11 +459,15 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
     return [];
   }
 
+  const exportedPluginSdkFileNames = readPackageJsonPluginSdkAliasFileNames(deps);
   const aliasDir = path.join(distRoot, "extensions", "node_modules", "openclaw");
   return [
     path.join(aliasDir, "package.json"),
     ...dirents
       .filter((dirent) => dirent.isFile() && path.extname(dirent.name) === ".js")
+      .filter(
+        (dirent) => !exportedPluginSdkFileNames || exportedPluginSdkFileNames.has(dirent.name),
+      )
       .map((dirent) => path.join(aliasDir, "plugin-sdk", dirent.name)),
   ].toSorted((left, right) => left.localeCompare(right));
 };

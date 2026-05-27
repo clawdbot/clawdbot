@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
+  embeddedAgentLog,
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -255,6 +256,90 @@ describe("createCodexDynamicToolBridge", () => {
       ],
     });
     expect(heartbeatExecute).not.toHaveBeenCalled();
+  });
+
+  it("keeps available and registered schemas paired with their tools", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "message",
+          parameters: {
+            type: "object",
+            properties: { current: { type: "string" } },
+          },
+        }),
+      ],
+      registeredTools: [
+        createTool({
+          name: "message",
+          parameters: {
+            type: "object",
+            properties: { durable: { type: "string" } },
+          },
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: { current: { type: "string" } },
+    });
+    expect(bridge.specs[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: { durable: { type: "string" } },
+    });
+  });
+
+  it("quarantines dynamic tools with unsupported input schemas", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const badExecute = vi.fn();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "message" }),
+        createTool({
+          name: "dofbot_move_angles",
+          parameters: { type: "array", items: { type: "number" } },
+          execute: badExecute,
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.telemetry.quarantinedTools).toEqual([
+      {
+        tool: "dofbot_move_angles",
+        violations: ['dofbot_move_angles.inputSchema.type must be "object"'],
+      },
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("dofbot_move_angles"),
+      expect.objectContaining({
+        tools: [
+          {
+            tool: "dofbot_move_angles",
+            violations: ['dofbot_move_angles.inputSchema.type must be "object"'],
+          },
+        ],
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "dofbot_move_angles",
+      arguments: {},
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: dofbot_move_angles" }],
+    });
+    expect(badExecute).not.toHaveBeenCalled();
   });
 
   it("can expose all dynamic tools directly for compatibility", () => {

@@ -31,6 +31,18 @@ function debugSkillCommandOnce(
   skillsLogger.debug(message, meta);
 }
 
+function traceSkillCommandOnce(
+  messageKey: string,
+  message: string,
+  meta?: Record<string, unknown>,
+) {
+  if (skillCommandDebugOnce.has(messageKey)) {
+    return;
+  }
+  skillCommandDebugOnce.add(messageKey);
+  skillsLogger.trace(message, meta);
+}
+
 function sanitizeSkillCommandName(raw: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(raw)
     .replace(/[^a-z0-9_]+/g, "_")
@@ -97,7 +109,7 @@ export function buildWorkspaceSkillCommandSpecs(
     const rawName = entry.skill.name;
     const base = sanitizeSkillCommandName(rawName);
     if (base !== rawName) {
-      debugSkillCommandOnce(
+      traceSkillCommandOnce(
         `sanitize:${rawName}:${base}`,
         `Sanitized skill command name "${rawName}" to "/${base}".`,
         { rawName, sanitized: `/${base}` },
@@ -105,7 +117,7 @@ export function buildWorkspaceSkillCommandSpecs(
     }
     const unique = resolveUniqueSkillCommandName(base, used);
     if (unique !== base) {
-      debugSkillCommandOnce(
+      traceSkillCommandOnce(
         `dedupe:${rawName}:${unique}`,
         `De-duplicated skill command name for "${rawName}" to "/${unique}".`,
         { rawName, deduped: `/${unique}` },

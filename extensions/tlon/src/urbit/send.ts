@@ -2,7 +2,7 @@ import { scot, da } from "@urbit/aura";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
 export type TlonPokeApi = {

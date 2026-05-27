@@ -1,8 +1,8 @@
+import { createReplyToFanout } from "openclaw/plugin-sdk/channel-outbound";
 import {
   renderMessagePresentationFallbackText,
   type MessagePresentation,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { createReplyToFanout } from "openclaw/plugin-sdk/outbound-runtime";
 import { resolvePayloadMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sendMessageMatrix, sendPollMatrix } from "./matrix/send.js";

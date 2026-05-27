@@ -17,7 +17,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
-    meetingNotesSourceProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],

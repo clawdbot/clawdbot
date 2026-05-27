@@ -22,6 +22,7 @@ type ScopedToolsCall = {
   accountId?: string;
   messageProvider?: string;
   inboundEventKind?: string;
+  sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
   surface?: string;
   excludeToolNames?: Iterable<string>;
@@ -170,6 +171,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
         "x-openclaw-inbound-event-kind": "room_event",
+        "x-openclaw-source-reply-delivery-mode": "message_tool_only",
       },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
@@ -180,6 +182,7 @@ describe("mcp loopback server", () => {
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
     expect(call.inboundEventKind).toBe("room_event");
+    expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call.surface).toBe("loopback");
     expect(Array.from(call.excludeToolNames ?? [])).toEqual([
       "read",
@@ -191,10 +194,10 @@ describe("mcp loopback server", () => {
     ]);
   });
 
-  it("keeps loopback tool cache entries separate by inbound event kind", async () => {
+  it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
     server = await startMcpLoopbackServer(0);
     const runtime = getActiveMcpLoopbackRuntime();
-    const sendToolsList = async (inboundEventKind: string) =>
+    const sendToolsList = async (inboundEventKind: string, sourceReplyDeliveryMode?: string) =>
       await sendRaw({
         port: server?.port ?? 0,
         token: runtime?.ownerToken,
@@ -203,16 +206,21 @@ describe("mcp loopback server", () => {
           "x-session-key": "agent:main:telegram:group:chat123",
           "x-openclaw-message-channel": "telegram",
           "x-openclaw-inbound-event-kind": inboundEventKind,
+          ...(sourceReplyDeliveryMode
+            ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
+            : {}),
         },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
       });
 
     expect((await sendToolsList("user_request")).status).toBe(200);
     expect((await sendToolsList("room_event")).status).toBe(200);
+    expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
+    expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {
@@ -690,6 +698,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
+      "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
     );
     expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-is-owner");
   });

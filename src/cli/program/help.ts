@@ -43,7 +43,16 @@ const EXAMPLES = [
   ],
 ] as const;
 
-export function configureProgramHelp(program: Command, ctx: ProgramContext) {
+export function configureProgramHelp(
+  program: Command,
+  ctx: ProgramContext,
+  options?: { commandsWithSubcommands?: ReadonlySet<string> },
+) {
+  const commandsWithSubcommands = new Set([
+    ...ROOT_COMMANDS_WITH_SUBCOMMANDS,
+    ...(options?.commandsWithSubcommands ?? []),
+  ]);
+
   program
     .name(CLI_NAME)
     .description("")
@@ -77,7 +86,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
     optionTerm: (option) => theme.option(option.flags),
     subcommandTerm: (cmd) => {
       const isRootCommand = cmd.parent === program;
-      const hasSubcommands = isRootCommand && ROOT_COMMANDS_WITH_SUBCOMMANDS.has(cmd.name());
+      const hasSubcommands = isRootCommand && commandsWithSubcommands.has(cmd.name());
       return theme.command(hasSubcommands ? `${cmd.name()} *` : cmd.name());
     },
   });

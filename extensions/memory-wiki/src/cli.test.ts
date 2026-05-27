@@ -172,6 +172,42 @@ describe("memory-wiki cli", () => {
     );
   });
 
+  it("rejects apply confidence values outside the documented range", async () => {
+    const { config } = await createCliVault();
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, config);
+
+    await expect(
+      program.parseAsync(
+        [
+          "wiki",
+          "apply",
+          "synthesis",
+          "CLI Alpha",
+          "--body",
+          "Alpha from CLI.",
+          "--source-id",
+          "source.alpha",
+          "--confidence",
+          "Infinity",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+
+    await expect(
+      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha", "--confidence", "1.5"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+  });
+
   it("registers apply metadata and preserves the page body", async () => {
     const { rootDir, config } = await createCliVault();
     const targetPath = path.join(rootDir, "entities", "alpha.md");

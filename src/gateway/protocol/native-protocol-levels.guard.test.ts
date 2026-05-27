@@ -133,4 +133,35 @@ describe("native Gateway protocol levels", () => {
       "connect params must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
     );
   });
+
+  it("uses the TypeScript source of truth for dev Gateway smoke scripts", async () => {
+    const devScripts = ["scripts/dev/gateway-smoke.ts", "scripts/dev/ios-node-e2e.ts"];
+    for (const relativePath of devScripts) {
+      const content = await readRepoFile(relativePath);
+      assertPattern(
+        content,
+        relativePath,
+        /MIN_CLIENT_PROTOCOL_VERSION/,
+        "connect params must import/use MIN_CLIENT_PROTOCOL_VERSION as minProtocol.",
+      );
+      assertPattern(
+        content,
+        relativePath,
+        /PROTOCOL_VERSION/,
+        "connect params must import/use PROTOCOL_VERSION as maxProtocol.",
+      );
+      assertPattern(
+        content,
+        relativePath,
+        /minProtocol:\s*MIN_CLIENT_PROTOCOL_VERSION/,
+        "connect params must advertise MIN_CLIENT_PROTOCOL_VERSION as minProtocol.",
+      );
+      assertPattern(
+        content,
+        relativePath,
+        /maxProtocol:\s*PROTOCOL_VERSION/,
+        "connect params must advertise PROTOCOL_VERSION as maxProtocol.",
+      );
+    }
+  });
 });

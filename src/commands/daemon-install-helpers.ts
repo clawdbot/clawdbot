@@ -7,7 +7,7 @@ import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.j
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
-import { resolveGatewayStateDir } from "../daemon/paths.js";
+import { resolveGatewayStateDir, resolveGatewayTaskScriptPath } from "../daemon/paths.js";
 import {
   OPENCLAW_WRAPPER_ENV_KEY,
   resolveGatewayProgramArguments,
@@ -519,12 +519,24 @@ export async function buildGatewayInstallPlan(params: {
     devMode: params.devMode,
     nodePath: params.nodePath,
   });
-  const wrapperPath = await resolveOpenClawWrapperPath(
-    params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY],
-  );
+  const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
+  const wrapperPointsAtWindowsTaskScript =
+    Boolean(wrapperInput?.trim()) &&
+    platform === "win32" &&
+    isSameServicePath(wrapperInput, resolveGatewayTaskScriptPath(params.env), platform);
+  if (wrapperPointsAtWindowsTaskScript) {
+    params.warn?.(
+      `Ignoring ${OPENCLAW_WRAPPER_ENV_KEY} because it points to the Windows task script; using the OpenClaw gateway entrypoint directly to avoid a recursive gateway.cmd wrapper.`,
+    );
+  }
+  const wrapperPath = wrapperPointsAtWindowsTaskScript
+    ? undefined
+    : await resolveOpenClawWrapperPath(wrapperInput);
   const serviceInputEnv: Record<string, string | undefined> = wrapperPath
     ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
-    : params.env;
+    : wrapperPointsAtWindowsTaskScript
+      ? omitEnvKey(params.env, OPENCLAW_WRAPPER_ENV_KEY)
+      : params.env;
   const { programArguments, workingDirectory } = await resolveGatewayProgramArguments({
     port: params.port,
     dev: devMode,
@@ -576,6 +588,36 @@ export async function buildGatewayInstallPlan(params: {
     environment,
     ...(Object.keys(environmentValueSources).length > 0 ? { environmentValueSources } : {}),
   };
+}
+
+function normalizeServicePathForCompare(
+  value: string | undefined,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
+}
+
+function isSameServicePath(
+  left: string | undefined,
+  right: string | undefined,
+  platform: NodeJS.Platform,
+): boolean {
+  const normalizedLeft = normalizeServicePathForCompare(left, platform);
+  const normalizedRight = normalizeServicePathForCompare(right, platform);
+  return Boolean(normalizedLeft && normalizedRight && normalizedLeft === normalizedRight);
+}
+
+function omitEnvKey(
+  env: Record<string, string | undefined>,
+  key: string,
+): Record<string, string | undefined> {
+  const next = { ...env };
+  delete next[key];
+  return next;
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {

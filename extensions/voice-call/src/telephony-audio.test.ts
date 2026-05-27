@@ -29,6 +29,12 @@ function rmsPcm(buffer: Buffer): number {
   return Math.sqrt(sum / samples);
 }
 
+function unalignedCopy(buffer: Buffer): Buffer {
+  const padded = Buffer.alloc(buffer.length + 1);
+  buffer.copy(padded, 1);
+  return padded.subarray(1);
+}
+
 describe("telephony-audio resamplePcmTo8k", () => {
   it("returns identical buffer for 8k input", () => {
     const pcm8k = makeSinePcm(8_000, 1_000, 0.2);
@@ -49,6 +55,13 @@ describe("telephony-audio resamplePcmTo8k", () => {
     const ratio = rmsPcm(highTone) / rmsPcm(lowTone);
     expect(ratio).toBeLessThan(0.1);
   });
+
+  it("matches the typed-array path for unaligned input buffers", () => {
+    const input = makeSinePcm(48_000, 1_000, 0.2);
+    const output = resamplePcmTo8k(input, 48_000);
+    const unalignedOutput = resamplePcmTo8k(unalignedCopy(input), 48_000);
+    expect(unalignedOutput.equals(output)).toBe(true);
+  });
 });
 
 describe("telephony-audio convertPcmToMulaw8k", () => {
@@ -57,5 +70,12 @@ describe("telephony-audio convertPcmToMulaw8k", () => {
     const mulaw = convertPcmToMulaw8k(input, 24_000);
     // 0.5s @ 8kHz => 4000 8-bit samples
     expect(mulaw.length).toBe(4_000);
+  });
+
+  it("matches the typed-array path for unaligned pcm buffers", () => {
+    const input = makeSinePcm(8_000, 1_000, 0.2);
+    const mulaw = convertPcmToMulaw8k(input, 8_000);
+    const unalignedMulaw = convertPcmToMulaw8k(unalignedCopy(input), 8_000);
+    expect(unalignedMulaw.equals(mulaw)).toBe(true);
   });
 });

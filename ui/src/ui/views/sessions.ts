@@ -200,6 +200,9 @@ function resolveSessionStatusBadge(row: GatewaySessionRow): {
   if (isSessionRunActive(row)) {
     return { label: t("sessionsView.statusLive"), tone: "live" };
   }
+  if (row.status === "running" && row.hasActiveRun === false) {
+    return { label: t("sessionsView.statusIdle"), tone: "idle" };
+  }
   if (row.status) {
     const tone = row.status === "done" ? "done" : ("failed" as const);
     return { label: formatSessionRunStatus(row.status), tone };

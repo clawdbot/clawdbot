@@ -81,8 +81,8 @@ export const handleConfigCommand: CommandHandler = async (params, allowTextComma
     const deniedText = resolveConfigWriteDeniedText({
       cfg: params.cfg,
       channel: params.command.channel,
-      channelId,
-      accountId: resolveChannelAccountId({
+      originChannelId: channelId,
+      originAccountId: resolveChannelAccountId({
         cfg: params.cfg,
         ctx: params.ctx,
         command: params.command,

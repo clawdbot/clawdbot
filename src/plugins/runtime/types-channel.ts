@@ -86,7 +86,7 @@ export type PluginRuntimeChannel = {
   reply: {
     dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
     /**
-     * @deprecated Prefer `openclaw/plugin-sdk/channel-message` adapters plus
+     * @deprecated Prefer `openclaw/plugin-sdk/channel-outbound` adapters plus
      * `dispatchReplyWithBufferedBlockDispatcher` or channel turn helpers.
      * This is a low-level legacy dispatcher escape hatch.
      */
@@ -107,9 +107,9 @@ export type PluginRuntimeChannel = {
     withReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").withReplyDispatcher;
     settleReplyDispatcher: typeof import("../../auto-reply/dispatch-dispatcher.js").settleReplyDispatcher;
     /**
-     * @deprecated Prefer `buildChannelInboundEventContext` /
-     * `buildChannelTurnContext` from `openclaw/plugin-sdk/channel-inbound` so
-     * inbound event metadata is carried into reply dispatch.
+     * @deprecated Prefer `buildChannelInboundEventContext` from
+     * `openclaw/plugin-sdk/channel-inbound` so inbound event metadata is
+     * carried into reply dispatch.
      */
     finalizeInboundContext: typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
     formatAgentEnvelope: typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
@@ -177,15 +177,23 @@ export type PluginRuntimeChannel = {
   outbound: {
     loadAdapter: import("../../channels/plugins/outbound/load.types.js").LoadChannelOutboundAdapter;
   };
+  inbound: {
+    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
+    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+    /** @deprecated Prefer `run` for raw inbound events or `dispatchReply` for assembled contexts. */
+    runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
+  };
+  /** @deprecated Use `inbound`. */
   turn: {
-    run: typeof import("../../channels/turn/kernel.js").runChannelTurn;
-    runAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
-    /** @deprecated Prefer `run(...)`. */
+    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
+    runAssembled: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
+    /** @deprecated Prefer `inbound.run(...)`. */
     runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
-    buildContext: typeof import("../../channels/turn/kernel.js").buildChannelInboundEventContext;
-    runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedChannelTurn;
-    /** @deprecated Prefer `runAssembled(...)`. */
-    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchAssembledChannelTurn;
+    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
+    runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
+    /** @deprecated Prefer `inbound.dispatchReply(...)`. */
+    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
@@ -125,10 +124,38 @@ function stripPreservedLegacyRootKeysForValidation(
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
 const bundledChannelSchemaById = new Map<string, unknown>(
-  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).map(
     (entry) => [entry.channelId, entry.schema] as const,
   ),
 );
+const bundledChannelIds = Object.freeze(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false)
+    .map((entry) => normalizeLowercaseStringOrEmpty(entry.channelId))
+    .filter((channelId) => channelId.length > 0),
+);
+const bundledChannelIdSet = new Set(bundledChannelIds);
+const bundledChannelAliases = new Map<string, string>(
+  GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter((entry) => entry.configurable !== false).flatMap(
+    (entry) => {
+      const channelId = normalizeLowercaseStringOrEmpty(entry.channelId);
+      if (!channelId) {
+        return [];
+      }
+      return (entry.aliases ?? [])
+        .map((alias) => [normalizeLowercaseStringOrEmpty(alias), channelId] as const)
+        .filter(([alias]) => alias.length > 0);
+    },
+  ),
+);
+
+function normalizeBundledChannelId(raw?: string | null): string | null {
+  const normalized = normalizeLowercaseStringOrEmpty(raw);
+  if (!normalized) {
+    return null;
+  }
+  const resolved = bundledChannelAliases.get(normalized) ?? normalized;
+  return bundledChannelIdSet.has(resolved) ? resolved : null;
+}
 
 function toIssueRecord(value: unknown): UnknownIssueRecord | null {
   if (!value || typeof value !== "object") {
@@ -1449,7 +1476,7 @@ function validateConfigObjectWithPluginsBase(
     };
   };
 
-  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
+  const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...bundledChannelIds]);
 
   if (config.channels && isRecord(config.channels)) {
     for (const key of Object.keys(config.channels)) {
@@ -1510,7 +1537,7 @@ function validateConfigObjectWithPluginsBase(
   }
 
   const heartbeatChannelIds = new Set<string>();
-  for (const channelId of CHANNEL_IDS) {
+  for (const channelId of bundledChannelIds) {
     heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(channelId));
   }
 
@@ -1527,7 +1554,7 @@ function validateConfigObjectWithPluginsBase(
     if (normalized === "last" || normalized === "none") {
       return;
     }
-    if (normalizeChatChannelId(trimmed)) {
+    if (normalizeBundledChannelId(trimmed)) {
       return;
     }
     if (!heartbeatChannelIds.has(normalized)) {

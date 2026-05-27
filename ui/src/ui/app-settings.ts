@@ -741,7 +741,9 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
   void Promise.allSettled([
     loadDebug(app),
     loadSkills(app),
-    loadUsage(app),
+    // The primary overview loaders can finish after the user has navigated away.
+    // Avoid starting the expensive usage RPC for stale overview refreshes.
+    isCurrentOverviewRefresh() ? loadUsage(app) : Promise.resolve(),
     loadOverviewLogs(app),
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.

@@ -26,7 +26,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Fail on tabs in workflow files
         run: |
@@ -58,7 +67,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Install actionlint
         shell: bash
@@ -90,7 +108,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        env:
+          CHECKOUT_REPO: ${{ github.repository }}
+          CHECKOUT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git init "$GITHUB_WORKSPACE"
+          git -C "$GITHUB_WORKSPACE" config gc.auto 0
+          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

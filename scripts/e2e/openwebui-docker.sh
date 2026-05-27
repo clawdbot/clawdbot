@@ -66,7 +66,7 @@ trap cleanup EXIT
 docker_e2e_build_or_reuse "$IMAGE_NAME" openwebui
 
 echo "Pulling Open WebUI image: $OPENWEBUI_IMAGE"
-timeout "$DOCKER_PULL_TIMEOUT" docker pull "$OPENWEBUI_IMAGE" >/dev/null
+DOCKER_COMMAND_TIMEOUT="$DOCKER_PULL_TIMEOUT" docker_e2e_docker_cmd pull "$OPENWEBUI_IMAGE" >/dev/null
 
 echo "Creating Docker network..."
 docker_e2e_docker_cmd network create "$NET_NAME" >/dev/null

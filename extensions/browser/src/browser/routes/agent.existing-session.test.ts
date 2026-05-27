@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import {
   createExistingSessionAgentSharedModule,
   existingSessionRouteState,
@@ -215,13 +216,72 @@ describe("existing-session browser routes", () => {
   it("checks existing-session snapshot URL when SSRF policy is configured", async () => {
     const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
     const response = createBrowserRouteResponse();
+
     await handler?.({ params: {}, query: { format: "ai" } }, response.res);
 
     expect(response.statusCode).toBe(200);
+    expect(navigationGuardMocks.assertBrowserNavigationAllowed).not.toHaveBeenCalled();
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
       url: "https://example.com",
       ssrfPolicy: { allowPrivateNetwork: false },
     });
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalled();
+  });
+
+  it("allows existing-session snapshots under the default SSRF policy object", async () => {
+    const handler = getSnapshotGetHandler({});
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
+
+    expect(response.statusCode).toBe(200);
+    expect(navigationGuardMocks.assertBrowserNavigationAllowed).not.toHaveBeenCalled();
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "https://example.com",
+      ssrfPolicy: {},
+    });
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).toHaveBeenCalled();
+  });
+
+  it("blocks existing-session snapshots when the current URL violates browser navigation policy", async () => {
+    routeState.profileCtx.ensureTabAvailable.mockResolvedValueOnce({
+      targetId: "7",
+      url: "http://127.0.0.1:8080/admin",
+    });
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockRejectedValueOnce(
+      new Error("browser navigation blocked by policy"),
+    );
+    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai" } }, response.res);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: "browser navigation blocked by policy" });
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
+      url: "http://127.0.0.1:8080/admin",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("rejects existing-session snapshot selectors before checking the current URL", async () => {
+    routeState.profileCtx.ensureTabAvailable.mockResolvedValueOnce({
+      targetId: "7",
+      url: "http://127.0.0.1:8080/admin",
+    });
+    const handler = getSnapshotGetHandler({ allowPrivateNetwork: false });
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "ai", selector: "#admin" } }, response.res);
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({
+      error: EXISTING_SESSION_LIMITS.snapshot.snapshotSelector,
+    });
+    expect(navigationGuardMocks.assertBrowserNavigationAllowed).not.toHaveBeenCalled();
+    expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).not.toHaveBeenCalled();
+    expect(chromeMcpMocks.takeChromeMcpSnapshot).not.toHaveBeenCalled();
   });
 
   it("checks existing-session screenshot URL when SSRF policy is configured", async () => {

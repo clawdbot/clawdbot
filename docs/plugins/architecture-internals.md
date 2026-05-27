@@ -665,8 +665,8 @@ barrel when authoring new plugins. Core subpaths:
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
 `setup-runtime`, `setup-tools`, `channel-pairing`,
-`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-lifecycle`,
-`channel-reply-pipeline`, `command-auth`, `secret-input`, `webhook-ingress`,
+`channel-contract`, `channel-feedback`, `channel-inbound`, `channel-outbound`,
+`command-auth`, `secret-input`, `webhook-ingress`,
 `channel-targets`, and `channel-actions`. Approval behavior should consolidate
 on one `approvalCapability` contract rather than mixing across unrelated
 plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
@@ -679,7 +679,9 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 instead of the broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/config-runtime`,
+`openclaw/plugin-sdk/channel-runtime`, `openclaw/plugin-sdk/channel-lifecycle`,
+small channel helper facades, `openclaw/plugin-sdk/outbound-runtime`,
+`openclaw/plugin-sdk/outbound-send-deps`, `openclaw/plugin-sdk/config-runtime`,
 and `openclaw/plugin-sdk/infra-runtime` are deprecated compatibility shims for
 older plugins. New code should import narrower generic primitives instead.
 </Info>

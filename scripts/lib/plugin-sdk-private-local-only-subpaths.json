@@ -1,9 +1,22 @@
 [
+  "agent-runtime-test-contracts",
+  "channel-contract-testing",
+  "channel-target-testing",
+  "channel-test-helpers",
   "codex-native-task-runtime",
+  "plugin-test-api",
+  "plugin-test-contracts",
+  "plugin-test-runtime",
+  "provider-http-test-mocks",
+  "provider-test-contracts",
   "qa-channel",
   "qa-channel-protocol",
   "qa-lab",
   "qa-runtime",
   "ssrf-runtime-internal",
-  "test-utils"
+  "test-env",
+  "test-fixtures",
+  "test-node-mocks",
+  "test-utils",
+  "testing"
 ]

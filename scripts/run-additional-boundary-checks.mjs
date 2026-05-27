@@ -2,6 +2,10 @@
 import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
+const DEFAULT_CHECK_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_OUTPUT_MAX_BYTES = 512 * 1024;
+const TIMEOUT_KILL_GRACE_MS = 5_000;
+
 export const BOUNDARY_CHECKS = [
   ["prompt:snapshots:check", "pnpm", ["prompt:snapshots:check"]],
   ["plugin-extension-boundary", "pnpm", ["run", "lint:plugins:no-extension-imports"]],
@@ -70,6 +74,14 @@ export function resolveConcurrency(value, fallback = 4) {
   return parsed;
 }
 
+export function resolvePositiveInteger(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return fallback;
+  }
+  return parsed;
+}
+
 export function parseShardSpec(value) {
   if (!value) {
     return null;
@@ -130,40 +142,178 @@ export function formatCommand({ command, args }) {
   return [command, ...args].join(" ");
 }
 
-function runSingleCheck(check, { cwd, env }) {
+export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
+  const limit = Math.max(1, maxBytes);
+  const chunks = [];
+  let bytes = 0;
+  let truncated = false;
+
+  const append = (value) => {
+    const text = String(value);
+    let textBytes = Buffer.byteLength(text);
+    if (textBytes >= limit) {
+      const buffer = Buffer.from(text);
+      const tail = buffer.subarray(buffer.length - limit).toString("utf8");
+      chunks.splice(0, chunks.length, tail);
+      bytes = Buffer.byteLength(tail);
+      truncated = true;
+      return;
+    }
+
+    chunks.push(text);
+    bytes += textBytes;
+    while (bytes > limit && chunks.length > 0) {
+      const first = chunks[0];
+      const firstBytes = Buffer.byteLength(first);
+      const overflow = bytes - limit;
+      if (firstBytes <= overflow) {
+        chunks.shift();
+        bytes -= firstBytes;
+        truncated = true;
+        continue;
+      }
+
+      const buffer = Buffer.from(first);
+      const tail = buffer.subarray(overflow).toString("utf8");
+      chunks[0] = tail;
+      bytes = chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk), 0);
+      truncated = true;
+    }
+  };
+
+  return {
+    append,
+    read() {
+      const output = chunks.join("");
+      return truncated
+        ? `[output truncated to last ${limit} bytes]\n${output}`
+        : output;
+    },
+  };
+}
+
+function terminateChild(child, signal) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {}
+  }
+  child.kill(signal);
+}
+
+function terminateActiveChildren(activeChildren, signal) {
+  for (const child of activeChildren) {
+    terminateChild(child, signal);
+  }
+}
+
+function installActiveChildCleanup(activeChildren) {
+  let active = true;
+  const removeHandlers = () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.off(signal, handler);
+    }
+    process.off("exit", exitHandler);
+  };
+  const cleanup = (signal) => {
+    if (!active) {
+      return;
+    }
+    active = false;
+    terminateActiveChildren(activeChildren, signal);
+  };
+  const signalHandlers = new Map();
+  const signals =
+    process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+  for (const signal of signals) {
+    const handler = () => {
+      cleanup(signal);
+      removeHandlers();
+      process.kill(process.pid, signal);
+    };
+    signalHandlers.set(signal, handler);
+    process.once(signal, handler);
+  }
+  const exitHandler = () => {
+    cleanup("SIGTERM");
+  };
+  process.once("exit", exitHandler);
+
+  return () => {
+    active = false;
+    removeHandlers();
+  };
+}
+
+export function runSingleCheck(
+  check,
+  {
+    activeChildren,
+    checkTimeoutMs = DEFAULT_CHECK_TIMEOUT_MS,
+    cwd,
+    env,
+    outputMaxBytes = DEFAULT_OUTPUT_MAX_BYTES,
+  },
+) {
   return new Promise((resolve) => {
     const startedAt = performance.now();
     const child = spawn(check.command, check.args, {
       cwd,
       env,
+      detached: process.platform !== "win32",
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    const chunks = [];
+    activeChildren?.add(child);
+    const output = createBoundedOutputBuffer(outputMaxBytes);
+    let settled = false;
+    let timedOut = false;
+    let forceKillTimer = null;
+    const finish = (code, signal) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (forceKillTimer) {
+        clearTimeout(forceKillTimer);
+      }
+      activeChildren?.delete(child);
+      resolve({
+        check,
+        code: timedOut ? 1 : (code ?? 1),
+        durationMs: Math.round(performance.now() - startedAt),
+        signal,
+        timedOut,
+        output: output.read(),
+      });
+    };
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      output.append(
+        `\n[boundary-check] ${check.label} timed out after ${formatDuration(checkTimeoutMs)}; terminating process group\n`,
+      );
+      terminateChild(child, "SIGTERM");
+      forceKillTimer = setTimeout(() => {
+        output.append(
+          `[boundary-check] ${check.label} still running after ${formatDuration(TIMEOUT_KILL_GRACE_MS)}; sending SIGKILL\n`,
+        );
+        terminateChild(child, "SIGKILL");
+      }, TIMEOUT_KILL_GRACE_MS);
+      forceKillTimer.unref?.();
+    }, checkTimeoutMs);
+    timeout.unref?.();
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => chunks.push(chunk));
-    child.stderr.on("data", (chunk) => chunks.push(chunk));
+    child.stdout.on("data", (chunk) => output.append(chunk));
+    child.stderr.on("data", (chunk) => output.append(chunk));
     child.on("error", (error) => {
-      chunks.push(`${error.stack ?? error.message}\n`);
-      resolve({
-        check,
-        code: 1,
-        durationMs: Math.round(performance.now() - startedAt),
-        signal: null,
-        output: chunks.join(""),
-      });
+      output.append(`${error.stack ?? error.message}\n`);
+      finish(1, null);
     });
-    child.on("close", (code, signal) => {
-      resolve({
-        check,
-        code: code ?? 1,
-        durationMs: Math.round(performance.now() - startedAt),
-        signal,
-        output: chunks.join(""),
-      });
-    });
+    child.on("close", (code, signal) => finish(code, signal));
   });
 }
 
@@ -187,7 +337,11 @@ function writeGroupedResult(result, output) {
   if (success) {
     output.write(`[ok] ${result.check.label} in ${formatDuration(result.durationMs)}\n`);
   } else {
-    const suffix = result.signal ? ` (signal ${result.signal})` : ` (exit ${result.code})`;
+    const suffix = result.timedOut
+      ? " (timeout)"
+      : result.signal
+        ? ` (signal ${result.signal})`
+        : ` (exit ${result.code})`;
     output.write(
       `::error title=${result.check.label} failed::${result.check.label} failed${suffix} after ${formatDuration(result.durationMs)}\n`,
     );
@@ -206,36 +360,55 @@ function writeTimingSummary(results, output) {
 
 export async function runChecks(
   checks = BOUNDARY_CHECKS,
-  { concurrency = 4, cwd = process.cwd(), env = process.env, output = process.stdout } = {},
+  {
+    checkTimeoutMs = DEFAULT_CHECK_TIMEOUT_MS,
+    concurrency = 4,
+    cwd = process.cwd(),
+    env = process.env,
+    output = process.stdout,
+    outputMaxBytes = DEFAULT_OUTPUT_MAX_BYTES,
+  } = {},
 ) {
   const results = Array.from({ length: checks.length });
+  const activeChildren = new Set();
+  const removeActiveChildCleanup = installActiveChildCleanup(activeChildren);
   let nextIndex = 0;
   let active = 0;
 
-  await new Promise((resolve) => {
-    const launch = () => {
-      if (nextIndex >= checks.length && active === 0) {
-        resolve();
-        return;
-      }
+  try {
+    await new Promise((resolve) => {
+      const launch = () => {
+        if (nextIndex >= checks.length && active === 0) {
+          resolve();
+          return;
+        }
 
-      while (active < concurrency && nextIndex < checks.length) {
-        const index = nextIndex;
-        const check = checks[nextIndex++];
-        active += 1;
-        void runSingleCheck(check, { cwd, env })
-          .then((result) => {
-            results[index] = result;
+        while (active < concurrency && nextIndex < checks.length) {
+          const index = nextIndex;
+          const check = checks[nextIndex++];
+          active += 1;
+          void runSingleCheck(check, {
+            activeChildren,
+            checkTimeoutMs,
+            cwd,
+            env,
+            outputMaxBytes,
           })
-          .finally(() => {
-            active -= 1;
-            launch();
-          });
-      }
-    };
+            .then((result) => {
+              results[index] = result;
+            })
+            .finally(() => {
+              active -= 1;
+              launch();
+            });
+        }
+      };
 
-    launch();
-  });
+      launch();
+    });
+  } finally {
+    removeActiveChildCleanup();
+  }
 
   let failures = 0;
   for (const result of results) {
@@ -265,6 +438,14 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
       process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY,
   );
+  const checkTimeoutMs = resolvePositiveInteger(
+    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
+    DEFAULT_CHECK_TIMEOUT_MS,
+  );
+  const outputMaxBytes = resolvePositiveInteger(
+    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES,
+    DEFAULT_OUTPUT_MAX_BYTES,
+  );
   const shards = parseShardSelection(resolveCliShardSpec(process.argv.slice(2), process.env));
   const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
   if (shards) {
@@ -272,6 +453,6 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,
     );
   }
-  const failures = await runChecks(checks, { concurrency });
+  const failures = await runChecks(checks, { checkTimeoutMs, concurrency, outputMaxBytes });
   process.exitCode = failures === 0 ? 0 : 1;
 }

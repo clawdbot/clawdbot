@@ -234,6 +234,9 @@ function parseOptionalInt(value: string | undefined, fieldName: string): number 
   if (!trimmed) {
     return undefined;
   }
+  if (!/^-?\d+$/.test(trimmed)) {
+    throw new Error(`${fieldName} must be an integer`);
+  }
   const parsed = Number.parseInt(trimmed, 10);
   if (!Number.isFinite(parsed)) {
     throw new Error(`${fieldName} must be an integer`);

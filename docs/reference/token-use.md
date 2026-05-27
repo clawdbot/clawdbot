@@ -53,6 +53,11 @@ for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
+`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+the live tool-result cap from the effective model context window: `16000` chars
+below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
+tokens, still bounded by the runtime context-share guard.
+
 For images, OpenClaw downscales transcript/tool image payloads before provider calls.
 Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:
 

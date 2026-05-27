@@ -240,6 +240,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
+      const xaiLimitError = '403 {"code":"The caller does not have permission to execute the specified operation","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}';
       let currentModel = "fixture-provider/fixture-model";
       let fastMode = process.env.OPENCLAW_TUI_PTY_FAST_MODE === "true";
 
@@ -309,9 +310,40 @@ async function writeTuiPtyFixtureScript(dir: string) {
             thinking: opts.thinking,
           });
           const runId = opts.runId ?? "run-pty-fixture";
-          const responseDelayMs = opts.message === "slow prompt" ? 500 : 20;
+          const responseDelayMs =
+            opts.message === "slow prompt" || opts.message === "streaming prompt" ? 500 : 20;
+          if (opts.message === "streaming prompt") {
+            setTimeout(() => {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "delta",
+                  message: {
+                    role: "assistant",
+                    content: [{ type: "text", text: "PTY_STREAMING: streaming prompt" }],
+                    timestamp: Date.now(),
+                  },
+                },
+              });
+            }, 5);
+          }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
+          const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
+            if (isXaiLimitProof) {
+              this.onEvent?.({
+                event: "chat",
+                payload: {
+                  runId,
+                  sessionKey: opts.sessionKey,
+                  state: "error",
+                  errorMessage: xaiLimitError,
+                },
+              });
+              return;
+            }
             const sourceReplyPayloads = isSourceReplyProof
               ? buildEmbeddedRunPayloads({
                   assistantTexts: [],
@@ -536,6 +568,20 @@ describe.sequential("TUI PTY harness", () => {
   );
 
   it(
+    "preserves xAI account limit errors in terminal output",
+    async () => {
+      await fixture.run.write("xai limit proof\r");
+      await fixture.run.waitForOutput("monthly spending limit");
+      expect(fixture.run.output()).not.toContain("Run /auth");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" && objectFieldEquals(entry, "message", "xai limit proof"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     "blocks overlapping normal messages while a run is busy",
     async () => {
       await fixture.run.write("slow prompt\r");
@@ -552,6 +598,23 @@ describe.sequential("TUI PTY harness", () => {
       expect(slowPromptCalls).toHaveLength(1);
       expect(slowPromptCalls[0]?.payload).toMatchObject({ message: "slow prompt" });
       await fixture.run.write("\x15", { delay: false });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "submits a follow-up prompt while a run is streaming",
+    async () => {
+      await fixture.run.write("\x15", { delay: false });
+      await fixture.run.write("streaming prompt\r");
+      await fixture.run.waitForOutput("PTY_STREAMING: streaming prompt");
+      await fixture.run.write("queued while streaming\r");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "queued while streaming"),
+      );
+      await fixture.run.waitForOutput("PTY_RESPONSE: streaming prompt");
     },
     TEST_TIMEOUT_MS,
   );

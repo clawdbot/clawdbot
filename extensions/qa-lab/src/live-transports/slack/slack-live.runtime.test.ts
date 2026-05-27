@@ -253,6 +253,22 @@ describe("Slack live QA runtime helpers", () => {
     );
   });
 
+  it("preserves sanitized gateway debug artifacts on scenario failure", async () => {
+    const cleanupIssues: string[] = [];
+    const stop = vi.fn(async () => {});
+
+    await testing.preserveSlackGatewayDebugArtifacts({
+      cleanupIssues,
+      gatewayDebugDirPath: ".artifacts/qa-e2e/slack-live-test/gateway-debug",
+      gatewayHarness: { stop } as never,
+    });
+
+    expect(stop).toHaveBeenCalledWith({
+      preserveToDir: ".artifacts/qa-e2e/slack-live-test/gateway-debug",
+    });
+    expect(cleanupIssues).toEqual([]);
+  });
+
   it("redacts approval artifact content and Slack metadata in summary-shaped results", () => {
     expect(
       testing.toSlackQaScenarioArtifactResults({

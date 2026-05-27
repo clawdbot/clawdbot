@@ -83,6 +83,7 @@ openclaw_e2e_install_package /tmp/openclaw-release-typed-onboarding-install.log
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
+openclaw_e2e_enable_openclaw_cli_timeout
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-typed-onboarding-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"

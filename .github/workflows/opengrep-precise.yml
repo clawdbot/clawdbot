@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
           fetch-tags: false
           persist-credentials: false
           submodules: false

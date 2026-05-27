@@ -15,11 +15,27 @@ if ! declare -F docker_e2e_docker_cmd >/dev/null 2>&1; then
 fi
 if ! declare -F docker_e2e_docker_run_cmd >/dev/null 2>&1; then
   docker_e2e_docker_run_cmd() {
-    if [ -n "${DOCKER_COMMAND_TIMEOUT:-}" ] && command -v timeout >/dev/null 2>&1; then
-      timeout "$DOCKER_COMMAND_TIMEOUT" docker "$@"
+    if declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
+      docker_e2e_timeout_cmd "${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}" docker "$@"
       return
     fi
-    docker "$@"
+    local timeout_value="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_DOCKER_E2E_RUN_TIMEOUT:-3600s}}"
+    local timeout_bin=""
+    if command -v timeout >/dev/null 2>&1; then
+      timeout_bin="timeout"
+    elif command -v gtimeout >/dev/null 2>&1; then
+      timeout_bin="gtimeout"
+    fi
+    if [ -n "$timeout_bin" ]; then
+      if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+        "$timeout_bin" --kill-after=30s "$timeout_value" docker "$@"
+      else
+        "$timeout_bin" "$timeout_value" docker "$@"
+      fi
+      return
+    fi
+    echo "timeout command not found; cannot bound Docker run after ${timeout_value}" >&2
+    return 127
   }
 fi
 
@@ -81,6 +97,12 @@ docker_e2e_package_mount_args() {
   local package_tgz="$1"
   local target="${2:-/tmp/openclaw-current.tgz}"
   DOCKER_E2E_PACKAGE_ARGS=(-v "$package_tgz:$target:ro" -e "OPENCLAW_CURRENT_PACKAGE_TGZ=$target")
+  if [ -n "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-}" ]; then
+    DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$OPENCLAW_E2E_NPM_INSTALL_TIMEOUT")
+  fi
+  if [ -n "${OPENCLAW_E2E_COMMAND_TIMEOUT:-}" ]; then
+    DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_COMMAND_TIMEOUT=$OPENCLAW_E2E_COMMAND_TIMEOUT")
+  fi
 }
 
 docker_e2e_cleanup_package_tgz() {

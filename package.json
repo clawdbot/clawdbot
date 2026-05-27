@@ -32,6 +32,36 @@
     "!dist/.runtime-postbuildstamp",
     "!dist/**/*.map",
     "!dist/plugin-sdk/.tsbuildinfo",
+    "!dist/plugin-sdk/agent-runtime-test-contracts.js",
+    "!dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
+    "!dist/plugin-sdk/channel-contract-testing.js",
+    "!dist/plugin-sdk/channel-contract-testing.d.ts",
+    "!dist/plugin-sdk/channel-target-testing.js",
+    "!dist/plugin-sdk/channel-target-testing.d.ts",
+    "!dist/plugin-sdk/channel-test-helpers.js",
+    "!dist/plugin-sdk/channel-test-helpers.d.ts",
+    "!dist/plugin-sdk/plugin-test-api.js",
+    "!dist/plugin-sdk/plugin-test-api.d.ts",
+    "!dist/plugin-sdk/plugin-test-contracts.js",
+    "!dist/plugin-sdk/plugin-test-contracts.d.ts",
+    "!dist/plugin-sdk/plugin-test-runtime.js",
+    "!dist/plugin-sdk/plugin-test-runtime.d.ts",
+    "!dist/plugin-sdk/provider-http-test-mocks.js",
+    "!dist/plugin-sdk/provider-http-test-mocks.d.ts",
+    "!dist/plugin-sdk/provider-test-contracts.js",
+    "!dist/plugin-sdk/provider-test-contracts.d.ts",
+    "!dist/plugin-sdk/test-env.js",
+    "!dist/plugin-sdk/test-env.d.ts",
+    "!dist/plugin-sdk/test-fixtures.js",
+    "!dist/plugin-sdk/test-fixtures.d.ts",
+    "!dist/plugin-sdk/test-node-mocks.js",
+    "!dist/plugin-sdk/test-node-mocks.d.ts",
+    "!dist/plugin-sdk/testing.js",
+    "!dist/plugin-sdk/testing.d.ts",
+    "!dist/plugin-sdk/src/agents/test-helpers/**",
+    "!dist/plugin-sdk/src/test-helpers/**",
+    "!dist/plugin-sdk/src/test-utils/**",
+    "!dist/plugin-sdk/src/plugin-sdk/test-helpers/**",
     "!dist/extensions/acpx/**",
     "!dist/extensions/amazon-bedrock/**",
     "!dist/extensions/amazon-bedrock-mantle/**",
@@ -50,7 +80,6 @@
     "!dist/extensions/line/**",
     "!dist/extensions/lobster/**",
     "!dist/extensions/memory-lancedb/**",
-    "!dist/extensions/meeting-notes/**",
     "!dist/extensions/matrix/**",
     "!dist/extensions/msteams/**",
     "!dist/extensions/nextcloud-talk/**",
@@ -218,6 +247,10 @@
     "./plugin-sdk/approval-native-runtime": {
       "types": "./dist/plugin-sdk/approval-native-runtime.d.ts",
       "default": "./dist/plugin-sdk/approval-native-runtime.js"
+    },
+    "./plugin-sdk/approval-reaction-runtime": {
+      "types": "./dist/plugin-sdk/approval-reaction-runtime.d.ts",
+      "default": "./dist/plugin-sdk/approval-reaction-runtime.js"
     },
     "./plugin-sdk/approval-reply-runtime": {
       "types": "./dist/plugin-sdk/approval-reply-runtime.d.ts",
@@ -567,54 +600,6 @@
       "types": "./dist/plugin-sdk/lazy-runtime.d.ts",
       "default": "./dist/plugin-sdk/lazy-runtime.js"
     },
-    "./plugin-sdk/agent-runtime-test-contracts": {
-      "types": "./dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
-      "default": "./dist/plugin-sdk/agent-runtime-test-contracts.js"
-    },
-    "./plugin-sdk/channel-target-testing": {
-      "types": "./dist/plugin-sdk/channel-target-testing.d.ts",
-      "default": "./dist/plugin-sdk/channel-target-testing.js"
-    },
-    "./plugin-sdk/channel-test-helpers": {
-      "types": "./dist/plugin-sdk/channel-test-helpers.d.ts",
-      "default": "./dist/plugin-sdk/channel-test-helpers.js"
-    },
-    "./plugin-sdk/plugin-test-api": {
-      "types": "./dist/plugin-sdk/plugin-test-api.d.ts",
-      "default": "./dist/plugin-sdk/plugin-test-api.js"
-    },
-    "./plugin-sdk/plugin-test-contracts": {
-      "types": "./dist/plugin-sdk/plugin-test-contracts.d.ts",
-      "default": "./dist/plugin-sdk/plugin-test-contracts.js"
-    },
-    "./plugin-sdk/plugin-test-runtime": {
-      "types": "./dist/plugin-sdk/plugin-test-runtime.d.ts",
-      "default": "./dist/plugin-sdk/plugin-test-runtime.js"
-    },
-    "./plugin-sdk/provider-http-test-mocks": {
-      "types": "./dist/plugin-sdk/provider-http-test-mocks.d.ts",
-      "default": "./dist/plugin-sdk/provider-http-test-mocks.js"
-    },
-    "./plugin-sdk/provider-test-contracts": {
-      "types": "./dist/plugin-sdk/provider-test-contracts.d.ts",
-      "default": "./dist/plugin-sdk/provider-test-contracts.js"
-    },
-    "./plugin-sdk/test-env": {
-      "types": "./dist/plugin-sdk/test-env.d.ts",
-      "default": "./dist/plugin-sdk/test-env.js"
-    },
-    "./plugin-sdk/test-fixtures": {
-      "types": "./dist/plugin-sdk/test-fixtures.d.ts",
-      "default": "./dist/plugin-sdk/test-fixtures.js"
-    },
-    "./plugin-sdk/test-node-mocks": {
-      "types": "./dist/plugin-sdk/test-node-mocks.d.ts",
-      "default": "./dist/plugin-sdk/test-node-mocks.js"
-    },
-    "./plugin-sdk/testing": {
-      "types": "./dist/plugin-sdk/testing.d.ts",
-      "default": "./dist/plugin-sdk/testing.js"
-    },
     "./plugin-sdk/temp-path": {
       "types": "./dist/plugin-sdk/temp-path.d.ts",
       "default": "./dist/plugin-sdk/temp-path.js"
@@ -682,10 +667,6 @@
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
       "default": "./dist/plugin-sdk/boolean-param.js"
-    },
-    "./plugin-sdk/channel-contract-testing": {
-      "types": "./dist/plugin-sdk/channel-contract-testing.d.ts",
-      "default": "./dist/plugin-sdk/channel-contract-testing.js"
     },
     "./plugin-sdk/dangerous-name-runtime": {
       "types": "./dist/plugin-sdk/dangerous-name-runtime.d.ts",
@@ -867,6 +848,10 @@
       "types": "./dist/plugin-sdk/channel-message-runtime.d.ts",
       "default": "./dist/plugin-sdk/channel-message-runtime.js"
     },
+    "./plugin-sdk/channel-outbound": {
+      "types": "./dist/plugin-sdk/channel-outbound.d.ts",
+      "default": "./dist/plugin-sdk/channel-outbound.js"
+    },
     "./plugin-sdk/channel-pairing": {
       "types": "./dist/plugin-sdk/channel-pairing.d.ts",
       "default": "./dist/plugin-sdk/channel-pairing.js"
@@ -1011,9 +996,9 @@
       "types": "./dist/plugin-sdk/realtime-voice.d.ts",
       "default": "./dist/plugin-sdk/realtime-voice.js"
     },
-    "./plugin-sdk/meeting-notes": {
-      "types": "./dist/plugin-sdk/meeting-notes.d.ts",
-      "default": "./dist/plugin-sdk/meeting-notes.js"
+    "./plugin-sdk/transcripts": {
+      "types": "./dist/plugin-sdk/transcripts.d.ts",
+      "default": "./dist/plugin-sdk/transcripts.js"
     },
     "./plugin-sdk/media-understanding": {
       "types": "./dist/plugin-sdk/media-understanding.d.ts",
@@ -1501,7 +1486,7 @@
     "lint:apps": "pnpm lint:swift",
     "lint:auth:no-pairing-store-group": "node scripts/check-no-pairing-store-group-auth.mjs",
     "lint:auth:pairing-account-scope": "node scripts/check-pairing-account-scope.mjs",
-    "lint:core": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.core.json src ui packages",
+    "lint:core": "node scripts/run-oxlint-shards.mjs --only=core --split-core",
     "lint:docker-e2e": "node scripts/check-docker-e2e-boundaries.mjs",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
     "lint:docs:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc --fix",
@@ -1716,13 +1701,14 @@
     "test:force": "node --import tsx scripts/test-force.ts",
     "test:gateway": "node scripts/run-with-env.mjs OPENCLAW_GATEWAY_PROJECT_SHARDS=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts",
     "test:gateway:cpu-scenarios": "node scripts/check-gateway-cpu-scenarios.mjs",
+    "test:gateway:memory-fd-repro": "node scripts/check-memory-fd-repro.mjs",
     "test:gateway:watch-regression": "node scripts/check-gateway-watch-regression.mjs",
     "test:install:e2e": "bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:e2e:anthropic": "OPENCLAW_E2E_MODELS=anthropic bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:e2e:openai": "OPENCLAW_E2E_MODELS=openai bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
     "test:live": "node scripts/test-live.mjs",
-    "test:live:cache": "node --import tsx scripts/check-live-cache.ts",
+    "test:live:cache": "node scripts/run-with-env.mjs OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 -- node --import tsx scripts/check-live-cache.ts",
     "test:live:codex-harness": "node scripts/test-live.mjs --codex-harness -- src/gateway/gateway-codex-harness.live.test.ts",
     "test:live:crestodian-rescue-channel": "node scripts/run-with-env.mjs OPENCLAW_LIVE_CRESTODIAN_RESCUE_CHANNEL=1 -- node scripts/test-live.mjs -- src/crestodian/rescue-channel.live.test.ts",
     "test:live:gateway-profiles": "node scripts/test-live.mjs -- src/gateway/gateway-models.profiles.live.test.ts",
@@ -1731,7 +1717,7 @@
     "test:live:media:music": "node --import tsx scripts/test-live-media.ts music",
     "test:live:media:video": "node --import tsx scripts/test-live-media.ts video",
     "test:live:models-profiles": "node scripts/test-live.mjs -- src/agents/models.profiles.live.test.ts",
-    "test:macos:ci": "node scripts/test-projects.mjs src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts test/scripts/vitest-process-group.test.ts",
+    "test:macos:ci": "node scripts/test-projects.mjs src/daemon/launchd.test.ts src/daemon/runtime-paths.test.ts src/daemon/runtime-binary.test.ts src/infra/brew.test.ts src/infra/stable-node-path.test.ts test/scripts/vitest-process-group.test.ts test/scripts/package-mac-app.test.ts test/scripts/package-mac-dist.test.ts test/scripts/create-dmg.test.ts",
     "test:max": "node scripts/test-projects-max.mjs",
     "test:parallels:linux": "bash scripts/e2e/parallels-linux-smoke.sh",
     "test:parallels:macos": "bash scripts/e2e/parallels-macos-smoke.sh",
@@ -1798,7 +1784,8 @@
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
     "ui:i18n:report": "node --import tsx scripts/control-ui-i18n-report.ts",
     "ui:i18n:sync": "node --import tsx scripts/control-ui-i18n.ts sync --write",
-    "ui:install": "node scripts/ui.js install"
+    "ui:install": "node scripts/ui.js install",
+    "verify": "node scripts/verify.mjs"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.22.1",
@@ -1817,7 +1804,6 @@
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.3.0",
     "@openclaw/proxyline": "0.3.3",
-    "@silvia-odwyer/photon-node": "0.3.4",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
     "commander": "14.0.3",
@@ -1839,7 +1825,7 @@
     "playwright-core": "1.60.0",
     "qrcode": "1.5.4",
     "quickjs-wasi": "2.2.0",
-    "rastermill": "0.2.0",
+    "rastermill": "0.3.0",
     "tar": "7.5.15",
     "tokenjuice": "0.7.1",
     "tree-sitter-bash": "0.25.1",

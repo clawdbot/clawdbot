@@ -65,6 +65,7 @@ export type HandleCommandsParams = {
   contextTokens: number;
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
+  loadSkillCommands?: () => Promise<SkillCommandSpec[]>;
   typing?: TypingController;
 };
 

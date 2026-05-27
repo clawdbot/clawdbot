@@ -26,6 +26,7 @@ export type RuntimeLlmAuthority = {
   pluginIdForPolicy?: string;
   sessionKey?: string;
   agentId?: string;
+  preferredProfile?: string;
   requiresBoundAgent?: boolean;
   allowAgentIdOverride?: boolean;
   allowModelOverride?: boolean;
@@ -383,6 +384,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
       const pluginPolicyId = resolvePluginPolicyId(options.authority, caller);
       const pluginPolicy = resolvePluginLlmOverridePolicy(cfg, pluginPolicyId);
       const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
+      const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
       const agentId = await resolveAgentId({
         request: params,
         cfg,
@@ -418,7 +420,10 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         cfg,
         agentId,
         modelRef: params.model,
+        preferredProfile,
+        allowBundledStaticCatalogFallback: true,
         allowMissingApiKeyModes: ["aws-sdk"],
+        skipPiDiscovery: true,
       });
 
       if ("error" in prepared) {

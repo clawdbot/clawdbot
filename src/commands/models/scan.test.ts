@@ -136,6 +136,20 @@ describe("models scan command", () => {
     expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [{ minParams: "7b" }, "--min-params"],
+    [{ maxAgeDays: "30d" }, "--max-age-days"],
+    [{ maxCandidates: "2.5" }, "--max-candidates"],
+    [{ timeout: "1000ms" }, "--timeout"],
+    [{ concurrency: "2x" }, "--concurrency"],
+  ])("rejects partial numeric option %s", async (opts, label) => {
+    const runtime = createRuntime();
+
+    await expect(modelsScanCommand(opts, runtime)).rejects.toThrow(label);
+
+    expect(mocks.scanOpenRouterModels).not.toHaveBeenCalled();
+  });
+
   it("rejects applying auto-downgraded metadata-only scan results before scanning", async () => {
     const runtime = createRuntime();
     vi.stubEnv("OPENROUTER_API_KEY", undefined);

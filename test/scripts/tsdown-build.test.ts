@@ -14,6 +14,10 @@ import {
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const NO_MEMORY_LIMIT = {
+  cgroupMemoryLimitPaths: [],
+  procMeminfoPath: "/openclaw-test-missing-proc-meminfo",
+};
 
 async function expectPathMissing(targetPath: string) {
   let statError: unknown;
@@ -36,6 +40,7 @@ describe("resolveTsdownBuildInvocation", () => {
       nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
       npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
       env: {},
+      ...NO_MEMORY_LIMIT,
     });
 
     expect(result).toEqual({
@@ -64,35 +69,85 @@ describe("resolveTsdownBuildInvocation", () => {
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      ...NO_MEMORY_LIMIT,
     });
 
     expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
   });
 
-  it("raises inherited low tsdown heap settings to the build floor", () => {
+  it("preserves inherited lower tsdown heap settings", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=4096" },
+      ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=4096");
   });
 
-  it("raises split inherited low tsdown heap settings to the build floor", () => {
+  it("preserves split inherited lower tsdown heap settings", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       npmExecPath: "/tmp/pnpm.cjs",
       env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size 4096" },
+      ...NO_MEMORY_LIMIT,
     });
 
-    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=8192");
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=4096");
+  });
+
+  it("keeps default tsdown heap below the container memory limit", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
+  });
+
+  it("clamps explicit tsdown heap settings to the container memory limit", () => {
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: { NODE_OPTIONS: "--trace-warnings --max-old-space-size=8192" },
+      cgroupMemoryLimitBytes: 7 * 1024 * 1024 * 1024,
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--trace-warnings --max-old-space-size=6400");
+  });
+
+  it("falls back to proc meminfo when the cgroup memory limit is unbounded", () => {
+    const fsMock = {
+      readFileSync: vi.fn((filePath: string) => {
+        if (filePath === "/test/memory.max") {
+          return "max\n";
+        }
+        if (filePath === "/test/meminfo") {
+          return "MemTotal: 7340032 kB\n";
+        }
+        throw new Error(`unexpected path ${filePath}`);
+      }),
+    };
+    const result = resolveTsdownBuildInvocation({
+      nodeExecPath: "/usr/bin/node",
+      npmExecPath: "/tmp/pnpm.cjs",
+      env: {},
+      fs: fsMock,
+      cgroupMemoryLimitPaths: ["/test/memory.max"],
+      procMeminfoPath: "/test/meminfo",
+    });
+
+    expect(result.options.env.NODE_OPTIONS).toBe("--max-old-space-size=6400");
   });
 
   it("can run tsdown without invoking pnpm", () => {
     const result = resolveTsdownBuildInvocation({
       nodeExecPath: "/usr/bin/node",
       env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      ...NO_MEMORY_LIMIT,
     });
 
     expect(result).toEqual({

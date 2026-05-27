@@ -40,13 +40,53 @@ describe("package Telegram live Docker E2E", () => {
 
     expect(installRunStart).toBeGreaterThanOrEqual(0);
     expect(installRunEnd).toBeGreaterThan(installRunStart);
+    expect(installRun).toContain(
+      '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
+    );
+    expect(installRun).toContain(
+      '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
+    expect(installRun).toContain('elif command -v gtimeout >/dev/null 2>&1; then');
+    expect(installRun).toContain("timeout_bin=\"gtimeout\"");
+    expect(installRun).toContain(
+      'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
+    );
+    expect(installRun).toContain('"$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1');
+    expect(installRun).toContain(
+      '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
+    );
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
+    expect(installRun).not.toContain("running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT");
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
+    expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
+    expect(installRun).not.toContain("run_logged docker run --rm");
     expect(script).toContain("run_logged docker_e2e_run_with_harness");
     expect(script).toContain('"${docker_env[@]}"');
     expect(script).toContain('if [ -z "$credential_role" ] && [ -n "${CI:-}" ]');
     expect(script).toContain('credential_role="ci"');
+  });
+
+  it("bounds installed-package hot path OpenClaw commands", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+    const runtimeRunStart = script.indexOf("# Mount only QA harness source");
+    const runtimeRun = script.slice(runtimeRunStart);
+
+    expect(runtimeRunStart).toBeGreaterThanOrEqual(0);
+    expect(script).toContain(
+      '-e OPENCLAW_E2E_COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"',
+    );
+    expect(runtimeRun).toContain("source scripts/lib/openclaw-e2e-instance.sh");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw --version");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw onboard");
+    expect(runtimeRun).toContain(
+      'OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard',
+    );
+    expect(runtimeRun).not.toContain("export OPENAI_API_KEY=");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw channels add");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --fix");
+    expect(runtimeRun).toContain("openclaw_e2e_run_command openclaw doctor --non-interactive");
+    expect(runtimeRun).not.toMatch(/^\s*openclaw (onboard|channels add|doctor )/mu);
   });
 
   it("can install a resolved package tarball instead of a registry spec", () => {

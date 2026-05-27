@@ -59,7 +59,10 @@ export async function handleCodexAppServerApprovalRequest(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
   autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
@@ -316,7 +319,10 @@ async function runOpenClawToolPolicyForApprovalRequest(params: {
   requestParams: JsonObject | undefined;
   paramsForRun: EmbeddedRunAttemptParams;
   context: ApprovalContext;
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
   signal?: AbortSignal;
 }): Promise<ApprovalPolicyOutcome | undefined> {
   const policyRequest = buildOpenClawToolPolicyRequest(params.method, params.requestParams);
@@ -379,7 +385,10 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
   requestParams: JsonObject | undefined;
   context: ApprovalContext;
   policyRequest: { toolName: string; params: JsonObject };
-  nativeHookRelay?: Pick<NativeHookRelayRegistrationHandle, "allowedEvents" | "relayId">;
+  nativeHookRelay?: Pick<
+    NativeHookRelayRegistrationHandle,
+    "allowedEvents" | "generation" | "relayId"
+  >;
   cwd?: string;
 }): Promise<
   | {
@@ -423,8 +432,10 @@ async function runNativeRelayToolPolicyForApprovalRequest(params: {
     const response = await invokeNativeHookRelay({
       provider: "codex",
       relayId: params.nativeHookRelay.relayId,
+      generation: params.nativeHookRelay.generation,
       event: "pre_tool_use",
       rawPayload: payload,
+      requireGeneration: true,
     });
     const decision = readNativeRelayPreToolUseDecision(response);
     if (decision.blocked) {

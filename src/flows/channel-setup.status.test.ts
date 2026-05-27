@@ -12,7 +12,6 @@ type FormatChannelPrimerLine = typeof import("../channels/registry.js").formatCh
 type FormatChannelSelectionLine =
   typeof import("../channels/registry.js").formatChannelSelectionLine;
 type IsChannelConfigured = typeof import("../config/channel-configured.js").isChannelConfigured;
-type ChannelSetupStatusModule = typeof import("./channel-setup.status.js");
 type NoteChannelPrimerChannels = Parameters<
   typeof import("./channel-setup.status.js").noteChannelPrimer
 >[1];
@@ -74,11 +73,13 @@ vi.mock("../plugins/bundled-sources.js", () => ({
   findBundledPluginSourceInMap: () => undefined,
 }));
 
-let collectChannelStatus: ChannelSetupStatusModule["collectChannelStatus"];
-let noteChannelStatus: ChannelSetupStatusModule["noteChannelStatus"];
-let noteChannelPrimer: ChannelSetupStatusModule["noteChannelPrimer"];
-let resolveChannelSelectionNoteLines: ChannelSetupStatusModule["resolveChannelSelectionNoteLines"];
-let resolveChannelSetupSelectionContributions: ChannelSetupStatusModule["resolveChannelSetupSelectionContributions"];
+import {
+  collectChannelStatus,
+  noteChannelPrimer,
+  noteChannelStatus,
+  resolveChannelSelectionNoteLines,
+  resolveChannelSetupSelectionContributions,
+} from "./channel-setup.status.js";
 
 function requireFirstMockCall<const Calls extends readonly unknown[][]>(
   calls: Calls,
@@ -92,8 +93,7 @@ function requireFirstMockCall<const Calls extends readonly unknown[][]>(
 }
 
 describe("resolveChannelSetupSelectionContributions", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     vi.clearAllMocks();
     listChatChannels.mockReturnValue([
       makeMeta("discord", "Discord"),
@@ -105,13 +105,6 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
     formatChannelSelectionLine.mockImplementation((meta) => `${meta.label} — ${meta.blurb}`);
     isChannelConfigured.mockReturnValue(false);
-    ({
-      collectChannelStatus,
-      noteChannelStatus,
-      noteChannelPrimer,
-      resolveChannelSelectionNoteLines,
-      resolveChannelSetupSelectionContributions,
-    } = await import("./channel-setup.status.js"));
   });
 
   it("sorts channels alphabetically by picker label", () => {

@@ -63,6 +63,11 @@ describe("scanStatusJsonFast", () => {
 
     await scanStatusJsonFast({}, {} as never);
 
+    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
+      createStatusMemorySearchConfig(),
+      process.env,
+      { includeChannelTargets: false },
+    );
     expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
@@ -123,11 +128,7 @@ describe("scanStatusJsonFast", () => {
     const result = await scanStatusJsonFast({}, {} as never);
 
     expect(result.memory).toBeNull();
-    expect(mocks.hasPotentialConfiguredChannels).toHaveBeenCalledWith(
-      createStatusMemorySearchConfig(),
-      process.env,
-      { includePersistedAuthState: false },
-    );
+    expect(mocks.hasPotentialConfiguredChannels).not.toHaveBeenCalled();
     expect(mocks.resolveMemorySearchConfig).not.toHaveBeenCalled();
     expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
   });
@@ -155,6 +156,8 @@ describe("scanStatusJsonFast", () => {
   it("skips gateway and update probes on cold-start status --json", async () => {
     await withTemporaryEnv(
       {
+        OPENCLAW_TWITCH_ACCESS_TOKEN: undefined,
+        TELEGRAM_BOT_TOKEN: undefined,
         VITEST: undefined,
         VITEST_POOL_ID: undefined,
         NODE_ENV: undefined,
@@ -166,5 +169,22 @@ describe("scanStatusJsonFast", () => {
 
     expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("keeps cold-start probes when a channel is configured from manifest env vars", async () => {
+    await withTemporaryEnv(
+      {
+        OPENCLAW_TWITCH_ACCESS_TOKEN: "token",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        NODE_ENV: undefined,
+      },
+      async () => {
+        await scanStatusJsonFast({}, {} as never);
+      },
+    );
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalled();
+    expect(mocks.probeGateway).toHaveBeenCalled();
   });
 });

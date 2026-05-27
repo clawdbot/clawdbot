@@ -20,6 +20,9 @@ import {
   buildNodeInvokeParams,
   callGatewayCli,
   nodesCallOpts,
+  parseOptionalNodeFiniteNumber,
+  parseOptionalNodeNonNegativeInteger,
+  parseOptionalNodePositiveInteger,
   resolveNode,
   resolveNodeId,
 } from "./rpc.js";
@@ -131,16 +134,20 @@ export function registerNodesCameraCommands(nodes: Command) {
                     );
                   })();
 
-          const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
-          const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
-          const delayMs = opts.delayMs ? Number.parseInt(opts.delayMs, 10) : undefined;
+          const maxWidth = parseOptionalNodePositiveInteger(opts.maxWidth, "--max-width");
+          const quality = parseOptionalNodeFiniteNumber(opts.quality, "--quality", {
+            minInclusive: 0,
+            maxInclusive: 1,
+          });
+          const delayMs = parseOptionalNodeNonNegativeInteger(opts.delayMs, "--delay-ms");
           const deviceId = normalizeOptionalString(opts.deviceId);
           if (deviceId && facings.length > 1) {
             throw new Error("facing=both is not allowed when --device-id is set");
           }
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(opts.invokeTimeout, 10)
-            : undefined;
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
 
           const results: Array<{
             facing: CameraFacing;
@@ -216,9 +223,10 @@ export function registerNodesCameraCommands(nodes: Command) {
           const facing = parseFacing(opts.facing ?? "front");
           const durationMs = parseDurationMs(opts.duration ?? "3000");
           const includeAudio = opts.audio !== false;
-          const timeoutMs = opts.invokeTimeout
-            ? Number.parseInt(opts.invokeTimeout, 10)
-            : undefined;
+          const timeoutMs = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
           const deviceId = normalizeOptionalString(opts.deviceId);
 
           const invokeParams = buildNodeInvokeParams({

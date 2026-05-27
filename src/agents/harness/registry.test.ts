@@ -168,7 +168,7 @@ describe("agent harness registry", () => {
   });
 
   it("honors explicit provider plugin runtime policy when the plugin harness is registered", () => {
-    registerAgentHarness(makeHarness("custom", { providers: ["custom-provider"] }), {
+    registerAgentHarness(makeHarness("custom", { providers: ["anthropic"] }), {
       ownerPluginId: "plugin-a",
     });
 

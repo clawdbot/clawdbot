@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   BOUNDARY_CHECKS,
+  createBoundedOutputBuffer,
   formatCommand,
   parseShardSelection,
   parseShardSpec,
   resolveConcurrency,
   runChecks,
+  runSingleCheck,
   selectChecksForShard,
 } from "../../scripts/run-additional-boundary-checks.mjs";
 
@@ -41,6 +43,14 @@ describe("run-additional-boundary-checks", () => {
     expect(formatCommand({ command: "pnpm", args: ["run", "lint:core"] })).toBe(
       "pnpm run lint:core",
     );
+  });
+
+  it("keeps only a bounded tail of command output", () => {
+    const output = createBoundedOutputBuffer(12);
+    output.append("first-line\n");
+    output.append("second-line\n");
+
+    expect(output.read()).toBe("[output truncated to last 12 bytes]\nsecond-line\n");
   });
 
   it("parses and applies CI shard specs", () => {
@@ -108,5 +118,25 @@ describe("run-additional-boundary-checks", () => {
     expect(text).toContain("bad-out");
     expect(text).toContain("::error title=fails failed::fails failed (exit 7)");
     expect(text).toContain("Additional boundary check timings:");
+  });
+
+  it("times out hung checks", async () => {
+    const result = await runSingleCheck(
+      {
+        label: "hangs",
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+      },
+      {
+        checkTimeoutMs: 50,
+        cwd: process.cwd(),
+        env: process.env,
+        outputMaxBytes: 4096,
+      },
+    );
+
+    expect(result.code).toBe(1);
+    expect(result.timedOut).toBe(true);
+    expect(result.output).toContain("timed out after 50ms");
   });
 });

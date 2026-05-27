@@ -22,20 +22,24 @@ export type PersistSessionEntryParams = {
 export async function persistSessionEntry(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
-  const persisted = await updateSessionStore(params.storePath, (store) => {
-    const current = store[params.sessionKey];
-    if (params.shouldPersist && !params.shouldPersist(current)) {
-      return current;
-    }
-    const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
-    for (const field of params.clearedFields ?? []) {
-      if (!Object.hasOwn(params.entry, field)) {
-        Reflect.deleteProperty(merged, field);
+  const persisted = await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const current = store[params.sessionKey];
+      if (params.shouldPersist && !params.shouldPersist(current)) {
+        return current;
       }
-    }
-    store[params.sessionKey] = merged;
-    return merged;
-  });
+      const merged = mergeSessionEntry(store[params.sessionKey], params.entry);
+      for (const field of params.clearedFields ?? []) {
+        if (!Object.hasOwn(params.entry, field)) {
+          Reflect.deleteProperty(merged, field);
+        }
+      }
+      store[params.sessionKey] = merged;
+      return merged;
+    },
+    { takeCacheOwnership: true },
+  );
   if (persisted) {
     params.sessionStore[params.sessionKey] = persisted;
   } else {

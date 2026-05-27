@@ -3,8 +3,18 @@ import { tmpdir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import {
+  modelProviderConfigBatchJson,
+  resolveParallelsModelTimeoutSeconds,
+  resolveProviderAuth as resolveProviderAuthDirect,
+  resolveSnapshot,
+  resolveUbuntuVmName,
+  resolveWindowsProviderAuth,
+  run,
+  shellQuote,
+} from "../../scripts/e2e/parallels/common.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
-import { execNodeEvalSync, spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
+import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
   linux: "scripts/e2e/parallels-linux-smoke.sh",
@@ -47,10 +57,6 @@ function countNonEmptyLines(value: string): number {
   return count;
 }
 
-function runTsEval(source: string, env: Record<string, string> = {}) {
-  return execNodeEvalSync(source, { env: { ...process.env, ...env }, imports: ["tsx"] });
-}
-
 function fakePrlctlEnv(tempDir: string): Record<string, string> {
   const pathValue = `${tempDir}${delimiter}${process.env.Path ?? process.env.PATH ?? ""}`;
   const fakeBootstrap = pathToFileURL(join(tempDir, "prlctl-bootstrap.mjs")).href;
@@ -68,30 +74,25 @@ function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap:
   writeFileSync(join(tempDir, "prlctl-bootstrap.mjs"), windowsBootstrap);
 }
 
-function resolveProviderAuth(
-  provider: string,
-  options: {
-    apiKeyEnv?: string;
-    env?: Record<string, string>;
-    modelId?: string;
-  } = {},
-) {
-  const source = `
-import { resolveProviderAuth } from "./${TS_PATHS.common}";
-const result = resolveProviderAuth({
-  provider: ${JSON.stringify(provider)},
-  apiKeyEnv: ${JSON.stringify(options.apiKeyEnv)},
-  modelId: ${JSON.stringify(options.modelId)},
-});
-console.log(JSON.stringify(result));
-`;
-  return JSON.parse(runTsEval(source, options.env)) as {
-    apiKeyEnv: string;
-    apiKeyValue: string;
-    authChoice: string;
-    authKeyFlag: string;
-    modelId: string;
-  };
+function withEnv<T>(env: Record<string, string>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+  }
+  for (const [key, value] of Object.entries(env)) {
+    process.env[key] = value;
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 describe("Parallels smoke model selection", () => {
@@ -129,12 +130,7 @@ describe("Parallels smoke model selection", () => {
   });
 
   it("writes full model ids as config map keys in provider batches", () => {
-    const source = `
-import { modelProviderConfigBatchJson } from "./${TS_PATHS.common}";
-const result = modelProviderConfigBatchJson("openai/gpt-5.5", "windows");
-console.log(result);
-`;
-    const batch = JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" })) as Array<{
+    const batch = JSON.parse(modelProviderConfigBatchJson("openai/gpt-5.5", "windows")) as Array<{
       path: string;
       value: unknown;
     }>;
@@ -215,15 +211,10 @@ if (isPrlctl) {
     );
 
     try {
-      const output = runTsEval(
-        `
-import { resolveSnapshot, shellQuote } from "./${TS_PATHS.common}";
-console.log(shellQuote("it's ok"));
-const snapshot = resolveSnapshot("vm", "fresh");
-console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
-`,
-        fakePrlctlEnv(tempDir),
-      );
+      const output = withEnv(fakePrlctlEnv(tempDir), () => {
+        const snapshot = resolveSnapshot("vm", "fresh");
+        return `${shellQuote("it's ok")}\n${[snapshot.id, snapshot.state, snapshot.name].join("\t")}`;
+      });
 
       expect(output.split("\n")[0]).toBe("'it'\"'\"'s ok'");
       expect(output).toContain("{wanted}\tpoweroff\tfresh-poweroff-2026-04-01");
@@ -267,16 +258,12 @@ if (isPrlctl) {
     );
 
     try {
-      const output = runTsEval(
-        `
-import { resolveSnapshot } from "./${TS_PATHS.common}";
-const snapshot = resolveSnapshot("vm", "macOS 26.5 latest");
-console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
-`,
-        fakePrlctlEnv(tempDir),
-      );
+      const output = withEnv(fakePrlctlEnv(tempDir), () => {
+        const snapshot = resolveSnapshot("vm", "macOS 26.5 latest");
+        return [snapshot.id, snapshot.state, snapshot.name].join("\t");
+      });
 
-      expect(output.trim()).toBe("{wanted}\tpoweron\tmacOS 26.5");
+      expect(output).toBe("{wanted}\tpoweron\tmacOS 26.5");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
@@ -321,15 +308,9 @@ if (isPrlctl) {
     );
 
     try {
-      const output = runTsEval(
-        `
-import { resolveUbuntuVmName } from "./${TS_PATHS.common}";
-console.log(resolveUbuntuVmName("Ubuntu missing"));
-`,
-        fakePrlctlEnv(tempDir),
-      );
+      const output = withEnv(fakePrlctlEnv(tempDir), () => resolveUbuntuVmName("Ubuntu missing"));
 
-      expect(output.trim()).toBe("Ubuntu 26.04");
+      expect(output).toBe("Ubuntu 26.04");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }
@@ -353,7 +334,11 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
   });
 
   it("resolves provider defaults and explicit model overrides", () => {
-    expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
+    expect(
+      withEnv({ OPENAI_API_KEY: "sk-openai" }, () =>
+        resolveProviderAuthDirect({ provider: "openai" }),
+      ),
+    ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
@@ -362,11 +347,13 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     });
 
     expect(
-      resolveProviderAuth("anthropic", {
-        apiKeyEnv: "CUSTOM_ANTHROPIC_KEY",
-        env: { CUSTOM_ANTHROPIC_KEY: "sk-anthropic" },
-        modelId: "anthropic/custom",
-      }),
+      withEnv({ CUSTOM_ANTHROPIC_KEY: "sk-anthropic" }, () =>
+        resolveProviderAuthDirect({
+          apiKeyEnv: "CUSTOM_ANTHROPIC_KEY",
+          modelId: "anthropic/custom",
+          provider: "anthropic",
+        }),
+      ),
     ).toEqual({
       apiKeyEnv: "CUSTOM_ANTHROPIC_KEY",
       apiKeyValue: "sk-anthropic",
@@ -377,14 +364,11 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
   });
 
   it("uses the shared GPT-5 OpenAI model for Windows smoke unless overridden", () => {
-    const source = `
-import { resolveWindowsProviderAuth } from "./${TS_PATHS.common}";
-const result = resolveWindowsProviderAuth({
-  provider: "openai",
-});
-console.log(JSON.stringify(result));
-`;
-    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toEqual({
+    expect(
+      withEnv({ OPENAI_API_KEY: "sk-openai" }, () =>
+        resolveWindowsProviderAuth({ provider: "openai" }),
+      ),
+    ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
@@ -393,11 +377,12 @@ console.log(JSON.stringify(result));
     });
 
     expect(
-      JSON.parse(
-        runTsEval(source, {
+      withEnv(
+        {
           OPENAI_API_KEY: "sk-openai",
           OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL: "openai/custom-windows",
-        }),
+        },
+        () => resolveWindowsProviderAuth({ provider: "openai" }),
       ),
     ).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
@@ -568,6 +553,21 @@ console.log(JSON.stringify(result));
     expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
 
+  it("resolves macOS smoke commands from the guest PATH", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+
+    expect(macos).toContain("/usr/local/bin:/usr/local/sbin");
+    expect(macos).toContain('const guestOpenClaw = "openclaw"');
+    expect(macos).toContain('const guestNode = "node"');
+    expect(macos).toContain('const guestNpm = "npm"');
+    expect(macos).toContain("$(npm root -g)/openclaw/openclaw.mjs");
+    expect(macos).toContain("guestOpenClawEntryExec");
+    expect(macos).not.toContain('const guestOpenClaw = "/opt/homebrew/bin/openclaw"');
+    expect(macos).not.toContain('const guestNode = "/opt/homebrew/bin/node"');
+    expect(macos).not.toContain('const guestNpm = "/opt/homebrew/bin/npm"');
+    expect(macos).not.toContain("/opt/homebrew/lib/node_modules/openclaw/openclaw.mjs");
+  });
+
   it("keeps Windows gateway reachability on a real deadline with start recovery", () => {
     const script = readFileSync(TS_PATHS.windows, "utf8");
 
@@ -594,20 +594,41 @@ console.log(JSON.stringify(result));
   });
 
   it("returns timed-out host command status when check is disabled", () => {
-    const result = JSON.parse(
-      runTsEval(`
-import { run } from "./${TS_PATHS.hostCommand}";
-const result = run(process.execPath, ["-e", "process.stdout.write('partial'); setTimeout(() => {}, 1000);"], {
-  check: false,
-  quiet: true,
-  timeoutMs: 50,
-});
-console.log(JSON.stringify(result));
-`),
-    ) as { status: number; stdout: string };
+    const result = run(
+      process.execPath,
+      ["-e", "process.stdout.write('partial'); setTimeout(() => {}, 1000);"],
+      {
+        check: false,
+        quiet: true,
+        timeoutMs: 50,
+      },
+    );
 
     expect(result.status).toBe(124);
     expect(result.stdout).toBeTypeOf("string");
+  });
+
+  it("does not wait for host commands that trap SIGTERM after a timeout", () => {
+    const startedAt = Date.now();
+    const result = run(
+      process.execPath,
+      [
+        "-e",
+        [
+          "process.on('SIGTERM', () => {});",
+          "setTimeout(() => process.exit(77), 700);",
+          "setInterval(() => {}, 1000);",
+        ].join(""),
+      ],
+      {
+        check: false,
+        quiet: true,
+        timeoutMs: 50,
+      },
+    );
+
+    expect(result.status).toBe(124);
+    expect(Date.now() - startedAt).toBeLessThan(500);
   });
 
   it("routes Windows host pnpm and npm shims through safe runners", () => {
@@ -677,15 +698,11 @@ console.log(JSON.stringify(result));
   });
 
   it("gives GPT-5.5 enough Parallels model time on slower desktop guests", () => {
-    const source = `
-import { resolveParallelsModelTimeoutSeconds } from "./${TS_PATHS.common}";
-console.log(JSON.stringify({
-  macos: resolveParallelsModelTimeoutSeconds("macos"),
-  windows: resolveParallelsModelTimeoutSeconds("windows"),
-  linux: resolveParallelsModelTimeoutSeconds("linux"),
-}));
-`;
-    expect(JSON.parse(runTsEval(source))).toEqual({
+    expect({
+      linux: resolveParallelsModelTimeoutSeconds("linux"),
+      macos: resolveParallelsModelTimeoutSeconds("macos"),
+      windows: resolveParallelsModelTimeoutSeconds("windows"),
+    }).toEqual({
       linux: 900,
       macos: 1800,
       windows: 1800,

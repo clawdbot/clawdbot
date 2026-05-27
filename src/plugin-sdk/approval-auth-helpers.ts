@@ -10,7 +10,7 @@ const IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION = Symbol(
   "openclaw.implicitSameChatApprovalAuthorization",
 );
 
-function markImplicitSameChatApprovalAuthorization(
+export function markImplicitSameChatApprovalAuthorization(
   result: ApprovalAuthorizationResult,
 ): ApprovalAuthorizationResult {
   // Keep this non-enumerable to avoid changing auth payload shape.

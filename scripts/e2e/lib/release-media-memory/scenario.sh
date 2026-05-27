@@ -83,6 +83,7 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
   printf 'OPENCLAW_STATE_DIR=%s\n' "$OPENCLAW_STATE_DIR"
   printf 'OPENCLAW_CONFIG_PATH=%s\n' "$OPENCLAW_CONFIG_PATH"
 } >/tmp/openclaw-release-media-memory-env.log
+openclaw_e2e_enable_openclaw_cli_timeout
 (
   cd "$package_root/dist/extensions/memory-core"
   find . -type f | sed 's#^\./##' | sort

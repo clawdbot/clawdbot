@@ -253,6 +253,38 @@ function extractStatesFromUpserts(): SessionAcpMeta["state"][] {
   return states;
 }
 
+function extractStateUpsertPersistenceOptions(): Array<{
+  state: SessionAcpMeta["state"];
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+}> {
+  const options: Array<{
+    state: SessionAcpMeta["state"];
+    skipMaintenance?: boolean;
+    takeCacheOwnership?: boolean;
+  }> = [];
+  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
+    const payload = firstArg as {
+      skipMaintenance?: boolean;
+      takeCacheOwnership?: boolean;
+      mutate: (
+        current: SessionAcpMeta | undefined,
+        entry: { acp?: SessionAcpMeta } | undefined,
+      ) => SessionAcpMeta | null | undefined;
+    };
+    const current = readySessionMeta();
+    const next = payload.mutate(current, { acp: current });
+    if (next?.state && payload.skipMaintenance && payload.takeCacheOwnership) {
+      options.push({
+        state: next.state,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
+      });
+    }
+  }
+  return options;
+}
+
 function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | undefined> {
   const options: Array<AcpSessionRuntimeOptions | undefined> = [];
   for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
@@ -314,6 +346,10 @@ describe("AcpSessionManager", () => {
     }
     expect(resolved.error.code).toBe("ACP_SESSION_INIT_FAILED");
     expect(resolved.error.message).toContain("ACP metadata is missing");
+    expectRecordFields(mockCallArg(hoisted.readAcpSessionEntryMock), {
+      clone: false,
+      sessionKey: "agent:codex:acp:session-1",
+    });
   });
 
   it("canonicalizes the main alias before ACP rehydrate after restart", async () => {
@@ -361,6 +397,10 @@ describe("AcpSessionManager", () => {
       agent: "main",
       sessionKey: "agent:main:main",
     });
+    expect(extractStateUpsertPersistenceOptions()).toEqual([
+      { state: "running", skipMaintenance: true, takeCacheOwnership: true },
+      { state: "idle", skipMaintenance: true, takeCacheOwnership: true },
+    ]);
   });
 
   it("tracks parented direct ACP turns in the task registry", async () => {

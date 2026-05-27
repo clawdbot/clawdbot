@@ -199,6 +199,32 @@ describe("message action media helpers", () => {
     }
   });
 
+  maybeIt("normalizes the selected structured attachment sandbox source", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "msg-params-attachment-"));
+    try {
+      const attachment: Record<string, unknown> = {
+        path: "/workspace/replies/photo.png",
+        mimeType: "image/png",
+        name: "photo.png",
+      };
+      const args: Record<string, unknown> = {
+        attachments: [attachment],
+      };
+
+      await normalizeSandboxMediaParams({
+        args,
+        mediaPolicy: {
+          mode: "sandbox",
+          sandboxRoot,
+        },
+      });
+
+      expect(attachment.path).toBe(path.join(sandboxRoot, "replies", "photo.png"));
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
   it("collects host media source hints from the shared media-source key set", () => {
     expect(
       collectActionMediaSourceHints(
@@ -217,6 +243,73 @@ describe("message action media helpers", () => {
       "file:///workspace/assets/event-cover.png",
       "/workspace/avatars/profile.png",
       "mxc://matrix.org/abc123def456",
+    ]);
+  });
+
+  it("collects the selected structured attachment source for host media access", () => {
+    expect(
+      collectActionMediaSourceHints({
+        attachments: [
+          {
+            path: " /workspace/uploads/photo.png ",
+            mimeType: "image/png",
+            name: "photo.png",
+          },
+        ],
+      }),
+    ).toEqual([" /workspace/uploads/photo.png "]);
+  });
+
+  it("does not collect ignored structured attachments when top-level media wins", () => {
+    expect(
+      collectActionMediaSourceHints({
+        media: "https://example.com/top-level.png",
+        attachments: [
+          {
+            path: "/workspace/uploads/ignored.png",
+            mimeType: "image/png",
+            name: "ignored.png",
+          },
+        ],
+      }),
+    ).toEqual(["https://example.com/top-level.png"]);
+  });
+
+  it("does not collect ignored structured attachments when plugin media params win", () => {
+    expect(
+      collectActionMediaSourceHints(
+        {
+          avatarPath: "/workspace/avatars/profile.png",
+          attachments: [
+            {
+              path: "/workspace/uploads/ignored.png",
+              mimeType: "image/png",
+              name: "ignored.png",
+            },
+          ],
+        },
+        matrixMediaSourceParamKeys,
+      ),
+    ).toEqual(["/workspace/avatars/profile.png"]);
+  });
+
+  it("collects every structured attachment source when the send path uses all attachments", () => {
+    expect(
+      collectActionMediaSourceHints(
+        {
+          media: "https://example.com/top-level.png",
+          attachments: [
+            { path: "/workspace/uploads/one.png" },
+            { fileUrl: "/workspace/uploads/two.png" },
+          ],
+        },
+        undefined,
+        { structuredAttachments: "all" },
+      ),
+    ).toEqual([
+      "https://example.com/top-level.png",
+      "/workspace/uploads/one.png",
+      "/workspace/uploads/two.png",
     ]);
   });
 
@@ -428,6 +521,56 @@ describe("message action media helpers", () => {
     });
 
     expect(args.filename).toBe("cute.png");
+  });
+
+  it("hydrates reply attachments from the first structured attachment source", async () => {
+    const args: Record<string, unknown> = {
+      attachments: [
+        {
+          url: "https://example.com/cute.png",
+          mimeType: "image/png",
+          name: "cute.png",
+        },
+      ],
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("cute.png");
+    expect(args.contentType).toBe("image/png");
+  });
+
+  it("does not hydrate ignored structured attachments when plugin media params win", async () => {
+    const args: Record<string, unknown> = {
+      avatarPath: "/workspace/avatars/profile.png",
+      attachments: [
+        {
+          url: "https://example.com/ignored.png",
+          mimeType: "image/png",
+          name: "ignored.png",
+        },
+      ],
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+      extraParamKeys: matrixMediaSourceParamKeys,
+    });
+
+    expect(args.filename).toBe("attachment");
+    expect(args.contentType).toBeUndefined();
   });
 
   it("does not fall back caption->message on reply (reply has its own text field)", async () => {

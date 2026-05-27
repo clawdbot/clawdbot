@@ -68,14 +68,14 @@ Recommended for most interactive installs on macOS/Linux/WSL.
 
 <Steps>
   <Step title="Detect OS">
-    Supports macOS and Linux (including WSL). If macOS is detected, installs Homebrew if missing.
+    Supports macOS and Linux (including WSL).
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). OpenClaw still supports Node 22 LTS, currently `22.19+`, for compatibility.
+    Checks Node version and installs Node 24 if needed (Homebrew on macOS, NodeSource setup scripts on Linux apt/dnf/yum). On macOS, Homebrew is installed only when the installer needs it for Node or Git. OpenClaw still supports Node 22 LTS, currently `22.19+`, for compatibility.
     On Alpine/musl Linux, the installer uses apk packages instead of NodeSource; the configured Alpine repositories must provide Node `22.19+` (Alpine 3.21 or newer at the time of writing).
   </Step>
   <Step title="Ensure Git">
-    Installs Git if missing using the detected package manager, including apk on Alpine.
+    Installs Git if missing using the detected package manager, including Homebrew on macOS and apk on Alpine.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install

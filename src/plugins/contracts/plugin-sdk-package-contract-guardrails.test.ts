@@ -692,6 +692,16 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectPluginSdkPackageExports()).toEqual([...publicPluginSdkEntrypoints].toSorted());
   });
 
+  it("keeps Vitest-backed SDK test helpers local-only", () => {
+    const localOnly = new Set(privateLocalOnlyPluginSdkEntrypoints);
+
+    expect(
+      ["plugin-test-contracts", "provider-test-contracts", "testing"].every((entrypoint) =>
+        localOnly.has(entrypoint),
+      ),
+    ).toBe(true);
+  });
+
   it("keeps configured local-origin fetch helpers out of deprecated infra-runtime", () => {
     const source = fs.readFileSync(resolve(REPO_ROOT, "src/plugin-sdk/infra-runtime.ts"), "utf8");
 

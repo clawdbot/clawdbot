@@ -42,4 +42,60 @@ describe("status daemon summary", () => {
     expect(summary.layout?.sourceScope).toBe("system");
     expect(summary.layout?.entrypointSourceCheckout).toBe(false);
   });
+
+  it("includes suspicious systemd cgroup hygiene in the service runtime summary", async () => {
+    mocks.readServiceStatusSummary.mockResolvedValueOnce({
+      label: "systemd user",
+      installed: true,
+      loaded: true,
+      managedByOpenClaw: true,
+      externallyManaged: false,
+      loadedText: "enabled",
+      runtime: {
+        status: "running",
+        pid: 1234,
+        systemd: {
+          unit: "openclaw-gateway.service",
+          killMode: "process",
+          tasksCurrent: 807,
+          memoryCurrent: 11_918_534_246,
+        },
+      },
+    });
+
+    const summary = await getDaemonStatusSummary();
+    expect(summary.runtimeShort).toBe(
+      "running (pid 1234, cgroup hygiene: KillMode=process, tasks=807, memory=11.1GiB)",
+    );
+    expect(summary.runtime?.systemd).toEqual({
+      unit: "openclaw-gateway.service",
+      killMode: "process",
+      tasksCurrent: 807,
+      memoryCurrent: 11_918_534_246,
+    });
+  });
+
+  it("keeps normal systemd cgroup metrics out of the short status line", async () => {
+    mocks.readServiceStatusSummary.mockResolvedValueOnce({
+      label: "systemd user",
+      installed: true,
+      loaded: true,
+      managedByOpenClaw: true,
+      externallyManaged: false,
+      loadedText: "enabled",
+      runtime: {
+        status: "running",
+        pid: 1234,
+        systemd: {
+          unit: "openclaw-gateway.service",
+          killMode: "control-group",
+          tasksCurrent: 7,
+          memoryCurrent: 132_120_576,
+        },
+      },
+    });
+
+    const summary = await getDaemonStatusSummary();
+    expect(summary.runtimeShort).toBe("running (pid 1234)");
+  });
 });

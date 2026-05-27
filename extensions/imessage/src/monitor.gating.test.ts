@@ -94,7 +94,7 @@ async function buildDispatchContextPayload(params: {
   const { cfg, message } = params;
   const { decision, groupHistories } = await resolveDispatchDecision({ cfg, message });
 
-  const { ctxPayload } = buildIMessageInboundContext({
+  const { ctxPayload } = await buildIMessageInboundContext({
     cfg,
     decision,
     message,
@@ -106,7 +106,7 @@ async function buildDispatchContextPayload(params: {
 }
 
 describe("imessage monitor gating + envelope builders", () => {
-  it("parseIMessageNotification rejects malformed payloads", () => {
+  it("parseIMessageNotification rejects malformed payloads", async () => {
     expect(
       parseIMessageNotification({
         message: { chat_id: 1, sender: { nested: "nope" } },
@@ -114,7 +114,7 @@ describe("imessage monitor gating + envelope builders", () => {
     ).toBeNull();
   });
 
-  it("parseIMessageNotification preserves destination_caller_id metadata", () => {
+  it("parseIMessageNotification preserves destination_caller_id metadata", async () => {
     expect(
       parseIMessageNotification({
         message: {
@@ -241,7 +241,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["+15550001111"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -280,7 +280,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["chat_id:55"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -325,7 +325,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["accessGroup:oncall"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -364,7 +364,7 @@ describe("imessage monitor gating + envelope builders", () => {
       groupAllowFrom: ["+15550001111"],
       groupPolicy: "allowlist",
     });
-    const { ctxPayload } = buildIMessageInboundContext({
+    const { ctxPayload } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,

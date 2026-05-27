@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { normalizeStringEntries, sortUniqueStrings } from "../shared/string-normalization.js";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
 import { isBunRuntime, isNodeRuntime } from "./runtime-binary.js";
@@ -61,6 +64,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdAfterNetworkOnline: "systemd-after-network-online",
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
+  systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
 } as const;
 
 export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean {
@@ -79,10 +83,12 @@ function parseSystemdUnit(content: string): {
   after: Set<string>;
   wants: Set<string>;
   restartSec?: string;
+  killMode?: string;
 } {
   const after = new Set<string>();
   const wants = new Set<string>();
   let restartSec: string | undefined;
+  let killMode: string | undefined;
 
   for (const rawLine of content.split(/\r?\n/)) {
     const line = rawLine.trim();
@@ -118,10 +124,12 @@ function parseSystemdUnit(content: string): {
       }
     } else if (key === "RestartSec") {
       restartSec = value;
+    } else if (key === "KillMode") {
+      killMode = value;
     }
   }
 
-  return { after, wants, restartSec };
+  return { after, wants, restartSec, killMode };
 }
 
 function isRestartSecPreferred(value: string | undefined): boolean {
@@ -169,6 +177,16 @@ async function auditSystemdUnit(
       code: SERVICE_AUDIT_CODES.systemdRestartSec,
       message: "RestartSec does not match the recommended 5s",
       detail: unitPath,
+      level: "recommended",
+    });
+  }
+  const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
+  if (killMode === "process" || killMode === "none") {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
+      message:
+        "KillMode is process/none; service child processes can survive gateway stops and restarts.",
+      detail: `${unitPath}: ${killMode}`,
       level: "recommended",
     });
   }

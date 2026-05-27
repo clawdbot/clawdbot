@@ -126,6 +126,34 @@ async function runCliAgentEndHook(
   runAgentHarnessAgentEndHook(hookParams);
 }
 
+async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): Promise<void> {
+  if (params.suppressNextUserMessagePersistence === true || !params.userTurnTranscriptRecorder) {
+    return;
+  }
+
+  const target = {
+    transcriptPath: params.sessionFile,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    cwd: params.workspaceDir,
+    ...(params.config ? { config: params.config } : {}),
+  };
+  const persisted = await params.userTurnTranscriptRecorder.persistApproved({ target });
+  if (persisted) {
+    try {
+      const notification = params.onUserMessagePersisted?.(persisted.message);
+      if (notification) {
+        void Promise.resolve(notification).catch((error) => {
+          log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+        });
+      }
+    } catch (error) {
+      log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
+    }
+  }
+}
+
 async function finalizeCliContextEngineTurn(params: {
   context: PreparedCliRunContext;
   historyMessages: unknown[];
@@ -620,6 +648,7 @@ export async function runPreparedCliAgent(
       }
     }
 
+    await persistApprovedCliUserTurnTranscript(params);
     runAgentHarnessLlmInputHook({
       event: llmInputEvent,
       ctx: hookContext,

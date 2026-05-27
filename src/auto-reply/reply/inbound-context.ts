@@ -21,6 +21,13 @@ function normalizeTextField(value: unknown): string | undefined {
   return sanitizeInboundSystemTags(normalizeInboundTextNewlines(value));
 }
 
+function normalizeTrustedTextField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return normalizeInboundTextNewlines(value);
+}
+
 function normalizeMediaType(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -36,11 +43,41 @@ function countMediaEntries(ctx: MsgContext): number {
   return Math.max(pathCount, urlCount, single);
 }
 
+function applySupplementalContext(ctx: MsgContext): void {
+  const supplemental = ctx.SupplementalContext;
+  if (!supplemental) {
+    return;
+  }
+  const fields = {
+    ReplyToId: supplemental.quote?.id,
+    ReplyToIdFull: supplemental.quote?.fullId,
+    ReplyToBody: supplemental.quote?.body,
+    ReplyToSender: supplemental.quote?.sender,
+    ReplyToIsQuote: supplemental.quote?.isQuote,
+    ForwardedFrom: supplemental.forwarded?.from,
+    ForwardedFromType: supplemental.forwarded?.fromType,
+    ForwardedFromId: supplemental.forwarded?.fromId,
+    ForwardedDate: supplemental.forwarded?.date,
+    ThreadStarterBody: supplemental.thread?.starterBody,
+    ThreadHistoryBody: supplemental.thread?.historyBody,
+    ThreadLabel: supplemental.thread?.label,
+    GroupSystemPrompt: supplemental.groupSystemPrompt,
+    UntrustedStructuredContext: supplemental.untrustedContext,
+  };
+  for (const [key, value] of Object.entries(fields)) {
+    if (value !== undefined && ctx[key as keyof MsgContext] === undefined) {
+      ctx[key as keyof MsgContext] = value as never;
+    }
+  }
+  delete ctx.SupplementalContext;
+}
+
 export function finalizeInboundContext<T extends Record<string, unknown>>(
   ctx: T,
   opts: FinalizeInboundContextOptions = {},
 ): T & FinalizedMsgContext {
   const normalized = ctx as T & MsgContext;
+  applySupplementalContext(normalized);
 
   normalized.Body = sanitizeInboundSystemTags(
     normalizeInboundTextNewlines(typeof normalized.Body === "string" ? normalized.Body : ""),
@@ -50,6 +87,7 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
   normalized.Transcript = normalizeTextField(normalized.Transcript);
   normalized.ThreadStarterBody = normalizeTextField(normalized.ThreadStarterBody);
   normalized.ThreadHistoryBody = normalizeTextField(normalized.ThreadHistoryBody);
+  normalized.GroupSystemPrompt = normalizeTrustedTextField(normalized.GroupSystemPrompt);
   if (Array.isArray(normalized.UntrustedContext)) {
     const normalizedUntrusted = normalized.UntrustedContext.map((entry) =>
       sanitizeInboundSystemTags(normalizeInboundTextNewlines(entry)),

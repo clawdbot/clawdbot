@@ -121,7 +121,7 @@ jobs:
       # builder stalls; an explicit buildx invocation fails closed instead.
       - name: Build root Dockerfile smoke image
         run: |
-          timeout 45m docker buildx build \
+          timeout --kill-after=30s 45m docker buildx build \
             --progress=plain \
             --load \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
@@ -132,7 +132,7 @@ jobs:
 
       - name: Run root Dockerfile CLI smoke
         run: |
-          docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh openclaw-dockerfile-smoke:local -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -163,7 +163,7 @@ jobs:
 
       - name: Smoke test Dockerfile with matrix extension build arg
         run: |
-          docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh openclaw-ext-smoke:local -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -235,7 +235,7 @@ jobs:
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
           set -euo pipefail
-          if timeout 180s docker pull "$IMAGE_REF"; then
+          if timeout --kill-after=30s 180s docker pull "$IMAGE_REF"; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "Using existing root Dockerfile smoke image: \`$IMAGE_REF\`" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -256,7 +256,7 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.preflight.outputs.dockerfile_image }}
         run: |
-          timeout 45m docker buildx build \
+          timeout --kill-after=30s 45m docker buildx build \
             --progress=plain \
             --push \
             --build-arg OPENCLAW_EXTENSIONS=matrix \
@@ -320,13 +320,13 @@ jobs:
       - name: Pull root Dockerfile smoke image
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: timeout 600s docker pull "$IMAGE_REF"
+        run: timeout --kill-after=30s 600s docker pull "$IMAGE_REF"
 
       - name: Run root Dockerfile CLI smoke
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -359,7 +359,7 @@ jobs:
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
         run: |
-          docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
+          timeout --kill-after=30s 20m docker run --rm --entrypoint sh "$IMAGE_REF" -lc '
             which openclaw &&
             openclaw --version &&
             node -e "
@@ -426,7 +426,7 @@ jobs:
       - name: Pull root Dockerfile smoke image
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: timeout 600s docker pull "$IMAGE_REF"
+        run: timeout --kill-after=30s 600s docker pull "$IMAGE_REF"
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
@@ -435,7 +435,7 @@ jobs:
 
       - name: Build installer smoke image
         run: |
-          timeout 20m docker buildx build \
+          timeout --kill-after=30s 20m docker buildx build \
             --progress=plain \
             --load \
             -t openclaw-install-smoke:local \
@@ -444,7 +444,7 @@ jobs:
 
       - name: Build installer non-root image
         run: |
-          timeout 20m docker buildx build \
+          timeout --kill-after=30s 20m docker buildx build \
             --progress=plain \
             --load \
             -t openclaw-install-nonroot:local \
@@ -475,7 +475,7 @@ jobs:
 
       - name: Run Rocky Linux installer smoke
         run: |
-          timeout 20m docker run --rm \
+          timeout --kill-after=30s 20m docker run --rm \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
@@ -484,7 +484,7 @@ jobs:
 
       - name: Run Rocky Linux CLI installer smoke
         run: |
-          timeout 20m docker run --rm \
+          timeout --kill-after=30s 20m docker run --rm \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
@@ -512,7 +512,7 @@ jobs:
       - name: Pull root Dockerfile smoke image
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: timeout 600s docker pull "$IMAGE_REF"
+        run: timeout --kill-after=30s 600s docker pull "$IMAGE_REF"
 
       - name: Setup Node environment for Bun smoke
         uses: ./.github/actions/setup-node-env

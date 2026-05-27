@@ -519,6 +519,8 @@ private struct CanvasContent: View {
                         isSpeaking: self.appModel.talkMode.isSpeaking,
                         isUserSpeechDetected: self.appModel.talkMode.isUserSpeechDetected,
                         permissionState: self.appModel.talkMode.gatewayTalkPermissionState,
+                        voiceModeTitle: self.appModel.talkMode.gatewayTalkVoiceModeTitle,
+                        voiceModeSubtitle: self.appModel.talkMode.gatewayTalkVoiceModeSubtitle,
                         onEnableTalk: {
                             self.showTalkPermissionPrompt = true
                         },

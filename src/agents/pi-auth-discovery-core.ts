@@ -5,8 +5,7 @@ import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import { isRecord } from "../utils.js";
 import {
   listProviderEnvAuthLookupKeys,
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
+  resolveProviderEnvAuthLookupMaps,
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import type { PiCredentialMap } from "./pi-auth-credentials.js";
@@ -27,8 +26,8 @@ export function addEnvBackedPiCredentials(
     workspaceDir: options.workspaceDir,
     env,
   };
-  const candidateMap = resolveProviderEnvApiKeyCandidates(lookupParams);
-  const authEvidenceMap = resolveProviderEnvAuthEvidence(lookupParams);
+  const lookupMaps = resolveProviderEnvAuthLookupMaps(lookupParams);
+  const { aliasMap, envCandidateMap: candidateMap, authEvidenceMap } = lookupMaps;
   const next = { ...credentials };
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
@@ -43,6 +42,7 @@ export function addEnvBackedPiCredentials(
     const resolved = resolveEnvApiKey(provider, env, {
       config: options.config,
       workspaceDir: options.workspaceDir,
+      aliasMap,
       candidateMap,
       authEvidenceMap,
     });

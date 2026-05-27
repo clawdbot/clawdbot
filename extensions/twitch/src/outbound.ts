@@ -10,7 +10,7 @@ import {
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveTwitchAccountContext } from "./config.js";
 import { sendMessageTwitchInternal } from "./send.js";

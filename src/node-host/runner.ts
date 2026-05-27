@@ -73,6 +73,7 @@ const NODE_HOST_EXIT_ON_RECONNECT_PAUSE_CODES: ReadonlySet<string> = new Set([
   ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
   ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH,
+  ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
 ]);
 
 type NodeHostReconnectPausedDeps = {

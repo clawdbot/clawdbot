@@ -31,12 +31,14 @@ describe("imessageApprovalNativeRuntime", () => {
         commandText: "echo hi",
         actions: [
           {
+            kind: "decision",
             decision: "allow-once",
             label: "Allow Once",
             command: "/approve exec-1 allow-once",
             style: "success",
           },
           {
+            kind: "decision",
             decision: "deny",
             label: "Deny",
             command: "/approve exec-1 deny",
@@ -81,18 +83,21 @@ describe("imessageApprovalNativeRuntime", () => {
         severity: "warning",
         actions: [
           {
+            kind: "decision",
             decision: "allow-once",
             label: "Allow Once",
             command: "/approve plugin:abc allow-once",
             style: "success",
           },
           {
+            kind: "decision",
             decision: "allow-always",
             label: "Allow Always",
             command: "/approve plugin:abc allow-always",
             style: "primary",
           },
           {
+            kind: "decision",
             decision: "deny",
             label: "Deny",
             command: "/approve plugin:abc deny",
@@ -108,6 +113,70 @@ describe("imessageApprovalNativeRuntime", () => {
     expect(payload.text).toContain("👎 Deny");
     expect(payload.text).not.toContain("/approve <id>");
     expect(payload.allowedDecisions).toEqual(["allow-once", "allow-always", "deny"]);
+  });
+
+  it("keeps plugin command actions visible without registering them as reactions", async () => {
+    const payload = await imessageApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: { accountId: "default" },
+      request: {
+        id: "plugin:agentkit",
+        request: {
+          title: "World proof required for exec",
+          description: "Verify with World before exec runs.",
+          pluginId: "agentkit",
+          toolName: "exec",
+          severity: "warning",
+          actions: [
+            {
+              kind: "command",
+              label: "Verify once",
+              command: "/agentkit approve plugin:agentkit allow-once",
+              style: "success",
+            },
+            {
+              kind: "decision",
+              label: "Deny",
+              command: "/approve plugin:agentkit deny",
+              decision: "deny",
+              style: "danger",
+            },
+          ],
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "plugin",
+      nowMs: 0,
+      view: {
+        approvalKind: "plugin",
+        approvalId: "plugin:agentkit",
+        title: "World proof required for exec",
+        severity: "warning",
+        actions: [
+          {
+            kind: "command",
+            label: "Verify once",
+            command: "/agentkit approve plugin:agentkit allow-once",
+            style: "success",
+          },
+          {
+            kind: "decision",
+            decision: "deny",
+            label: "Deny",
+            command: "/approve plugin:agentkit deny",
+            style: "danger",
+          },
+        ],
+      } as never,
+    });
+
+    expect(payload.text).toContain("/agentkit approve plugin:agentkit allow-once");
+    expect(payload.text).toContain("/approve plugin:agentkit deny");
+    expect(payload.text).toContain("👎 Deny");
+    expect(payload.text).not.toContain("👍 Allow Once");
+    expect(payload.allowedDecisions).toEqual(["deny"]);
   });
 
   it("normalizes iMessage handle targets and carries account ids into prepared delivery", async () => {

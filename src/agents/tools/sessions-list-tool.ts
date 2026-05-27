@@ -417,9 +417,19 @@ export function createSessionsListTool(opts?: {
         await Promise.all(Array.from({ length: maxConcurrent }, () => worker()));
       }
 
+      const visibilityMetadata =
+        visibility === "all"
+          ? undefined
+          : {
+              mode: visibility,
+              restricted: true,
+              warning: `Session visibility is restricted (effective tools.sessions.visibility=${visibility}). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.`,
+            };
+
       return jsonResult({
         count: rows.length,
         sessions: rows,
+        ...(visibilityMetadata ? { visibility: visibilityMetadata } : {}),
       });
     },
   };

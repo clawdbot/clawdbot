@@ -39,11 +39,21 @@ const STRUCTURED_SECRET_ENV_FIELD_RE = new RegExp(
   "i",
 );
 
+const ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`;
+const ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN = String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`;
+const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^\s&#]+)`;
+const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
+  ENV_ASSIGNMENT_REDACT_PATTERN,
+  ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
+  STANDALONE_ASSIGNMENT_REDACT_PATTERN,
+]);
+const shellReferencePreservingPatterns = new WeakSet<RegExp>();
+
 const DEFAULT_REDACT_PATTERNS: string[] = [
   // ENV-style assignments. Keep this case-sensitive so diagnostics like
   // `Unrecognized key: "llm"` do not lose the actual config key.
-  String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g`,
-  String.raw`/\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|${PAYMENT_CREDENTIAL_ENV_KEYS})\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g`,
+  ENV_ASSIGNMENT_REDACT_PATTERN,
+  ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
   // URL query parameters. Keep this separate from ENV-style assignments so
   // lower-case URL secrets stay redacted without hiding config-key diagnostics.
   String.raw`/[?&](?:access[-_]?token|auth[-_]?token|hook[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret|token|key|secret|password|pass|passwd|auth|signature|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^&\s"'<>]+)/gi`,
@@ -62,7 +72,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
   // Standalone token assignments in CLI or HTTP diagnostics. URL query params
   // are handled above so non-secret params survive and long values stay hinted.
-  String.raw`(^|[\s,;])(?:access_token|refresh_token|auth[-_]?token|api[-_]?key|client[-_]?secret|app[-_]?secret|token|secret|password|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^\s&#]+)`,
+  STANDALONE_ASSIGNMENT_REDACT_PATTERN,
   // PEM blocks.
   String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]+?-----END [A-Z ]*PRIVATE KEY-----`,
   // Common token prefixes.
@@ -87,6 +97,10 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
   String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
 ];
+let defaultResolvedPatterns: RegExp[] | undefined;
+
+const DEFAULT_REDACT_PREFILTER_RE =
+  /(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|AUTH|COOKIE|SIGNATURE|CARD|CVC|CVV|PAYMENT|PRIVATE KEY|[?&]pass=|security[-_]?code|securityCode|\bBearer\s+|sk-|ghp_|github_pat_|xox[baprs]-|xapp-|gsk_|AIza|ya29\.|1\/\/0|eyJ|pplx-|npm_|AKID|LTAI|hf_|r8_|\bbot\d{6,}:|\b\d{6,}:[A-Za-z0-9_-]{20,})/i;
 
 export type RedactOptions = {
   mode?: RedactSensitiveMode;
@@ -103,26 +117,36 @@ function normalizeMode(value?: string): RedactSensitiveMode {
 }
 
 function parsePattern(raw: RedactPattern): RegExp | null {
+  let pattern: RegExp | null = null;
   if (raw instanceof RegExp) {
     if (raw.flags.includes("g")) {
-      return raw;
+      pattern = raw;
+    } else {
+      pattern = new RegExp(raw.source, `${raw.flags}g`);
     }
-    return new RegExp(raw.source, `${raw.flags}g`);
+  } else if (raw.trim()) {
+    const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
+    if (match) {
+      const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
+      pattern = compileConfigRegex(match[1], flags)?.regex ?? null;
+    } else {
+      pattern = compileConfigRegex(raw, "gi")?.regex ?? null;
+    }
   }
-  if (!raw.trim()) {
-    return null;
+  if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
+    shellReferencePreservingPatterns.add(pattern);
   }
-  const match = raw.match(/^\/(.+)\/([gimsuy]*)$/);
-  if (match) {
-    const flags = match[2].includes("g") ? match[2] : `${match[2]}g`;
-    return compileConfigRegex(match[1], flags)?.regex ?? null;
-  }
-  return compileConfigRegex(raw, "gi")?.regex ?? null;
+  return pattern;
 }
 
 function resolvePatterns(value?: RedactPattern[]): RegExp[] {
-  const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
-  return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  if (!value?.length) {
+    defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
+      (re): re is RegExp => Boolean(re),
+    );
+    return defaultResolvedPatterns;
+  }
+  return value.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
 
 function maskToken(token: string): string {
@@ -142,11 +166,46 @@ function redactPemBlock(block: string): string {
   return `${lines[0]}\n…redacted…\n${lines[lines.length - 1]}`;
 }
 
-function redactMatch(match: string, groups: string[]): string {
+function isShellReferenceToKey(key: string, value: string): boolean {
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) {
+    return false;
+  }
+  const bare = value.match(/^\$([A-Z_][A-Z0-9_]*)$/);
+  if (bare) {
+    return bare[1] === key;
+  }
+  const braced = value.match(/^\$\{([A-Z_][A-Z0-9_]*)(?::[-=?+])?\}$/);
+  return braced?.[1] === key;
+}
+
+function readEnvAssignmentKey(match: string): string | undefined {
+  return match.match(/\b([A-Z_][A-Z0-9_]*)\b\s*[=:]/)?.[1];
+}
+
+function shouldPreserveShellReferenceMatch(match: string, token: string): boolean {
+  const key = readEnvAssignmentKey(match);
+  return key ? isShellReferenceToKey(key, token) : false;
+}
+
+function isEmptyShellParameterExpansionTail(token: string): boolean {
+  return /^[-=?+]\}$/.test(token);
+}
+
+function redactMatch(
+  match: string,
+  groups: string[],
+  options: { preserveShellReferences?: boolean } = {},
+): string {
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match);
   }
   const token = groups.findLast((value) => typeof value === "string" && value.length > 0) ?? match;
+  const preserveShellReferences =
+    options.preserveShellReferences &&
+    (shouldPreserveShellReferenceMatch(match, token) || isEmptyShellParameterExpansionTail(token));
+  if (preserveShellReferences) {
+    return match;
+  }
   const masked = maskToken(token);
   if (token === match) {
     return masked;
@@ -158,10 +217,16 @@ function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
     next = replacePatternBounded(next, pattern, (...args: string[]) =>
-      redactMatch(args[0], args.slice(1, -2)),
+      redactMatch(args[0], args.slice(1, -2), {
+        preserveShellReferences: shellReferencePreservingPatterns.has(pattern),
+      }),
     );
   }
   return next;
+}
+
+function couldMatchDefaultRedactPatterns(text: string): boolean {
+  return DEFAULT_REDACT_PREFILTER_RE.test(text);
 }
 
 function looksLikeAppSpecificPassword(candidate: string): boolean {
@@ -201,10 +266,14 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
-  const resolved = resolveRedactOptions(options);
-  if (resolved.mode === "off") {
+  const resolvedOptions = options ?? resolveConfigRedaction();
+  if (normalizeMode(resolvedOptions.mode) === "off") {
     return text;
   }
+  if (!resolvedOptions.patterns?.length && !couldMatchDefaultRedactPatterns(text)) {
+    return text;
+  }
+  const resolved = resolveRedactOptions(resolvedOptions);
   if (!resolved.patterns.length) {
     return text;
   }
@@ -272,6 +341,9 @@ function redactSensitiveFieldValueWithOptions(
     return redacted;
   }
   if (isSensitiveFieldKey(key)) {
+    if (isShellReferenceToKey(key, value)) {
+      return value;
+    }
     return maskToken(value);
   }
   return value;

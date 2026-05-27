@@ -1,27 +1,48 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
-import {
-  collectExecPolicyScopeSnapshots,
-  resolveExecPolicyScopeSummary,
-} from "./exec-approvals-effective.js";
 import {
   makeMockCommandResolution,
   makeMockExecutableResolution,
 } from "./exec-approvals-test-helpers.js";
-import {
-  evaluateExecAllowlist,
-  hasDurableExecApproval,
-  maxAsk,
-  minSecurity,
-  requireValidExecTarget,
-  type ExecApprovalsFile,
-  normalizeExecAsk,
-  normalizeExecHost,
-  normalizeExecTarget,
-  normalizeExecSecurity,
-  requiresExecApproval,
-} from "./exec-approvals.js";
+import type { ExecApprovalsFile } from "./exec-approvals.js";
+
+vi.unmock("./exec-approvals.js");
+vi.unmock("./exec-approvals-effective.js");
+
+let collectExecPolicyScopeSnapshots: typeof import("./exec-approvals-effective.js").collectExecPolicyScopeSnapshots;
+let resolveExecPolicyScopeSummary: typeof import("./exec-approvals-effective.js").resolveExecPolicyScopeSummary;
+let evaluateExecAllowlist: typeof import("./exec-approvals.js").evaluateExecAllowlist;
+let hasDurableExecApproval: typeof import("./exec-approvals.js").hasDurableExecApproval;
+let maxAsk: typeof import("./exec-approvals.js").maxAsk;
+let minSecurity: typeof import("./exec-approvals.js").minSecurity;
+let requireValidExecTarget: typeof import("./exec-approvals.js").requireValidExecTarget;
+let normalizeExecAsk: typeof import("./exec-approvals.js").normalizeExecAsk;
+let normalizeExecHost: typeof import("./exec-approvals.js").normalizeExecHost;
+let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
+let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
+let requiresExecApproval: typeof import("./exec-approvals.js").requiresExecApproval;
+
+async function loadActualExecApprovalModules(): Promise<void> {
+  vi.resetModules();
+  const execApprovals =
+    await vi.importActual<typeof import("./exec-approvals.js")>("./exec-approvals.js");
+  const effective = await vi.importActual<typeof import("./exec-approvals-effective.js")>(
+    "./exec-approvals-effective.js",
+  );
+  collectExecPolicyScopeSnapshots = effective.collectExecPolicyScopeSnapshots;
+  resolveExecPolicyScopeSummary = effective.resolveExecPolicyScopeSummary;
+  evaluateExecAllowlist = execApprovals.evaluateExecAllowlist;
+  hasDurableExecApproval = execApprovals.hasDurableExecApproval;
+  maxAsk = execApprovals.maxAsk;
+  minSecurity = execApprovals.minSecurity;
+  requireValidExecTarget = execApprovals.requireValidExecTarget;
+  normalizeExecAsk = execApprovals.normalizeExecAsk;
+  normalizeExecHost = execApprovals.normalizeExecHost;
+  normalizeExecTarget = execApprovals.normalizeExecTarget;
+  normalizeExecSecurity = execApprovals.normalizeExecSecurity;
+  requiresExecApproval = execApprovals.requiresExecApproval;
+}
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
@@ -65,6 +86,10 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
 }
 
 describe("exec approvals policy helpers", () => {
+  beforeEach(async () => {
+    await loadActualExecApprovalModules();
+  });
+
   it.each([
     { raw: " gateway ", expected: "gateway" },
     { raw: "NODE", expected: "node" },
@@ -217,6 +242,7 @@ describe("exec approvals policy helpers", () => {
     const executable = makeMockExecutableResolution({
       rawExecutable: "/usr/bin/echo",
       resolvedPath: "/usr/bin/echo",
+      resolvedRealPath: "/usr/bin/echo",
       executableName: "echo",
     });
     const result = evaluateExecAllowlist({

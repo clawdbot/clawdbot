@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -14,7 +14,15 @@ import {
   listHealthChecks,
   registerHealthCheck,
 } from "./health-check-registry.js";
-import type { HealthCheck } from "./health-checks.js";
+import type { HealthCheck, HealthFinding } from "./health-checks.js";
+
+const mocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn(async () => []),
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: mocks.loadModelCatalog,
+}));
 
 const runtime = { log() {}, error() {}, exit() {} };
 
@@ -66,6 +74,9 @@ function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthChe
     async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
       return [];
     },
+    async collectRuntimeToolSchemaFindings() {
+      return [];
+    },
     ...overrides,
   };
 }
@@ -82,6 +93,8 @@ describe("registerCoreHealthChecks", () => {
   beforeEach(() => {
     clearHealthChecksForTest();
     resetCoreHealthChecksForTest();
+    mocks.loadModelCatalog.mockClear();
+    mocks.loadModelCatalog.mockResolvedValue([]);
   });
 
   it("registers the built-in health checks once", () => {
@@ -269,6 +282,25 @@ describe("registerCoreHealthChecks", () => {
     );
   });
 
+  it("uses the read-only model catalog for hooks.gmail.model checks", async () => {
+    const cfg: OpenClawConfig = {
+      hooks: {
+        gmail: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const check = getCheck(createCoreHealthChecks(createDeps()), "core/doctor/hooks-model");
+
+    await check.detect({
+      mode: "lint",
+      runtime,
+      cfg,
+    });
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+  });
+
   it("converts workspace suggestions into info findings", async () => {
     const check = getCheck(
       createCoreHealthChecks(
@@ -312,6 +344,43 @@ describe("registerCoreHealthChecks", () => {
         checkId: "core/doctor/workspace-suggestions",
         severity: "info",
         message: "Memory system not found in workspace.",
+      }),
+    );
+  });
+
+  it("reports active runtime tool schema projection findings", async () => {
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectRuntimeToolSchemaFindings(): Promise<readonly HealthFinding[]> {
+            return [
+              {
+                checkId: "core/doctor/runtime-tool-schemas",
+                severity: "error",
+                message:
+                  "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
+                path: "plugins.entries.dofbot",
+                target: "dofbot_move_angles",
+                requirement: 'dofbot_move_angles.parameters.type must be "object"',
+              },
+            ];
+          },
+        }),
+      ),
+      "core/doctor/runtime-tool-schemas",
+    );
+
+    await expect(
+      check.detect({
+        mode: "doctor",
+        runtime,
+        cfg: {},
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "error",
+        target: "dofbot_move_angles",
       }),
     );
   });

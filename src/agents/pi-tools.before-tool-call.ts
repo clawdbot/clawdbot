@@ -106,6 +106,10 @@ type HookOutcome =
     }
   | { blocked: false; params: unknown };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
+type BeforeToolCallWrapperOptions = {
+  approvalMode?: "request" | "report";
+  emitDiagnostics: boolean;
+};
 
 export type BeforeToolCallPolicyDiagnosticState = {
   hasBeforeToolCallHook: boolean;
@@ -143,6 +147,8 @@ export function hasBeforeToolCallPolicy(): boolean {
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
 const BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS = Symbol("beforeToolCallDiagnosticOptions");
+const BEFORE_TOOL_CALL_SOURCE_TOOL = Symbol("beforeToolCallSourceTool");
+const BEFORE_TOOL_CALL_HOOK_CONTEXT = Symbol("beforeToolCallHookContext");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
@@ -355,6 +361,23 @@ function emitSkillUsedDiagnostic(params: {
   });
 }
 
+function notifyPluginApprovalResolution(
+  approval: PluginApprovalRequest,
+  resolution: PluginApprovalResolution,
+): void {
+  const onResolution = approval.onResolution;
+  if (typeof onResolution !== "function") {
+    return;
+  }
+  try {
+    void Promise.resolve(onResolution(resolution)).catch((err) => {
+      log.warn(`plugin onResolution callback failed: ${String(err)}`);
+    });
+  } catch (err) {
+    log.warn(`plugin onResolution callback failed: ${String(err)}`);
+  }
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -365,19 +388,6 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
-  const safeOnResolution = (resolution: PluginApprovalResolution): void => {
-    const onResolution = approval.onResolution;
-    if (typeof onResolution !== "function") {
-      return;
-    }
-    try {
-      void Promise.resolve(onResolution(resolution)).catch((err) => {
-        log.warn(`plugin onResolution callback failed: ${String(err)}`);
-      });
-    } catch (err) {
-      log.warn(`plugin onResolution callback failed: ${String(err)}`);
-    }
-  };
   try {
     const requestResult: {
       id?: string;
@@ -394,6 +404,8 @@ async function requestPluginToolApproval(params: {
         description: approval.description,
         severity: approval.severity,
         allowedDecisions: approval.allowedDecisions,
+        actions: approval.actions,
+        keepPendingWithoutRoute: approval.keepPendingWithoutRoute,
         toolName: params.toolName,
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
@@ -405,7 +417,7 @@ async function requestPluginToolApproval(params: {
     );
     const id = requestResult?.id;
     if (!id) {
-      safeOnResolution(PluginApprovalResolutions.CANCELLED);
+      notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
       return {
         blocked: true,
         kind: "failure",
@@ -422,7 +434,7 @@ async function requestPluginToolApproval(params: {
     if (hasImmediateDecision) {
       decision = requestResult?.decision;
       if (decision === null) {
-        safeOnResolution(PluginApprovalResolutions.CANCELLED);
+        notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
         return {
           blocked: true,
           kind: "failure",
@@ -473,7 +485,7 @@ async function requestPluginToolApproval(params: {
       decision === PluginApprovalResolutions.DENY
         ? decision
         : PluginApprovalResolutions.TIMEOUT;
-    safeOnResolution(resolution);
+    notifyPluginApprovalResolution(approval, resolution);
     if (
       decision === PluginApprovalResolutions.ALLOW_ONCE ||
       decision === PluginApprovalResolutions.ALLOW_ALWAYS
@@ -507,7 +519,7 @@ async function requestPluginToolApproval(params: {
       params: params.baseParams,
     };
   } catch (err) {
-    safeOnResolution(PluginApprovalResolutions.CANCELLED);
+    notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
     if (isAbortSignalCancellation(err, params.signal)) {
       log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
       return {
@@ -796,6 +808,10 @@ export async function runBeforeToolCallHook(args: {
     }
     if (trustedPolicyResult?.requireApproval) {
       if (args.approvalMode === "report") {
+        notifyPluginApprovalResolution(
+          trustedPolicyResult.requireApproval,
+          PluginApprovalResolutions.CANCELLED,
+        );
         return {
           blocked: true,
           kind: "failure",
@@ -862,6 +878,10 @@ export async function runBeforeToolCallHook(args: {
 
     if (hookResult?.requireApproval) {
       if (args.approvalMode === "report") {
+        notifyPluginApprovalResolution(
+          hookResult.requireApproval,
+          PluginApprovalResolutions.CANCELLED,
+        );
         return {
           blocked: true,
           kind: "failure",
@@ -908,7 +928,7 @@ export async function runBeforeToolCallHook(args: {
 export function wrapToolWithBeforeToolCallHook(
   tool: AnyAgentTool,
   ctx?: HookContext,
-  options: { emitDiagnostics?: boolean } = {},
+  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
 ): AnyAgentTool {
   const execute = tool.execute;
   if (!execute) {
@@ -916,7 +936,10 @@ export function wrapToolWithBeforeToolCallHook(
   }
   const toolName = tool.name || "tool";
   const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
-  const diagnosticOptions = { emitDiagnostics: options.emitDiagnostics !== false };
+  const hookOptions: BeforeToolCallWrapperOptions = {
+    ...(options.approvalMode ? { approvalMode: options.approvalMode } : {}),
+    emitDiagnostics: options.emitDiagnostics !== false,
+  };
   const wrappedTool: AnyAgentTool = {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -929,6 +952,7 @@ export function wrapToolWithBeforeToolCallHook(
         toolCallId,
         ctx,
         signal,
+        approvalMode: hookOptions.approvalMode,
       });
       if (outcome.blocked) {
         if (outcome.kind !== "veto") {
@@ -948,7 +972,7 @@ export function wrapToolWithBeforeToolCallHook(
           ...(toolCallId && { toolCallId }),
           paramsSummary: summarizeToolParams(outcome.params ?? hookParams),
         };
-        if (diagnosticOptions.emitDiagnostics) {
+        if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEvent({
             type: "tool.execution.blocked",
             ...eventBase,
@@ -990,7 +1014,7 @@ export function wrapToolWithBeforeToolCallHook(
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(executeParams),
       };
-      if (diagnosticOptions.emitDiagnostics) {
+      if (hookOptions.emitDiagnostics) {
         emitTrustedDiagnosticEvent({
           type: "tool.execution.started",
           ...eventBase,
@@ -1012,7 +1036,7 @@ export function wrapToolWithBeforeToolCallHook(
           toolParams: executeParams,
           ctx,
         });
-        if (diagnosticOptions.emitDiagnostics) {
+        if (hookOptions.emitDiagnostics) {
           if (skillMatch) {
             emitSkillUsedDiagnostic({
               ctx,
@@ -1031,7 +1055,7 @@ export function wrapToolWithBeforeToolCallHook(
       } catch (err) {
         const cause = unwrapErrorCause(err);
         const errorCode = diagnosticHttpStatusCode(cause);
-        if (diagnosticOptions.emitDiagnostics) {
+        if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEvent({
             type: "tool.execution.error",
             ...eventBase,
@@ -1058,7 +1082,15 @@ export function wrapToolWithBeforeToolCallHook(
     enumerable: true,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
-    value: diagnosticOptions,
+    value: hookOptions,
+    enumerable: false,
+  });
+  Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_SOURCE_TOOL, {
+    value: tool,
+    enumerable: false,
+  });
+  Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_HOOK_CONTEXT, {
+    value: ctx,
     enumerable: false,
   });
   return wrappedTool;
@@ -1077,6 +1109,25 @@ export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled:
   }
 }
 
+export function rewrapToolWithBeforeToolCallHook(
+  tool: AnyAgentTool,
+  ctx?: HookContext,
+  options: { approvalMode?: "request" | "report"; emitDiagnostics?: boolean } = {},
+): AnyAgentTool {
+  const taggedTool = tool as unknown as Record<symbol, unknown>;
+  const source = taggedTool[BEFORE_TOOL_CALL_SOURCE_TOOL];
+  const wrappedContext = taggedTool[BEFORE_TOOL_CALL_HOOK_CONTEXT];
+  const preservedContext =
+    wrappedContext && typeof wrappedContext === "object"
+      ? (wrappedContext as HookContext)
+      : undefined;
+  return wrapToolWithBeforeToolCallHook(
+    source && typeof source === "object" ? (source as AnyAgentTool) : tool,
+    ctx ?? preservedContext,
+    options,
+  );
+}
+
 export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
   if (!isToolWrappedWithBeforeToolCallHook(source)) {
     return;
@@ -1084,6 +1135,19 @@ export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAg
   Object.defineProperty(target, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,
+  });
+  const taggedSource = source as unknown as Record<symbol, unknown>;
+  const sourceTool = taggedSource[BEFORE_TOOL_CALL_SOURCE_TOOL];
+  if (sourceTool && typeof sourceTool === "object") {
+    Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {
+      value: sourceTool,
+      enumerable: false,
+    });
+  }
+  const hookContext = taggedSource[BEFORE_TOOL_CALL_HOOK_CONTEXT];
+  Object.defineProperty(target, BEFORE_TOOL_CALL_HOOK_CONTEXT, {
+    value: hookContext,
+    enumerable: false,
   });
 }
 
@@ -1096,6 +1160,8 @@ export function consumeAdjustedParamsForToolCall(toolCallId: string, runId?: str
 
 export const testing = {
   BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
   BEFORE_TOOL_CALL_WRAPPED,
   buildAdjustedParamsKey,
   adjustedParamsByToolCallId,

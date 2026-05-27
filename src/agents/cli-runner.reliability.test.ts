@@ -10,6 +10,7 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -100,6 +101,23 @@ function createSessionFile(params?: { history?: Array<{ role: "user"; content: s
     );
   }
   return { dir, sessionFile, storePath };
+}
+
+function createCliUserTurnRecorder(params: {
+  text: string;
+  sessionFile: string;
+  sessionKey?: string;
+  workspaceDir: string;
+}) {
+  return createUserTurnTranscriptRecorder({
+    input: { text: params.text },
+    target: {
+      transcriptPath: params.sessionFile,
+      sessionId: "s1",
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      cwd: params.workspaceDir,
+    },
+  });
 }
 
 function buildPreparedContext(params?: {
@@ -220,6 +238,16 @@ function expectTextMessage(value: unknown, fields: { role: string; content: stri
   expect(message.role).toBe(fields.role);
   expect(message.content).toBe(fields.content);
   expect(message.timestamp).toBeTypeOf("number");
+}
+
+function readTranscriptMessages(sessionFile: string): unknown[] {
+  return fs
+    .readFileSync(sessionFile, "utf-8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { message?: unknown })
+    .map((entry) => entry.message)
+    .filter(Boolean);
 }
 
 describe("runCliAgent reliability", () => {
@@ -808,8 +836,225 @@ describe("runCliAgent reliability", () => {
     releaseAgentEnd();
   });
 
+  it("persists approved CLI user turns before model execution", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(onUserMessagePersisted).toHaveBeenCalledOnce();
+      expect(onUserMessagePersisted).toHaveBeenCalledWith(
+        expect.objectContaining({
+          role: "user",
+          content: "display prompt",
+        }),
+      );
+
+      const messages = readTranscriptMessages(sessionFile);
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          role: "user",
+          content: "display prompt",
+        }),
+      );
+      expect(JSON.stringify(messages)).not.toContain("runtime prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an existing user-turn recorder for approved CLI persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "recorder display prompt",
+        media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+        timestamp: 123,
+        idempotencyKey: "cli-recorder:user",
+      },
+      target: {
+        transcriptPath: sessionFile,
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        cwd: dir,
+      },
+      updateMode: "none",
+    });
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-recorder",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.hasPersisted()).toBe(true);
+
+      const messages = readTranscriptMessages(sessionFile);
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "recorder display prompt",
+          MediaPath: "/tmp/image.png",
+          MediaType: "image/png",
+          timestamp: 123,
+          idempotencyKey: "cli-recorder:user",
+        }),
+      ]);
+      expect(JSON.stringify(messages)).not.toContain("legacy display prompt");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fail CLI execution when persistence notification fails", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello despite notification failure",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-notify-fail",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "display prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted: () => {
+            throw new Error("notification failed");
+          },
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello despite notification failure" }]);
+      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not execute the CLI when approved user turn persistence fails", async () => {
+    supervisorSpawnMock.mockClear();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-fail-"));
+    const blockedParent = path.join(dir, "not-a-directory");
+    fs.writeFileSync(blockedParent, "occupied", "utf-8");
+    const onUserMessagePersisted = vi.fn();
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-fails",
+      });
+
+      await expect(
+        runPreparedCliAgent({
+          ...context,
+          params: {
+            ...context.params,
+            agentId: "main",
+            sessionFile: path.join(blockedParent, "s1.jsonl"),
+            workspaceDir: dir,
+            prompt: "runtime prompt",
+            userTurnTranscriptRecorder: createCliUserTurnRecorder({
+              text: "display prompt",
+              sessionFile: path.join(blockedParent, "s1.jsonl"),
+              sessionKey: "agent:main:main",
+              workspaceDir: dir,
+            }),
+            onUserMessagePersisted,
+          },
+        }),
+      ).rejects.toThrow();
+
+      expect(supervisorSpawnMock).not.toHaveBeenCalled();
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
     supervisorSpawnMock.mockClear();
+    const onUserMessagePersisted = vi.fn();
     let releaseAgentEnd: () => void = () => undefined;
     const agentEndSettled = new Promise<void>((resolve) => {
       releaseAgentEnd = resolve;
@@ -836,15 +1081,25 @@ describe("runCliAgent reliability", () => {
 
     try {
       let resolved = false;
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-blocked-cli",
+      });
       const run = runPreparedCliAgent({
-        ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" }),
+        ...context,
         params: {
-          ...buildPreparedContext({ sessionKey: "agent:main:main", runId: "run-blocked-cli" })
-            .params,
+          ...context.params,
           agentId: "main",
           sessionFile,
           workspaceDir: dir,
           prompt: "secret prompt",
+          userTurnTranscriptRecorder: createCliUserTurnRecorder({
+            text: "secret prompt",
+            sessionFile,
+            sessionKey: "agent:main:main",
+            workspaceDir: dir,
+          }),
+          onUserMessagePersisted,
         },
       }).then((result) => {
         resolved = true;
@@ -869,6 +1124,7 @@ describe("runCliAgent reliability", () => {
       expect(result.meta.livenessState).toBe("blocked");
       expect(supervisorSpawnMock).not.toHaveBeenCalled();
       expect(hookRunner.runLlmInput).not.toHaveBeenCalled();
+      expect(onUserMessagePersisted).not.toHaveBeenCalled();
       const beforeRunEvent = requireRecord(
         callArg(hookRunner.runBeforeAgentRun, 0, 0, "before_agent_run event"),
         "before_agent_run event",

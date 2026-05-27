@@ -300,7 +300,9 @@ describe("buildInboundUserContextPrefix", () => {
       { sourceReplyDeliveryMode: "message_tool_only" },
     );
 
-    expect(text).toContain("Delivery: to send a message, use the `message` tool.");
+    expect(text).toContain(
+      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    );
     expect(text.indexOf("Delivery:")).toBeLessThan(text.indexOf("Conversation info"));
     expect(text).toContain("Conversation info (untrusted metadata):");
   });

@@ -13,8 +13,9 @@ objective: Verify GPT-5.5 can switch from disabled thinking to medium thinking w
 successCriteria:
   - Live runs target openai/gpt-5.5, not a mini or pro variant.
   - The session enables reasoning display before the comparison turns.
-  - The disabled-thinking turn returns its visible marker without a non-empty Reasoning summary.
-  - The medium-thinking turn returns its visible marker and a separate Reasoning-prefixed message.
+  - The disabled-thinking turn returns its visible marker without sending a reasoning payload to OpenAI-compatible providers.
+  - The medium-thinking turn sends a medium reasoning request and returns its visible marker.
+  - Transports with a visible reasoning lane expose a separate Reasoning-prefixed message; qa-channel validates provider behavior because generic delivery suppresses reasoning payloads by design.
 docsRefs:
   - docs/tools/thinking.md
   - docs/help/testing.md
@@ -29,8 +30,8 @@ execution:
   kind: flow
   summary: Toggle reasoning display and GPT-5.5 thinking between off/none and medium, then verify visible reasoning only on the medium turn.
   config:
-    requiredLiveProvider: openai
-    requiredLiveModel: gpt-5.5
+    requiredProvider: openai
+    requiredModel: gpt-5.5
     offDirective: /think off
     maxDirective: /think medium
     reasoningDirective: /reasoning on
@@ -77,22 +78,25 @@ steps:
           - lambda:
               expr: "state.getSnapshot().messages.filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Reasoning visibility enabled/i.test(candidate.text)).at(-1)"
           - expr: liveTurnTimeoutMs(env, 20000)
-      - call: patchConfig
+      - set: thinkOffCursor
+        value:
+          expr: state.getSnapshot().messages.length
+      - call: state.addInboundMessage
         args:
-          - env:
-              ref: env
-            patch:
-              agents:
-                defaults:
-                  thinkingDefault: "off"
-      - call: waitForGatewayHealthy
+          - conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text:
+              expr: config.offDirective
+      - call: waitForCondition
+        saveAs: thinkOffAck
         args:
-          - ref: env
-          - 60000
-      - call: waitForQaChannelReady
-        args:
-          - ref: env
-          - 60000
+          - lambda:
+              expr: "state.getSnapshot().messages.slice(thinkOffCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking disabled/i.test(candidate.text)).at(-1)"
+          - expr: liveTurnTimeoutMs(env, 20000)
       - set: offCursor
         value:
           expr: state.getSnapshot().messages.length
@@ -111,7 +115,7 @@ steps:
         args:
           - lambda:
               expr: "state.getSnapshot().messages.slice(offCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.includes(config.offMarker)).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 30000)
+          - expr: liveTurnTimeoutMs(env, 90000)
       - set: offMessages
         value:
           expr: "state.getSnapshot().messages.slice(offCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId)"
@@ -136,27 +140,34 @@ steps:
                 expr: "String(offRequest?.model ?? '').includes('gpt-5.5')"
                 message:
                   expr: "`expected GPT-5.5 off mock request, got ${String(offRequest?.model ?? '')}`"
-    detailsExpr: "`reasoning ack=${reasoningAck.text}; off answer=${offAnswer.text}`"
+            - assert:
+                expr: "offRequest?.body && !Object.prototype.hasOwnProperty.call(offRequest.body, 'reasoning')"
+                message:
+                  expr: "`disabled thinking should omit OpenAI reasoning payload, got ${JSON.stringify(offRequest?.body?.reasoning ?? null)}`"
+    detailsExpr: "`reasoning ack=${reasoningAck.text}; thinking off=${thinkOffAck.text}; off answer=${offAnswer.text}`"
   - name: switches to medium thinking
     actions:
-      - call: patchConfig
+      - set: thinkMediumCursor
+        value:
+          expr: state.getSnapshot().messages.length
+      - call: state.addInboundMessage
         args:
-          - env:
-              ref: env
-            patch:
-              agents:
-                defaults:
-                  thinkingDefault: "medium"
-      - call: waitForGatewayHealthy
+          - conversation:
+              id:
+                expr: config.conversationId
+              kind: direct
+            senderId: qa-operator
+            senderName: QA Operator
+            text:
+              expr: config.maxDirective
+      - call: waitForCondition
+        saveAs: thinkMediumAck
         args:
-          - ref: env
-          - 60000
-      - call: waitForQaChannelReady
-        args:
-          - ref: env
-          - 60000
-    detailsExpr: "`thinking default patched to medium`"
-  - name: verifies medium thinking emits visible reasoning
+          - lambda:
+              expr: "state.getSnapshot().messages.slice(thinkMediumCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && /Thinking level set to medium/i.test(candidate.text)).at(-1)"
+          - expr: liveTurnTimeoutMs(env, 20000)
+    detailsExpr: "`thinking medium=${thinkMediumAck.text}`"
+  - name: verifies medium thinking reaches the provider
     actions:
       - set: maxCursor
         value:
@@ -172,19 +183,6 @@ steps:
             text:
               expr: config.maxPrompt
       - call: waitForCondition
-        saveAs: maxReasoning
-        args:
-          - lambda:
-              expr: "state.getSnapshot().messages.slice(maxCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.trimStart().startsWith('Reasoning:')).at(-1)"
-          - expr: liveTurnTimeoutMs(env, 120000)
-      - assert:
-          expr: "maxReasoning.text.trimStart().startsWith('Reasoning:')"
-          message:
-            expr: "`missing max reasoning message near answer: ${recentOutboundSummary(state, 6)}`"
-    detailsExpr: "`reasoning=${maxReasoning.text}`"
-  - name: verifies medium thinking completes the answer
-    actions:
-      - call: waitForCondition
         saveAs: maxAnswer
         args:
           - lambda:
@@ -193,7 +191,7 @@ steps:
       - assert:
           expr: "maxAnswer.text.includes(config.maxMarker)"
           message:
-            expr: "`missing max marker: ${maxAnswer.text}`"
+            expr: "`missing max marker near answer: ${recentOutboundSummary(state, 6)}`"
       - if:
           expr: "Boolean(env.mock)"
           then:
@@ -207,5 +205,22 @@ steps:
                 expr: "String(maxRequest?.model ?? '').includes('gpt-5.5')"
                 message:
                   expr: "`expected GPT-5.5 mock request, got ${String(maxRequest?.model ?? '')}`"
-    detailsExpr: "`answer=${maxAnswer.text}`"
+            - assert:
+                expr: "maxRequest?.body?.reasoning?.effort === 'medium'"
+                message:
+                  expr: "`expected medium OpenAI reasoning payload, got ${JSON.stringify(maxRequest?.body?.reasoning ?? null)}`"
+      - if:
+          expr: "env.transport.id !== 'qa-channel'"
+          then:
+            - call: waitForCondition
+              saveAs: maxReasoning
+              args:
+                - lambda:
+                    expr: "state.getSnapshot().messages.slice(maxCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === config.conversationId && candidate.text.trimStart().startsWith('Reasoning:')).at(-1)"
+                - expr: liveTurnTimeoutMs(env, 120000)
+            - assert:
+                expr: "maxReasoning.text.trimStart().startsWith('Reasoning:')"
+                message:
+                  expr: "`missing max reasoning message near answer: ${recentOutboundSummary(state, 6)}`"
+    detailsExpr: "env.transport.id === 'qa-channel' ? `answer=${maxAnswer.text}; medium reasoning=${env.mock ? String(maxRequest?.body?.reasoning?.effort ?? '') : 'live'}; qa-channel suppresses reasoning delivery` : `answer=${maxAnswer.text}; reasoning=${maxReasoning.text}`"
 ```

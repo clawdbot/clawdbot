@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectIntegrityDriftRejected,
   mockNpmViewMetadataResult,
@@ -25,6 +25,8 @@ const { installPluginFromNpmPackArchive, installPluginFromNpmSpec, PLUGIN_INSTAL
   await import("./install.js");
 
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-npm-spec");
+let previousNpmGlobalConfig: string | undefined;
+let npmGlobalConfigPath: string;
 
 function successfulSpawn(stdout = "") {
   return {
@@ -47,6 +49,10 @@ function npmViewVersionsArgv(spec: string): string[] {
 
 function npmPackArchiveMetadataArgv(archivePath: string): string[] {
   return ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"];
+}
+
+function commandKey(argv: readonly string[]): string {
+  return argv.join("\0");
 }
 
 function resolveManagedFileDependency(npmRoot: string, dependencySpec: string): string | null {
@@ -262,13 +268,23 @@ function mockNpmViewAndInstall(params: {
 
 function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   const packagesByName = new Map(packages.map((pkg) => [pkg.packageName, pkg]));
+  const packPackagesByArgv = new Map(
+    packages
+      .filter((pkg) => pkg.packArchivePath)
+      .map((pkg) => [commandKey(npmPackArchiveMetadataArgv(pkg.packArchivePath ?? "")), pkg]),
+  );
+  const viewPackagesByArgv = new Map(
+    packages.filter((pkg) => pkg.spec).map((pkg) => [commandKey(npmViewArgv(pkg.spec ?? "")), pkg]),
+  );
+  const versionsPackagesByArgv = new Map(
+    packages
+      .filter((pkg) => pkg.versions)
+      .map((pkg) => [commandKey(npmViewVersionsArgv(pkg.packageName)), pkg]),
+  );
   runCommandWithTimeoutMock.mockImplementation(
     async (argv: string[], options?: { cwd?: string }) => {
-      const packPackage = packages.find(
-        (pkg) =>
-          pkg.packArchivePath &&
-          JSON.stringify(argv) === JSON.stringify(npmPackArchiveMetadataArgv(pkg.packArchivePath)),
-      );
+      const argvKey = commandKey(argv);
+      const packPackage = packPackagesByArgv.get(argvKey);
       if (packPackage) {
         return successfulSpawn(
           JSON.stringify([
@@ -285,9 +301,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           ]),
         );
       }
-      const viewPackage = packages.find(
-        (pkg) => pkg.spec && JSON.stringify(argv) === JSON.stringify(npmViewArgv(pkg.spec)),
-      );
+      const viewPackage = viewPackagesByArgv.get(argvKey);
       if (viewPackage) {
         return successfulSpawn(
           JSON.stringify({
@@ -300,9 +314,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           }),
         );
       }
-      const versionsPackage = packages.find(
-        (pkg) => JSON.stringify(argv) === JSON.stringify(npmViewVersionsArgv(pkg.packageName)),
-      );
+      const versionsPackage = versionsPackagesByArgv.get(argvKey);
       if (versionsPackage) {
         return successfulSpawn(
           JSON.stringify(versionsPackage.versions ?? [versionsPackage.version]),
@@ -416,7 +428,19 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
   );
 }
 
+beforeAll(() => {
+  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  npmGlobalConfigPath = path.join(suiteTempRootTracker.makeTempDir(), "global-npmrc");
+  fs.writeFileSync(npmGlobalConfigPath, "", "utf8");
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
+});
+
 afterAll(() => {
+  if (previousNpmGlobalConfig === undefined) {
+    delete process.env.NPM_CONFIG_GLOBALCONFIG;
+  } else {
+    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
+  }
   suiteTempRootTracker.cleanup();
 });
 
@@ -431,6 +455,7 @@ beforeEach(() => {
   );
   resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
   vi.unstubAllEnvs();
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
 });
 
 describe("installPluginFromNpmSpec", () => {

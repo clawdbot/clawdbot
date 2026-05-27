@@ -22,7 +22,7 @@ import {
   serializeCommandArgs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
-import type { ChatCommandDefinition } from "./commands-registry.types.js";
+import type { ChatCommandDefinition, NativeCommandSpec } from "./commands-registry.types.js";
 
 type NativeCommandNameResolver = (params: { commandKey: string; defaultName: string }) => string;
 
@@ -146,10 +146,7 @@ function requireNativeCommand(name: string, provider?: string): ChatCommandDefin
   return command;
 }
 
-function requireNativeSpec(
-  specs: readonly { name: string; acceptsArgs?: boolean; descriptionLocalizations?: unknown }[],
-  name: string,
-) {
+function requireNativeSpec(specs: readonly NativeCommandSpec[], name: string) {
   const spec = specs.find((candidate) => candidate.name === name);
   if (!spec) {
     throw new Error(`Expected native command spec "${name}"`);
@@ -231,7 +228,9 @@ describe("commands registry", () => {
     expect(btw.textAliases).toEqual(["/btw", "/side"]);
     expect(normalizeCommandBody("/side what changed?")).toBe("/btw what changed?");
     expect(requireNativeCommand("side").key).toBe("btw");
-    expect(requireNativeSpec(listNativeCommandSpecs(), "side").acceptsArgs).toBe(true);
+    const sideNativeSpec = requireNativeSpec(listNativeCommandSpecs(), "side");
+    expect(sideNativeSpec.acceptsArgs).toBe(true);
+    expect(sideNativeSpec.isAlias).toBe(true);
   });
 
   it("filters commands based on config flags", () => {

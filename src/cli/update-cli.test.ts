@@ -44,6 +44,9 @@ const updateNpmInstalledPlugins = vi.fn();
 const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
 );
+const checkShellCompletionStatus = vi.fn();
+const ensureCompletionCacheExists = vi.fn();
+const installCompletion = vi.fn();
 const legacyConfigRepairMocks = vi.hoisted(() => ({
   repairLegacyConfigForUpdateChannel: vi.fn(),
 }));
@@ -171,6 +174,10 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync: () => mockGetSelfAndAncestorPidsSync(),
 }));
 
+vi.mock("../infra/update-managed-service-handoff-cleanup.js", () => ({
+  cleanupStaleManagedServiceUpdateHandoffs: vi.fn(async () => 0),
+}));
+
 vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
@@ -220,6 +227,32 @@ vi.mock("../plugins/installed-plugin-index-records.js", async (importOriginal) =
     writePersistedInstalledPluginIndexInstallRecords: vi.fn(async () => undefined),
   };
 });
+
+vi.mock("./update-cli/post-core-plugin-convergence.js", () => ({
+  convergenceWarningsToOutcomes: (convergence: {
+    warnings: Array<{ pluginId?: string; message: string }>;
+    errored: boolean;
+  }) => ({
+    warnings: convergence.warnings,
+    outcomes: convergence.warnings
+      .filter((warning): warning is { pluginId: string; message: string } =>
+        Boolean(warning.pluginId),
+      )
+      .map((warning) => ({
+        pluginId: warning.pluginId,
+        status: "error",
+        message: warning.message,
+      })),
+    errored: convergence.errored,
+  }),
+  runPostCorePluginConvergence: vi.fn(async (params: { baselineInstallRecords?: unknown }) => ({
+    changes: [],
+    warnings: [],
+    errored: false,
+    smokeFailures: [],
+    installRecords: params.baselineInstallRecords ?? {},
+  })),
+}));
 
 vi.mock("../daemon/service.js", () => ({
   readGatewayServiceState: async () => {
@@ -277,9 +310,20 @@ vi.mock("./update-cli/restart-helper.js", () => ({
 vi.mock("../commands/doctor.js", () => ({
   doctorCommand: vi.fn(),
 }));
+vi.mock("../commands/doctor-completion.js", () => ({
+  checkShellCompletionStatus: (...args: unknown[]) => checkShellCompletionStatus(...args),
+  ensureCompletionCacheExists: (...args: unknown[]) => ensureCompletionCacheExists(...args),
+}));
 vi.mock("../commands/doctor/legacy-config-repair.js", () => ({
   repairLegacyConfigForUpdateChannel: legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
 }));
+vi.mock("./completion-runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./completion-runtime.js")>();
+  return {
+    ...actual,
+    installCompletion: (...args: unknown[]) => installCompletion(...args),
+  };
+});
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
   runDaemonInstall: mockedRunDaemonInstall,
@@ -793,6 +837,15 @@ describe("update-cli", () => {
       config: baseConfig,
       outcomes: [],
     });
+    checkShellCompletionStatus.mockResolvedValue({
+      shell: "zsh",
+      profileInstalled: false,
+      cacheExists: false,
+      cachePath: "/tmp/openclaw-completion.zsh",
+      usesSlowPattern: false,
+    });
+    ensureCompletionCacheExists.mockResolvedValue(true);
+    installCompletion.mockResolvedValue(undefined);
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
     vi.mocked(doctorCommand).mockResolvedValue(undefined);
@@ -881,6 +934,28 @@ describe("update-cli", () => {
     expect(logOutput).toContain("timed out after 30s");
     expect(logOutput).toContain("openclaw completion --write-state");
     expect(logOutput).not.toContain("Error: spawnSync");
+  });
+
+  it("keeps update completion refresh best-effort when profile install fails", async () => {
+    setTty(true);
+    checkShellCompletionStatus.mockResolvedValue({
+      shell: "zsh",
+      profileInstalled: true,
+      cacheExists: true,
+      cachePath: "/tmp/openclaw-completion.zsh",
+      usesSlowPattern: true,
+    });
+    installCompletion.mockRejectedValueOnce(new Error("EACCES: permission denied"));
+
+    await updateCommand({ yes: true, restart: false });
+
+    expect(installCompletion).toHaveBeenCalledWith("zsh", true, "openclaw");
+    const logOutput = vi
+      .mocked(runtimeCapture.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(logOutput).toContain("Shell completion refresh failed: EACCES: permission denied");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
   });
 
   it("respawns into the updated package root before running post-update tasks", async () => {
@@ -1186,8 +1261,7 @@ describe("update-cli", () => {
         .mocked(readConfigFileSnapshot)
         .mock.calls.some(
           ([options]) =>
-            options?.skipPluginValidation === true &&
-            options.suppressFutureVersionWarning === true,
+            options?.skipPluginValidation === true && options.suppressFutureVersionWarning === true,
         ),
     ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);

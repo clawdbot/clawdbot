@@ -356,6 +356,27 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequest().payload.stream).toBe(true);
   });
 
+  it("caps default max_tokens for large-output Anthropic-compatible models", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "minimax-portal",
+        id: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.io/anthropic",
+        maxTokens: 196_608,
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-minimax-redacted",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(latestAnthropicRequest().payload.model).toBe("MiniMax-M2.7");
+    expect(latestAnthropicRequest().payload.max_tokens).toBe(32_000);
+    expect(latestAnthropicRequest().payload.stream).toBe(true);
+  });
+
   it("fails locally when Anthropic maxTokens is non-positive after resolution", async () => {
     const model = attachModelProviderRequestTransport(
       {

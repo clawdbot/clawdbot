@@ -664,9 +664,9 @@ export function collectHooksHardeningFindings(
       severity: remoteExposure ? "critical" : "warn",
       title: "Hook agent routing allows any configured agent",
       detail:
-        "hooks.allowedAgentIds is unset or includes '*', so authenticated hook callers may route to any configured agent id.",
+        "hooks.allowedAgentIds is unset or includes '*', so authenticated hook callers may route to any configured agent id, including the default agent when agentId is omitted.",
       remediation:
-        'Set hooks.allowedAgentIds to an explicit allowlist (for example, ["hooks", "main"]) or [] to deny explicit agent routing.',
+        'Set hooks.allowedAgentIds to an explicit allowlist (for example, ["hooks", "main"]) or [] to deny hook agent routing.',
     });
   }
 

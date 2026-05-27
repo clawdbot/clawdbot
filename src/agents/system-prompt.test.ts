@@ -1314,7 +1314,9 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");
-    expect(prompt).toContain("[... N more characters truncated]");
+    expect(prompt).toContain(
+      "[... N more characters truncated; rerun with narrower args if needed]",
+    );
     expect(prompt).toContain("offset/limit");
     expect(prompt).toContain("instead of full-file `cat`");
   });

@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import { createServer as createNetServer, type Server as NetServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -93,6 +95,37 @@ function runRuntimeSmoke(root: string, args: string[]) {
   });
 }
 
+async function listenOnLoopback(server: HttpServer | NetServer): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const onError = (error: Error) => {
+      server.off("error", onError);
+      reject(error);
+    };
+    server.once("error", onError);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", onError);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("server did not bind to a TCP port"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+async function closeServer(server: HttpServer | NetServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error?: Error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { force: true, recursive: true });
@@ -115,6 +148,65 @@ describe("bundled plugin install/uninstall probe", () => {
 
     const second = runtimeSmoke.appendBoundedOutput(first, "ghij", 5);
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("bounds runtime smoke child commands and preserves captured output", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const startedAt = Date.now();
+
+    await expect(
+      runtimeSmoke.runCommand(
+        process.execPath,
+        [
+          "-e",
+          "process.stdout.write('partial\\n'); process.stderr.write('problem\\n'); setInterval(() => {}, 1000);",
+        ],
+        { timeoutMs: 200 },
+      ),
+    ).rejects.toThrow(/timed out after 200ms[\s\S]*partial[\s\S]*problem/u);
+
+    expect(Date.now() - startedAt).toBeLessThan(2_500);
+  });
+
+  it("accepts successful runtime HTTP probes", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(204);
+      response.end();
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+
+      await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 1000 })).resolves.toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("bounds stalled runtime HTTP probes", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const sockets = new Set<Socket>();
+    const server = createNetServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => {
+        sockets.delete(socket);
+      });
+    });
+
+    try {
+      const port = await listenOnLoopback(server);
+      const startedAt = Date.now();
+
+      await expect(runtimeSmoke.httpOk(port, "/healthz", { timeoutMs: 100 })).resolves.toBe(false);
+
+      expect(Date.now() - startedAt).toBeLessThan(2_500);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeServer(server);
+    }
   });
 
   it("creates runtime smoke state with OPENCLAW_HOME at the test home", async () => {

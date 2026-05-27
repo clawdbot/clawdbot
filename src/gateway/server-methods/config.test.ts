@@ -100,7 +100,7 @@ describe("config.openFile", () => {
     );
   });
 
-  it("returns a generic error and logs details when the opener fails", async () => {
+  it("returns a detailed error and logs details when the opener fails", async () => {
     process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
     execFileMock.mockImplementation((...args: unknown[]) => {
       invokeExecFileCallback(
@@ -120,12 +120,42 @@ describe("config.openFile", () => {
       {
         ok: false,
         path: "/tmp/config.json",
-        error: "failed to open config file",
+        error: "Failed to open config file: spawn xdg-open ENOENT",
       },
       undefined,
     );
     expect(logGateway.warn).toHaveBeenCalledWith(
       "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+    );
+  });
+
+  it("returns actionable headless environment error when xdg-open reports no method available", async () => {
+    process.env.OPENCLAW_CONFIG_PATH = "/tmp/config.json";
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      invokeExecFileCallback(
+        args,
+        new Error("xdg-open: no method available for opening '/tmp/config.json'"),
+      );
+      return {} as never;
+    });
+
+    const { options, respond, logGateway } = createConfigHandlerHarness({
+      method: "config.openFile",
+    });
+    await configHandlers["config.openFile"](options);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        ok: false,
+        path: "/tmp/config.json",
+        error:
+          "Cannot open file in headless environment. File path: /tmp/config.json. This environment appears to lack a graphical or terminal browser handler.",
+      },
+      undefined,
+    );
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: xdg-open: no method available for opening '/tmp/config.json'",
     );
   });
 });

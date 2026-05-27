@@ -34,6 +34,40 @@ const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
   "dist/plugin-sdk/src/plugin-sdk/qa-runtime.d.ts",
 ]);
 const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
+const OMITTED_PLUGIN_SDK_TEST_FILES = new Set([
+  "dist/plugin-sdk/agent-runtime-test-contracts.d.ts",
+  "dist/plugin-sdk/agent-runtime-test-contracts.js",
+  "dist/plugin-sdk/channel-contract-testing.d.ts",
+  "dist/plugin-sdk/channel-contract-testing.js",
+  "dist/plugin-sdk/channel-target-testing.d.ts",
+  "dist/plugin-sdk/channel-target-testing.js",
+  "dist/plugin-sdk/channel-test-helpers.d.ts",
+  "dist/plugin-sdk/channel-test-helpers.js",
+  "dist/plugin-sdk/plugin-test-api.d.ts",
+  "dist/plugin-sdk/plugin-test-api.js",
+  "dist/plugin-sdk/plugin-test-contracts.d.ts",
+  "dist/plugin-sdk/plugin-test-contracts.js",
+  "dist/plugin-sdk/plugin-test-runtime.d.ts",
+  "dist/plugin-sdk/plugin-test-runtime.js",
+  "dist/plugin-sdk/provider-http-test-mocks.d.ts",
+  "dist/plugin-sdk/provider-http-test-mocks.js",
+  "dist/plugin-sdk/provider-test-contracts.d.ts",
+  "dist/plugin-sdk/provider-test-contracts.js",
+  "dist/plugin-sdk/test-env.d.ts",
+  "dist/plugin-sdk/test-env.js",
+  "dist/plugin-sdk/test-fixtures.d.ts",
+  "dist/plugin-sdk/test-fixtures.js",
+  "dist/plugin-sdk/test-node-mocks.d.ts",
+  "dist/plugin-sdk/test-node-mocks.js",
+  "dist/plugin-sdk/testing.d.ts",
+  "dist/plugin-sdk/testing.js",
+]);
+const OMITTED_PLUGIN_SDK_TEST_PREFIXES = [
+  "dist/plugin-sdk/src/agents/test-helpers/",
+  "dist/plugin-sdk/src/plugin-sdk/test-helpers/",
+  "dist/plugin-sdk/src/test-helpers/",
+  "dist/plugin-sdk/src/test-utils/",
+];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
@@ -145,6 +179,15 @@ function isExternalizedBundledExtensionDistPath(
   );
 }
 
+function isOmittedPluginSdkTestPath(relativePath: string): boolean {
+  return (
+    OMITTED_PLUGIN_SDK_TEST_FILES.has(relativePath) ||
+    OMITTED_PLUGIN_SDK_TEST_PREFIXES.some(
+      (prefix) => relativePath === prefix.slice(0, -1) || relativePath.startsWith(prefix),
+    )
+  );
+}
+
 async function collectExternalizedBundledExtensionIds(
   packageRoot: string,
 ): Promise<ExternalizedBundledExtensionIds> {
@@ -177,6 +220,9 @@ function isPackagedDistPath(
   if (relativePath === "dist/plugin-sdk/.tsbuildinfo") {
     return false;
   }
+  if (isOmittedPluginSdkTestPath(relativePath)) {
+    return false;
+  }
   if (
     OMITTED_PRIVATE_QA_PLUGIN_SDK_PREFIXES.some((prefix) => relativePath.startsWith(prefix)) ||
     OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES.has(relativePath) ||
@@ -197,6 +243,7 @@ function isOmittedDistSubtree(
   return (
     isExternalizedBundledExtensionDistPath(relativePath, externalizedExtensionIds) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
+    isOmittedPluginSdkTestPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
   );
 }

@@ -12,5 +12,6 @@ describe("config validation cold imports", () => {
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*manifest-command-aliases\.runtime\.js["']/);
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*providers\.runtime\.js["']/);
     expect(source).not.toMatch(/\bfrom\s+["'][^"']*loader\.js["']/);
+    expect(source).not.toMatch(/\bfrom\s+["'][^"']*channels\/ids\.js["']/);
   });
 });

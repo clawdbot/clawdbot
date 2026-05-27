@@ -85,6 +85,8 @@ struct TalkToolbarTray: View {
     var isSpeaking: Bool
     var isUserSpeechDetected: Bool
     var permissionState: TalkGatewayPermissionState
+    var voiceModeTitle: String
+    var voiceModeSubtitle: String?
     var onEnableTalk: () -> Void
     var onStopTalk: () -> Void
 
@@ -132,6 +134,13 @@ struct TalkToolbarTray: View {
 
                     Text(self.subtitle)
                         .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                if let voiceModeText = self.voiceModeText {
+                    Text(voiceModeText)
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -193,7 +202,22 @@ struct TalkToolbarTray: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Talk Mode")
-        .accessibilityValue("\(self.state.title), \(self.subtitle)")
+        .accessibilityValue(self.accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        if let voiceModeText {
+            return "\(self.state.title), \(self.subtitle), \(voiceModeText)"
+        }
+        return "\(self.state.title), \(self.subtitle)"
+    }
+
+    private var voiceModeText: String? {
+        guard !self.state.prefersPermissionCopy else { return nil }
+        let title = self.voiceModeTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title != "Not loaded" else { return nil }
+        let subtitle = (self.voiceModeSubtitle ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return subtitle.isEmpty ? title : "\(title) • \(subtitle)"
     }
 
     private var subtitle: String {

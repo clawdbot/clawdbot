@@ -31,7 +31,7 @@ export {
   isTrustedProxyAddress,
 } from "openclaw/plugin-sdk/core";
 export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
-export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export {
   listSkillCommandsForAgents,
@@ -50,7 +50,7 @@ export { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-
 export { formatInboundFromLabel } from "openclaw/plugin-sdk/channel-inbound";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";

@@ -24,6 +24,8 @@ import { extractPayloadText } from "./test-helpers.agent-results.js";
 const CLI_CRON_MCP_PROBE_MAX_ATTEMPTS = 10;
 const CLI_CRON_MCP_PROBE_VERIFY_POLLS = 20;
 const CLI_CRON_MCP_PROBE_VERIFY_POLL_MS = 2_000;
+const CLI_CRON_MCP_LOOPBACK_REQUEST_TIMEOUT_MS = 30_000;
+const CLI_CRON_MCP_LOOPBACK_MAX_BODY_BYTES = 1_048_576;
 
 function shouldLogCliCronProbe(): boolean {
   return (
@@ -111,6 +113,17 @@ type LoopbackToolListEntry = {
   inputSchema?: unknown;
 };
 
+function parsePositiveInt(value: string | undefined, fallback: number, name: string): number {
+  if (!value?.trim()) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`invalid ${name}: ${value}`);
+  }
+  return parsed;
+}
+
 function asLoopbackSchemaRecord(schema: unknown): Record<string, unknown> | null {
   return schema && typeof schema === "object" && !Array.isArray(schema)
     ? (schema as Record<string, unknown>)
@@ -170,6 +183,7 @@ async function callLoopbackJsonRpc(params: {
   messageProvider?: string;
   accountId?: string;
   body: Record<string, unknown>;
+  env?: NodeJS.ProcessEnv;
 }): Promise<LoopbackJsonRpcResponse> {
   const runtime = getActiveMcpLoopbackRuntime();
   if (!runtime) {
@@ -186,12 +200,34 @@ async function callLoopbackJsonRpc(params: {
   if (params.accountId) {
     headers["x-openclaw-account-id"] = params.accountId;
   }
-  const response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify(params.body),
-  });
-  const text = await response.text();
+  const timeoutMs = parsePositiveInt(
+    params.env?.OPENCLAW_MCP_LOOPBACK_PROBE_TIMEOUT_MS,
+    CLI_CRON_MCP_LOOPBACK_REQUEST_TIMEOUT_MS,
+    "OPENCLAW_MCP_LOOPBACK_PROBE_TIMEOUT_MS",
+  );
+  const maxBodyBytes = parsePositiveInt(
+    params.env?.OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES,
+    CLI_CRON_MCP_LOOPBACK_MAX_BODY_BYTES,
+    "OPENCLAW_MCP_LOOPBACK_PROBE_MAX_BODY_BYTES",
+  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response: Response | undefined;
+  let text = "";
+  try {
+    response = await fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(params.body),
+      signal: controller.signal,
+    });
+    text = await readBoundedResponseText(response, maxBodyBytes);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!response) {
+    throw new Error("mcp loopback did not return a response");
+  }
   if (!response.ok) {
     throw new Error(`mcp loopback http ${response.status}: ${text}`);
   }
@@ -203,6 +239,28 @@ async function callLoopbackJsonRpc(params: {
     throw new Error(`mcp loopback json-rpc error: ${parsed.error.message}`);
   }
   return parsed;
+}
+
+async function readBoundedResponseText(response: Response, byteLimit: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "";
+  }
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    totalBytes += value.byteLength;
+    if (totalBytes > byteLimit) {
+      await reader.cancel();
+      throw new Error(`mcp loopback response body exceeded ${byteLimit} bytes`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
 export async function verifyCliCronMcpLoopbackPreflight(params: {
@@ -224,6 +282,7 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
+    env: params.env,
     body: {
       jsonrpc: "2.0",
       id: "init",
@@ -235,12 +294,14 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
+    env: params.env,
     body: { jsonrpc: "2.0", method: "notifications/initialized" },
   });
   const toolsList = await callLoopbackJsonRpc({
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
+    env: params.env,
     body: { jsonrpc: "2.0", id: "tools-list", method: "tools/list" },
   });
   const tools = Array.isArray((toolsList.result as { tools?: unknown[] } | undefined)?.tools)
@@ -265,6 +326,7 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
+    env: params.env,
     body: {
       jsonrpc: "2.0",
       id: "cron-add",

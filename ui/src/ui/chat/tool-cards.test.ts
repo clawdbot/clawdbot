@@ -5,11 +5,19 @@ import { describe, expect, it, vi } from "vitest";
 import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
+  isToolErrorOutput,
   renderToolCard,
+  renderToolCardSidebar,
 } from "./tool-cards.ts";
 
 vi.mock("../icons.ts", () => ({
-  icons: {},
+  icons: {
+    check: "✓",
+    chevronDown: "",
+    panelRightOpen: "",
+    x: "✕",
+    zap: "",
+  },
 }));
 
 vi.mock("../tool-display.ts", () => ({
@@ -40,7 +48,7 @@ function requireFirstMockArg(
   if (!arg || typeof arg !== "object" || Array.isArray(arg)) {
     throw new Error(`expected ${label} payload`);
   }
-  return arg as Record<string, unknown>;
+  return arg;
 }
 
 describe("tool-cards", () => {
@@ -304,5 +312,269 @@ describe("tool-cards", () => {
     expect(sidebar.kind).toBe("canvas");
     expect(sidebar.docId).toBe("cv_sidebar");
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
+  });
+
+  describe("isToolErrorOutput", () => {
+    it("flags JSON payloads that carry a top-level error string", () => {
+      expect(
+        isToolErrorOutput(
+          JSON.stringify({
+            error: "missing_brave_api_key",
+            message: "BRAVE_API_KEY is not configured",
+            provider: "brave",
+          }),
+        ),
+      ).toBe(true);
+    });
+
+    it("flags JSON payloads that carry a top-level isError flag", () => {
+      expect(
+        isToolErrorOutput(
+          JSON.stringify({
+            isError: true,
+            content: [{ type: "text", text: "Tool error: boom" }],
+          }),
+        ),
+      ).toBe(true);
+      expect(
+        isToolErrorOutput(
+          JSON.stringify({
+            is_error: true,
+            content: [{ type: "text", text: "Tool error: boom" }],
+          }),
+        ),
+      ).toBe(true);
+    });
+
+    it("flags 'Tool not found' bodies regardless of trailing punctuation or case", () => {
+      expect(isToolErrorOutput("Tool not found")).toBe(true);
+      expect(isToolErrorOutput("  tool not found.  ")).toBe(true);
+      expect(isToolErrorOutput("TOOL NOT FOUND")).toBe(true);
+    });
+
+    it("flags JSON payloads with top-level failure statuses", () => {
+      expect(isToolErrorOutput(JSON.stringify({ status: "error" }))).toBe(true);
+      expect(isToolErrorOutput(JSON.stringify({ status: "failed" }))).toBe(true);
+      expect(isToolErrorOutput(JSON.stringify({ status: "timeout" }))).toBe(true);
+      expect(isToolErrorOutput(JSON.stringify({ status: "completed" }))).toBe(false);
+      expect(isToolErrorOutput(JSON.stringify({ status: "ok" }))).toBe(false);
+    });
+
+    it("does not flag successful payloads or strings without a tool error signal", () => {
+      expect(isToolErrorOutput(undefined)).toBe(false);
+      expect(isToolErrorOutput("")).toBe(false);
+      expect(isToolErrorOutput("Opened page")).toBe(false);
+      expect(
+        isToolErrorOutput(
+          JSON.stringify({ isError: false, result: "ok", error: "no validation errors" }),
+        ),
+      ).toBe(false);
+      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: null }))).toBe(false);
+      expect(isToolErrorOutput(JSON.stringify({ result: "ok", error: "" }))).toBe(false);
+      expect(isToolErrorOutput(JSON.stringify({ result: "ok" }))).toBe(false);
+      expect(isToolErrorOutput("{ not really json }")).toBe(false);
+    });
+  });
+
+  it("renders a Tool error label and Error badge when output is an error JSON", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:1",
+          name: "web_search",
+          args: { query: "python stable version" },
+          inputText: '{\n  "query": "python stable version"\n}',
+          outputText: JSON.stringify({
+            error: "missing_brave_api_key",
+            message: "BRAVE_API_KEY is not configured",
+          }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool error");
+    expect(container.textContent).not.toMatch(/\bTool output\b/);
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    const expandedCard = container.querySelector(".chat-tool-card--expanded");
+    expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
+    expect(container.querySelector(".chat-tool-card__status-badge")).not.toBeNull();
+  });
+
+  it("renders a Tool error label when output has a status-only error payload", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:status-only",
+          name: "sessions_spawn",
+          outputText: JSON.stringify({ status: "error" }),
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool error");
+    expect(container.textContent).not.toMatch(/\bTool output\b/);
+    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+  });
+
+  it("renders a Tool error label when output is the literal 'Tool not found'", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:2",
+          name: "Unknown",
+          outputText: "Tool not found",
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool error");
+    expect(container.textContent).not.toMatch(/\bTool output\b/);
+    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
+    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+  });
+
+  it("renders a Tool error label when the tool card has an explicit error flag", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:explicit",
+          name: "lookup",
+          outputText: "lookup failed",
+          isError: true,
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool error");
+    expect(container.textContent).not.toMatch(/\bTool output\b/);
+    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
+    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+  });
+
+  it("respects an explicit success flag even when the payload looks like an error", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:err:status-false",
+          name: "web_search",
+          outputText: JSON.stringify({
+            error: "missing_brave_api_key",
+          }),
+          isError: false,
+        },
+        { expanded: false, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Web Search");
+    expect(container.textContent).not.toContain("Tool error");
+    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
+  });
+
+  it("does not render View with a checkmark for sidebar cards whose output is an error JSON", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCardSidebar(
+        {
+          id: "msg:err:sidebar",
+          name: "web_search",
+          outputText: JSON.stringify({
+            error: "missing_brave_api_key",
+            message: "BRAVE_API_KEY is not configured",
+          }),
+        },
+        vi.fn(),
+      ),
+      container,
+    );
+
+    const card = container.querySelector(".chat-tool-card");
+    const action = container.querySelector(".chat-tool-card__action");
+    expect(card?.classList.contains("chat-tool-card--error")).toBe(true);
+    expect(action?.classList.contains("chat-tool-card__action--error")).toBe(true);
+    expect(action?.textContent).toContain("View error");
+    expect(action?.textContent).toContain("✕");
+    expect(action?.textContent).not.toContain("✓");
+  });
+
+  it("marks Tool not found sidebar output as an error instead of View with a checkmark", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCardSidebar(
+        {
+          id: "msg:err:sidebar-tool-not-found",
+          name: "Unknown",
+          outputText: "Tool not found",
+        },
+        vi.fn(),
+      ),
+      container,
+    );
+
+    const action = container.querySelector(".chat-tool-card__action");
+    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+    expect(action?.textContent).toContain("View error");
+    expect(action?.textContent).toContain("✕");
+    expect(action?.textContent).not.toContain("✓");
+  });
+
+  it("marks status-only sidebar output as an error instead of View with a checkmark", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCardSidebar(
+        {
+          id: "msg:err:sidebar-status",
+          name: "sessions_wait",
+          outputText: JSON.stringify({ status: "timeout" }),
+        },
+        vi.fn(),
+      ),
+      container,
+    );
+
+    const action = container.querySelector(".chat-tool-card__action");
+    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
+    expect(action?.textContent).toContain("View error");
+    expect(action?.textContent).toContain("✕");
+    expect(action?.textContent).not.toContain("✓");
+  });
+
+  it("keeps Tool output labelling for successful results", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:ok:1",
+          name: "browser.open",
+          outputText: "Opened page",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("Tool output");
+    expect(container.textContent).not.toContain("Tool error");
+    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
+    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
   });
 });

@@ -40,7 +40,7 @@ export async function processDiscordVoiceSegment(params: {
   ownerAllowFrom?: string[];
   fetchGuildName: (guildId: string) => Promise<string | undefined>;
   speakerContext: DiscordVoiceSpeakerContextResolver;
-  meetingNotes?: VoiceSessionEntry["meetingNotes"];
+  transcripts?: VoiceSessionEntry["transcripts"];
   enqueuePlayback: (entry: VoiceSessionEntry, task: () => Promise<void>) => void;
 }) {
   const { entry, wavPath, userId, durationSeconds } = params;
@@ -79,9 +79,9 @@ export async function processDiscordVoiceSegment(params: {
   logVoiceVerbose(
     `transcript from ${ingress.speakerLabel} (${userId}) in guild ${entry.guildId} channel ${entry.channelId}: ${formatVoiceTranscriptLogPreview(transcript)}`,
   );
-  if (params.meetingNotes) {
-    await params.meetingNotes.onUtterance({
-      sessionId: params.meetingNotes.sessionId,
+  if (params.transcripts) {
+    await params.transcripts.onUtterance({
+      sessionId: params.transcripts.sessionId,
       startedAt: new Date().toISOString(),
       final: true,
       speaker: {

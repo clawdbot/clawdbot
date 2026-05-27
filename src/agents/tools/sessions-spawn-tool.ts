@@ -196,7 +196,6 @@ function createSessionsSpawnToolSchema(params: {
     ),
 
     // Inline attachments (snapshot-by-value).
-    // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
     attachments: Type.Optional(
       Type.Array(
         Type.Object({

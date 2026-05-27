@@ -181,7 +181,9 @@ describe("installSessionToolResultGuard", () => {
 
     const text = getToolResultText(getPersistedMessages(sm));
     expect(text).toContain("more characters truncated");
-    expect(text).toMatch(/\[\.\.\. \d+ more characters truncated\]$/);
+    expect(text).toMatch(
+      /\[\.\.\. \d+ more characters truncated; rerun with narrower args if needed\]$/,
+    );
   });
 
   it("honors tiny configured tool-result caps truthfully", () => {

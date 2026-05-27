@@ -139,6 +139,27 @@ describe("discordMessageActions", () => {
     ]);
   });
 
+  it("requires trusted requester sender for privileged guild admin actions only from Discord turns", () => {
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(true);
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "channel-delete",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).toBe(false);
+    expect(
+      discordMessageActions.requiresTrustedRequesterSender?.({
+        action: "read",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
+  });
+
   it("describes scoped account actions when only the account token is an unresolved SecretRef", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {

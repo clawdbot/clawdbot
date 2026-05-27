@@ -3,10 +3,7 @@ import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import {
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
-} from "./model-auth-env-vars.js";
+import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
@@ -22,7 +19,7 @@ import {
   type ProviderApiKeyResolver,
   type ProviderAuthResolver,
 } from "./models-config.providers.secret-helpers.js";
-import { resolveProviderAuthAliasMap, resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type {
@@ -63,12 +60,17 @@ function createProviderAuthLookupCaches(
   config?: OpenClawConfig,
 ): () => ProviderAuthLookupCaches {
   let caches: ProviderAuthLookupCaches | undefined;
-  return () =>
-    (caches ??= {
-      aliasMap: resolveProviderAuthAliasMap({ config, env }),
-      candidateMap: resolveProviderEnvApiKeyCandidates({ config, env }),
-      authEvidenceMap: resolveProviderEnvAuthEvidence({ config, env }),
-    });
+  return () => {
+    if (!caches) {
+      const lookupMaps = resolveProviderEnvAuthLookupMaps({ config, env });
+      caches = {
+        aliasMap: lookupMaps.aliasMap,
+        candidateMap: lookupMaps.envCandidateMap,
+        authEvidenceMap: lookupMaps.authEvidenceMap,
+      };
+    }
+    return caches;
+  };
 }
 
 function resolveProviderIdForAuthFromCaches(

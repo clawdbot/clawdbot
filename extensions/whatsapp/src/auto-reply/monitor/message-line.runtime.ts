@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 export {
   formatInboundEnvelope,
   type EnvelopeFormatOptions,
-} from "openclaw/plugin-sdk/channel-envelope";
+} from "openclaw/plugin-sdk/channel-inbound";
 
 type WhatsAppMessagePrefixConfig = OpenClawConfig;
 

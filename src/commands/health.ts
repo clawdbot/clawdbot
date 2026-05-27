@@ -203,7 +203,7 @@ const resolveAgentOrder = (cfg: OpenClawConfig) => {
 
 const buildSessionSummary = async (storePath: string) => {
   const { loadSessionStore } = await import("../config/sessions/store.js");
-  const store = loadSessionStore(storePath);
+  const store = loadSessionStore(storePath, { clone: false });
   const sessions = Object.entries(store)
     .filter(([key]) => key !== "global" && key !== "unknown")
     .map(([key, entry]) => ({ key, updatedAt: entry?.updatedAt ?? 0 }))

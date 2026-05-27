@@ -20,7 +20,11 @@ const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
+vi.mock("./app-server/shared-client.js", () => ({
+  ...sharedClientMocks,
+  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
 
 describe("codex conversation controls", () => {
   beforeEach(async () => {

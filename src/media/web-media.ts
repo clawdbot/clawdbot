@@ -18,12 +18,9 @@ import {
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
 import {
-  convertHeicToJpeg,
-  hasAlphaChannel,
-  isImageProcessorUnavailableError,
-  optimizeImageToPng,
+  createImageProcessor,
   readImageMetadataFromHeader,
-  resizeToJpeg,
+  readImageProbeFromHeader,
 } from "./media-services.js";
 import {
   detectMime,
@@ -153,9 +150,13 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "text/csv",
   "text/markdown",
 ]);
-// file-type returns undefined (no magic bytes) for plain-text formats like CSV and
-// Markdown, so host-read needs an explicit "this really decodes as text" fallback.
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV
+// and Markdown, so host-read needs an explicit text validation fallback.
 const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
+// HTML remains deliberately outside the host-read allowlist pending a separate
+// security-boundary review, but extension-declared .html files still need to
+// fail closed instead of falling through to binary/media sniffing.
+const HOST_READ_DECLARED_TEXT_MIMES = new Set([...HOST_READ_TEXT_PLAIN_ALIASES, "text/html"]);
 const MB = 1024 * 1024;
 
 function getTextStats(text: string): { printableRatio: number } {
@@ -270,12 +271,17 @@ function assertHostReadMediaAllowed(params: {
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
-  // For extension-declared plain-text aliases such as .csv/.md, trust only the
+  // For extension-declared plain-text aliases such as .csv/.html/.md, trust only the
   // text validator path. Some opaque blobs can still produce bogus binary MIME
   // hits (for example BOM-prefixed 0xFF data sniffing as audio/mpeg), and
   // host-read should reject those instead of returning early on the sniff.
-  if (declaredMime && HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime)) {
-    if (!params.sniffedContentType && params.buffer && isValidatedHostReadText(params.buffer)) {
+  if (declaredMime && HOST_READ_DECLARED_TEXT_MIMES.has(declaredMime)) {
+    if (
+      HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime) &&
+      !params.sniffedContentType &&
+      params.buffer &&
+      isValidatedHostReadText(params.buffer)
+    ) {
       return;
     }
     throw new LocalMediaAccessError(
@@ -350,7 +356,8 @@ type OptimizedImage = {
   buffer: Buffer;
   optimizedSize: number;
   resizeSide: number;
-  format: "jpeg" | "png";
+  format: "jpeg" | "png" | "webp";
+  mimeType: string;
   quality?: number;
   compressionLevel?: number;
 };
@@ -536,30 +543,14 @@ function resolvePreservableOriginalImageContentType(params: {
 function detectPreservableImageMime(
   buffer: Buffer,
 ): "image/png" | "image/jpeg" | "image/webp" | null {
-  if (
-    buffer.length >= 8 &&
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47 &&
-    buffer[4] === 0x0d &&
-    buffer[5] === 0x0a &&
-    buffer[6] === 0x1a &&
-    buffer[7] === 0x0a
-  ) {
-    return "image/png";
-  }
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
-    buffer.subarray(8, 12).toString("ascii") === "WEBP"
-  ) {
-    return "image/webp";
-  }
-  return null;
+  const format = readImageProbeFromHeader(buffer)?.format;
+  return format === "png"
+    ? "image/png"
+    : format === "jpeg"
+      ? "image/jpeg"
+      : format === "webp"
+        ? "image/webp"
+        : null;
 }
 
 function isPreservableImageMime(
@@ -653,28 +644,33 @@ async function optimizeImageWithFallback(params: {
   meta?: { contentType?: string; fileName?: string };
   imageCompression?: ImageCompressionPolicy;
 }): Promise<OptimizedImage> {
-  const { buffer, cap, meta } = params;
-  const isPng = meta?.contentType === "image/png" || meta?.fileName?.toLowerCase().endsWith(".png");
-  const hasAlpha = isPng && (await hasAlphaChannel(buffer));
-
-  if (hasAlpha) {
-    const grid = resolveImageCompressionGrid(params.imageCompression);
-    const optimized = await optimizeImageToPng(buffer, cap, { sides: grid.sides });
-    if (optimized.buffer.length <= cap) {
-      return { ...optimized, format: "png" };
-    }
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `PNG with alpha still exceeds ${formatMb(cap, 0)}MB after optimization; falling back to JPEG`,
-      );
-    }
-  }
-
-  const optimized = await optimizeImageToJpeg(buffer, cap, {
-    ...meta,
-    ...(params.imageCompression ? { imageCompression: params.imageCompression } : {}),
+  const { buffer, cap } = params;
+  const grid = resolveImageCompressionGrid(params.imageCompression);
+  const optimized = await createImageProcessor().encode(buffer, {
+    format: "auto",
+    maxBytes: cap,
+    opaque: { format: "jpeg" },
+    transparent: { format: "png" },
+    search: {
+      maxSide: grid.sides,
+      quality: grid.qualities,
+    },
+    transparency: "auto",
   });
-  return { ...optimized, format: "jpeg" };
+  if (optimized.chosen.transparency === "flattened" && shouldLogVerbose()) {
+    logVerbose(`Image transparency flattened to fit ${formatMb(cap, 0)}MB optimization budget`);
+  }
+  return {
+    buffer: optimized.data,
+    optimizedSize: optimized.bytes,
+    resizeSide: optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height),
+    format: optimized.format,
+    mimeType: optimized.mimeType,
+    ...(optimized.chosen.quality === undefined ? {} : { quality: optimized.chosen.quality }),
+    ...(optimized.chosen.compressionLevel === undefined
+      ? {}
+      : { compressionLevel: optimized.chosen.compressionLevel }),
+  };
 }
 
 export async function optimizeImageBufferForWebMedia(params: {
@@ -714,44 +710,19 @@ export async function optimizeImageBufferForWebMedia(params: {
       fileName: params.fileName,
     };
   }
-  let optimized: OptimizedImage;
-  try {
-    optimized = await optimizeImageWithFallback({
-      buffer: params.buffer,
-      cap,
-      meta,
-      imageCompression: params.imageCompression,
-    });
-  } catch (err) {
-    const fallbackContentType = resolvePreservableOriginalImageContentType({
-      buffer: params.buffer,
-      cap,
-      contentType: meta.contentType,
-      fileName: meta.fileName,
-      policy: params.imageCompression,
-    });
-    if (isImageProcessorUnavailableError(err) && !isHeicSource(meta) && fallbackContentType) {
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `Image optimizer unavailable; sending original ${formatMb(params.buffer.length)}MB media without optimization`,
-        );
-      }
-      return {
-        buffer: params.buffer,
-        contentType: fallbackContentType,
-        kind: "image",
-        fileName: params.fileName,
-      };
-    }
-    throw err;
-  }
+  const optimized = await optimizeImageWithFallback({
+    buffer: params.buffer,
+    cap,
+    meta,
+    imageCompression: params.imageCompression,
+  });
   logOptimizedImage({ originalSize: params.buffer.length, optimized });
   if (optimized.buffer.length > cap) {
     throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
   }
   return {
     buffer: optimized.buffer,
-    contentType: optimized.format === "png" ? "image/png" : "image/jpeg",
+    contentType: optimized.mimeType,
     kind: "image",
     fileName:
       optimized.format === "jpeg" && isHeicSource(params)
@@ -803,48 +774,18 @@ async function loadWebMediaInternal(
     meta?: { contentType?: string; fileName?: string },
   ) => {
     const originalSize = buffer.length;
-    let optimized: OptimizedImage;
-    try {
-      optimized = await optimizeImageWithFallback({
-        buffer,
-        cap,
-        meta,
-        ...(imageCompression ? { imageCompression } : {}),
-      });
-    } catch (err) {
-      const fallbackContentType = resolvePreservableOriginalImageContentType({
-        buffer,
-        cap,
-        contentType: meta?.contentType,
-        fileName: meta?.fileName,
-        policy: imageCompression,
-      });
-      if (
-        isImageProcessorUnavailableError(err) &&
-        !isHeicSource(meta ?? {}) &&
-        fallbackContentType
-      ) {
-        if (shouldLogVerbose()) {
-          logVerbose(
-            `Image optimizer unavailable; sending original ${formatMb(buffer.length)}MB media without optimization`,
-          );
-        }
-        return {
-          buffer,
-          contentType: fallbackContentType,
-          kind: "image" as const,
-          fileName: meta?.fileName,
-        };
-      }
-      throw err;
-    }
+    const optimized = await optimizeImageWithFallback({
+      buffer,
+      cap,
+      meta,
+      ...(imageCompression ? { imageCompression } : {}),
+    });
     logOptimizedImage({ originalSize, optimized });
 
     if (optimized.buffer.length > cap) {
       throw new Error(formatCapReduce("Media", cap, optimized.buffer.length));
     }
 
-    const contentType = optimized.format === "png" ? "image/png" : "image/jpeg";
     const fileName =
       optimized.format === "jpeg" && meta && isHeicSource(meta)
         ? toJpegFileName(meta.fileName)
@@ -852,7 +793,7 @@ async function loadWebMediaInternal(
 
     return {
       buffer: optimized.buffer,
-      contentType,
+      contentType: optimized.mimeType,
       kind: "image" as const,
       fileName,
     };
@@ -1067,72 +1008,23 @@ export async function optimizeImageToJpeg(
   resizeSide: number;
   quality: number;
 }> {
-  // Try a grid of sizes/qualities until under the limit.
-  let source = buffer;
-  if (isHeicSource(opts)) {
-    try {
-      source = await convertHeicToJpeg(buffer);
-    } catch (err) {
-      throw new Error(`HEIC image conversion failed: ${String(err)}`, { cause: err });
-    }
-  }
   const { sides, qualities } = resolveImageCompressionGrid(opts.imageCompression);
-  let smallest: {
-    buffer: Buffer;
-    size: number;
-    resizeSide: number;
-    quality: number;
-  } | null = null;
-  let firstResizeError: unknown;
-  const errors: string[] = [];
-
-  for (const side of sides) {
-    for (const quality of qualities) {
-      try {
-        const out = await resizeToJpeg({
-          buffer: source,
-          maxSide: side,
-          quality,
-          withoutEnlargement: true,
-        });
-        const size = out.length;
-        if (!smallest || size < smallest.size) {
-          smallest = { buffer: out, size, resizeSide: side, quality };
-        }
-        if (size <= maxBytes) {
-          return {
-            buffer: out,
-            optimizedSize: size,
-            resizeSide: side,
-            quality,
-          };
-        }
-      } catch (err) {
-        firstResizeError ??= err;
-        const message = formatErrorMessage(err).trim();
-        if (message && !errors.includes(message)) {
-          errors.push(message);
-        }
-        // Continue trying other size/quality combinations
-      }
-    }
-  }
-
-  if (smallest) {
-    return {
-      buffer: smallest.buffer,
-      optimizedSize: smallest.size,
-      resizeSide: smallest.resizeSide,
-      quality: smallest.quality,
-    };
-  }
-
-  if (isImageProcessorUnavailableError(firstResizeError)) {
-    throw firstResizeError;
-  }
-
-  const detail = errors.length > 0 ? `: ${errors.slice(0, 3).join("; ")}` : "";
-  throw new Error(`Failed to optimize image${detail}`, { cause: firstResizeError });
+  const optimized = await createImageProcessor().encode(buffer, {
+    format: "auto",
+    maxBytes,
+    opaque: { format: "jpeg" },
+    search: {
+      maxSide: sides,
+      quality: qualities,
+    },
+    transparency: "flatten",
+  });
+  return {
+    buffer: optimized.data,
+    optimizedSize: optimized.bytes,
+    resizeSide: optimized.chosen.maxSide ?? Math.max(optimized.width, optimized.height),
+    quality: optimized.chosen.quality ?? qualities.at(-1) ?? 85,
+  };
 }
 
-export { optimizeImageToPng };
+export { optimizeImageToPng } from "./media-services.js";

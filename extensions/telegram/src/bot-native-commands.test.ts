@@ -728,4 +728,18 @@ describe("registerTelegramNativeCommands", () => {
     expect(commandParams.to).toBe("telegram:100");
     expect(commandParams.messageThreadId).toBeUndefined();
   });
+
+  it("uses bot topic capability for Telegram plugin command DM topic session keys", async () => {
+    const { handler } = registerPlugCommand();
+
+    await handler({
+      ...createPrivateCommandContext({ chatId: 100, userId: 200, threadId: 77 }),
+      me: { has_topics_enabled: true },
+    });
+
+    const commandParams = firstExecutePluginCommandParams();
+    expect(commandParams.sessionKey).toBe("agent:main:main:thread:100:77");
+    const deliveryParams = firstDeliverRepliesParams();
+    expect(deliveryParams.sessionKeyForInternalHooks).toBe("agent:main:main:thread:100:77");
+  });
 });

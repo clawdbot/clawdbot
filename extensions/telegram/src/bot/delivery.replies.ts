@@ -1,4 +1,8 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
+import {
+  createOutboundPayloadPlan,
+  projectOutboundPayloadPlanForDelivery,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { fireAndForgetHook } from "openclaw/plugin-sdk/hook-runtime";
@@ -17,10 +21,6 @@ import {
   kindFromMime,
   probeVideoDimensions,
 } from "openclaw/plugin-sdk/media-runtime";
-import {
-  createOutboundPayloadPlan,
-  projectOutboundPayloadPlanForDelivery,
-} from "openclaw/plugin-sdk/outbound-runtime";
 import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";

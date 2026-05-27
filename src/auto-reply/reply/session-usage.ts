@@ -113,6 +113,8 @@ export async function persistSessionUsageUpdate(params: {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
         update: async (entry) => {
           const preserveSessionModelState =
             params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;
@@ -197,6 +199,8 @@ export async function persistSessionUsageUpdate(params: {
       await updateSessionStoreEntry({
         storePath,
         sessionKey,
+        skipMaintenance: true,
+        takeCacheOwnership: true,
         update: async (entry) => {
           const preserveSessionModelState =
             params.isHeartbeat === true || params.preserveUserFacingSessionModelState === true;

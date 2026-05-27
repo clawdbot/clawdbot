@@ -87,6 +87,14 @@ describe("cli program (smoke)", () => {
     expect(options?.timeoutMs).toBeUndefined();
   });
 
+  it("rejects partial tui history limits", async () => {
+    await expect(runProgram(["tui", "--history-limit", "10x"])).rejects.toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Error: --history-limit must be a positive integer.",
+    );
+    expect(runTui).not.toHaveBeenCalled();
+  });
+
   it("runs setup wizard when wizard flags are present", async () => {
     await runProgram(["setup", "--remote-url", "ws://example"]);
 

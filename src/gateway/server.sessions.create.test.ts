@@ -268,8 +268,12 @@ test("sessions.create can start the first agent turn from an initial task", asyn
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
   );
   expect(created.payload?.runStarted).toBe(true);
-  requireNonEmptyString(created.payload?.runId, "started run id");
+  const runId = requireNonEmptyString(created.payload?.runId, "started run id");
   expect(created.payload?.messageSeq).toBe(1);
+
+  const wait = await rpcReq(ws, "agent.wait", { runId, timeoutMs: 1_000 });
+  expect(wait.ok).toBe(true);
+  expect(wait.payload?.status).toBe("ok");
 
   ws.close();
 });

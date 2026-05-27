@@ -1,11 +1,6 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  asRecord,
-  normalizeOptionalString as readString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_GOOGLE_MEET_AUDIO_INPUT_COMMAND,
   DEFAULT_GOOGLE_MEET_AUDIO_OUTPUT_COMMAND,
@@ -13,7 +8,7 @@ import {
 import {
   GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
   outputMentionsBlackHole2ch,
-} from "./transports/chrome.js";
+} from "./transports/chrome-audio-device.js";
 
 type NodeBridgeSession = {
   id: string;
@@ -45,6 +40,20 @@ function readStringArray(value: unknown): string[] | undefined {
     (entry): entry is string => typeof entry === "string" && entry.length > 0,
   );
   return result.length > 0 ? result : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function readNumber(value: unknown, fallback: number): number {

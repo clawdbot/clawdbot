@@ -17,6 +17,7 @@ CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="$(openclaw_live_default_profile_file)"
 CODEX_HARNESS_AUTH_MODE="${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}"
+CODEX_CLI_PACKAGE_SPEC="${OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC:-}"
 TEMP_DIRS=()
 DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
 DOCKER_HOME_MOUNT=()
@@ -69,6 +70,16 @@ if [[ "$CODEX_HARNESS_AUTH_MODE" != "api-key" && ! -s "$HOME/.codex/auth.json" ]
     echo "If this is a Testbox/API-key run, set OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key and run through openclaw-testbox-env." >&2
   fi
   exit 1
+fi
+if [[ -z "$CODEX_CLI_PACKAGE_SPEC" ]]; then
+  CODEX_CLI_PACKAGE_SPEC="$(
+    node -e '
+      const pkg = require(process.argv[1]);
+      const version = pkg.dependencies?.["@openai/codex"];
+      if (!version || typeof version !== "string") process.exit(1);
+      process.stdout.write(`@openai/codex@${version}`);
+    ' "$ROOT_DIR/extensions/codex/package.json"
+  )"
 fi
 
 cleanup_temp_dirs() {
@@ -203,6 +214,23 @@ fi
 mkdir -p "$NPM_CONFIG_PREFIX" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+run_setup_command() {
+  local timeout_value="${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180}s"
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  else
+    echo "timeout command not found; cannot bound live Codex harness setup after ${timeout_value}" >&2
+    return 127
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+  else
+    "$timeout_bin" "$timeout_value" "$@"
+  fi
+}
 if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
   IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
   if ((${#auth_files[@]} > 0)); then
@@ -224,9 +252,8 @@ trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" != "api-key" ]; then
   node --import tsx "$trusted_scripts_dir/prepare-codex-ci-auth.ts" "$HOME/.codex/auth.json"
 fi
-if [ ! -x "$NPM_CONFIG_PREFIX/bin/codex" ]; then
-  npm install -g @openai/codex
-fi
+run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"
+"$NPM_CONFIG_PREFIX/bin/codex" --version
 if [ "${OPENCLAW_LIVE_CODEX_HARNESS_AUTH:-codex-auth}" = "api-key" ]; then
   printf '%s\n' "$OPENAI_API_KEY" | "$NPM_CONFIG_PREFIX/bin/codex" login --with-api-key >/dev/null
 fi
@@ -296,9 +323,12 @@ echo "==> Auth mode: $CODEX_HARNESS_AUTH_MODE"
 echo "==> Profile file: $PROFILE_STATUS"
 echo "==> CI-safe Codex config: ${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}"
 echo "==> Test files: ${OPENCLAW_LIVE_CODEX_TEST_FILES:-src/gateway/gateway-codex-harness.live.test.ts}"
+echo "==> Codex CLI package: $CODEX_CLI_PACKAGE_SPEC"
 echo "==> Harness fallback: none"
 echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-DOCKER_RUN_ARGS=(docker run --rm -t \
+DOCKER_RUN_ARGS=()
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_CODEX_HARNESS_DOCKER_RUN_TIMEOUT:-2100s}"
+DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
@@ -325,9 +355,11 @@ DOCKER_RUN_ARGS=(docker run --rm -t \
   -e OPENCLAW_LIVE_CODEX_HARNESS_MODEL="${OPENCLAW_LIVE_CODEX_HARNESS_MODEL:-codex/gpt-5.5}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS="${OPENCLAW_LIVE_CODEX_HARNESS_REQUIRE_GUARDIAN_EVENTS:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS="${OPENCLAW_LIVE_CODEX_HARNESS_REQUEST_TIMEOUT_MS:-}" \
+  -e OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS="${OPENCLAW_LIVE_CODEX_HARNESS_SETUP_TIMEOUT_SECONDS:-180}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_ONLY:-}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE="${OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE:-1}" \
   -e OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG="${OPENCLAW_LIVE_CODEX_HARNESS_USE_CI_SAFE_CODEX_CONFIG:-1}" \
+  -e OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC="$CODEX_CLI_PACKAGE_SPEC" \
   -e OPENCLAW_CLI_BACKEND_LOG_OUTPUT="${OPENCLAW_CLI_BACKEND_LOG_OUTPUT:-}" \
   -e OPENCLAW_TEST_CONSOLE="${OPENCLAW_TEST_CONSOLE:-}" \
   -e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts" \

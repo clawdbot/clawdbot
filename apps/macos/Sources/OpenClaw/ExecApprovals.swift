@@ -84,7 +84,7 @@ enum ExecAsk: String, CaseIterable, Codable, Identifiable {
     }
 }
 
-enum ExecApprovalDecision: String, Codable {
+enum ExecApprovalDecision: String, Codable, Equatable {
     case allowOnce = "allow-once"
     case allowAlways = "allow-always"
     case deny

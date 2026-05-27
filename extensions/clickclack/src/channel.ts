@@ -7,7 +7,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   createComputedAccountStatusAdapter,

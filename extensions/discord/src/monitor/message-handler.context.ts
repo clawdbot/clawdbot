@@ -185,36 +185,21 @@ export async function buildDiscordMessageProcessContext(params: {
     });
   }
   const replyContext = resolveReplyContext(message, resolveDiscordMessageText);
-  const replyVisibility = replyContext
-    ? evaluateSupplementalContextVisibility({
-        mode: contextVisibilityMode,
-        kind: "quote",
-        senderAllowed: isSupplementalContextSenderAllowed({
-          id: replyContext.senderId,
-          name: replyContext.senderName,
-          tag: replyContext.senderTag,
-          memberRoleIds: replyContext.memberRoleIds,
-        }),
+  const replySenderAllowed = replyContext
+    ? isSupplementalContextSenderAllowed({
+        id: replyContext.senderId,
+        name: replyContext.senderName,
+        tag: replyContext.senderTag,
+        memberRoleIds: replyContext.memberRoleIds,
       })
-    : null;
-  const filteredReplyContext = replyContext && replyVisibility?.include ? replyContext : null;
-  const isReplyTargetSelf = Boolean(botUserId && filteredReplyContext?.senderId === botUserId);
-  const replyContextForPromptBody = isReplyTargetSelf ? null : filteredReplyContext;
-  if (replyContext && !filteredReplyContext && isGuildMessage) {
+    : true;
+  const replyVisible = evaluateSupplementalContextVisibility({
+    mode: contextVisibilityMode,
+    kind: "quote",
+    senderAllowed: replySenderAllowed,
+  }).include;
+  if (replyContext && !replyVisible && isGuildMessage) {
     logVerbose(`discord: drop reply context (mode=${contextVisibilityMode})`);
-  }
-  const mediaListForContext = [...mediaList];
-  if (replyContextForPromptBody) {
-    const referencedReplyMediaList = await resolveReferencedReplyMediaList(message, mediaMaxBytes, {
-      fetchImpl: discordRestFetch,
-      ssrfPolicy: cfg.browser?.ssrfPolicy,
-      readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
-      totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-      abortSignal,
-    });
-    if (!isContextAborted(abortSignal)) {
-      mediaListForContext.push(...referencedReplyMediaList);
-    }
   }
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;
@@ -271,7 +256,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const preflightAudioIndex =
     preflightAudioTranscript === undefined
       ? -1
-      : mediaListForContext.findIndex((media) => media.contentType?.startsWith("audio/"));
+      : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
   const threadKeys = resolveThreadSessionKeys({
     baseSessionKey,
     threadId: threadChannel ? messageChannelId : undefined,
@@ -333,10 +318,10 @@ export async function buildDiscordMessageProcessContext(params: {
           sessionKey: effectiveSessionKey,
         });
 
-  const ctxPayload = buildChannelInboundEventContext({
+  const ctxPayload = await buildChannelInboundEventContext({
     channel: "discord",
-    provider: "discord",
-    surface: "discord",
+    resolveSupplementalMedia: true,
+    contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
     messageIdFull: canonicalMessageId && canonicalMessageId !== message.id ? message.id : undefined,
@@ -356,10 +341,6 @@ export async function buildDiscordMessageProcessContext(params: {
       label: fromLabel,
       spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
-      routePeer: {
-        kind: isDirectMessage ? "direct" : "channel",
-        id: isDirectMessage ? author.id : messageChannelId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -372,7 +353,7 @@ export async function buildDiscordMessageProcessContext(params: {
     },
     reply: {
       to: effectiveTo,
-      originatingTo,
+      ...(originatingTo !== effectiveTo ? { originatingTo } : {}),
     },
     message: {
       inboundEventKind: ctx.inboundEventKind,
@@ -380,7 +361,6 @@ export async function buildDiscordMessageProcessContext(params: {
       rawBody: preflightAudioTranscript ?? baseText,
       bodyForAgent: preflightAudioTranscript ?? baseText ?? text,
       commandBody: preflightAudioTranscript ?? baseText,
-      envelopeFrom: fromLabel,
       inboundHistory,
     },
     access: {
@@ -393,9 +373,6 @@ export async function buildDiscordMessageProcessContext(params: {
       },
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands: ctx.allowTextCommands,
-        useAccessGroups: false,
-        authorizers: [],
       },
     },
     commandTurn: {
@@ -404,20 +381,40 @@ export async function buildDiscordMessageProcessContext(params: {
       authorized: commandAuthorized,
       body: preflightAudioTranscript ?? baseText,
     },
-    media: toInboundMediaFacts(mediaListForContext, {
+    media: toInboundMediaFacts(mediaList, {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),
     supplemental: {
-      quote: filteredReplyContext
-        ? {
-            id: filteredReplyContext.id,
-            body: replyContextForPromptBody?.body,
-            sender: filteredReplyContext.sender,
-          }
-        : undefined,
+      quote:
+        replyContext && replyVisible
+          ? {
+              id: replyContext.id,
+              body: replyContext.body,
+              sender: replyContext.sender,
+              senderAllowed: replySenderAllowed,
+              isSelf: Boolean(botUserId && replyContext.senderId === botUserId),
+              media: async () => {
+                const referencedReplyMediaList = await resolveReferencedReplyMediaList(
+                  message,
+                  mediaMaxBytes,
+                  {
+                    fetchImpl: discordRestFetch,
+                    ssrfPolicy: cfg.browser?.ssrfPolicy,
+                    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+                    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+                    abortSignal,
+                  },
+                );
+                return isContextAborted(abortSignal)
+                  ? []
+                  : toInboundMediaFacts(referencedReplyMediaList);
+              },
+            }
+          : undefined,
       thread: {
         starterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
         label: threadLabel,
+        senderAllowed: true,
       },
       groupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
     },

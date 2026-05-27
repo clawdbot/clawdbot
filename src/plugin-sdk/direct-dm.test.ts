@@ -5,7 +5,7 @@ import {
   createPreCryptoDirectDmAuthorizer,
   dispatchInboundDirectDmWithRuntime,
   resolveInboundDirectDmAccessWithRuntime,
-} from "./direct-dm.js";
+} from "./channel-inbound.js";
 
 const baseCfg = {
   commands: { useAccessGroups: true },

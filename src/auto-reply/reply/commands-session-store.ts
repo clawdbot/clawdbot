@@ -12,9 +12,16 @@ export async function persistSessionEntry(params: CommandParams): Promise<boolea
   params.sessionEntry.updatedAt = Date.now();
   params.sessionStore[params.sessionKey] = params.sessionEntry;
   if (params.storePath) {
-    await updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey] = params.sessionEntry as SessionEntry;
-    });
+    // Slash commands mutate one known session entry; skipping global session
+    // maintenance avoids scanning the whole sessions directory for simple
+    // command-only writes.
+    await updateSessionStore(
+      params.storePath,
+      (store) => {
+        store[params.sessionKey] = params.sessionEntry as SessionEntry;
+      },
+      { skipMaintenance: true },
+    );
   }
   return true;
 }

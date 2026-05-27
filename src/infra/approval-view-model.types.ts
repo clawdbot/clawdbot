@@ -10,12 +10,22 @@ import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-app
 
 type ApprovalPhase = "pending" | "resolved" | "expired";
 
-export type ApprovalActionView = {
+export type ApprovalDecisionActionView = {
+  kind: "decision";
   decision: ExecApprovalDecision;
   label: string;
   style: NonNullable<InteractiveReplyButton["style"]>;
   command: string;
 };
+
+export type ApprovalCommandActionView = {
+  kind: "command";
+  label: string;
+  style: NonNullable<InteractiveReplyButton["style"]>;
+  command: string;
+};
+
+export type ApprovalActionView = ApprovalDecisionActionView | ApprovalCommandActionView;
 
 export type ApprovalMetadataView = {
   label: string;

@@ -26,6 +26,7 @@ const pluginRegistryMocks = vi.hoisted(() => ({
 
 const envCandidateMocks = vi.hoisted(() => ({
   resolveProviderEnvApiKeyCandidates: vi.fn(),
+  resolveProviderEnvAuthLookupMaps: vi.fn(),
 }));
 
 vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
@@ -33,9 +34,13 @@ vi.mock("../../agents/model-auth-env-vars.js", async (importOriginal) => {
   envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockImplementation(
     actual.resolveProviderEnvApiKeyCandidates,
   );
+  envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockImplementation(
+    actual.resolveProviderEnvAuthLookupMaps,
+  );
   return {
     ...actual,
     resolveProviderEnvApiKeyCandidates: envCandidateMocks.resolveProviderEnvApiKeyCandidates,
+    resolveProviderEnvAuthLookupMaps: envCandidateMocks.resolveProviderEnvAuthLookupMaps,
   };
 });
 
@@ -97,6 +102,7 @@ async function writeWorkspaceAuthEvidencePlugin(workspaceDir: string) {
 describe("createModelListAuthIndex", () => {
   beforeEach(() => {
     envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockClear();
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockClear();
     pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockClear();
   });
 
@@ -134,7 +140,11 @@ describe("createModelListAuthIndex", () => {
   });
 
   it("checks resolver-only env auth on demand", () => {
-    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockReturnValueOnce({});
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockReturnValueOnce({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+    });
     const index = createModelListAuthIndex({
       cfg: {},
       authStore: emptyStore,
@@ -147,7 +157,11 @@ describe("createModelListAuthIndex", () => {
   });
 
   it("does not rediscover resolver-only env auth when a command metadata snapshot is supplied", () => {
-    envCandidateMocks.resolveProviderEnvApiKeyCandidates.mockReturnValueOnce({});
+    envCandidateMocks.resolveProviderEnvAuthLookupMaps.mockReturnValueOnce({
+      aliasMap: {},
+      envCandidateMap: {},
+      authEvidenceMap: {},
+    });
     const metadataSnapshot = {
       index: { plugins: [] },
       plugins: [],

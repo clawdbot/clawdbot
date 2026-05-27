@@ -29,7 +29,7 @@ function createPluginRecord(
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
     mediaUnderstandingProviderIds: [],
-    meetingNotesSourceProviderIds: [],
+    transcriptSourceProviderIds: [],
     imageGenerationProviderIds: [],
     videoGenerationProviderIds: [],
     musicGenerationProviderIds: [],

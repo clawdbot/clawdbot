@@ -38,6 +38,8 @@ entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
 rm -f "$OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG"
 
+openclaw_e2e_enable_openclaw_cli_timeout
+
 echo "Installing Codex plugin: $PLUGIN_SPEC"
 openclaw plugins install "$PLUGIN_SPEC" --force >"$PLUGIN_INSTALL_LOG" 2>&1
 openclaw plugins inspect codex --runtime --json >"$PLUGIN_INSPECT_LOG"

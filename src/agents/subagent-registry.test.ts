@@ -1044,6 +1044,64 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
+  it("resumes ended cleanup when lifecycle killed completion rejects before cleanup", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+    mocks.ensureRuntimePluginsLoaded
+      .mockRejectedValueOnce(new Error("runtime unavailable before cleanup"))
+      .mockRejectedValueOnce(new Error("runtime still unavailable before cleanup"));
+
+    mod.registerSubagentRun({
+      runId: "run-killed-recovery",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "killed recovery test",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-killed-recovery",
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 100 },
+    });
+
+    lifecycleHandler?.({
+      runId: "run-killed-recovery",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 100,
+        endedAt: 200,
+        stopReason: "aborted",
+      },
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-killed-recovery");
+      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(2);
+      expect(run?.outcome?.status).toBe("error");
+      expect(run?.endedReason).toBe("subagent-killed");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("preserves run-mode keep entries past SESSION_RUN_TTL_MS sweep", async () => {
     mod.registerSubagentRun({
       runId: "run-keep-survives-ttl",

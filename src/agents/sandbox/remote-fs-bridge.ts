@@ -15,6 +15,15 @@ import {
 } from "./path-utils.js";
 import { isExistingWorkspaceSkillMountSource } from "./workspace-mounts.js";
 
+function parseStatMtimeMs(value: string | undefined): number {
+  const raw = value ?? "0";
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    return Number(raw) * 1000;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
 
 type ResolvedRemotePath = SandboxResolvedPath & {
@@ -235,7 +244,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       signal: params.signal,
     });
     const result = await this.runRemoteScript({
-      script: 'set -eu\nstat -c "%F|%s|%Y" -- "$1"',
+      script: 'set -eu\nstat -c "%F|%s|%y" -- "$1"',
       args: [canonical],
       signal: params.signal,
     });
@@ -244,7 +253,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     return {
       type: kindRaw === "directory" ? "directory" : kindRaw === "regular file" ? "file" : "other",
       size: Number(sizeRaw),
-      mtimeMs: Number(mtimeRaw) * 1000,
+      mtimeMs: parseStatMtimeMs(mtimeRaw),
     };
   }
 

@@ -101,25 +101,8 @@ function listTrackedTestFiles(rootPath) {
     );
 }
 
-export function listTrackedTestFilesForRoots(roots) {
+function listFilesystemTestFiles(rootPath) {
   const files = [];
-  for (const root of roots) {
-    const trackedFiles = listTrackedTestFiles(path.join(repoRoot, root));
-    if (!trackedFiles) {
-      return null;
-    }
-    files.push(...trackedFiles);
-  }
-  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
-}
-
-function countTestFiles(rootPath) {
-  const trackedFiles = listTrackedTestFiles(rootPath);
-  if (trackedFiles) {
-    return trackedFiles.length;
-  }
-
-  let total = 0;
   const stack = [rootPath];
 
   while (stack.length > 0) {
@@ -137,12 +120,31 @@ function countTestFiles(rootPath) {
         continue;
       }
       if (entry.isFile() && (fullPath.endsWith(".test.ts") || fullPath.endsWith(".test.tsx"))) {
-        total += 1;
+        files.push(normalizeRelative(path.relative(repoRoot, fullPath)));
       }
     }
   }
 
-  return total;
+  return files.toSorted((left, right) => left.localeCompare(right));
+}
+
+export function listTrackedTestFilesForRoots(roots) {
+  const files = [];
+  for (const root of roots) {
+    const rootPath = path.join(repoRoot, root);
+    const trackedFiles = listTrackedTestFiles(rootPath) ?? listFilesystemTestFiles(rootPath);
+    files.push(...trackedFiles);
+  }
+  return [...new Set(files)].toSorted((left, right) => left.localeCompare(right));
+}
+
+function countTestFiles(rootPath) {
+  const trackedFiles = listTrackedTestFiles(rootPath);
+  if (trackedFiles) {
+    return trackedFiles.length;
+  }
+
+  return listFilesystemTestFiles(rootPath).length;
 }
 
 function estimatePlanCost(config, testFileCount) {
@@ -280,7 +282,13 @@ export function resolveExtensionTestPlan(params = {}) {
 function mergeTestPlans(plans) {
   const groupsByConfig = new Map();
 
-  for (const plan of plans) {
+  const testPlans = plans.filter((plan) => plan.hasTests);
+  const noTestExtensionIds = plans
+    .filter((plan) => !plan.hasTests)
+    .map((plan) => plan.extensionId)
+    .toSorted((left, right) => left.localeCompare(right));
+
+  for (const plan of testPlans) {
     const current = groupsByConfig.get(plan.config) ?? {
       config: plan.config,
       extensionIds: [],
@@ -310,21 +318,23 @@ function mergeTestPlans(plans) {
     extensionIds: plans
       .map((plan) => plan.extensionId)
       .toSorted((left, right) => left.localeCompare(right)),
-    estimatedCost: plans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
-    hasTests: plans.length > 0,
+    estimatedCost: testPlans.reduce((sum, plan) => sum + plan.estimatedCost, 0),
+    hasTests: testPlans.length > 0,
+    noTestExtensionIds,
     planGroups,
-    testFileCount: plans.reduce((sum, plan) => sum + plan.testFileCount, 0),
+    testFileCount: testPlans.reduce((sum, plan) => sum + plan.testFileCount, 0),
   };
 }
 
 export function resolveExtensionBatchPlan(params = {}) {
   const cwd = params.cwd ?? process.cwd();
+  const hasExplicitExtensionIds = params.extensionIds !== undefined;
   const extensionIds = params.extensionIds ?? listAvailableExtensionIds();
-  const plans = extensionIds
-    .map((extensionId) => resolveExtensionTestPlan({ cwd, targetArg: extensionId }))
-    .filter((plan) => plan.hasTests);
+  const plans = extensionIds.map((extensionId) =>
+    resolveExtensionTestPlan({ cwd, targetArg: extensionId }),
+  );
 
-  return mergeTestPlans(plans);
+  return mergeTestPlans(hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests));
 }
 
 function pickLeastLoadedShard(shards) {

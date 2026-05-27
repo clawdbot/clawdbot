@@ -155,6 +155,7 @@ trap 'rm -f "$run_log"; rm -rf "$npm_prefix_host"' EXIT
 
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  -e OPENCLAW_E2E_COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
   -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"
@@ -221,8 +222,9 @@ run_logged() {
 }
 
 echo "Running package Telegram live Docker E2E ($PACKAGE_LABEL)..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
@@ -237,7 +239,32 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 echo "Installing ${package_label} from ${install_source}..."
-npm install -g "$install_source" --no-fund --no-audit
+
+npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
+run_npm_install() {
+  if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
+    npm install -g "$install_source" --no-fund --no-audit
+    return
+  fi
+
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -z "$timeout_bin" ]; then
+    echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2
+    return 127
+  fi
+
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  else
+    "$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  fi
+}
+run_npm_install
 
 command -v openclaw
 openclaw --version
@@ -252,6 +279,7 @@ run_logged docker_e2e_run_with_harness \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-runtime.XXXXXX")"
 export NPM_CONFIG_PREFIX="/npm-global"
@@ -275,7 +303,7 @@ dump_hotpath_logs() {
 trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
 
 command -v openclaw
-openclaw --version
+openclaw_e2e_run_command openclaw --version
 mkdir -p /app/node_modules
 openclaw_package_dir="/npm-global/lib/node_modules/openclaw"
 # The mounted QA harness imports openclaw/plugin-sdk and package dependencies;
@@ -338,7 +366,9 @@ done
 
 if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
   echo "Running installed-package onboarding recovery hot path..."
-  OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
+  hotpath_openai_api_key="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}"
+  OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard \
+    --non-interactive --accept-risk \
     --mode local \
     --auth-choice openai-api-key \
     --secret-input-mode ref \
@@ -350,9 +380,9 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     --skip-health \
     --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
 
-  openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
-  openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
-  openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
 fi
 
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"

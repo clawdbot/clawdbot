@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import path from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -33,6 +33,13 @@ type RunGroupParams = {
 
 function runScript(args: string[], cwd = process.cwd()) {
   return execFileSync(process.execPath, [scriptPath, ...args], {
+    cwd,
+    encoding: "utf8",
+  });
+}
+
+function runScriptResult(args: string[], cwd = process.cwd()) {
+  return spawnSync(process.execPath, [scriptPath, ...args], {
     cwd,
     encoding: "utf8",
   });
@@ -461,6 +468,21 @@ describe("scripts/test-extension.mjs", () => {
     ]);
   });
 
+  it("keeps explicitly requested extensions without tests in batch plans", () => {
+    const extensionId = findExtensionWithoutTests();
+    const batch = resolveExtensionBatchPlan({
+      cwd: process.cwd(),
+      extensionIds: [extensionId, "firecrawl"],
+    });
+
+    expect(batch.extensionIds).toEqual([extensionId, "firecrawl"].toSorted());
+    expect(batch.extensionCount).toBe(2);
+    expect(batch.noTestExtensionIds).toEqual([extensionId]);
+    expect(batch.hasTests).toBe(true);
+    expect(batch.testFileCount).toBe(1);
+    expect(batch.planGroups.flatMap((group) => group.extensionIds)).toEqual(["firecrawl"]);
+  });
+
   it("counts tracked extension tests without walking extension directories", () => {
     const payload = expectNoNodeFsScans<{
       batchTests: number;
@@ -657,6 +679,35 @@ describe("scripts/test-extension.mjs", () => {
     expect(runParams.targets).toContain("extensions/codex/src/app-server/client.test.ts");
   });
 
+  it("fails extension batch groups when exact excludes remove every test", async () => {
+    const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const result = await runExtensionBatchPlan(
+      resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
+      {
+        runGroup,
+        vitestArgs: ["--exclude", bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts")],
+      },
+    );
+
+    expect(result).toBe(1);
+    expect(runGroup).not.toHaveBeenCalled();
+  });
+
+  it("allows extension batch groups to opt into empty exact excludes", async () => {
+    const runGroup = vi.fn<() => Promise<number>>().mockResolvedValue(0);
+    const result = await runExtensionBatchPlan(
+      resolveExtensionBatchPlan({ cwd: process.cwd(), extensionIds: ["firecrawl"] }),
+      {
+        allowEmptyAfterExclude: true,
+        runGroup,
+        vitestArgs: ["--exclude", bundledPluginFile("firecrawl", "src/firecrawl-tools.test.ts")],
+      },
+    );
+
+    expect(result).toBe(0);
+    expect(runGroup).not.toHaveBeenCalled();
+  });
+
   it("detects exact Vitest excludes in extension batch args", () => {
     expect([
       ...parseExactVitestExcludePaths([
@@ -667,11 +718,19 @@ describe("scripts/test-extension.mjs", () => {
     expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
   });
 
-  it("treats extensions without tests as a no-op by default", () => {
+  it("fails explicitly requested extensions without tests by default", () => {
     const extensionId = findExtensionWithoutTests();
-    const stdout = runScript([extensionId]);
+    const result = runScriptResult([extensionId]);
 
-    expect(stdout).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
-    expect(stdout).toContain("Skipping.");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
+  });
+
+  it("allows explicitly requested extensions without tests when requested", () => {
+    const extensionId = findExtensionWithoutTests();
+    const result = runScriptResult([extensionId, "--allow-no-tests"]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain(`No tests found for ${bundledPluginRoot(extensionId)}.`);
   });
 });

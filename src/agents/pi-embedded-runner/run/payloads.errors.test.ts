@@ -468,6 +468,64 @@ describe("buildEmbeddedRunPayloads", () => {
     );
   });
 
+  it("still shows write tool errors when timedOut is true but no fileTarget was recorded", () => {
+    // Without `fileTarget` we cannot distinguish a confirmed file write from
+    // an unrelated mutating-tool timeout, so the default-visible warning is
+    // preserved to avoid hiding real failures.
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "write",
+        error: "invoke timed out",
+        timedOut: true,
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+  });
+
+  it("still shows write tool errors when timedOut and fileTarget only prove the attempted path", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Done."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "write",
+        error: "invoke timed out",
+        timedOut: true,
+        mutatingAction: true,
+        fileTarget: { path: "/tmp/openclaw/output.md" },
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+  });
+
+  it("still shows exec tool errors when timedOut is true (no file-write boundary)", () => {
+    // Exec timeouts never set `fileTarget`, so the new file-write boundary
+    // never matches. Exec/message/cron/gateway tools keep the visible
+    // warning because the disk-write idempotency reasoning does not apply.
+    const payloads = buildPayloads({
+      assistantTexts: ["The script is ready."],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "command timed out",
+        timedOut: true,
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Exec");
+  });
+
   it("shows exec tool errors when assistant output claims success", () => {
     const payloads = buildPayloads({
       assistantTexts: ["The script is ready to use and saved in your workspace."],

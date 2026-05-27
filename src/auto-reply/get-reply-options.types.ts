@@ -1,5 +1,6 @@
 import type { ImageContent } from "@earendil-works/pi-ai";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -56,6 +57,8 @@ export type GetReplyOptions = {
   imageOrder?: PromptImageOrderEntry[];
   /** Notifies when an agent run actually starts (useful for webchat command handling). */
   onAgentRunStart?: (runId: string) => void;
+  /** Shared lifecycle owner for the current user-turn transcript append. */
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onReplyStart?: () => Promise<void> | void;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;

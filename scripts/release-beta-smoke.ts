@@ -29,7 +29,7 @@ Options:
 `;
 }
 
-function parseArgs(argv: string[]): Options {
+export function parseArgs(argv: string[]): Options {
   const options: Options = {
     beta: "beta",
     model: "openai/gpt-5.4",
@@ -72,6 +72,9 @@ function parseArgs(argv: string[]): Options {
       default:
         throw new Error(`unknown option: ${arg}`);
     }
+  }
+  if (options.skipParallels && options.skipTelegram) {
+    throw new Error("--skip-parallels and --skip-telegram cannot be used together");
   }
   return options;
 }

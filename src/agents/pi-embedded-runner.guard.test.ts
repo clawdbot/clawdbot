@@ -96,6 +96,87 @@ describe("guardSessionManager integration", () => {
     );
   });
 
+  it("applies prepared user persistence fields to the next real user message", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      preparedUserTurnMessage: {
+        role: "user",
+        content: "What is in this image?",
+        timestamp: 123,
+        MediaPath: "/tmp/a.png",
+        MediaPaths: ["/tmp/a.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      } as Extract<AgentMessage, { role: "user" }>,
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage({
+      role: "user",
+      content: [
+        { type: "text", text: "[media attached: media://inbound/a.png]\nWhat is in this image?" },
+      ],
+    } as AgentMessage);
+    appendMessage({ role: "user", content: "follow-up" } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: "What is in this image?",
+      MediaPath: "/tmp/a.png",
+      MediaPaths: ["/tmp/a.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
+    expect(messages[1]).toEqual({ role: "user", content: "follow-up" });
+  });
+
+  it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      preparedUserTurnMessage: {
+        role: "user",
+        content: "visible prompt",
+        timestamp: 123,
+        MediaPath: "/tmp/a.png",
+        MediaPaths: ["/tmp/a.png"],
+        MediaType: "image/png",
+        MediaTypes: ["image/png"],
+      } as Extract<AgentMessage, { role: "user" }>,
+    });
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage({
+      role: "user",
+      content: [{ type: "text", text: "blocked" }],
+      timestamp: 124,
+      __openclaw: { beforeAgentRunBlocked: { blockedBy: "test", blockedAt: 123 } },
+    } as AgentMessage);
+    appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "blocked" }],
+      __openclaw: { beforeAgentRunBlocked: { blockedBy: "test", blockedAt: 123 } },
+    });
+    expect(messages[0]).not.toHaveProperty("MediaPath");
+    expect(messages[1]).toMatchObject({
+      role: "user",
+      content: "visible prompt",
+      MediaPath: "/tmp/a.png",
+      MediaPaths: ["/tmp/a.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
+  });
+
   it("redacts configured text patterns before persisting transcript messages", () => {
     const cfg = {
       logging: {

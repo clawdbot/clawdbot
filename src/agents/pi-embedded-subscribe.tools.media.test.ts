@@ -341,13 +341,13 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("does not trust bundled plugin tool names without run-local metadata", () => {
-    expect(isToolResultMediaTrusted("meeting_notes")).toBe(false);
+    expect(isToolResultMediaTrusted("plugin_media_tool")).toBe(false);
   });
 
   it("trusts bundled plugin tool names carried by run-local metadata", () => {
-    expect(isToolResultMediaTrusted("meeting_notes", undefined, new Set(["meeting_notes"]))).toBe(
-      true,
-    );
+    expect(
+      isToolResultMediaTrusted("plugin_media_tool", undefined, new Set(["plugin_media_tool"])),
+    ).toBe(true);
   });
 
   it("blocks trusted-media aliases that are not exact registered built-ins", () => {
@@ -391,10 +391,10 @@ describe("extractToolResultMediaPaths", () => {
   it("keeps local media for bundled plugin tool names trusted in this run", () => {
     expect(
       filterToolResultMediaUrls(
-        "meeting_notes",
+        "plugin_media_tool",
         ["/tmp/meeting.wav"],
         undefined,
-        new Set(["meeting_notes"]),
+        new Set(["plugin_media_tool"]),
       ),
     ).toEqual(["/tmp/meeting.wav"]);
   });

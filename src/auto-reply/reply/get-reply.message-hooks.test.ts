@@ -50,12 +50,14 @@ registerGetReplyRuntimeOverrides(mocks);
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
+let stageSandboxMediaMock: typeof import("./stage-sandbox-media.runtime.js").stageSandboxMedia;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
+  ({ stageSandboxMedia: stageSandboxMediaMock } = await import("./stage-sandbox-media.runtime.js"));
 }
 
 function emptyAliasIndex() {
@@ -101,6 +103,7 @@ describe("getReplyFromConfig message hooks", () => {
     mocks.initSessionState.mockReset();
     vi.mocked(resolveDefaultModelMock).mockReset();
     vi.mocked(runPreparedReplyMock).mockReset();
+    vi.mocked(stageSandboxMediaMock).mockReset();
     vi.mocked(logVerbose).mockReset();
 
     mocks.applyMediaUnderstanding.mockImplementation(async (...args: unknown[]) => {
@@ -141,6 +144,7 @@ describe("getReplyFromConfig message hooks", () => {
       aliasIndex: emptyAliasIndex(),
     });
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
+    vi.mocked(stageSandboxMediaMock).mockResolvedValue({ staged: new Map() });
     mocks.initSessionState.mockResolvedValue(
       createGetReplySessionState({
         sessionKey: "agent:main:telegram:-100123",
@@ -281,6 +285,70 @@ describe("getReplyFromConfig message hooks", () => {
         text: "a tiny dot image",
       }),
     ]);
+    expect(stageSandboxMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("stages remote iMessage media before media understanding", async () => {
+    const order: string[] = [];
+    const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+    const stagedPath = "/tmp/openclaw-remote-cache/photo.jpg";
+    vi.mocked(stageSandboxMediaMock).mockImplementationOnce(async (params) => {
+      order.push("stage");
+      params.ctx.MediaPath = stagedPath;
+      params.ctx.MediaPaths = [stagedPath];
+      params.ctx.MediaUrl = stagedPath;
+      params.ctx.MediaUrls = [stagedPath];
+      params.sessionCtx.MediaPath = stagedPath;
+      params.sessionCtx.MediaPaths = [stagedPath];
+      params.sessionCtx.MediaUrl = stagedPath;
+      params.sessionCtx.MediaUrls = [stagedPath];
+      return { staged: new Map([[remotePath, stagedPath]]) };
+    });
+    mocks.applyMediaUnderstanding.mockImplementationOnce(async (...args: unknown[]) => {
+      order.push("understand");
+      const { ctx } = args[0] as { ctx: MsgContext };
+      expect(ctx.MediaPath).toBe(stagedPath);
+      expect(ctx.MediaPaths).toEqual([stagedPath]);
+      expect(ctx.MediaUrl).toBe(stagedPath);
+      expect(ctx.MediaUrls).toEqual([stagedPath]);
+      expect(ctx.MediaStaged).toBe(true);
+    });
+
+    await getReplyFromConfig(
+      buildCtx({
+        Provider: "imessage",
+        Surface: "imessage",
+        OriginatingChannel: "imessage",
+        OriginatingTo: "imessage:chat:abc",
+        ChatType: "direct",
+        Body: "please describe this",
+        BodyForAgent: "please describe this",
+        RawBody: "please describe this",
+        CommandBody: "please describe this",
+        BodyForCommands: "please describe this",
+        SessionKey: "agent:main:imessage:direct:user",
+        From: "imessage:user",
+        To: "imessage:chat:abc",
+        MediaPath: remotePath,
+        MediaPaths: [remotePath],
+        MediaUrl: remotePath,
+        MediaUrls: [remotePath],
+        MediaType: "image/jpeg",
+        MediaTypes: ["image/jpeg"],
+        MediaRemoteHost: "user@gateway-host",
+      }),
+      undefined,
+      withFastReplyConfig({}),
+    );
+
+    expect(order).toEqual(["stage", "understand"]);
+    expect(stageSandboxMediaMock).toHaveBeenCalledTimes(1);
+    expect(stageSandboxMediaMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:imessage:direct:user",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
   });
 
   it("emits only preprocessed when no transcript is produced", async () => {

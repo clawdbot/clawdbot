@@ -109,6 +109,13 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 
 const log = createSubsystemLogger("memory");
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
+const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+
+type NativeMemoryWatchPair = {
+  dir: string;
+  main: fsSync.FSWatcher;
+  parent: fsSync.FSWatcher | null;
+};
 
 function resolveMemoryWatchFactory(): typeof chokidar.watch {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
@@ -118,6 +125,18 @@ function resolveMemoryWatchFactory(): typeof chokidar.watch {
     }
   }
   return chokidar.watch.bind(chokidar);
+}
+
+function resolveMemoryNativeWatchFactory(): typeof fsSync.watch {
+  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+    const override = (globalThis as Record<PropertyKey, unknown>)[
+      TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY
+    ];
+    if (typeof override === "function") {
+      return override as typeof fsSync.watch;
+    }
+  }
+  return fsSync.watch.bind(fsSync);
 }
 
 function shouldIgnoreMemoryWatchPath(
@@ -200,6 +219,7 @@ export abstract class MemoryManagerSyncOps {
   } = { enabled: false, available: false };
   protected vectorReady: Promise<boolean> | null = null;
   protected watcher: FSWatcher | null = null;
+  private nativeMemoryWatchPairs: NativeMemoryWatchPair[] = [];
   protected watchTimer: NodeJS.Timeout | null = null;
   protected sessionWatchTimer: NodeJS.Timeout | null = null;
   protected sessionUnsubscribe: (() => void) | null = null;
@@ -434,13 +454,18 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected ensureWatcher() {
-    if (!this.sources.has("memory") || !this.settings.sync.watch || this.watcher) {
+    if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
     }
-    const watchPaths = new Set<string>([
-      path.join(this.workspaceDir, "MEMORY.md"),
-      path.join(this.workspaceDir, "memory"),
-    ]);
+    if (this.watcher || this.nativeMemoryWatchPairs.length > 0) {
+      // Already initialized — preserve idempotence.
+      return;
+    }
+    // Core paths preserve original symlink-follow behavior (chokidar/fs.watch
+    // resolve through symlinks by default); extraPaths preserves the original
+    // explicit symlink-skip policy.
+    const fileWatchPaths = new Set<string>([path.join(this.workspaceDir, "MEMORY.md")]);
+    const dirWatchPaths = new Set<string>([path.join(this.workspaceDir, "memory")]);
     const additionalPaths = normalizeExtraMemoryPaths(this.workspaceDir, this.settings.extraPaths);
     for (const entry of additionalPaths) {
       try {
@@ -449,7 +474,7 @@ export abstract class MemoryManagerSyncOps {
           continue;
         }
         if (stat.isDirectory()) {
-          watchPaths.add(entry);
+          dirWatchPaths.add(entry);
           continue;
         }
         if (
@@ -457,32 +482,293 @@ export abstract class MemoryManagerSyncOps {
           (normalizeLowercaseStringOrEmpty(entry).endsWith(".md") ||
             classifyMemoryMultimodalPath(entry, this.settings.multimodal) !== null)
         ) {
-          watchPaths.add(entry);
+          fileWatchPaths.add(entry);
         }
       } catch {
         // Skip missing/unreadable additional paths.
       }
     }
-    this.watcher = resolveMemoryWatchFactory()(Array.from(watchPaths), {
-      ignoreInitial: true,
-      ignored: (watchPath, stats) =>
-        shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
-    });
     const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
       recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
-    this.watcher.on("add", markDirty);
-    this.watcher.on("change", markDirty);
-    this.watcher.on("unlink", markDirty);
-    this.watcher.on("unlinkDir", markDirty);
-    this.watcher.on("error", (err) => {
-      // File watcher errors (e.g., ENOSPC) should not crash the gateway.
-      // Log the error and continue - memory search still works without auto-sync.
+    // Native recursive fs.watch for directory paths — one watcher per
+    // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
+    // Avoids chokidar's per-file fs.watch fan-out that opened ~12k REG FDs
+    // on multi-thousand-`.md` memory trees (issue #86613).
+    //
+    // Linux is intentionally NOT in the native set: Node's
+    // `fs.watch(dir, { recursive: true })` on non-macOS/non-Windows routes
+    // through `internal/fs/recursive_watch`, which walks the tree and
+    // attaches one watcher per entry under the hood. That defeats the
+    // constant-watcher-profile goal of this fix without throwing (so the
+    // creation-failure fallback below would not catch it). Linux paths
+    // therefore go straight to chokidar, matching pre-PR behavior on that
+    // platform.
+    //
+    // On any other native creation failure (e.g. unsupported filesystem,
+    // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory also falls back to
+    // chokidar so freshness is preserved on the degraded path.
+    const nativeRecursiveSupported = process.platform === "darwin" || process.platform === "win32";
+    for (const dir of dirWatchPaths) {
+      if (!nativeRecursiveSupported) {
+        fileWatchPaths.add(dir);
+        continue;
+      }
+      if (!this.attachNativeMemoryWatchForDir(dir, markDirty)) {
+        // Native creation failed (dir missing, unsupported FS, throw) —
+        // fall back to chokidar so directory coverage isn't dropped.
+        fileWatchPaths.add(dir);
+      }
+    }
+    if (fileWatchPaths.size > 0) {
+      this.watcher = resolveMemoryWatchFactory()(Array.from(fileWatchPaths), {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
+      });
+      this.watcher.on("add", markDirty);
+      this.watcher.on("change", markDirty);
+      this.watcher.on("unlink", markDirty);
+      this.watcher.on("unlinkDir", markDirty);
+      this.watcher.on("error", (err) => {
+        // File watcher errors (e.g., ENOSPC) should not crash the gateway.
+        // Log the error and continue - memory search still works without auto-sync.
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory watcher error: ${message}`);
+      });
+    }
+  }
+
+  // Attach a native recursive `fs.watch` to `dir` plus a non-recursive
+  // parent-directory watch that detects root-replacement
+  // (`rm -rf memory && mkdir memory`) by inode comparison. Returns true if
+  // the main native watcher attached. Called from ensureWatcher(); also
+  // re-entered from the parent-watch handler on detected replacement.
+  protected attachNativeMemoryWatchForDir(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): boolean {
+    if (this.closed) {
+      return false;
+    }
+    let recordedInode: number | null;
+    try {
+      recordedInode = fsSync.statSync(dir).ino;
+    } catch {
+      // Dir doesn't exist; caller will fall back to chokidar.
+      return false;
+    }
+    let mainWatcher: fsSync.FSWatcher;
+    try {
+      mainWatcher = resolveMemoryNativeWatchFactory()(
+        dir,
+        { recursive: true },
+        (_eventType, filename) => {
+          if (filename == null) {
+            // Node docs: filename may be null on some platforms even when
+            // recursive watching is otherwise supported. Be conservative
+            // and mark broadly dirty rather than dropping the event.
+            markDirty();
+            return;
+          }
+          const full = path.join(dir, filename);
+          let stats: fsSync.Stats | undefined;
+          try {
+            const s = fsSync.lstatSync(full, { throwIfNoEntry: false });
+            stats = s ?? undefined;
+          } catch {
+            stats = undefined;
+          }
+          if (shouldIgnoreMemoryWatchPath(full, stats, this.settings.multimodal)) {
+            return;
+          }
+          // Pass stats so the watch-settle queue can debounce rapid
+          // writes; without a snapshot the queue cannot detect stability.
+          markDirty(full, stats);
+        },
+      );
+    } catch (err) {
+      log.warn(
+        `failed to start native recursive watcher on ${dir}: ${String(err)}; falling back to chokidar`,
+      );
+      return false;
+    }
+    const pair: NativeMemoryWatchPair = { dir, main: mainWatcher, parent: null };
+    mainWatcher.on("error", (err) => {
       const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory watcher error: ${message}`);
+      log.warn(`memory native watcher error on ${dir}: ${message}`);
+      // Per Node docs the FSWatcher is no longer usable after an error.
+      this.closeNativeMemoryWatchPair(pair);
+      if (this.closed) {
+        return;
+      }
+      // Force a broad re-sync to cover the gap, then restore directory
+      // coverage by reattaching to chokidar so subsequent file changes
+      // still drive watch sync (intervalMinutes defaults to 0; without
+      // a watcher the directory would stop being indexed).
+      markDirty();
+      this.attachMemoryChokidarFallback(dir, markDirty);
     });
+    this.nativeMemoryWatchPairs.push(pair);
+    // Non-recursive parent watcher: catches root-directory replacement so
+    // we can reattach the main watcher on the new inode. Without this,
+    // `rm -rf memory && mkdir memory` would leave the main watcher bound
+    // to the dead inode and silently miss subsequent file changes.
+    try {
+      const parentDir = path.dirname(dir);
+      const baseName = path.basename(dir);
+      const parentWatcher = resolveMemoryNativeWatchFactory()(
+        parentDir,
+        { recursive: false },
+        (_eventType, filename) => {
+          // Per Node docs `filename` can be null on some platforms even
+          // when the parent watcher is otherwise supported. Treat null
+          // as an unknown event and re-check the watched directory's
+          // inode (clawsweeper review [P2] 5df68c…); otherwise filter
+          // by basename so sibling events don't trigger reattach.
+          if (filename !== null && filename !== baseName) {
+            return;
+          }
+          let currentInode: number | null;
+          try {
+            currentInode = fsSync.statSync(dir).ino;
+          } catch {
+            currentInode = null;
+          }
+          if (currentInode === recordedInode) {
+            return;
+          }
+          // Root was replaced (or removed). Tear down the existing pair
+          // and either reattach (if dir still exists) or fall back to
+          // chokidar (if dir is gone).
+          this.closeNativeMemoryWatchPair(pair);
+          if (this.closed) {
+            return;
+          }
+          markDirty();
+          if (currentInode !== null) {
+            // Re-attach on the new inode (this also installs a fresh
+            // parent watcher closed over the new recordedInode). If the
+            // helper's own statSync races with the dir disappearing
+            // between our inode check and its own check, it returns
+            // false — fall back to chokidar so coverage isn't lost.
+            if (!this.attachNativeMemoryWatchForDir(dir, markDirty)) {
+              this.attachMemoryChokidarFallback(dir, markDirty);
+            }
+          } else {
+            this.attachMemoryChokidarFallback(dir, markDirty);
+          }
+        },
+      );
+      parentWatcher.on("error", (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory native parent watcher error on ${path.dirname(dir)}: ${message}`);
+        try {
+          parentWatcher.close();
+        } catch {
+          // ignore
+        }
+        this.removeNativeMemoryParentWatch(parentWatcher);
+        if (pair.parent === parentWatcher) {
+          pair.parent = null;
+        }
+        // Main watcher still alive — root-replacement detection is lost
+        // but normal events still flow. No fallback needed.
+      });
+      pair.parent = parentWatcher;
+    } catch (err) {
+      // Parent watcher couldn't start (e.g. parentDir not accessible).
+      // The main watcher still works for non-replacement events; just
+      // log and continue.
+      log.warn(
+        `memory native parent watcher could not start on ${path.dirname(dir)}: ${String(err)}`,
+      );
+    }
+    return true;
+  }
+
+  private closeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
+    try {
+      pair.main.close();
+    } catch {
+      // ignore close failures
+    }
+    if (pair.parent) {
+      try {
+        pair.parent.close();
+      } catch {
+        // ignore close failures
+      }
+      pair.parent = null;
+    }
+    this.removeNativeMemoryWatchPair(pair);
+  }
+
+  protected closeNativeMemoryWatchPairs(): void {
+    while (this.nativeMemoryWatchPairs.length > 0) {
+      const pair = this.nativeMemoryWatchPairs[0];
+      if (!pair) {
+        return;
+      }
+      this.closeNativeMemoryWatchPair(pair);
+    }
+  }
+
+  private removeNativeMemoryParentWatch(w: fsSync.FSWatcher): void {
+    for (const pair of this.nativeMemoryWatchPairs) {
+      if (pair.parent === w) {
+        pair.parent = null;
+        return;
+      }
+    }
+  }
+
+  private removeNativeMemoryWatchPair(pair: NativeMemoryWatchPair): void {
+    const idx = this.nativeMemoryWatchPairs.indexOf(pair);
+    if (idx >= 0) {
+      this.nativeMemoryWatchPairs.splice(idx, 1);
+    }
+  }
+
+  // Reattach `dir` to chokidar after a native recursive watcher dies, so
+  // subsequent memory changes under `dir` continue to drive watch sync.
+  // Called from the native watcher `error` handler in ensureWatcher();
+  // factored out so the fallback shape can be unit-tested in isolation.
+  protected attachMemoryChokidarFallback(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): void {
+    if (this.closed) {
+      // Manager teardown started — don't create new watcher resources.
+      return;
+    }
+    try {
+      if (this.watcher) {
+        // Existing chokidar watcher (handling MEMORY.md and/or other file
+        // paths) — extend it to cover this directory too.
+        this.watcher.add(dir);
+        return;
+      }
+      // No chokidar watcher exists yet. Spin one up just for this directory
+      // so the periodic-sync gap is closed.
+      this.watcher = resolveMemoryWatchFactory()([dir], {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          shouldIgnoreMemoryWatchPath(watchPath, stats, this.settings.multimodal),
+      });
+      this.watcher.on("add", markDirty);
+      this.watcher.on("change", markDirty);
+      this.watcher.on("unlink", markDirty);
+      this.watcher.on("unlinkDir", markDirty);
+      this.watcher.on("error", (err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory watcher error: ${message}`);
+      });
+    } catch (err) {
+      log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);
+    }
   }
 
   protected ensureSessionListener() {

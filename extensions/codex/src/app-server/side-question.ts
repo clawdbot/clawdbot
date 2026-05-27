@@ -66,7 +66,10 @@ import { rememberCodexRateLimits, readRecentCodexRateLimits } from "./rate-limit
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { readCodexAppServerBinding } from "./session-binding.js";
-import { getSharedCodexAppServerClient } from "./shared-client.js";
+import {
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
+} from "./shared-client.js";
 import {
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
@@ -75,7 +78,7 @@ import {
 } from "./thread-lifecycle.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
-const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
@@ -145,7 +148,7 @@ export async function runCodexAppServerSideQuestion(
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const authProfileId = params.authProfileId ?? binding.authProfileId;
-  const client = await getSharedCodexAppServerClient({
+  const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: appServer.requestTimeoutMs,
     authProfileId,
@@ -403,6 +406,7 @@ export async function runCodexAppServerSideQuestion(
         timeoutMs: appServer.requestTimeoutMs,
       });
     } finally {
+      releaseLeasedSharedCodexAppServerClient(client);
       nativeHookRelay?.unregister();
     }
   }

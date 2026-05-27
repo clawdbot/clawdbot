@@ -159,12 +159,35 @@ function selectAgentHarnessDecision(params: {
   if (runtime !== "auto") {
     const forced = pluginHarnesses.find((entry) => entry.id === runtime);
     if (forced) {
-      return buildSelectionDecision({
-        harness: forced,
-        policy,
-        selectedReason: "forced_plugin",
-        candidates: listHarnessCandidates(pluginHarnesses),
+      const support = forced.supports({
+        provider: params.provider,
+        modelId: params.modelId,
+        requestedRuntime: runtime,
       });
+      if (support.supported) {
+        return buildSelectionDecision({
+          harness: forced,
+          policy,
+          selectedReason: "forced_plugin",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      if (isCliRuntimeAliasForProvider({ runtime, provider: params.provider })) {
+        return buildSelectionDecision({
+          harness: piHarness,
+          policy: {
+            ...policy,
+            runtime: "pi",
+          },
+          selectedReason: "cli_runtime_passthrough_pi",
+          candidates: listHarnessCandidates(pluginHarnesses),
+        });
+      }
+      throw new Error(
+        `Requested agent harness "${runtime}" does not support ${formatProviderModel(params)}${
+          support.reason ? ` (${support.reason})` : ""
+        }.`,
+      );
     }
     if (runtime === "codex" && policy.runtimeSource === "implicit") {
       return buildSelectionDecision({
@@ -489,4 +512,7 @@ export async function maybeCompactAgentHarnessSession(
     return undefined;
   }
   return harness.compact(params);
+}
+function formatProviderModel(params: { provider: string; modelId?: string }): string {
+  return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
 }

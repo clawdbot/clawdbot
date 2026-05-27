@@ -33,14 +33,19 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ### Deprecated compatibility and test helpers
 
-These subpaths remain package exports for older plugins and OpenClaw test suites,
-but new code should not add imports from them: `agent-runtime-test-contracts`,
+Deprecated subpaths stay exported for older plugins, but new code should use the
+focused SDK subpaths below. The maintained list is
+`scripts/lib/plugin-sdk-deprecated-public-subpaths.json`; CI rejects bundled
+production imports from it. Broad barrels such as `compat`, `config-types`,
+`infra-runtime`, `text-runtime`, and `zod` are compatibility only. Import `zod`
+directly from `zod`.
+
+OpenClaw's Vitest-backed test-helper subpaths are repo-local only and are no
+longer package exports: `agent-runtime-test-contracts`,
 `channel-contract-testing`, `channel-target-testing`, `channel-test-helpers`,
-`plugin-test-api`, `plugin-test-contracts`, `provider-http-test-mocks`,
-`provider-test-contracts`, `test-env`, `test-fixtures`, `test-node-mocks`,
-`testing`, `channel-runtime`, `compat`, `config-types`, `infra-runtime`,
-`text-runtime`, and `zod`. Import `zod` directly from `zod` in new plugin code.
-`plugin-test-runtime` is still an active focused test helper subpath.
+`plugin-test-api`, `plugin-test-contracts`, `plugin-test-runtime`,
+`provider-http-test-mocks`, `provider-test-contracts`, `test-env`,
+`test-fixtures`, `test-node-mocks`, and `testing`.
 
 ### Reserved bundled plugin helper subpaths
 
@@ -48,41 +53,6 @@ These subpaths are plugin-owned compatibility surfaces for their owning bundled
 plugin, not general SDK APIs: `plugin-sdk/codex-mcp-projection` and
 `plugin-sdk/codex-native-task-runtime`. Cross-owner extension imports are blocked
 by package contract guardrails.
-
-### Deprecated unused public subpaths
-
-These public subpaths existed for at least one month and currently have no
-bundled extension production imports. They remain importable for compatibility,
-but new plugin code should use focused, actively consumed SDK subpaths instead:
-`agent-config-primitives`, `channel-config-schema-legacy`,
-`channel-reply-pipeline`, `channel-runtime`, `channel-secret-runtime`,
-`command-auth`, `compat`, `config-runtime`, `config-schema`, `discord`,
-`group-access`, `infra-runtime`, `matrix`, `mattermost`,
-`media-generation-runtime-shared`, `memory-core-engine-runtime`,
-`memory-core-host-multimodal`, `memory-core-host-query`,
-`music-generation-core`, `self-hosted-provider-setup`, `telegram-account`,
-`telegram-command-config`, and `zalouser`.
-
-### Deprecated rare public subpaths
-
-Public subpaths currently used by only one or two bundled plugin owners are also
-deprecated for new plugin code. They remain package exports for compatibility,
-but new code should prefer actively shared SDK seams or plugin-owned package
-APIs. Maintainers track the exact set in
-`scripts/lib/plugin-sdk-deprecated-public-subpaths.json` and the current budget
-with `pnpm plugin-sdk:surface`.
-
-### Deprecated broad barrels
-
-These broad re-export barrels remain buildable for OpenClaw source and
-compatibility checks, but new code should prefer focused SDK subpaths:
-`agent-runtime`, `channel-lifecycle`, `channel-runtime`, `cli-runtime`,
-`compat`, `config-types`, `conversation-runtime`, `hook-runtime`,
-`infra-runtime`, `media-runtime`, `plugin-runtime`, `security-runtime`, and
-`text-runtime`. `channel-runtime`, `compat`, `config-types`, `infra-runtime`,
-and `text-runtime` remain package exports only for backwards compatibility; use
-focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
-`text-chunking`, `text-utility-runtime`, and `logging-core` instead.
 
 <AccordionGroup>
   <Accordion title="Channel subpaths">
@@ -102,7 +72,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/account-helpers` | Narrow account-list/account-action helpers |
     | `plugin-sdk/access-groups` | Access-group allowlist parsing and redacted group diagnostics helpers |
     | `plugin-sdk/channel-pairing` | `createChannelPairingController` |
-    | `plugin-sdk/channel-reply-pipeline` | Legacy reply pipeline helpers. New channel reply pipeline code should use `createChannelMessageReplyPipeline` and `resolveChannelMessageSourceReplyDeliveryMode` from `plugin-sdk/channel-message`. |
+    | `plugin-sdk/channel-reply-pipeline` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-config-helpers` | `createHybridChannelConfigAdapter`, `resolveChannelDmAccess`, `resolveChannelDmAllowFrom`, `resolveChannelDmPolicy`, `normalizeChannelDmPolicy`, `normalizeLegacyDmAliases` |
     | `plugin-sdk/channel-config-schema` | Shared channel config schema primitives plus Zod and direct JSON/TypeBox builders |
     | `plugin-sdk/bundled-channel-config-schema` | Bundled OpenClaw channel config schemas for maintained bundled plugins only |
@@ -112,15 +82,16 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-policy` | `resolveChannelGroupRequireMention` |
     | `plugin-sdk/channel-ingress` | Deprecated low-level channel ingress compatibility facade. New receive paths should use `plugin-sdk/channel-ingress-runtime`. |
     | `plugin-sdk/channel-ingress-runtime` | Experimental high-level channel ingress runtime resolver and route fact builders for migrated channel receive paths. Prefer this over assembling effective allowlists, command allowlists, and legacy projections in each plugin. See [Channel ingress API](/plugins/sdk-channel-ingress). |
-    | `plugin-sdk/channel-lifecycle` | `createAccountStatusSink`, `createChannelRunQueue`, and legacy draft stream lifecycle helpers. New preview finalization code should use `plugin-sdk/channel-message`. |
-    | `plugin-sdk/channel-message` | Cheap message lifecycle contract helpers such as `defineChannelMessageAdapter`, `createChannelMessageAdapterFromOutbound`, `createChannelMessageReplyPipeline`, `createReplyPrefixContext`, `resolveChannelMessageSourceReplyDeliveryMode`, durable-final capability derivation, capability proof helpers for send/receipt/side-effect capabilities, `MessageReceiveContext`, receive ack policy proofs, `defineFinalizableLivePreviewAdapter`, `deliverWithFinalizableLivePreviewAdapter`, live-preview and live-finalizer capability proofs, durable recovery state, `RenderedMessageBatch`, message receipt types, and receipt id helpers. See [Channel message API](/plugins/sdk-channel-message). Legacy reply-dispatch facades are deprecated compatibility only. |
-    | `plugin-sdk/channel-message-runtime` | Runtime delivery helpers that may load outbound delivery, including `deliverInboundReplyWithMessageSendContext`, `sendDurableMessageBatch`, and `withDurableMessageSendContext`. Deprecated reply-dispatch bridges remain importable for compatibility dispatchers only. Use from monitor/send runtime modules, not hot plugin bootstrap files. |
+    | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-outbound` | Message lifecycle contracts plus reply pipeline options, receipts, live preview/streaming, lifecycle helpers, outbound identity, payload planning, durable sends, and message-send context helpers. See [Channel outbound API](/plugins/sdk-channel-outbound). |
+    | `plugin-sdk/channel-message` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
+    | `plugin-sdk/channel-message-runtime` | Deprecated compatibility alias for `plugin-sdk/channel-outbound` plus legacy reply-dispatch facades. |
     | `plugin-sdk/inbound-envelope` | Shared inbound route + envelope builder helpers |
-    | `plugin-sdk/inbound-reply-dispatch` | Legacy shared inbound record-and-dispatch helpers, visible/final dispatch predicates, and deprecated `deliverDurableInboundReplyPayload` compatibility for prepared channel dispatchers. New channel receive/dispatch code should import runtime lifecycle helpers from `plugin-sdk/channel-message-runtime`. |
+    | `plugin-sdk/inbound-reply-dispatch` | Deprecated compatibility facade. Use `plugin-sdk/channel-inbound` for inbound runners and dispatch predicates, and `plugin-sdk/channel-outbound` for message delivery helpers. |
     | `plugin-sdk/messaging-targets` | Deprecated target parsing alias; use `plugin-sdk/channel-targets` |
     | `plugin-sdk/outbound-media` | Shared outbound media loading helpers |
-    | `plugin-sdk/outbound-send-deps` | Lightweight outbound send dependency lookup for channel adapters |
-    | `plugin-sdk/outbound-runtime` | Outbound identity, send delegate, session, formatting, and payload planning helpers. Direct delivery helpers such as `deliverOutboundPayloads` are deprecated compatibility substrate; use `plugin-sdk/channel-message-runtime` for new send paths. |
+    | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/poll-runtime` | Narrow poll normalization helpers |
     | `plugin-sdk/thread-bindings-runtime` | Thread-binding lifecycle and adapter helpers |
     | `plugin-sdk/agent-media-payload` | Legacy agent media payload builder |
@@ -133,17 +104,19 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-plugin-common` | Shared channel plugin prelude exports |
     | `plugin-sdk/allowlist-config-edit` | Allowlist config edit/read helpers |
     | `plugin-sdk/group-access` | Shared group-access decision helpers |
-    | `plugin-sdk/direct-dm` | Shared direct-DM auth/guard helpers |
+    | `plugin-sdk/direct-dm`, `plugin-sdk/direct-dm-access` | Deprecated compatibility facades. Use `plugin-sdk/channel-inbound`. |
+    | `plugin-sdk/direct-dm-guard-policy` | Narrow direct-DM pre-crypto guard policy helpers |
     | `plugin-sdk/discord` | Deprecated Discord compatibility facade for published `@openclaw/discord@2026.3.13` and tracked owner compatibility; new plugins should use generic channel SDK subpaths |
     | `plugin-sdk/telegram-account` | Deprecated Telegram account-resolution compatibility facade for tracked owner compatibility; new plugins should use injected runtime helpers or generic channel SDK subpaths |
     | `plugin-sdk/zalouser` | Deprecated Zalo Personal compatibility facade for published Lark/Zalo packages that still import sender command authorization; new plugins should use `plugin-sdk/command-auth` |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
-    | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, debounce, mention matching, mention-policy, and envelope formatting |
+    | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, formatting, roots, debounce, mention matching, mention-policy, and inbound logging |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
     | `plugin-sdk/channel-mention-gating` | Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
-    | `plugin-sdk/channel-envelope` | Narrow inbound envelope formatting helpers |
-    | `plugin-sdk/channel-location` | Channel location context and formatting helpers |
-    | `plugin-sdk/channel-logging` | Channel logging helpers for inbound drops and typing/ack failures |
+    | `plugin-sdk/channel-envelope`, `plugin-sdk/channel-inbound-roots`, `plugin-sdk/channel-location`, `plugin-sdk/channel-logging` | Deprecated compatibility facades. Use `plugin-sdk/channel-inbound` or `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-pairing-paths` | Deprecated compatibility facade. Use `plugin-sdk/channel-pairing`. |
+    | `plugin-sdk/channel-reply-options-runtime` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
+    | `plugin-sdk/channel-streaming` | Deprecated compatibility facade. Use `plugin-sdk/channel-outbound`. |
     | `plugin-sdk/channel-send-result` | Reply result types |
     | `plugin-sdk/channel-actions` | Channel message-action helpers, plus deprecated native schema helpers kept for plugin compatibility |
     | `plugin-sdk/channel-route` | Shared route normalization, parser-driven target resolution, thread-id stringification, dedupe/compact route keys, parsed-target types, and route/target comparison helpers |
@@ -198,7 +171,8 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/approval-gateway-runtime` | Shared approval gateway-resolution helper |
     | `plugin-sdk/approval-handler-adapter-runtime` | Lightweight native approval adapter loading helpers for hot channel entrypoints |
     | `plugin-sdk/approval-handler-runtime` | Broader approval handler runtime helpers; prefer the narrower adapter/gateway seams when they are enough |
-    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers |
+    | `plugin-sdk/approval-native-runtime` | Native approval target + account-binding helpers and local native exec prompt suppression |
+    | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-reply-runtime` | Exec/plugin approval reply payload helpers |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval payload helpers, native approval routing/runtime helpers, and structured approval display helpers such as `formatApprovalDisplayPath` |
     | `plugin-sdk/reply-dedupe` | Narrow inbound reply dedupe reset helpers |
@@ -245,6 +219,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/runtime-config-snapshot` | Current process config snapshot helpers such as `getRuntimeConfig`, `getRuntimeConfigSnapshot`, and test snapshot setters |
     | `plugin-sdk/telegram-command-config` | Telegram command-name/description normalization and duplicate/conflict checks, even when the bundled Telegram contract surface is unavailable |
     | `plugin-sdk/text-autolink-runtime` | File-reference autolink detection without the broad text barrel |
+    | `plugin-sdk/approval-reaction-runtime` | Hardcoded approval reaction bindings, reaction prompt payloads, reaction target stores, and compatibility export for local native exec prompt suppression |
     | `plugin-sdk/approval-runtime` | Exec/plugin approval helpers, approval-capability builders, auth/profile helpers, native routing/runtime helpers, and structured approval display path formatting |
     | `plugin-sdk/reply-runtime` | Shared inbound/reply runtime helpers, chunking, dispatch, heartbeat, reply planner |
     | `plugin-sdk/reply-dispatch-runtime` | Narrow reply dispatch/finalize and conversation-label helpers |
@@ -322,9 +297,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/media-mime` | Narrow MIME normalization, file-extension mapping, MIME detection, and media-kind helpers |
     | `plugin-sdk/media-store` | Narrow media store helpers such as `saveMediaBuffer` and `saveMediaStream` |
     | `plugin-sdk/media-generation-runtime` | Shared media-generation failover helpers, candidate selection, and missing-model messaging |
-    | `plugin-sdk/meeting-notes` | Meeting notes source provider types, registry lookup, and provider id normalization helpers |
     | `plugin-sdk/media-understanding` | Media understanding provider types plus provider-facing image/audio/structured-extraction helper exports |
-    | `plugin-sdk/meeting-notes` | Meeting notes source provider types, registry helpers, and provider id normalization |
     | `plugin-sdk/text-chunking` | Text and markdown chunking/render helpers, markdown table conversion, directive-tag stripping, and safe-text utilities |
     | `plugin-sdk/text-chunking` | Outbound text chunking helper |
     | `plugin-sdk/speech` | Speech provider types plus provider-facing directive, registry, validation, OpenAI-compatible TTS builder, and speech helper exports |
@@ -338,7 +311,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/music-generation-core` | Shared music-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/video-generation` | Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
-    | `plugin-sdk/meeting-notes` | Shared meeting-notes source provider types, registry helpers, session descriptors, and utterance metadata |
+    | `plugin-sdk/transcripts` | Shared transcripts source provider types, registry helpers, session descriptors, and utterance metadata |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
     | `plugin-sdk/webhook-path` | Deprecated compatibility alias; use `plugin-sdk/webhook-ingress` |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |

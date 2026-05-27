@@ -1260,6 +1260,51 @@ describe("before_tool_call requireApproval handling", () => {
     expect(waitCall[2]).toEqual({ id: "server-id-1" });
   });
 
+  it("passes plugin approval actions and no-route pending preference to the gateway", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Sensitive",
+        description: "Sensitive op",
+        pluginId: "agentkit",
+        allowedDecisions: ["deny"],
+        keepPendingWithoutRoute: true,
+        actions: [
+          {
+            kind: "command",
+            label: "Open AgentKit",
+            style: "primary",
+            commandTemplate: "/agentkit approve {id}",
+          },
+        ],
+      },
+    });
+
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-actions", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-actions", decision: "deny" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(true);
+    const requestParams = requireRecord(requireGatewayCall(0)[2], "approval request params");
+    expect(requestParams).toMatchObject({
+      pluginId: "agentkit",
+      allowedDecisions: ["deny"],
+      keepPendingWithoutRoute: true,
+      actions: [
+        {
+          kind: "command",
+          label: "Open AgentKit",
+          style: "primary",
+          commandTemplate: "/agentkit approve {id}",
+        },
+      ],
+    });
+  });
+
   it("blocks on deny decision", async () => {
     hookRunner.runBeforeToolCall.mockResolvedValue({
       requireApproval: {

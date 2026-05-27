@@ -12,7 +12,7 @@
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import { resolveTwitchAccountContext } from "./config.js";
 import { twitchMessageAdapter, twitchOutbound } from "./outbound.js";

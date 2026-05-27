@@ -70,7 +70,8 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   release blocker unless the operator waives it or the data clearly proves
   infrastructure noise.
 - Generate the changelog before version/tag preparation so the top changelog
-  section is deduped and ordered by user impact.
+  section is deduped and ordered by user impact. Use
+  `$openclaw-changelog-update` for the rewrite.
 - Do not create beta-specific `CHANGELOG.md` headings. Beta releases use the
   stable base version section, for example `v2026.4.20-beta.1` uses
   `## 2026.4.20` release notes.

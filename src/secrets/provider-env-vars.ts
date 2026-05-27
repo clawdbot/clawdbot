@@ -48,6 +48,12 @@ export type ProviderAuthEvidence = {
   source?: string;
 };
 
+export type ProviderAuthLookupMaps = {
+  aliasMap: Readonly<Record<string, string>>;
+  envCandidateMap: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+};
+
 function isWorkspacePluginTrustedForProviderEnvVars(
   plugin: PluginManifestRecord,
   config: OpenClawConfig | undefined,
@@ -129,18 +135,28 @@ function resolveProviderMetadataSnapshot(
   if (params?.metadataSnapshot) {
     return params.metadataSnapshot;
   }
-  const config = params?.config ?? {};
+  const config = params?.config;
   const env = params?.env ?? process.env;
-  const current = getCurrentPluginMetadataSnapshot({
-    config,
-    env,
-    ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    allowWorkspaceScopedSnapshot: true,
-  });
+  let current: PluginMetadataSnapshot | undefined;
+  if (config) {
+    current = getCurrentPluginMetadataSnapshot({
+      config,
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+    });
+  } else {
+    current = getCurrentPluginMetadataSnapshot({
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+  }
   if (current) {
     return current;
   }
-  if (normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
+  if (config && normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
     const unscopedCurrent = getCurrentPluginMetadataSnapshot({
       env,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
@@ -152,7 +168,7 @@ function resolveProviderMetadataSnapshot(
     }
   }
   return loadPluginMetadataSnapshot({
-    config,
+    config: config ?? {},
     workspaceDir: params?.workspaceDir,
     env,
     preferPersisted: false,
@@ -163,6 +179,18 @@ function resolveManifestProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, string[]> {
   const snapshot = resolveProviderMetadataSnapshot(params);
+  const aliases = resolveProviderAuthAliasMap({
+    ...params,
+    metadataSnapshot: snapshot,
+  });
+  return resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliases);
+}
+
+function resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+  aliases: Readonly<Record<string, string>>,
+): Record<string, string[]> {
   const candidates: Record<string, string[]> = {};
   for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginProviderEnvVars(plugin, params)) {
@@ -179,7 +207,6 @@ function resolveManifestProviderAuthEnvVarCandidates(
       appendUniqueEnvVarCandidates(candidates, provider.id, provider.envVars ?? []);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -195,6 +222,18 @@ function resolveManifestProviderAuthEvidence(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, ProviderAuthEvidence[]> {
   const snapshot = resolveProviderMetadataSnapshot(params);
+  const aliases = resolveProviderAuthAliasMap({
+    ...params,
+    metadataSnapshot: snapshot,
+  });
+  return resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliases);
+}
+
+function resolveManifestProviderAuthEvidenceFromSnapshot(
+  params: ProviderEnvVarLookupParams | undefined,
+  snapshot: PluginMetadataSnapshot,
+  aliases: Readonly<Record<string, string>>,
+): Record<string, ProviderAuthEvidence[]> {
   const evidenceByProvider: Record<string, ProviderAuthEvidence[]> = {};
   for (const plugin of snapshot.plugins) {
     if (
@@ -210,7 +249,6 @@ function resolveManifestProviderAuthEvidence(
       appendUniqueAuthEvidence(evidenceByProvider, provider.id, provider.authEvidence ?? []);
     }
   }
-  const aliases = resolveProviderAuthAliasMap(params);
   for (const [alias, target] of Object.entries(aliases).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -235,6 +273,25 @@ export function resolveProviderAuthEvidence(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly ProviderAuthEvidence[]> {
   return resolveManifestProviderAuthEvidence(params);
+}
+
+export function resolveProviderAuthLookupMaps(
+  params?: ProviderEnvVarLookupParams,
+): ProviderAuthLookupMaps {
+  const snapshot = resolveProviderMetadataSnapshot(params);
+  const lookupParams = {
+    ...params,
+    metadataSnapshot: snapshot,
+  };
+  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
+  return {
+    aliasMap,
+    envCandidateMap: {
+      ...resolveManifestProviderAuthEnvVarCandidatesFromSnapshot(params, snapshot, aliasMap),
+      ...CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES,
+    },
+    authEvidenceMap: resolveManifestProviderAuthEvidenceFromSnapshot(params, snapshot, aliasMap),
+  };
 }
 
 export function resolveProviderEnvVars(

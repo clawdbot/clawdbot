@@ -79,6 +79,52 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("uses Discord requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+        senderUserId: "spoofed-admin-id",
+      },
+      cfg,
+      requesterSenderId: "trusted-sender-id",
+      toolContext: { currentChannelProvider: "discord" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+        senderUserId: "trusted-sender-id",
+      },
+      cfg,
+    });
+  });
+
+  it("does not treat non-Discord requester ids as Discord guild admin sender ids", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+      },
+      cfg,
+      requesterSenderId: "telegram-user-id",
+      toolContext: { currentChannelProvider: "telegram" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+      },
+      cfg,
+    });
+  });
+
   it("falls back to toolContext.currentMessageId for reactions", async () => {
     const cfg = discordConfig();
     await handleDiscordMessageAction({

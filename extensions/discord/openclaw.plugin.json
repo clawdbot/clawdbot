@@ -5,7 +5,7 @@
   },
   "channels": ["discord"],
   "contracts": {
-    "meetingNotesSourceProviders": ["discord-voice"]
+    "transcriptSourceProviders": ["discord-voice"]
   },
   "channelEnvVars": {
     "discord": ["DISCORD_BOT_TOKEN"]

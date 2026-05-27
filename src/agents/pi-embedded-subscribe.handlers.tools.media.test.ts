@@ -472,12 +472,12 @@ describe("handleToolExecutionEnd media emission", () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: true,
       toolResultFormat: "plain",
-      trustedLocalMediaToolNames: new Set(["meeting_notes"]),
+      trustedLocalMediaToolNames: new Set(["plugin_media_tool"]),
     });
 
     await handleToolExecutionEnd(ctx, {
       type: "tool_execution_end",
-      toolName: "meeting_notes",
+      toolName: "plugin_media_tool",
       toolCallId: "tc-1",
       isError: false,
       result: {

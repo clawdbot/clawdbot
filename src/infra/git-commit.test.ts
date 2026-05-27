@@ -55,10 +55,17 @@ describe("git commit resolution", () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
   let testing: (typeof import("./git-commit.js"))["testing"];
+  let repoHead: string;
 
   beforeAll(async () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
+    repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf-8",
+    })
+      .trim()
+      .slice(0, 7);
     ({ resolveCommitHash, testing } = await import("./git-commit.js"));
   });
 
@@ -78,46 +85,19 @@ describe("git commit resolution", () => {
   });
 
   it("resolves commit metadata from the caller module root instead of the caller cwd", async () => {
-    const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    })
-      .trim()
-      .slice(0, 7);
-
     const temp = await makeTempDir("git-commit-cwd");
     const otherRepo = path.join(temp, "other");
-    await fs.mkdir(otherRepo, { recursive: true });
-    execFileSync("git", ["init", "-q"], { cwd: otherRepo });
-    await fs.writeFile(path.join(otherRepo, "note.txt"), "x\n", "utf-8");
-    execFileSync("git", ["add", "note.txt"], { cwd: otherRepo });
-    execFileSync(
-      "git",
-      ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "init"],
-      { cwd: otherRepo },
-    );
-    const otherHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: otherRepo,
-      encoding: "utf-8",
-    })
-      .trim()
-      .slice(0, 7);
+    const otherCommit = "1234567890abcdef1234567890abcdef12345678";
+    await makeFakeGitRepo(otherRepo, { head: otherCommit });
 
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
     vi.spyOn(process, "cwd").mockReturnValue(otherRepo);
 
     expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).toBe(repoHead);
-    expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherHead);
+    expect(resolveCommitHash({ moduleUrl: entryModuleUrl })).not.toBe(otherCommit.slice(0, 7));
   });
 
   it("prefers live git metadata over stale build info in a real checkout", () => {
-    const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    })
-      .trim()
-      .slice(0, 7);
-
     const entryModuleUrl = pathToFileURL(path.join(repoRoot, "src", "entry.ts")).href;
 
     expect(
@@ -176,13 +156,6 @@ describe("git commit resolution", () => {
   });
 
   it("treats invalid moduleUrl inputs as a fallback hint instead of throwing", () => {
-    const repoHead = execFileSync("git", ["rev-parse", "--short=7", "HEAD"], {
-      cwd: repoRoot,
-      encoding: "utf-8",
-    })
-      .trim()
-      .slice(0, 7);
-
     expect(resolveCommitHash({ moduleUrl: "not-a-file-url", cwd: repoRoot, env: {} })).toBe(
       repoHead,
     );
@@ -191,15 +164,7 @@ describe("git commit resolution", () => {
   it("does not walk out of the openclaw package into a host repo", async () => {
     const temp = await makeTempDir("git-commit-package-boundary");
     const hostRepo = path.join(temp, "host");
-    await fs.mkdir(hostRepo, { recursive: true });
-    execFileSync("git", ["init", "-q"], { cwd: hostRepo });
-    await fs.writeFile(path.join(hostRepo, "host.txt"), "x\n", "utf-8");
-    execFileSync("git", ["add", "host.txt"], { cwd: hostRepo });
-    execFileSync(
-      "git",
-      ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "init"],
-      { cwd: hostRepo },
-    );
+    await makeFakeGitRepo(hostRepo, { head: "abcdef1234567890abcdef1234567890abcdef12" });
 
     const packageRoot = path.join(hostRepo, "node_modules", "openclaw");
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });

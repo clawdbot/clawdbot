@@ -74,6 +74,16 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("reserves assistant position without clearing existing streamed text", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.startAssistant("partial", "run-active");
+    chatLog.reserveAssistantSlot("run-active");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("partial");
+    expect(chatLog.children.length).toBe(1);
+  });
+
   it("drops stale tool references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
     chatLog.startTool("tool-1", "read_file", { path: "a.txt" });

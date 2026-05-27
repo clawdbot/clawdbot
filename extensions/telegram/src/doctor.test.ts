@@ -158,6 +158,76 @@ describe("telegram doctor", () => {
     ).toEqual(["Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block)."]);
   });
 
+  it("removes retired DM thread reply policy keys", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            dm: { threadReplies: "inbound" },
+            direct: {
+              "123": { threadReplies: "always", requireTopic: true },
+            },
+            accounts: {
+              work: {
+                dm: { threadReplies: "off" },
+                direct: {
+                  "456": { threadReplies: "inbound", systemPrompt: "Support" },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(telegram?.dm).toBeUndefined();
+    expect(telegram?.direct?.["123"]).toEqual({ requireTopic: true });
+    expect(telegram?.accounts?.work?.dm).toBeUndefined();
+    expect(telegram?.accounts?.work?.direct?.["456"]).toEqual({ systemPrompt: "Support" });
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.direct.123.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.accounts.work.dm.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+      "Removed channels.telegram.accounts.work.direct.456.threadReplies; DM topic sessions now follow Telegram getMe.has_topics_enabled.",
+    ]);
+  });
+
+  it("removes empty retired DM policy stanzas", () => {
+    const normalize = telegramDoctor.normalizeCompatibilityConfig;
+    if (!normalize) {
+      throw new Error("expected telegram compatibility normalizer");
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          telegram: {
+            dm: {},
+            accounts: {
+              work: {
+                dm: {},
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    const telegram = result.config.channels?.telegram;
+    expect(telegram?.dm).toBeUndefined();
+    expect(telegram?.accounts?.work?.dm).toBeUndefined();
+    expect(result.changes).toEqual([
+      "Removed channels.telegram.dm.",
+      "Removed channels.telegram.accounts.work.dm.",
+    ]);
+  });
+
   it("finds invalid allowFrom entries across scopes", () => {
     const hits = scanTelegramInvalidAllowFromEntries({
       channels: {

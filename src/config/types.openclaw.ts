@@ -1,4 +1,5 @@
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
+import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
@@ -142,6 +143,7 @@ export type OpenClawConfig = {
   web?: WebConfig;
   channels?: ChannelsConfig;
   cron?: CronConfig;
+  transcripts?: TranscriptsConfig;
   commitments?: CommitmentsConfig;
   hooks?: HooksConfig;
   discovery?: DiscoveryConfig;

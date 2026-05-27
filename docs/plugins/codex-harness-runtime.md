@@ -49,11 +49,12 @@ newly selected model.
 ## Visible replies and heartbeats
 
 When a direct/source chat turn runs through the Codex harness, visible replies
-default to the message tool: final assistant text stays private unless the
-agent calls `message(action="send")`. This matches GPT models well because they
-can decide whether source-channel output is useful. Set
-`messages.visibleReplies: "automatic"` to restore the old mode where final
-assistant text posts automatically.
+default to automatic final assistant delivery for internal WebChat surfaces.
+This keeps Codex aligned with the Pi harness prompt contract: agents reply
+normally, and OpenClaw posts the final text to the source conversation. Set
+`messages.visibleReplies: "message_tool"` when a direct/source chat should
+intentionally keep final assistant text private unless the agent calls
+`message(action="send")`.
 
 Codex heartbeat turns also get `heartbeat_respond` in the searchable OpenClaw
 tool catalog by default, so the agent can record whether the wake should stay

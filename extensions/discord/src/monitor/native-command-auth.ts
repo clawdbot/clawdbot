@@ -63,6 +63,36 @@ export function resolveDiscordNativeCommandAllowlistAccess(params: {
   return { configured: true, allowed: match.allowed } as const;
 }
 
+export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
+  const raw = cfg.commands?.ownerAllowFrom;
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return undefined;
+  }
+  const entries: string[] = [];
+  for (const entry of raw) {
+    const trimmed = normalizeOptionalString(String(entry ?? "")) ?? "";
+    if (!trimmed) {
+      continue;
+    }
+    const separatorIndex = trimmed.indexOf(":");
+    if (separatorIndex > 0) {
+      const prefix = trimmed.slice(0, separatorIndex).toLowerCase();
+      if (prefix === "discord") {
+        const remainder = normalizeOptionalString(trimmed.slice(separatorIndex + 1)) ?? "";
+        if (remainder) {
+          entries.push(remainder);
+        }
+        continue;
+      }
+      if (prefix !== "user" && prefix !== "pk") {
+        continue;
+      }
+    }
+    entries.push(trimmed);
+  }
+  return entries.length > 0 ? entries : undefined;
+}
+
 export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -157,6 +187,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
   accountId: string;
+  skipCommandOwnerAllowFrom?: boolean;
 }): Promise<boolean> {
   const { interaction, cfg, discordConfig, accountId } = params;
   const user = interaction.user;
@@ -288,6 +319,23 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   });
   if (!groupDmAccess.allowed) {
     return false;
+  }
+  if (params.skipCommandOwnerAllowFrom !== true) {
+    const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(cfg);
+    const { ownerAllowed: commandOwnerOk } = resolveDiscordOwnerAccess({
+      allowFrom: commandOwnerAllowFrom,
+      sender: {
+        id: sender.id,
+        name: sender.name,
+        tag: sender.tag,
+      },
+      allowNameMatching,
+    });
+    const commandOwnerAllowAll = commandOwnerAllowFrom?.includes("*") === true;
+    const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
+    if (commandOwnerAllowFrom && !senderIsCommandOwner && !commandsAllowFromAccess.allowed) {
+      return false;
+    }
   }
   if (!isDirectMessage) {
     return resolveDiscordGuildNativeCommandAuthorized({

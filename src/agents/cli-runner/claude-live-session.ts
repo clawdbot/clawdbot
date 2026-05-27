@@ -204,7 +204,8 @@ export function buildClaudeLiveArgs(params: {
     upsertArgValue(
       upsertArgValue(
         upsertArgValue(
-          stripLiveProcessArgs(params.args, params.backend, params.useResume),
+          stripLiveProcessArgs(params.args, params.backend,
+            params.useResume && params.backend.systemPromptWhen !== "always"),
           "--input-format",
           "stream-json",
         ),

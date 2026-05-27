@@ -21,6 +21,10 @@ export async function authorizeSlackDirectMessage(params: {
     return false;
   }
 
+  if (params.ctx.dmPolicy === "open" && params.allowFromLower.includes("*")) {
+    return true;
+  }
+
   const sender = await params.resolveSenderName(params.senderId);
   const senderName = sender?.name ?? undefined;
   const allowMatch = resolveSlackAllowListMatch({

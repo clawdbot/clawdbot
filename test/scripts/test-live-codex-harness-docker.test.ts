@@ -90,6 +90,18 @@ describe("scripts/test-live-codex-harness-docker.sh", () => {
     );
   });
 
+  it("installs the plugin-pinned Codex CLI package for app-server proof", () => {
+    const script = fs.readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain('"$ROOT_DIR/extensions/codex/package.json"');
+    expect(script).toContain("process.stdout.write(`@openai/codex@${version}`);");
+    expect(script).toContain('-e OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC="$CODEX_CLI_PACKAGE_SPEC"');
+    expect(script).toContain(
+      'run_setup_command npm install -g "$OPENCLAW_LIVE_CODEX_CLI_PACKAGE_SPEC"',
+    );
+    expect(script).not.toContain("run_setup_command npm install -g @openai/codex");
+  });
+
   it("fails instead of skipping when Codex auth cannot identify an account", () => {
     const script = fs.readFileSync(SCRIPT_PATH, "utf8");
 

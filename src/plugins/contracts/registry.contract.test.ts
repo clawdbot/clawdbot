@@ -37,7 +37,7 @@ describe("plugin contract registry", () => {
               realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
               realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
               mediaUnderstandingProviders: entry.mediaUnderstandingProviderIds,
-              meetingNotesSourceProviders: entry.meetingNotesSourceProviderIds,
+              transcriptSourceProviders: entry.transcriptSourceProviderIds,
               documentExtractors: entry.documentExtractorIds,
               imageGenerationProviders: entry.imageGenerationProviderIds,
               videoGenerationProviders: entry.videoGenerationProviderIds,
@@ -93,9 +93,9 @@ describe("plugin contract registry", () => {
         pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
     },
     {
-      name: "does not duplicate bundled meeting-notes source provider ids",
+      name: "does not duplicate bundled transcripts source provider ids",
       ids: () =>
-        pluginRegistrationContractRegistry.flatMap((entry) => entry.meetingNotesSourceProviderIds),
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.transcriptSourceProviderIds),
     },
     {
       name: "does not duplicate bundled realtime transcription provider ids",
@@ -214,14 +214,14 @@ describe("plugin contract registry", () => {
     });
   });
 
-  it("covers every bundled meeting-notes source plugin discovered from manifests", () => {
+  it("covers every bundled transcripts source plugin discovered from manifests", () => {
     expectRegistryPluginIds({
       actualPluginIds: pluginRegistrationContractRegistry
-        .filter((entry) => entry.meetingNotesSourceProviderIds.length > 0)
+        .filter((entry) => entry.transcriptSourceProviderIds.length > 0)
         .map((entry) => entry.pluginId),
       predicate: (plugin) =>
         plugin.origin === "bundled" &&
-        (plugin.contracts?.meetingNotesSourceProviders?.length ?? 0) > 0,
+        (plugin.contracts?.transcriptSourceProviders?.length ?? 0) > 0,
     });
   });
 

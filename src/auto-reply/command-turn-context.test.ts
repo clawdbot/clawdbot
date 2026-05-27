@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,
@@ -7,6 +8,9 @@ import {
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "./command-turn-context.js";
+import { isExplicitCommandTurnContext } from "./command-turn-detection.js";
+
+const emptyConfig = {} as const satisfies OpenClawConfig;
 
 describe("resolveCommandTurnContext", () => {
   it("derives native command turns from legacy context fields", () => {
@@ -51,6 +55,88 @@ describe("resolveCommandTurnContext", () => {
       authorized: false,
     });
     expect(isExplicitCommandTurn(commandTurn)).toBe(false);
+  });
+
+  it("treats authorized control command bodies as explicit without legacy source tags", () => {
+    expect(
+      isExplicitCommandTurnContext(
+        {
+          CommandAuthorized: true,
+          CommandBody: "/reset",
+        },
+        emptyConfig,
+      ),
+    ).toBe(true);
+    expect(
+      isExplicitCommandTurnContext(
+        {
+          CommandAuthorized: true,
+          CommandBody: "hey can you /status please",
+        },
+        emptyConfig,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps structured normal command turns non-explicit", () => {
+    expect(
+      isExplicitCommandTurnContext(
+        {
+          CommandTurn: {
+            kind: "normal",
+            source: "message",
+            authorized: false,
+            body: "/think high through this",
+          },
+          CommandAuthorized: true,
+          Body: "through this",
+          RawBody: "through this",
+          CommandBody: "/think high through this",
+        },
+        emptyConfig,
+      ),
+    ).toBe(false);
+  });
+
+  it("uses cleaned command bodies for command-shaped structured normal turns", () => {
+    expect(
+      isExplicitCommandTurnContext(
+        {
+          CommandTurn: {
+            kind: "normal",
+            source: "message",
+            authorized: false,
+            body: "/reset",
+          },
+          CommandAuthorized: true,
+          Body: "/reset@openclaw",
+          RawBody: "/reset@openclaw",
+          CommandBody: "/reset",
+        },
+        emptyConfig,
+      ),
+    ).toBe(true);
+  });
+
+  it("normalizes bot-mentioned command bodies for structured normal turns", () => {
+    expect(
+      isExplicitCommandTurnContext(
+        {
+          CommandTurn: {
+            kind: "normal",
+            source: "message",
+            authorized: false,
+            body: "/reset@openclaw",
+          },
+          CommandAuthorized: true,
+          Body: "/reset@openclaw",
+          RawBody: "/reset@openclaw",
+          CommandBody: "/reset@openclaw",
+          BotUsername: "openclaw",
+        },
+        emptyConfig,
+      ),
+    ).toBe(true);
   });
 
   it("lets structured command turns override legacy command fields", () => {

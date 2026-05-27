@@ -514,10 +514,32 @@ describe("sessions_list gating", () => {
 
     const details = requireDetails(result);
     expect(details.count).toBe(1);
+    expect(details.visibility).toBeUndefined();
     const session = requireSessions(details)[0];
     expect(session?.key).toBe("agent:codex:acp:child-1");
     expect(session?.parentSessionKey).toBe(MAIN_AGENT_SESSION_KEY);
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes visibility metadata when session visibility is restricted", async () => {
+    loadConfigMock.mockReturnValue({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true },
+        sessions: { visibility: "tree" },
+      },
+    });
+
+    const result = await createMainSessionsListTool().execute("call1", {});
+
+    const details = requireDetails(result);
+    expect(details.count).toBe(1);
+    expect(details.visibility).toMatchObject({
+      mode: "tree",
+      restricted: true,
+      warning:
+        "Session visibility is restricted (effective tools.sessions.visibility=tree). Results may omit sessions outside the current scope. The count field reflects only sessions within the current scope.",
+    });
   });
 
   it("keeps literal current keys for message previews", async () => {

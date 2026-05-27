@@ -233,6 +233,8 @@ run_case_local_basic() {
     --skip-ui \
     --skip-health
 
+  validate_local_basic_log /tmp/openclaw-onboard-local-basic.log
+
   # Assert config + workspace scaffolding.
   workspace_dir="$OPENCLAW_STATE_DIR/workspace"
   sessions_dir="$OPENCLAW_STATE_DIR/agents/main/sessions"

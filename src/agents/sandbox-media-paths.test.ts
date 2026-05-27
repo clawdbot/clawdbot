@@ -42,4 +42,56 @@ describe("createSandboxBridgeReadFile", () => {
     expect(resolved).toEqual({ resolved: "/sandbox/image.png" });
     expect(stat).not.toHaveBeenCalled();
   });
+
+  it("rewrites inbound media URIs before direct sandbox resolution", async () => {
+    const resolvePath = vi.fn(({ filePath }: { filePath: string }) => ({
+      hostPath: `/tmp/sandbox-root/${filePath}`,
+      relativePath: filePath,
+      containerPath: `/sandbox/${filePath}`,
+    }));
+    const stat = vi.fn(async () => ({ type: "file", size: 1, mtimeMs: 1 }));
+
+    const resolved = await resolveSandboxedBridgeMediaPath({
+      sandbox: {
+        root: "/tmp/sandbox-root",
+        bridge: {
+          resolvePath,
+          stat,
+        } as unknown as SandboxFsBridge,
+      },
+      mediaPath: "media://inbound/photo.png",
+      inboundFallbackDir: "media/inbound",
+    });
+
+    expect(stat).toHaveBeenCalledWith({
+      filePath: "media/inbound/photo.png",
+      cwd: "/tmp/sandbox-root",
+    });
+    expect(resolvePath).toHaveBeenCalledWith({
+      filePath: "media/inbound/photo.png",
+      cwd: "/tmp/sandbox-root",
+    });
+    expect(resolved).toEqual({
+      resolved: "/tmp/sandbox-root/media/inbound/photo.png",
+      rewrittenFrom: "media://inbound/photo.png",
+    });
+  });
+
+  it("rejects missing staged inbound media URIs before direct sandbox resolution", async () => {
+    const resolvePath = vi.fn();
+    await expect(
+      resolveSandboxedBridgeMediaPath({
+        sandbox: {
+          root: "/tmp/sandbox-root",
+          bridge: {
+            resolvePath,
+            stat: vi.fn(async () => null),
+          } as unknown as SandboxFsBridge,
+        },
+        mediaPath: "media://inbound/missing.png",
+        inboundFallbackDir: "media/inbound",
+      }),
+    ).rejects.toThrow("Sandbox media reference is not staged: media://inbound/missing.png");
+    expect(resolvePath).not.toHaveBeenCalled();
+  });
 });

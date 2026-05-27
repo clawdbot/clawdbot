@@ -25,11 +25,29 @@ export type SessionAttentionClassification =
     };
 
 export function classifySessionAttention(params: {
+  state?: "idle" | "processing" | "waiting";
   queueDepth: number;
   activity: DiagnosticSessionActivitySnapshot;
   staleMs: number;
 }): SessionAttentionClassification {
   if (params.activity.activeWorkKind) {
+    // Idle session with queued work and stale orphaned activity (no active
+    // embedded owner) should be classified as recoverable stuck state, not as
+    // stalled active work. This prevents orphaned model_call or tool_call
+    // activity from blocking the queue indefinitely.
+    if (
+      params.state === "idle" &&
+      params.queueDepth > 0 &&
+      params.activity.hasActiveEmbeddedRun !== true &&
+      (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
+    ) {
+      return {
+        eventType: "session.stuck",
+        reason: "queued_work_without_active_run",
+        classification: "stale_session_state",
+        recoveryEligible: true,
+      };
+    }
     if (
       params.activity.activeWorkKind === "tool_call" &&
       (params.activity.activeToolAgeMs ?? 0) > params.staleMs &&

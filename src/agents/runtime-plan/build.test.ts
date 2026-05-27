@@ -136,6 +136,7 @@ describe("AgentRuntimePlan", () => {
     expect(plan.auth.authProfileProviderForAuth).toBe("openai-codex");
     expect(plan.auth.harnessAuthProvider).toBe("openai-codex");
     expect(plan.auth.forwardedAuthProfileId).toBe("openai-codex:work");
+    expect(plan.delivery.isSilentPayload({ text: "NO_REPLY\n\nNO_REPLY" })).toBe(true);
     expect(plan.delivery.isSilentPayload({ text: '{"action":"NO_REPLY"}' })).toBe(true);
     expect(
       plan.delivery.isSilentPayload({

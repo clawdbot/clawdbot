@@ -188,6 +188,23 @@ describe("sanitizeToolResult", () => {
     expect(text).toContain("MODEL=gpt-4");
   });
 
+  it("preserves env placeholders in tool output text", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: 'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"\nTELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"',
+        },
+      ],
+    };
+
+    const text = getTextContent(sanitizeToolResult(result));
+
+    expect(text).toBe(
+      'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"\nTELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"',
+    );
+  });
+
   it("redacts Bearer authorization tokens", () => {
     const result = {
       content: [{ type: "text", text: "Authorization: Bearer abcdef0123456789QWERTY=" }],
@@ -316,6 +333,26 @@ describe("sanitizeToolArgs", () => {
     expect(sanitized.command).not.toContain("sk-or-v1-abcdef0123456789");
     expect(sanitized.flags.join(" ")).not.toContain("sk-1234567890abcdefXYZ");
     expect(sanitized.flags[0]).toBe("--api-key");
+  });
+
+  it("preserves structured env placeholders in args", () => {
+    const args = {
+      DISCORD_BOT_TOKEN: "${DISCORD_BOT_TOKEN:-}",
+      nested: {
+        apiKey: "${OPENAI_API_KEY:-}",
+        GITHUB_TOKEN: "${GITHUB_TOKEN:-literalgithub1234567890}",
+      },
+    };
+    const sanitized = sanitizeToolArgs(args) as {
+      DISCORD_BOT_TOKEN: string;
+      nested: {
+        apiKey: string;
+        GITHUB_TOKEN: string;
+      };
+    };
+    expect(sanitized.DISCORD_BOT_TOKEN).toBe("${DISCORD_BOT_TOKEN:-}");
+    expect(sanitized.nested.apiKey).toBe("${OPEN…Y:-}");
+    expect(sanitized.nested.GITHUB_TOKEN).toBe("${GITHUB_TOKEN:-liter…890}");
   });
 
   it("passes through null/undefined and non-string primitives unchanged", () => {

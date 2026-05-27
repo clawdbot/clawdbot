@@ -21,6 +21,7 @@ export async function requestJsonlSocket<T>(params: {
         return;
       }
       settled = true;
+      clearNodeTimeout(timer);
       try {
         client.destroy();
       } catch {
@@ -32,6 +33,8 @@ export async function requestJsonlSocket<T>(params: {
     const timer = setNodeTimeout(() => finish(null), timeoutMs);
 
     client.on("error", () => finish(null));
+    client.on("end", () => finish(null));
+    client.on("close", () => finish(null));
     client.connect(socketPath, () => {
       client.end(`${requestLine}\n`);
     });
@@ -51,7 +54,6 @@ export async function requestJsonlSocket<T>(params: {
           if (result === undefined) {
             continue;
           }
-          clearNodeTimeout(timer);
           finish(result);
           return;
         } catch {

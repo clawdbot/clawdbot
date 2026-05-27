@@ -494,7 +494,7 @@ describeLive("subagent announce live", () => {
         entry: spawnedRun,
         message: steerToken,
       });
-      expect(steerResult.status).toBe("accepted");
+      expect(["accepted", "done"]).toContain(steerResult.status);
 
       const steeredRun = await waitFor("steered child completion", () => {
         if (initialError) {

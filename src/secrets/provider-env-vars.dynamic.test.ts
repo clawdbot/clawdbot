@@ -8,6 +8,7 @@ import {
   PROVIDER_ENV_VARS,
   resolveProviderAuthEnvVarCandidates,
   resolveProviderAuthEvidence,
+  resolveProviderAuthLookupMaps,
 } from "./provider-env-vars.js";
 
 type MockManifestRegistry = {
@@ -597,5 +598,115 @@ describe("provider env vars dynamic manifest metadata", () => {
         includeUntrustedWorkspacePlugins: false,
       }),
     ).toEqual(["WHISPERX_API_KEY"]);
+  });
+
+  it("only loads plugin metadata snapshot once when resolving env var candidates, avoiding duplicate snapshot loads", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+          providerAuthAliases: {
+            "fireworks-plan": "fireworks",
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+
+    resolveProviderAuthEnvVarCandidates({ config: {} });
+
+    // Verify it was only called once, proving alias resolution reused the snapshot and did not perform a second cold load!
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves alias, env, and evidence lookup maps from one metadata snapshot", () => {
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      plugins: [
+        {
+          id: "external-fireworks",
+          origin: "global",
+          providerAuthEnvVars: {
+            fireworks: ["FIREWORKS_ALT_API_KEY"],
+          },
+          providerAuthAliases: {
+            "fireworks-plan": "fireworks",
+          },
+          setup: {
+            providers: [
+              {
+                id: "fireworks",
+                authEvidence: [
+                  {
+                    type: "local-file-with-env",
+                    fileEnvVar: "FIREWORKS_CREDENTIALS",
+                    credentialMarker: "fireworks-local-credentials",
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+
+    const lookupMaps = resolveProviderAuthLookupMaps({ config: {} });
+
+    expect(lookupMaps.aliasMap["fireworks-plan"]).toBe("fireworks");
+    expect(lookupMaps.envCandidateMap["fireworks-plan"]).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(lookupMaps.authEvidenceMap["fireworks-plan"]).toEqual([
+      {
+        type: "local-file-with-env",
+        fileEnvVar: "FIREWORKS_CREDENTIALS",
+        credentialMarker: "fireworks-local-credentials",
+      },
+    ]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reuse a load-path current snapshot for default provider env lookups without parameters", () => {
+    const staleSnapshot = {
+      index: {
+        plugins: [
+          {
+            pluginId: "load-path-provider",
+            origin: "global",
+            enabled: true,
+            enabledByDefault: true,
+          },
+        ],
+      },
+      plugins: [
+        {
+          id: "load-path-provider",
+          origin: "global",
+          providerAuthEnvVars: {
+            "load-path-provider": ["LOAD_PATH_PROVIDER_API_KEY"],
+          },
+        },
+      ],
+    };
+    pluginRegistryMocks.getCurrentPluginMetadataSnapshot.mockImplementation(
+      (params: { config?: unknown; requireDefaultDiscoveryContext?: boolean }) => {
+        if (params.config || params.requireDefaultDiscoveryContext) {
+          return undefined;
+        }
+        return staleSnapshot;
+      },
+    );
+
+    expect(resolveProviderAuthEnvVarCandidates()["load-path-provider"]).toBeUndefined();
+    expect(pluginRegistryMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+      env: process.env,
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import {
   getChannelStreamingConfigObject,
   resolveChannelStreamingNativeTransport,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

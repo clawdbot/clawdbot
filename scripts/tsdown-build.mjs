@@ -20,8 +20,14 @@ const DEPENDENCY_PATH_MARKERS = ["node_modules/", "openclaw-pnpm-node-modules/"]
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=8192";
 const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 8192;
+const MIN_TSDOWN_MAX_OLD_SPACE_MB = 2048;
+const TSDOWN_CGROUP_MEMORY_HEADROOM_MB = 768;
+const CGROUP_MEMORY_LIMIT_PATHS = [
+  "/sys/fs/cgroup/memory.max",
+  "/sys/fs/cgroup/memory/memory.limit_in_bytes",
+];
+const PROC_MEMINFO_PATH = "/proc/meminfo";
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
@@ -202,7 +208,100 @@ function parseNonNegativeInteger(value) {
   return Math.trunc(parsed);
 }
 
-function normalizeTsdownNodeOptions(nodeOptions) {
+function parseCgroupMemoryLimitBytes(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (trimmed === "" || trimmed === "max" || !/^\d+$/u.test(trimmed)) {
+    return null;
+  }
+  const parsed = BigInt(trimmed);
+  if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return null;
+  }
+  return Number(parsed);
+}
+
+function readCgroupMemoryLimitBytes(params = {}) {
+  if (Number.isFinite(params.cgroupMemoryLimitBytes) && params.cgroupMemoryLimitBytes > 0) {
+    return Math.trunc(params.cgroupMemoryLimitBytes);
+  }
+
+  const fsImpl = params.fs ?? fs;
+  const paths = params.cgroupMemoryLimitPaths ?? CGROUP_MEMORY_LIMIT_PATHS;
+  for (const limitPath of paths) {
+    try {
+      const limitBytes = parseCgroupMemoryLimitBytes(fsImpl.readFileSync(limitPath, "utf8"));
+      if (limitBytes !== null) {
+        return limitBytes;
+      }
+    } catch {
+      // Missing cgroup files are expected outside Linux containers.
+    }
+  }
+
+  return null;
+}
+
+function parseProcMemTotalBytes(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.match(/^MemTotal:\s+(\d+)\s+kB$/imu);
+  if (!match) {
+    return null;
+  }
+  const parsed = BigInt(match[1]) * 1024n;
+  if (parsed <= 0n || parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    return null;
+  }
+  return Number(parsed);
+}
+
+function readProcMemTotalBytes(params = {}) {
+  if (Number.isFinite(params.procMemTotalBytes) && params.procMemTotalBytes > 0) {
+    return Math.trunc(params.procMemTotalBytes);
+  }
+
+  const fsImpl = params.fs ?? fs;
+  try {
+    return parseProcMemTotalBytes(
+      fsImpl.readFileSync(params.procMeminfoPath ?? PROC_MEMINFO_PATH, "utf8"),
+    );
+  } catch {
+    return null;
+  }
+}
+
+function resolveTsdownMaxOldSpaceMb(params = {}) {
+  const limitBytes = readCgroupMemoryLimitBytes(params) ?? readProcMemTotalBytes(params);
+  if (limitBytes === null) {
+    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  }
+
+  const limitMb = Math.floor(limitBytes / 1024 / 1024);
+  if (limitMb <= 0) {
+    return DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+  }
+
+  const cgroupCap = Math.max(
+    MIN_TSDOWN_MAX_OLD_SPACE_MB,
+    limitMb - TSDOWN_CGROUP_MEMORY_HEADROOM_MB,
+  );
+  return Math.min(DEFAULT_TSDOWN_MAX_OLD_SPACE_MB, cgroupCap);
+}
+
+function parseMaxOldSpaceSizeMb(value, fallbackMb) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallbackMb;
+  }
+  return Math.trunc(parsed);
+}
+
+function normalizeTsdownNodeOptions(nodeOptions, params = {}) {
+  const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
   const normalized = [];
   let foundMaxOldSpaceSize = false;
@@ -212,7 +311,7 @@ function normalizeTsdownNodeOptions(nodeOptions) {
     const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
     if (inlineMatch) {
       foundMaxOldSpaceSize = true;
-      const value = Math.max(Number(inlineMatch[1]), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB);
+      const value = Math.min(parseMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb), maxOldSpaceMb);
       normalized.push(`--max-old-space-size=${value}`);
       continue;
     }
@@ -220,10 +319,7 @@ function normalizeTsdownNodeOptions(nodeOptions) {
     if (part === "--max-old-space-size") {
       foundMaxOldSpaceSize = true;
       const next = parts[index + 1];
-      const parsed = next === undefined ? Number.NaN : Number(next);
-      const value = Number.isFinite(parsed)
-        ? Math.max(Math.trunc(parsed), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB)
-        : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+      const value = Math.min(parseMaxOldSpaceSizeMb(next, maxOldSpaceMb), maxOldSpaceMb);
       normalized.push(`--max-old-space-size=${value}`);
       if (next !== undefined) {
         index += 1;
@@ -235,17 +331,17 @@ function normalizeTsdownNodeOptions(nodeOptions) {
   }
 
   if (!foundMaxOldSpaceSize) {
-    normalized.push(DEFAULT_TSDOWN_NODE_OPTIONS);
+    normalized.push(`--max-old-space-size=${maxOldSpaceMb}`);
   }
 
   return normalized.join(" ");
 }
 
-function resolveTsdownEnv(env) {
+function resolveTsdownEnv(env, params = {}) {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
   return {
     ...env,
-    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions),
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions, params),
   };
 }
 
@@ -292,7 +388,7 @@ export function createTsdownOutputScanner(params = {}) {
 }
 
 export function resolveTsdownBuildInvocation(params = {}) {
-  const env = resolveTsdownEnv(params.env ?? process.env);
+  const env = resolveTsdownEnv(params.env ?? process.env, params);
   const tsdownArgs = [
     "--config-loader",
     "unrun",

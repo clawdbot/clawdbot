@@ -14,6 +14,7 @@ import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
 import { isAbortedAgentStopReason } from "./run-termination.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
+import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
@@ -337,6 +338,70 @@ function clearAllPendingLifecycleTimeouts() {
   pendingLifecycleTimeoutByRunId.clear();
 }
 
+type CompleteSubagentRunParams = {
+  runId: string;
+  endedAt?: number;
+  outcome: SubagentRunOutcome;
+  reason: SubagentLifecycleEndedReason;
+  sendFarewell?: boolean;
+  accountId?: string;
+  triggerCleanup: boolean;
+};
+
+async function completeSubagentRunWithRecovery(params: CompleteSubagentRunParams, source: string) {
+  try {
+    await completeSubagentRun(params);
+    return;
+  } catch (error) {
+    const current = subagentRuns.get(params.runId);
+    log.warn("failed to complete subagent run; retrying completion", {
+      source,
+      runId: params.runId,
+      childSessionKey: current?.childSessionKey,
+      error,
+    });
+  }
+
+  const current = subagentRuns.get(params.runId);
+  if (
+    !current ||
+    typeof current.endedAt !== "number" ||
+    typeof current.cleanupCompletedAt === "number" ||
+    current.pauseReason === "sessions_yield"
+  ) {
+    return;
+  }
+
+  try {
+    await completeSubagentRun(params);
+    return;
+  } catch (retryError) {
+    log.warn("failed to complete subagent run after retry; retrying ended cleanup", {
+      source,
+      runId: params.runId,
+      childSessionKey: current.childSessionKey,
+      error: retryError,
+    });
+  }
+
+  const latest = subagentRuns.get(params.runId);
+  if (
+    !latest ||
+    typeof latest.endedAt !== "number" ||
+    typeof latest.cleanupCompletedAt === "number" ||
+    latest.pauseReason === "sessions_yield"
+  ) {
+    return;
+  }
+  latest.cleanupHandled = false;
+  resumedRuns.delete(params.runId);
+  resumeSubagentRun(params.runId);
+}
+
+function completeSubagentRunInBackground(params: CompleteSubagentRunParams, source: string) {
+  void completeSubagentRunWithRecovery(params, source);
+}
+
 function schedulePendingLifecycleError(params: { runId: string; endedAt: number; error?: string }) {
   clearPendingLifecycleTimeout(params.runId);
   clearPendingLifecycleError(params.runId);
@@ -353,18 +418,19 @@ function schedulePendingLifecycleError(params: { runId: string; endedAt: number;
     if (entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE || entry.outcome?.status === "ok") {
       return;
     }
-    void completeSubagentRun({
+    const completionParams = {
       runId: params.runId,
       endedAt: pending.endedAt,
       outcome: {
-        status: "error",
+        status: "error" as const,
         error: pending.error,
       },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
-    });
+    };
+    completeSubagentRunInBackground(completionParams, "lifecycle-error-grace");
   }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
   timer.unref?.();
   pendingLifecycleErrorByRunId.set(params.runId, {
@@ -390,17 +456,18 @@ function schedulePendingLifecycleTimeout(params: { runId: string; endedAt: numbe
     if (entry.outcome?.status === "ok") {
       return;
     }
-    void completeSubagentRun({
+    const completionParams = {
       runId: params.runId,
       endedAt: pending.endedAt,
       outcome: {
-        status: "timeout",
+        status: "timeout" as const,
       },
       reason: SUBAGENT_ENDED_REASON_COMPLETE,
       sendFarewell: true,
       accountId: entry.requesterOrigin?.accountId,
       triggerCleanup: true,
-    });
+    };
+    completeSubagentRunInBackground(completionParams, "lifecycle-timeout-grace");
   }, LIFECYCLE_TIMEOUT_RETRY_GRACE_MS);
   timer.unref?.();
   pendingLifecycleTimeoutByRunId.set(params.runId, {
@@ -842,15 +909,18 @@ async function sweepSubagentRuns() {
             notBeforeMs: entry.startedAt ?? entry.createdAt,
           });
           if (completion) {
-            await completeSubagentRun({
-              runId,
-              endedAt: completion.endedAt,
-              outcome: completion.outcome,
-              reason: completion.reason,
-              sendFarewell: true,
-              accountId: entry.requesterOrigin?.accountId,
-              triggerCleanup: true,
-            });
+            await completeSubagentRunWithRecovery(
+              {
+                runId,
+                endedAt: completion.endedAt,
+                outcome: completion.outcome,
+                reason: completion.reason,
+                sendFarewell: true,
+                accountId: entry.requesterOrigin?.accountId,
+                triggerCleanup: true,
+              },
+              "sweeper-session-completion",
+            );
             continue;
           }
 
@@ -859,18 +929,21 @@ async function sweepSubagentRuns() {
             continue;
           }
 
-          await completeSubagentRun({
-            runId,
-            endedAt: now,
-            outcome: {
-              status: "error",
-              error: "subagent run lost active execution context",
+          await completeSubagentRunWithRecovery(
+            {
+              runId,
+              endedAt: now,
+              outcome: {
+                status: "error",
+                error: "subagent run lost active execution context",
+              },
+              reason: SUBAGENT_ENDED_REASON_ERROR,
+              sendFarewell: true,
+              accountId: entry.requesterOrigin?.accountId,
+              triggerCleanup: true,
             },
-            reason: SUBAGENT_ENDED_REASON_ERROR,
-            sendFarewell: true,
-            accountId: entry.requesterOrigin?.accountId,
-            triggerCleanup: true,
-          });
+            "sweeper-lost-context",
+          );
           continue;
         }
       }
@@ -1004,35 +1077,39 @@ function ensureListener() {
       if (isAbortedAgentStopReason(stopReason)) {
         clearPendingLifecycleError(evt.runId);
         clearPendingLifecycleTimeout(evt.runId);
-        await completeSubagentRun({
-          runId: evt.runId,
-          endedAt,
-          outcome: {
-            status: "error",
-            error: "subagent run terminated",
+        await completeSubagentRunWithRecovery(
+          {
+            runId: evt.runId,
+            endedAt,
+            outcome: {
+              status: "error",
+              error: "subagent run terminated",
+            },
+            reason: SUBAGENT_ENDED_REASON_KILLED,
+            sendFarewell: true,
+            accountId: entry.requesterOrigin?.accountId,
+            triggerCleanup: true,
           },
-          reason: SUBAGENT_ENDED_REASON_KILLED,
-          sendFarewell: true,
-          accountId: entry.requesterOrigin?.accountId,
-          triggerCleanup: true,
-        });
+          "lifecycle-killed-event",
+        );
         return;
       }
       if (isBlockedLivenessState(livenessState)) {
         clearPendingLifecycleError(evt.runId);
         clearPendingLifecycleTimeout(evt.runId);
-        await completeSubagentRun({
+        const blockedParams = {
           runId: evt.runId,
           endedAt,
           outcome: {
-            status: "error",
+            status: "error" as const,
             error: formatBlockedLivenessError(error),
           },
           reason: SUBAGENT_ENDED_REASON_ERROR,
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
           triggerCleanup: true,
-        });
+        };
+        await completeSubagentRunWithRecovery(blockedParams, "lifecycle-blocked-event");
         return;
       }
       if (evt.data?.aborted) {
@@ -1057,16 +1134,19 @@ function ensureListener() {
       }
       clearPendingLifecycleError(evt.runId);
       clearPendingLifecycleTimeout(evt.runId);
-      await completeSubagentRun({
+      const completionParams = {
         runId: evt.runId,
         endedAt,
-        outcome: { status: "ok" },
+        outcome: { status: "ok" as const },
         reason: SUBAGENT_ENDED_REASON_COMPLETE,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
-      });
-    })();
+      };
+      await completeSubagentRunWithRecovery(completionParams, "lifecycle-ok-event");
+    })().catch((err) => {
+      log.warn("lifecycle event handler failed", { err, runId: evt.runId });
+    });
   });
 }
 
@@ -1209,18 +1289,21 @@ export async function finalizeInterruptedSubagentRun(params: {
     if (!entry || typeof entry.cleanupCompletedAt === "number") {
       continue;
     }
-    await completeSubagentRun({
-      runId,
-      endedAt,
-      outcome: {
-        status: "error",
-        error: params.error,
+    await completeSubagentRunWithRecovery(
+      {
+        runId,
+        endedAt,
+        outcome: {
+          status: "error",
+          error: params.error,
+        },
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
       },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-      sendFarewell: true,
-      accountId: entry.requesterOrigin?.accountId,
-      triggerCleanup: true,
-    });
+      "explicit-failed-mark",
+    );
     updated += 1;
   }
   return updated;

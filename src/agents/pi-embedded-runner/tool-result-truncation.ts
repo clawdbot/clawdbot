@@ -31,18 +31,17 @@ import {
 const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
 
 /**
- * Default hard cap for a single live tool result text block.
+ * Low-context default cap for a single live tool result text block.
  *
  * Pi already truncates tool results aggressively when serializing old history
  * for compaction summaries. For the live request path we still keep a bounded
  * request-local ceiling so oversized tool output cannot dominate the next turn.
  */
 export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
-
-/**
- * Backwards-compatible alias for older call sites/tests.
- */
-export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+export const LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 32_000;
+export const XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS = 64_000;
+const LARGE_CONTEXT_TOOL_RESULT_TOKENS = 100_000;
+const XL_CONTEXT_TOOL_RESULT_TOKENS = 200_000;
 
 /**
  * Minimum characters to keep when truncating.
@@ -59,6 +58,8 @@ type ToolResultTruncationOptions = {
 
 const DEFAULT_SUFFIX = (truncatedChars: number) =>
   formatContextLimitTruncationNotice(truncatedChars);
+const COMPACT_RECOVERY_SUFFIX = (truncatedChars: number) =>
+  `[... ${Math.max(1, Math.floor(truncatedChars))} chars truncated; narrow args]`;
 export const MIN_TRUNCATED_TEXT_CHARS = MIN_KEEP_CHARS + DEFAULT_SUFFIX(1).length;
 
 function resolveSuffixFactory(
@@ -207,8 +208,22 @@ export function truncateToolResultText(
 export function calculateMaxToolResultChars(contextWindowTokens: number): number {
   return calculateMaxToolResultCharsWithCap(
     contextWindowTokens,
-    DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
+    resolveAutoLiveToolResultMaxChars(contextWindowTokens),
   );
+}
+
+export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
+  if (!Number.isFinite(contextWindowTokens)) {
+    return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
+  }
+  const tokens = Math.floor(contextWindowTokens);
+  if (tokens >= XL_CONTEXT_TOOL_RESULT_TOKENS) {
+    return XL_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS;
+  }
+  if (tokens >= LARGE_CONTEXT_TOOL_RESULT_TOKENS) {
+    return LARGE_CONTEXT_MAX_LIVE_TOOL_RESULT_CHARS;
+  }
+  return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 
 export function calculateMaxToolResultCharsWithCap(
@@ -226,10 +241,9 @@ export function resolveLiveToolResultMaxChars(params: {
   cfg?: OpenClawConfig;
   agentId?: string | null;
 }): number {
-  const configuredCap =
-    resolveAgentContextLimits(params.cfg, params.agentId)?.toolResultMaxChars ??
-    DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-  return calculateMaxToolResultCharsWithCap(params.contextWindowTokens, configuredCap);
+  const configuredCap = resolveAgentContextLimits(params.cfg, params.agentId)?.toolResultMaxChars;
+  const cap = configuredCap ?? resolveAutoLiveToolResultMaxChars(params.contextWindowTokens);
+  return calculateMaxToolResultCharsWithCap(params.contextWindowTokens, cap);
 }
 
 /**
@@ -379,7 +393,6 @@ function buildAggregateToolResultReplacements(params: {
   minKeepChars?: number;
 }): ToolResultReplacement[] {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
-  const minTruncatedTextChars = minKeepChars + DEFAULT_SUFFIX(1).length;
   const candidates = params.branch
     .map((entry, index) => ({ entry, index }))
     .filter(
@@ -404,6 +417,13 @@ function buildAggregateToolResultReplacements(params: {
   if (candidates.length < 2) {
     return [];
   }
+
+  const suffixFactory =
+    minKeepChars === RECOVERY_MIN_KEEP_CHARS &&
+    params.aggregateBudgetChars < candidates.length * DEFAULT_SUFFIX(1).length
+      ? COMPACT_RECOVERY_SUFFIX
+      : DEFAULT_SUFFIX;
+  const minTruncatedTextChars = minKeepChars + suffixFactory(1).length;
 
   const totalChars = candidates.reduce((sum, item) => sum + item.textLength, 0);
   if (totalChars <= params.aggregateBudgetChars) {
@@ -431,6 +451,7 @@ function buildAggregateToolResultReplacements(params: {
     const targetChars = Math.max(minTruncatedTextChars, candidate.textLength - requestedReduction);
     const truncatedMessage = truncateToolResultMessage(candidate.message, targetChars, {
       minKeepChars,
+      suffix: suffixFactory,
     });
     const newLength = getToolResultTextLength(truncatedMessage);
     const actualReduction = Math.max(0, candidate.textLength - newLength);

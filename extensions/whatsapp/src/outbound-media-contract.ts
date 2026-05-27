@@ -1,6 +1,6 @@
 import path from "node:path";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";

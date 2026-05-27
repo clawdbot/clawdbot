@@ -16,6 +16,7 @@ describe("resolveCronExecutionRetryHint", () => {
   it("treats common network error codes as network when retryOn only includes network", () => {
     for (const code of [
       "EAI_AGAIN",
+      "ENETDOWN",
       "EHOSTUNREACH",
       "EHOSTDOWN",
       "ENETRESET",

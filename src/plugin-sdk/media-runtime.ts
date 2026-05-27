@@ -27,6 +27,7 @@ export {
   parseFfprobeCsvFields,
   parseFfprobeVideoDimensions,
   probeVideoDimensions,
+  resolveFfmpegBin,
   resizeToJpeg,
   resizeToPng,
   runFfmpeg,

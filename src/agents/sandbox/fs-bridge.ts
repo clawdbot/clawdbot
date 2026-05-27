@@ -36,6 +36,15 @@ export function createSandboxFsBridge(params: {
   return new SandboxFsBridgeImpl(params.sandbox);
 }
 
+function parseStatMtimeMs(value: string | undefined): number {
+  const raw = value ?? "0";
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    return Number(raw) * 1000;
+  }
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
 class SandboxFsBridgeImpl implements SandboxFsBridge {
   private readonly sandbox: SandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
@@ -208,11 +217,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const text = result.stdout.toString("utf8").trim();
     const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
     const size = Number.parseInt(sizeRaw ?? "0", 10);
-    const mtime = Number.parseInt(mtimeRaw ?? "0", 10) * 1000;
     return {
       type: coerceStatType(typeRaw),
       size: Number.isFinite(size) ? size : 0,
-      mtimeMs: Number.isFinite(mtime) ? mtime : 0,
+      mtimeMs: parseStatMtimeMs(mtimeRaw),
     };
   }
 

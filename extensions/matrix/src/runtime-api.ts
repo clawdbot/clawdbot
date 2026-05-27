@@ -31,8 +31,9 @@ export {
   formatLocationText,
   toLocationContext,
   type NormalizedLocation,
-} from "openclaw/plugin-sdk/channel-location";
-export { logInboundDrop, logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
+} from "openclaw/plugin-sdk/channel-inbound";
+export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+export { logTypingFailure } from "openclaw/plugin-sdk/channel-outbound";
 export { resolveAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 export type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 export type {
@@ -72,7 +73,7 @@ export {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/channel-inbound";
 export {
   ensureConfiguredAcpBindingReady,
   resolveConfiguredAcpBindingRecord,
@@ -87,10 +88,10 @@ export {
   resolveThreadBindingIdleTimeoutMsForChannel,
   resolveThreadBindingMaxAgeMsForChannel,
 } from "openclaw/plugin-sdk/conversation-runtime";
-export { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
+export { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 export { resolveAgentIdFromSessionKey } from "openclaw/plugin-sdk/routing";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { normalizePollInput, type PollInput } from "openclaw/plugin-sdk/poll-runtime";
 export { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";

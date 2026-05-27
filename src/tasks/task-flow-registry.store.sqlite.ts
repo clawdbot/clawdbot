@@ -52,6 +52,27 @@ let cachedDatabase: FlowRegistryDatabase | null = null;
 const FLOW_REGISTRY_DIR_MODE = 0o700;
 const FLOW_REGISTRY_FILE_MODE = 0o600;
 const FLOW_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
+const FLOW_RUNS_COLUMNS = `
+  flow_id TEXT PRIMARY KEY,
+  shape TEXT,
+  sync_mode TEXT NOT NULL DEFAULT 'managed',
+  owner_key TEXT NOT NULL,
+  requester_origin_json TEXT,
+  controller_id TEXT,
+  revision INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  notify_policy TEXT NOT NULL,
+  goal TEXT NOT NULL,
+  current_step TEXT,
+  blocked_task_id TEXT,
+  blocked_summary TEXT,
+  state_json TEXT,
+  wait_json TEXT,
+  cancel_requested_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  ended_at INTEGER
+`;
 
 function normalizeNumber(value: number | bigint | null): number | undefined {
   if (typeof value === "bigint") {
@@ -245,28 +266,70 @@ function hasFlowRunsColumn(db: DatabaseSync, columnName: string): boolean {
   return rows.some((row) => row.name === columnName);
 }
 
+function rebuildLegacyFlowRunsTable(db: DatabaseSync) {
+  // Older live registries can retain owner_session_key TEXT NOT NULL even after owner_key is
+  // added. Current inserts do not write owner_session_key, so SQLite rejects mirrored flow rows
+  // until the table is rebuilt into the canonical schema.
+  db.exec(`
+    DROP TABLE IF EXISTS flow_runs_canonical_migration;
+    CREATE TABLE flow_runs_canonical_migration (
+      ${FLOW_RUNS_COLUMNS}
+    );
+    INSERT INTO flow_runs_canonical_migration (
+      flow_id,
+      sync_mode,
+      owner_key,
+      requester_origin_json,
+      controller_id,
+      revision,
+      status,
+      notify_policy,
+      goal,
+      current_step,
+      blocked_task_id,
+      blocked_summary,
+      state_json,
+      wait_json,
+      cancel_requested_at,
+      created_at,
+      updated_at,
+      ended_at
+    )
+    SELECT
+      flow_id,
+      CASE
+        WHEN sync_mode = 'task_mirrored' THEN 'task_mirrored'
+        ELSE 'managed'
+      END,
+      COALESCE(NULLIF(trim(owner_key), ''), owner_session_key),
+      requester_origin_json,
+      CASE
+        WHEN sync_mode = 'task_mirrored' THEN NULL
+        ELSE COALESCE(NULLIF(trim(controller_id), ''), 'core/legacy-restored')
+      END,
+      COALESCE(revision, 0),
+      status,
+      notify_policy,
+      goal,
+      current_step,
+      blocked_task_id,
+      blocked_summary,
+      state_json,
+      wait_json,
+      cancel_requested_at,
+      created_at,
+      updated_at,
+      ended_at
+    FROM flow_runs;
+    DROP TABLE flow_runs;
+    ALTER TABLE flow_runs_canonical_migration RENAME TO flow_runs;
+  `);
+}
+
 function ensureSchema(db: DatabaseSync) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS flow_runs (
-      flow_id TEXT PRIMARY KEY,
-      shape TEXT,
-      sync_mode TEXT NOT NULL DEFAULT 'managed',
-      owner_key TEXT NOT NULL,
-      requester_origin_json TEXT,
-      controller_id TEXT,
-      revision INTEGER NOT NULL DEFAULT 0,
-      status TEXT NOT NULL,
-      notify_policy TEXT NOT NULL,
-      goal TEXT NOT NULL,
-      current_step TEXT,
-      blocked_task_id TEXT,
-      blocked_summary TEXT,
-      state_json TEXT,
-      wait_json TEXT,
-      cancel_requested_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      ended_at INTEGER
+      ${FLOW_RUNS_COLUMNS}
     );
   `);
   if (!hasFlowRunsColumn(db, "owner_key") && hasFlowRunsColumn(db, "owner_session_key")) {
@@ -330,6 +393,35 @@ function ensureSchema(db: DatabaseSync) {
   }
   if (!hasFlowRunsColumn(db, "cancel_requested_at")) {
     db.exec(`ALTER TABLE flow_runs ADD COLUMN cancel_requested_at INTEGER;`);
+  }
+  if (hasFlowRunsColumn(db, "owner_session_key")) {
+    // Populate the canonical fields before rebuilding so existing rows survive the legacy-column
+    // drop, including pre-sync-mode single-task flows and older managed flows with no controller.
+    db.exec(`
+      UPDATE flow_runs
+      SET owner_key = owner_session_key
+      WHERE (owner_key IS NULL OR trim(owner_key) = '')
+    `);
+    db.exec(`
+      UPDATE flow_runs
+      SET sync_mode = CASE
+        WHEN shape = 'single_task' THEN 'task_mirrored'
+        ELSE 'managed'
+      END
+      WHERE sync_mode IS NULL OR trim(sync_mode) = ''
+    `);
+    db.exec(`
+      UPDATE flow_runs
+      SET revision = 0
+      WHERE revision IS NULL
+    `);
+    db.exec(`
+      UPDATE flow_runs
+      SET controller_id = 'core/legacy-restored'
+      WHERE sync_mode = 'managed'
+        AND (controller_id IS NULL OR trim(controller_id) = '')
+    `);
+    rebuildLegacyFlowRunsTable(db);
   }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_status ON flow_runs(status);`);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_flow_runs_owner_key ON flow_runs(owner_key);`);

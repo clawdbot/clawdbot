@@ -1,6 +1,6 @@
-import type { MeetingNotesUtterance } from "openclaw/plugin-sdk/meeting-notes";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import type { TranscriptUtterance } from "openclaw/plugin-sdk/transcripts";
 import { ChannelType } from "../internal/discord.js";
 import type { VoiceCaptureState } from "./capture-state.js";
 import type { VoiceReceiveRecoveryState } from "./receive-recovery.js";
@@ -70,9 +70,9 @@ export type VoiceSessionEntry = {
   capture: VoiceCaptureState;
   pendingRealtime?: VoiceRealtimeSession;
   realtime?: VoiceRealtimeSession;
-  meetingNotes?: {
+  transcripts?: {
     sessionId: string;
-    onUtterance: (utterance: MeetingNotesUtterance) => void | Promise<void>;
+    onUtterance: (utterance: TranscriptUtterance) => void | Promise<void>;
   };
   receiveRecovery: VoiceReceiveRecoveryState;
   isStopped: () => boolean;

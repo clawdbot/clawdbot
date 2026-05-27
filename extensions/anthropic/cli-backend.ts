@@ -67,7 +67,7 @@ export function buildAnthropicCliBackend(): CliBackendPlugin {
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
       systemPromptFileArg: "--append-system-prompt-file",
       systemPromptMode: "append",
-      systemPromptWhen: "first",
+      systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       reliability: {
         watchdog: {

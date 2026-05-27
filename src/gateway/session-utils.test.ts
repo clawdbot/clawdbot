@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -919,6 +919,39 @@ describe("gateway session utils", () => {
 
         expect(loaded.storePath).toBe(resolveSyncRealpath(retiredStorePath));
         expect(loaded.entry?.sessionId).toBe("sess-retired");
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("loadSessionEntry can borrow the cached store for read-only hot paths", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-entry-borrowed-", async ({ stateDir }) => {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const storePath = path.join(sessionsDir, "sessions.json");
+        fs.writeFileSync(
+          storePath,
+          JSON.stringify({
+            "agent:main:main": { sessionId: "sess-main", updatedAt: 7 },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const loaded = loadSessionEntry("agent:main:main", { clone: false });
+        const borrowedStore = loadSessionStore(loaded.storePath, { clone: false });
+
+        expect(loaded.entry).toBe(borrowedStore["agent:main:main"]);
       });
     } finally {
       resetConfigRuntimeState();

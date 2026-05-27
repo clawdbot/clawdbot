@@ -533,6 +533,30 @@ describe("readSessionMessages", () => {
     }
   });
 
+  test("forwards the outer JSONL record timestamp to __openclaw.recordTimestampMs (#85648)", async () => {
+    const sessionId = "test-session-record-timestamp";
+    const t1 = "2026-05-16T16:00:31.000Z";
+    const t2 = "2026-05-23T04:02:33.000Z";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { timestamp: t1, message: { role: "user", content: "old turn" } },
+      { timestamp: t2, message: { role: "assistant", content: "fresh turn" } },
+    ]);
+    const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      maxBytes: 2048,
+    });
+    expect(result).toHaveLength(2);
+    expectMessageFields(result[0], {
+      content: "old turn",
+      openclaw: { recordTimestampMs: Date.parse(t1) },
+    });
+    expectMessageFields(result[1], {
+      content: "fresh turn",
+      openclaw: { recordTimestampMs: Date.parse(t2) },
+    });
+  });
+
   test("honors byte caps for async recent-message reads", async () => {
     const sessionId = "test-session-recent-async-byte-cap";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -1985,6 +2009,7 @@ describe("oversized transcript line guards", () => {
   test("oversized line metadata extraction preserves id and parentId", async () => {
     const sessionId = "test-oversized-metadata-extract";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const timestamp = "2026-05-16T16:00:33.000Z";
     const oversizedContent = "w".repeat(300 * 1024);
     const lines = [
       JSON.stringify({ type: "session", version: 3, id: sessionId }),
@@ -1996,6 +2021,7 @@ describe("oversized transcript line guards", () => {
       }),
       JSON.stringify({
         type: "message",
+        timestamp,
         id: "oversized-child",
         parentId: "root-msg",
         message: { role: "assistant", content: oversizedContent },
@@ -2017,6 +2043,7 @@ describe("oversized transcript line guards", () => {
     // id is preserved in __openclaw transcript metadata
     const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
     expect(meta?.id).toBe("oversized-child");
+    expect(meta?.recordTimestampMs).toBe(Date.parse(timestamp));
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.
 

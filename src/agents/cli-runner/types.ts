@@ -10,6 +10,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type {
+  PersistedUserTurnMessage,
+  UserTurnTranscriptRecorder,
+} from "../../sessions/user-turn-transcript.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
@@ -32,6 +36,9 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
+  suppressNextUserMessagePersistence?: boolean;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  onUserMessagePersisted?: (message: PersistedUserTurnMessage) => void | Promise<void>;
   currentInboundEventKind?: InboundEventKind;
   currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
@@ -128,6 +135,7 @@ export type PreparedCliRunContext = {
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
+  claudeSkillsPluginArgs?: string[] | undefined;
   bootstrapPromptWarningLines: string[];
   openClawHistoryPrompt?: string;
   heartbeatPrompt?: string;

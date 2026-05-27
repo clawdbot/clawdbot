@@ -129,6 +129,7 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 fixture_dir="$(mktemp -d /tmp/openclaw-live-plugin-tool.XXXXXX)"
 plugin_dir="$fixture_dir/package"

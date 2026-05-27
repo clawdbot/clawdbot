@@ -612,7 +612,7 @@ struct SettingsTab: View {
     private var shouldShowRealtimeVoicePicker: Bool {
         let providerSelection = TalkModeProviderSelection.resolved(self.talkProviderSelectionRaw)
         return providerSelection == .openAIRealtime
-            || self.appModel.talkMode.gatewayTalkUsesRealtimeRelay
+            || self.appModel.talkMode.gatewayTalkUsesRealtime
     }
 
     private func talkVoiceSettingsView() -> AnyView {
@@ -630,6 +630,16 @@ struct SettingsTab: View {
                     Text("Gateway Default").tag("")
                     ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
                         Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+                    }
+                }
+            }
+            LabeledContent("Voice Mode") {
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(self.appModel.talkMode.gatewayTalkVoiceModeTitle)
+                    if let subtitle = self.appModel.talkMode.gatewayTalkVoiceModeSubtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }

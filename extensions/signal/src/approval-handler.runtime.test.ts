@@ -12,6 +12,22 @@ vi.mock("./send.js", () => ({
 
 const { signalApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
 
+function buildPendingContent(params: {
+  manualText: string;
+  reactionText?: string;
+  allowedDecisions?: readonly ("allow-once" | "allow-always" | "deny")[];
+}) {
+  const allowedDecisions = params.allowedDecisions ?? ["allow-once"];
+  return {
+    manualFallbackPayload: { text: params.manualText },
+    reactionPayload: {
+      text: params.reactionText ?? params.manualText,
+      allowedDecisions,
+      reactionBindings: [],
+    },
+  };
+}
+
 describe("Signal approval native runtime", () => {
   beforeEach(() => {
     sendMocks.sendTypingSignal.mockReset().mockResolvedValue(true);
@@ -39,7 +55,7 @@ describe("Signal approval native runtime", () => {
     await signalApprovalNativeRuntime.transport.deliverPending({
       cfg: {},
       preparedTarget: prepared!.target,
-      pendingPayload: { text: "approval", allowedDecisions: ["allow-once"] },
+      pendingPayload: buildPendingContent({ manualText: "approval" }),
     } as never);
 
     expect(sendMocks.sendTypingSignal).toHaveBeenCalledWith("+15551230000", {
@@ -68,10 +84,13 @@ describe("Signal approval native runtime", () => {
     await signalApprovalNativeRuntime.transport.deliverPending({
       cfg,
       preparedTarget: unbound!.target,
-      pendingPayload: {
-        text: "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
+      pendingPayload: buildPendingContent({
+        manualText:
+          "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
+        reactionText:
+          "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny",
         allowedDecisions: ["allow-once", "deny"],
-      },
+      }),
     } as never);
 
     expect(sendMocks.sendMessageSignal).toHaveBeenLastCalledWith(
@@ -89,10 +108,13 @@ describe("Signal approval native runtime", () => {
     await signalApprovalNativeRuntime.transport.deliverPending({
       cfg,
       preparedTarget: bound!.target,
-      pendingPayload: {
-        text: "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
+      pendingPayload: buildPendingContent({
+        manualText:
+          "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
+        reactionText:
+          "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny",
         allowedDecisions: ["allow-once", "deny"],
-      },
+      }),
     } as never);
 
     expect(sendMocks.sendMessageSignal).toHaveBeenLastCalledWith(

@@ -19,6 +19,7 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24.beta.1", beta: true },
     { tag: "v2026.2.24-BETA-1", beta: true },
     { tag: "v2026.2.24-alpha.1", beta: false },
+    { tag: "v2026.2.24-next.1", beta: false },
     { tag: "v2026.2.24-1", beta: false },
     { tag: "v2026.2.24-alphabeta.1", beta: false },
     { tag: "v2026.2.24", beta: false },
@@ -31,7 +32,15 @@ describe("update-channels tag detection", () => {
     { tag: "v2026.2.24-beta.1", prerelease: true, stable: false },
     { tag: "v2026.2.24-rc.1", prerelease: true, stable: false },
     { tag: "v2026.2.24-preview.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-dev.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-next.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-canary.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-nightly.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-experimental.1", prerelease: true, stable: false },
+    { tag: "v2026.2.24-custom.1", prerelease: true, stable: false },
     { tag: "v2026.2.24-1", prerelease: false, stable: true },
+    { tag: "v1.0.1-1", prerelease: false, stable: true },
+    { tag: "v2026.2.24-alphabeta.1", prerelease: true, stable: false },
     { tag: "v2026.2.24", prerelease: false, stable: true },
   ])("stable/prerelease classification for $tag", ({ tag, prerelease, stable }) => {
     expect(isPrereleaseTag(tag)).toBe(prerelease);
@@ -101,7 +110,23 @@ describe("resolveEffectiveUpdateChannel", () => {
       name: "treats non-beta git tag as stable",
       params: {
         installKind: "git" as const,
-        git: { tag: "v2026.2.24-1" },
+        git: { tag: "v2026.2.24" },
+      },
+      expected: { channel: "stable", source: "git-tag" },
+    },
+    {
+      name: "treats non-beta prerelease git tag as dev",
+      params: {
+        installKind: "git" as const,
+        git: { tag: "v2026.5.25-alpha.1" },
+      },
+      expected: { channel: "dev", source: "git-tag" },
+    },
+    {
+      name: "preserves legacy numeric stable git tags",
+      params: {
+        installKind: "git" as const,
+        git: { tag: "v1.0.1-1" },
       },
       expected: { channel: "stable", source: "git-tag" },
     },

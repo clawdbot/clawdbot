@@ -492,6 +492,22 @@ export type PluginHookBeforeToolCallResult = {
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+    actions?: Array<
+      | {
+          kind: "decision";
+          label: string;
+          style: "primary" | "secondary" | "success" | "danger";
+          decision: "allow-once" | "allow-always" | "deny";
+          commandTemplate: string;
+        }
+      | {
+          kind: "command";
+          label: string;
+          style: "primary" | "secondary" | "success" | "danger";
+          commandTemplate: string;
+        }
+    >;
+    keepPendingWithoutRoute?: boolean;
     pluginId?: string;
     onResolution?: (decision: PluginApprovalResolution) => Promise<void> | void;
   };

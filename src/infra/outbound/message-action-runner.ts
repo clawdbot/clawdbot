@@ -1355,17 +1355,21 @@ export async function runMessageAction(
     requesterSenderId: input.requesterSenderId,
     senderIsOwner: input.senderIsOwner,
   });
+  const structuredAttachmentMode = action === "send" ? "all" : "selected";
 
   await normalizeSandboxMediaParams({
     args: params,
     mediaPolicy: normalizationPolicy,
     extraParamKeys: extraActionMediaSourceParamKeys,
+    structuredAttachments: structuredAttachmentMode,
   });
 
   const mediaAccess = resolveAgentScopedOutboundMediaAccess({
     cfg,
     agentId: resolvedAgentId,
-    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys),
+    mediaSources: collectActionMediaSourceHints(params, extraActionMediaSourceParamKeys, {
+      structuredAttachments: structuredAttachmentMode,
+    }),
     sessionKey: input.sessionKey,
     messageProvider: input.sessionKey ? undefined : channel,
     accountId: input.sessionKey ? (input.requesterAccountId ?? accountId) : accountId,
@@ -1387,6 +1391,7 @@ export async function runMessageAction(
     action,
     dryRun,
     mediaPolicy,
+    extraParamKeys: extraActionMediaSourceParamKeys,
   });
 
   const resolvedTarget = await resolveActionTarget({

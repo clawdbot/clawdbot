@@ -535,7 +535,11 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string; agentDir?: string } = {},
+  params: {
+    authProfileId?: string;
+    agentDir?: string;
+    fallbackApiKeyCacheKey?: string;
+  } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -553,6 +557,7 @@ export function codexAppServerStartOptionsKey(
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
     agentDir: params.agentDir ?? null,
+    fallbackApiKeyCacheKey: params.fallbackApiKeyCacheKey ?? null,
   });
 }
 

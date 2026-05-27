@@ -238,8 +238,8 @@ export function createImageLifecycleCore() {
           async () => undefined,
         ) as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyWithBufferedBlockDispatcher"],
       },
-      turn: {
-        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+      inbound: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
             return {
@@ -294,9 +294,9 @@ export function createImageLifecycleCore() {
             routeSessionKey: resolved.routeSessionKey,
             dispatchResult,
           };
-        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
-        runAssembled: vi.fn(
-          async (params: Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0]) => {
+        }) as unknown as PluginRuntime["channel"]["inbound"]["run"],
+        dispatchReply: vi.fn(
+          async (params: Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0]) => {
             await params.recordInboundSession({
               storePath: params.storePath,
               sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
@@ -327,9 +327,9 @@ export function createImageLifecycleCore() {
               dispatchResult,
             };
           },
-        ) as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
+        ) as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
         buildContext:
-          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(

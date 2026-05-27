@@ -46,6 +46,21 @@ describe("qqbot: prefix normalization for inbound commandAuthorized", () => {
     return result.commandAccess.authorized;
   }
 
+  async function resolveSlashCommandAuthorized(
+    rawAllowFrom: string[],
+    senderId: string,
+    cfg: Record<string, unknown> = {},
+  ): Promise<boolean> {
+    return await access.resolveSlashCommandAuthorization({
+      cfg,
+      accountId: "default",
+      conversationId: senderId,
+      isGroup: false,
+      senderId,
+      allowFrom: rawAllowFrom,
+    });
+  }
+
   it("authorizes when allowFrom uses qqbot: prefix and senderId is the bare id", async () => {
     await expect(resolveInboundCommandAuthorized(["qqbot:USER123"], "USER123")).resolves.toBe(true);
   });
@@ -64,6 +79,21 @@ describe("qqbot: prefix normalization for inbound commandAuthorized", () => {
 
   it("authorizes any sender when allowFrom contains wildcard *", async () => {
     await expect(resolveInboundCommandAuthorized(["*"], "ANYONE")).resolves.toBe(true);
+  });
+
+  it("authorizes slash commands from access group allowFrom entries", async () => {
+    await expect(
+      resolveSlashCommandAuthorized(["accessGroup:operators"], "USER123", {
+        accessGroups: {
+          operators: {
+            type: "message.senders",
+            members: {
+              qqbot: ["USER123"],
+            },
+          },
+        },
+      }),
+    ).resolves.toBe(true);
   });
 
   it("denies group command auth in an open group without explicit allowlists", async () => {

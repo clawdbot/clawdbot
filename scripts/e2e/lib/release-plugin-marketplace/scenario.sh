@@ -35,6 +35,7 @@ trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
 openclaw_e2e_install_package /tmp/openclaw-release-plugin-marketplace-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 openclaw onboard \
   --non-interactive \

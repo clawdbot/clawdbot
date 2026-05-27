@@ -90,6 +90,8 @@ vi.mock("./controllers/devices.ts", () => ({
 
 vi.mock("./controllers/exec-approval.ts", () => ({
   addExecApproval: vi.fn((queue, entry) => [...queue, entry]),
+  clearResolvedExecApprovalPrompt: vi.fn(),
+  enqueueExecApprovalPrompt: vi.fn(),
   parseExecApprovalRequested: vi.fn(() => null),
   parseExecApprovalResolved: vi.fn(() => null),
   parsePluginApprovalRequested: vi.fn(() => null),

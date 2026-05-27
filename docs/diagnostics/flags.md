@@ -50,6 +50,50 @@ Disable all flags:
 OPENCLAW_DIAGNOSTICS=0
 ```
 
+`OPENCLAW_DIAGNOSTICS=0` is a process-level disable override: it disables
+flags from both env and config for that process.
+
+## Profiling flags
+
+Profiler flags enable targeted timing spans without raising global logging
+levels. They are disabled by default.
+
+Enable all profiler-gated spans for one gateway run:
+
+```bash
+OPENCLAW_DIAGNOSTICS=profiler openclaw gateway run
+```
+
+Enable only reply-dispatch profiler spans:
+
+```bash
+OPENCLAW_DIAGNOSTICS=reply.profiler openclaw gateway run
+```
+
+Enable only Codex app-server startup/tool/thread profiler spans:
+
+```bash
+OPENCLAW_DIAGNOSTICS=codex.profiler openclaw gateway run
+```
+
+Enable profiler flags from config:
+
+```json
+{
+  "diagnostics": {
+    "flags": ["reply.profiler", "codex.profiler"]
+  }
+}
+```
+
+Restart the gateway after changing config flags. To disable a profiler flag,
+remove it from `diagnostics.flags` and restart. To temporarily disable every
+diagnostics flag even when config enables profiler flags, start the process with:
+
+```bash
+OPENCLAW_DIAGNOSTICS=0 openclaw gateway run
+```
+
 ## Timeline artifacts
 
 The `timeline` flag writes structured startup and runtime timing events for

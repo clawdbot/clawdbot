@@ -112,9 +112,7 @@ export function matchRealtimeVoiceActivationName(
   for (const { candidate, compact: heardCompact } of candidates) {
     for (const { activationName, compact: activationCompact } of preparedActivationNames) {
       const exactMatch = heardCompact === activationCompact;
-      const fuzzyMatch =
-        candidate.edge === "leading" &&
-        isFuzzyActivationNameMatch(candidate, heardCompact, activationCompact);
+      const fuzzyMatch = isFuzzyActivationNameMatch(candidate, heardCompact, activationCompact);
       if (exactMatch || fuzzyMatch) {
         return {
           allowed: true,
@@ -211,6 +209,8 @@ function trailingActivationNameCandidates(
     if (!/(^|[\s,.:;!?-])$/.test(text.slice(0, startIndex))) {
       break;
     }
+    const directAddressBoundary = /(^|[,.:;!?-]\s*)$/.test(text.slice(0, startIndex));
+    const trailingQuestion = /\?\s*$/.test(text);
     if (wordCount > 1) {
       const previousToken = tokens[tokens.length - wordCount + 1];
       const between = previousToken
@@ -229,7 +229,7 @@ function trailingActivationNameCandidates(
       heardName,
       startIndex,
       endIndex,
-      strongBoundary: true,
+      strongBoundary: directAddressBoundary && trailingQuestion,
     });
   }
 
@@ -317,6 +317,12 @@ function isFuzzyActivationNameMatch(
     return false;
   }
   const distance = levenshteinDistance(heardCompact, activationCompact);
+  if (candidate.edge === "trailing") {
+    return (
+      heardCompact.length === activationCompact.length &&
+      hasOnlyPhoneticSubstitutions(heardCompact, activationCompact)
+    );
+  }
   if (distance <= 1) {
     return true;
   }

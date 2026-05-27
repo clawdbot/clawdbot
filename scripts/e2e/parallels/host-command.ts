@@ -121,6 +121,7 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
     encoding: "utf8",
     env: invocation.env ?? env,
     input: options.input,
+    killSignal: "SIGKILL",
     maxBuffer: 50 * 1024 * 1024,
     stdio: options.quiet ? ["pipe", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
     shell: invocation.shell,

@@ -1,5 +1,6 @@
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
+import { waitForWebSocketOpen } from "./open-websocket.mjs";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;
@@ -24,20 +25,7 @@ function delay(ms) {
 
 async function openSocket(timeoutMs = 10_000) {
   const ws = new WebSocket(url);
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.close();
-      reject(new Error("ws open timeout"));
-    }, timeoutMs);
-    ws.once("open", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    ws.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error instanceof Error ? error : new Error(String(error)));
-    });
-  });
+  await waitForWebSocketOpen(ws, timeoutMs, "ws open timeout");
   return ws;
 }
 

@@ -41,6 +41,10 @@ function requireSystemBin(name: string): string {
   return resolved;
 }
 
+export function resolveFfmpegBin(): string {
+  return requireSystemBin("ffmpeg");
+}
+
 function isBrokenPipeError(error: Error): boolean {
   return (error as NodeJS.ErrnoException).code === "EPIPE";
 }
@@ -74,7 +78,7 @@ export async function runFfprobe(args: string[], options?: MediaExecOptions): Pr
 
 export async function runFfmpeg(args: string[], options?: MediaExecOptions): Promise<string> {
   const { stdout } = await execFileAsync(
-    requireSystemBin("ffmpeg"),
+    resolveFfmpegBin(),
     args,
     resolveExecOptions(MEDIA_FFMPEG_TIMEOUT_MS, options),
   );

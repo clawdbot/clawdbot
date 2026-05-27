@@ -35,14 +35,14 @@ Core owns the shared message tool, prompt wiring, the outer session-key shape,
 generic `:thread:` bookkeeping, and dispatch.
 
 New channel plugins should also expose a `message` adapter with
-`defineChannelMessageAdapter` from `openclaw/plugin-sdk/channel-message`. The
+`defineChannelMessageAdapter` from `openclaw/plugin-sdk/channel-outbound`. The
 adapter declares which durable final-send capabilities the native transport
 actually supports and points text/media sends at the same transport functions as
 the legacy `outbound` adapter. Only declare a capability when a contract test
 proves the native side effect and returned receipt.
 For the full API contract, examples, capability matrix, receipt rules, live
 preview finalization, receive ack policy, tests, and migration table, see
-[Channel message API](/plugins/sdk-channel-message).
+[Channel outbound API](/plugins/sdk-channel-outbound).
 If the existing `outbound` adapter already has the right send methods and
 capability metadata, use `createChannelMessageAdapterFromOutbound(...)` to
 derive the `message` adapter instead of hand-writing another bridge.
@@ -68,11 +68,11 @@ Inbound receivers that defer platform acknowledgements should declare
 ack timing in monitor-local state. Cover every declared policy with
 `verifyChannelMessageReceiveAckPolicyAdapterProofs(...)`.
 
-Legacy reply/turn helpers such as `createChannelTurnReplyPipeline`,
+Legacy reply helpers such as `createChannelTurnReplyPipeline`,
 `dispatchInboundReplyWithBase`, and `recordInboundSessionAndDispatchReply`
 remain available for compatibility dispatchers. Do not use those names for new
 channel code; new plugins should start with the `message` adapter, receipts, and
-receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-message`.
+receive/send lifecycle helpers on `openclaw/plugin-sdk/channel-outbound`.
 
 Channels migrating inbound authorization can use the experimental
 `openclaw/plugin-sdk/channel-ingress-runtime` subpath from runtime receive
@@ -152,6 +152,8 @@ Most channel plugins do not need approval-specific code.
 - Use `approvalCapability.render` only when a channel truly needs custom approval payloads instead of the shared renderer.
 - Use `approvalCapability.describeExecApprovalSetup` when the channel wants the disabled-path reply to explain the exact config knobs needed to enable native exec approvals. The hook receives `{ channel, channelLabel, accountId }`; named-account channels should render account-scoped paths such as `channels.<channel>.accounts.<id>.execApprovals.*` instead of top-level defaults.
 - If a channel can infer stable owner-like DM identities from existing config, use `createResolvedApproverActionAuthAdapter` from `openclaw/plugin-sdk/approval-runtime` to restrict same-chat `/approve` without adding approval-specific core logic.
+- If custom approval auth intentionally allows only same-chat fallback, return `markImplicitSameChatApprovalAuthorization({ authorized: true })` from `openclaw/plugin-sdk/approval-auth-runtime`; otherwise core treats the result as explicit approver authorization.
+- If a channel-owned native callback resolves approvals directly, use `isImplicitSameChatApprovalAuthorization(...)` before resolving so implicit fallback still goes through the channel's normal actor authorization.
 - If a channel needs native approval delivery, keep channel code focused on target normalization plus transport/presentation facts. Use `createChannelExecApprovalProfile`, `createChannelNativeOriginTargetResolver`, `createChannelApproverDmTargetResolver`, and `createApproverRestrictedNativeApprovalCapability` from `openclaw/plugin-sdk/approval-runtime`. Put the channel-specific facts behind `approvalCapability.nativeRuntime`, ideally via `createChannelApprovalNativeRuntimeAdapter(...)` or `createLazyChannelApprovalNativeRuntimeAdapter(...)`, so core can assemble the handler and own request filtering, routing, dedupe, expiry, gateway subscription, and routed-elsewhere notices. `nativeRuntime` is split into a few smaller seams:
 - `createChannelNativeOriginTargetResolver` uses the shared channel-route matcher by default for `{ to, accountId, threadId }` targets. Pass `targetsMatch` only when a channel has provider-specific equivalence rules, such as Slack timestamp prefix matching.
 - Pass `normalizeTargetForMatch` to `createChannelNativeOriginTargetResolver` when the channel needs to canonicalize provider ids before the default route matcher or a custom `targetsMatch` callback runs, while preserving the original target for delivery. Use `normalizeTarget` only when the resolved delivery target itself should be canonicalized.
@@ -251,12 +253,12 @@ surfaces:
   `openclaw/plugin-sdk/account-helpers` for multi-account config and
   default-account fallback
 - `openclaw/plugin-sdk/inbound-envelope` and
-  `openclaw/plugin-sdk/inbound-reply-dispatch` for inbound route/envelope and
+  `openclaw/plugin-sdk/channel-inbound` for inbound route/envelope and
   record-and-dispatch wiring
 - `openclaw/plugin-sdk/channel-targets` for target parsing helpers
-- `openclaw/plugin-sdk/outbound-media` and
-  `openclaw/plugin-sdk/outbound-runtime` for media loading plus outbound
-  identity/send delegates and payload planning
+- `openclaw/plugin-sdk/outbound-media` for media loading and
+  `openclaw/plugin-sdk/channel-outbound` for outbound identity/send delegates
+  and payload planning
 - `buildThreadAwareOutboundSessionRoute(...)` from
   `openclaw/plugin-sdk/channel-core` when an outbound route should preserve an
   explicit `replyToId`/`threadId` or recover the current `:thread:` session
@@ -736,7 +738,7 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime
   </Card>
-  <Card title="Channel turn kernel" icon="bolt" href="/plugins/sdk-channel-turn">
+  <Card title="Channel inbound API" icon="bolt" href="/plugins/sdk-channel-inbound">
     Shared inbound event lifecycle: ingest, resolve, record, dispatch, finalize
   </Card>
 </CardGroup>

@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn(),
   resolveManifestActivationPluginIds: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
   loadConfig: vi.fn(),
   readConfigFileSnapshot: vi.fn(),
 }));
@@ -27,6 +28,11 @@ vi.mock("./activation-planner.js", () => ({
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: (...args: unknown[]) => mocks.applyPluginAutoEnable(...args),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  resolvePluginMetadataSnapshot: (...args: unknown[]) =>
+    mocks.resolvePluginMetadataSnapshot(...args),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -157,6 +163,8 @@ describe("registerPluginCliCommands", () => {
     mocks.resolveManifestActivationPluginIds.mockReset();
     mocks.resolveManifestActivationPluginIds.mockReturnValue([]);
     mocks.applyPluginAutoEnable.mockReset();
+    mocks.resolvePluginMetadataSnapshot.mockReset();
+    mocks.resolvePluginMetadataSnapshot.mockReturnValue(undefined);
     mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
       config,
       changes: [],
@@ -309,6 +317,23 @@ describe("registerPluginCliCommands", () => {
     expect(registryOptions.autoEnabledReasons).toEqual({
       demo: ["demo configured"],
     });
+  });
+
+  it("keeps root-help descriptor load failures quiet", async () => {
+    const stderrWrite = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as unknown as typeof process.stderr.write);
+    mocks.loadOpenClawPluginCliRegistry.mockImplementationOnce((options: { logger?: unknown }) => {
+      const logger = options.logger as { error?: (message: string) => void };
+      logger.error?.("[plugins] stale failed to load from /tmp/stale: boom");
+      throw new Error("boom");
+    });
+
+    await expect(
+      getPluginCliCommandDescriptors({ plugins: { entries: { stale: {} } } } as OpenClawConfig),
+    ).resolves.toEqual([]);
+
+    expect(stderrWrite).not.toHaveBeenCalled();
   });
 
   it("keeps runtime CLI command registration on the full plugin loader for legacy channel plugins", async () => {

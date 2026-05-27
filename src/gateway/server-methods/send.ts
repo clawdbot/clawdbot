@@ -288,6 +288,37 @@ async function mirrorDeliveredSourceReplyToTranscriptBestEffort(params: {
   }
 }
 
+const sourceReplyTranscriptMirrorQueues = new Map<string, Promise<void>>();
+
+function resolveSourceReplyTranscriptMirrorQueueKey(
+  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0],
+): string {
+  return mirror.sessionKey?.trim() || "__global__";
+}
+
+function scheduleDeliveredSourceReplyTranscriptMirror(params: {
+  context: GatewayRequestContext;
+  mirror: Parameters<typeof mirrorDeliveredSourceReplyToTranscript>[0];
+}): Promise<void> {
+  const queueKey = resolveSourceReplyTranscriptMirrorQueueKey(params.mirror);
+  const previous = sourceReplyTranscriptMirrorQueues.get(queueKey);
+  // Queue per session so current-conversation source replies are visible before
+  // a following turn can read the transcript.
+  const queued = (async () => {
+    await previous?.catch(() => undefined);
+    await mirrorDeliveredSourceReplyToTranscriptBestEffort(params);
+  })();
+  sourceReplyTranscriptMirrorQueues.set(queueKey, queued);
+  void queued
+    .finally(() => {
+      if (sourceReplyTranscriptMirrorQueues.get(queueKey) === queued) {
+        sourceReplyTranscriptMirrorQueues.delete(queueKey);
+      }
+    })
+    .catch(() => undefined);
+  return queued;
+}
+
 export const sendHandlers: GatewayRequestHandlers = {
   "message.action": async ({ params, respond, context, client }) => {
     const p = params;
@@ -399,7 +430,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const agentId =
           normalizeOptionalString(request.agentId) ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
-        await mirrorDeliveredSourceReplyToTranscriptBestEffort({
+        await scheduleDeliveredSourceReplyTranscriptMirror({
           context,
           mirror: {
             action: request.action,

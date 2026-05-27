@@ -4,6 +4,7 @@ import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
 const mocks = vi.hoisted(() => ({
   applyPluginAutoEnable: vi.fn(),
+  collectActiveToolSchemaProjectionWarnings: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   evaluateStoredCredentialEligibility: vi.fn(),
   getInstalledPluginRecord: vi.fn(),
@@ -110,6 +111,10 @@ vi.mock("./shared/allowlist-policy-repair.js", () => ({
 
 vi.mock("./shared/allowfrom-fallback-migration.js", () => ({
   maybeRepairGroupAllowFromFallback: mocks.maybeRepairGroupAllowFromFallback,
+}));
+
+vi.mock("./shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: mocks.collectActiveToolSchemaProjectionWarnings,
 }));
 
 vi.mock("./shared/bundled-plugin-load-paths.js", () => ({
@@ -230,6 +235,7 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValue([]);
     mocks.resolveAuthProfileOrder.mockReturnValue([]);
     mocks.resolveProfileUnusableUntilForDisplay.mockReturnValue(null);
     mocks.maybeRepairStalePluginConfig.mockImplementation((cfg: OpenClawConfig) => ({
@@ -424,6 +430,37 @@ describe("doctor repair sequencing", () => {
     ]);
     expect(result.state.pendingChanges).toBe(false);
     expect(result.state.candidate.channels?.discord?.allowFrom).toEqual([106232522769186816]);
+  });
+
+  it("emits active tool schema projection warnings during doctor repair", async () => {
+    mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValueOnce([
+      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+    ]);
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          tools: { allow: ["dofbot_move_angles"] },
+        } as OpenClawConfig,
+        candidate: {
+          tools: { allow: ["dofbot_move_angles"] },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toStrictEqual([]);
+    expect(result.warningNotes).toContain(
+      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+    );
+    expect(mocks.collectActiveToolSchemaProjectionWarnings).toHaveBeenCalledWith({
+      cfg: {
+        tools: { allow: ["dofbot_move_angles"] },
+      },
+      env: process.env,
+    });
   });
 
   it("auto-enables newly installed configured plugins after doctor repair", async () => {

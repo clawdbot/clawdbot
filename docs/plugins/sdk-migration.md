@@ -524,13 +524,15 @@ releases.
   | `plugin-sdk/channel-config-schema-legacy` | Deprecated bundled config schemas | Compatibility alias only; use `plugin-sdk/bundled-channel-config-schema` for maintained bundled plugins |
   | `plugin-sdk/telegram-command-config` | Telegram command config helpers | Command-name normalization, description trimming, duplicate/conflict validation |
   | `plugin-sdk/channel-policy` | Group/DM policy resolution | `resolveChannelGroupRequireMention` |
-  | `plugin-sdk/channel-lifecycle` | Account status and draft stream lifecycle helpers | `createAccountStatusSink`, draft preview finalization helpers |
+  | `plugin-sdk/channel-lifecycle` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
   | `plugin-sdk/inbound-envelope` | Inbound envelope helpers | Shared route + envelope builder helpers |
-  | `plugin-sdk/inbound-reply-dispatch` | Inbound reply helpers | Shared record-and-dispatch helpers |
+  | `plugin-sdk/channel-inbound` | Inbound receive helpers | Context building, formatting, roots, runners, prepared reply dispatch, and dispatch predicates |
   | `plugin-sdk/messaging-targets` | Deprecated target parsing import path | Use `plugin-sdk/channel-targets` for generic target parsing helpers, `plugin-sdk/channel-route` for route comparison, and plugin-owned `messaging.targetResolver` / `messaging.resolveOutboundSessionRoute` for provider-specific target resolution |
   | `plugin-sdk/outbound-media` | Outbound media helpers | Shared outbound media loading |
-  | `plugin-sdk/outbound-send-deps` | Outbound send dependency helpers | Lightweight `resolveOutboundSendDep` lookup without importing the full outbound runtime |
-  | `plugin-sdk/outbound-runtime` | Outbound runtime helpers | Outbound delivery, identity/send delegate, session, formatting, and payload planning helpers |
+  | `plugin-sdk/outbound-send-deps` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
+  | `plugin-sdk/channel-outbound` | Outbound message lifecycle helpers | Message adapters, receipts, durable send helpers, live preview/streaming helpers, reply options, lifecycle helpers, outbound identity, and payload planning |
+  | `plugin-sdk/channel-streaming` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
+  | `plugin-sdk/outbound-runtime` | Deprecated compatibility facade | Use `plugin-sdk/channel-outbound` |
   | `plugin-sdk/thread-bindings-runtime` | Thread-binding helpers | Thread-binding lifecycle and adapter helpers |
   | `plugin-sdk/agent-media-payload` | Legacy media payload helpers | Agent media payload builder for legacy field layouts |
   | `plugin-sdk/channel-runtime` | Deprecated compatibility shim | Legacy channel runtime utilities only |
@@ -640,7 +642,8 @@ releases.
   | `plugin-sdk/channel-status` | Channel status helpers | Shared channel status snapshot/summary helpers |
   | `plugin-sdk/allowlist-config-edit` | Allowlist config helpers | Allowlist config edit/read helpers |
   | `plugin-sdk/group-access` | Group access helpers | Shared group-access decision helpers |
-  | `plugin-sdk/direct-dm` | Direct-DM helpers | Shared direct-DM auth/guard helpers |
+  | `plugin-sdk/direct-dm`, `plugin-sdk/direct-dm-access` | Deprecated compatibility facades | Use `plugin-sdk/channel-inbound` |
+  | `plugin-sdk/direct-dm-guard-policy` | Direct-DM guard helpers | Narrow pre-crypto guard policy helpers |
   | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status and ambient proxy helper primitives |
   | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
   | `plugin-sdk/webhook-path` | Deprecated webhook path alias | Use `plugin-sdk/webhook-ingress` |

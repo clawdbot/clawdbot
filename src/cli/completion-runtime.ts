@@ -233,17 +233,15 @@ export async function usesSlowDynamicCompletion(
 export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
   const isShellSupported = isCompletionShell(shell);
   if (!isShellSupported) {
-    console.error(`Automated installation not supported for ${shell} yet.`);
-    return;
+    throw new Error(`Automated installation not supported for ${shell} yet.`);
   }
 
   const cachePath = resolveCompletionCachePath(shell, binName);
   const cacheExists = await pathExists(cachePath);
   if (!cacheExists) {
-    console.error(
+    throw new Error(
       `Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.`,
     );
-    return;
   }
 
   let profilePath: string;
@@ -305,6 +303,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       );
     }
   } catch (err) {
-    console.error(`Failed to install completion: ${err as string}`);
+    const message = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to install completion: ${message}`, { cause: err });
   }
 }

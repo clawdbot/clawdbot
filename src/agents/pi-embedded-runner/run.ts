@@ -36,6 +36,7 @@ import {
   markAuthProfileSuccess,
   resolveAuthProfileEligibility,
 } from "../auth-profiles.js";
+import { resolveExternalCliAuthOverlayScopeFromSelection } from "../auth-profiles/external-cli-auth-selection.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
   resolveSessionKeyForRequest,
@@ -379,6 +380,7 @@ function backfillSessionKey(params: {
       : resolveSessionKeyForRequest({
           cfg: params.config,
           sessionId: params.sessionId,
+          clone: false,
         });
     return normalizeOptionalString(resolved.sessionKey);
   } catch (err) {
@@ -708,6 +710,37 @@ export async function runEmbeddedPiAgent(
         pluginHarnessOwnsTransport &&
         provider === OPENAI_CODEX_PROVIDER_ID &&
         effectiveModel.api === "openai-codex-responses";
+      let piExternalCliAuthScope = pluginHarnessOwnsTransport
+        ? { ignoreAutoPreferredProfile: false }
+        : resolveExternalCliAuthOverlayScopeFromSelection({
+            provider,
+            cfg: params.config,
+            agentId: params.agentId,
+            modelId,
+            workspaceDir: resolvedWorkspace,
+            userLockedAuthProfileId:
+              params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+          });
+      let noExternalAuthStore: AuthProfileStore | undefined;
+      if (
+        !pluginHarnessOwnsTransport &&
+        !pluginHarnessNeedsOpenClawAuthBootstrap &&
+        !piExternalCliAuthScope.providerIds
+      ) {
+        noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        });
+        piExternalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
+          provider,
+          cfg: params.config,
+          agentId: params.agentId,
+          modelId,
+          workspaceDir: resolvedWorkspace,
+          store: noExternalAuthStore,
+          userLockedAuthProfileId:
+            params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+        });
+      }
       const authStore =
         pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? createEmptyAuthProfileStore()
@@ -716,9 +749,15 @@ export async function runEmbeddedPiAgent(
                 externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
                 allowKeychainPrompt: false,
               })
-            : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-                allowKeychainPrompt: false,
-              });
+            : piExternalCliAuthScope.providerIds
+              ? ensureAuthProfileStore(agentDir, {
+                  externalCliProviderIds: piExternalCliAuthScope.providerIds,
+                  allowKeychainPrompt: false,
+                })
+              : (noExternalAuthStore ??
+                ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+                  allowKeychainPrompt: false,
+                }));
       const attemptAuthProfileStore =
         pluginHarnessOwnsTransport && !pluginHarnessNeedsOpenClawAuthBootstrap
           ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
@@ -788,7 +827,9 @@ export async function runEmbeddedPiAgent(
         pluginHarnessProfileOrder[0];
       const preferredProfileId = pluginHarnessOwnsTransport
         ? resolvePluginHarnessPreferredProfileId()
-        : requestedProfileId;
+        : piExternalCliAuthScope.ignoreAutoPreferredProfile && !requestedProfileIsUserLocked
+          ? undefined
+          : requestedProfileId;
       let lockedProfileId = requestedProfileIsUserLocked ? preferredProfileId : undefined;
       if (lockedProfileId) {
         if (pluginHarnessOwnsTransport) {
@@ -1109,6 +1150,7 @@ export async function runEmbeddedPiAgent(
         if (params.currentMessageId !== undefined) {
           lastPersistedCurrentMessageId = params.currentMessageId;
         }
+        params.userTurnTranscriptRecorder?.markRuntimePersisted(message);
         params.onUserMessagePersisted?.(message);
       };
       const continueFromCurrentTranscript = () => {
@@ -1151,6 +1193,11 @@ export async function runEmbeddedPiAgent(
       }) => {
         const { profileId, reason } = failure;
         if (!profileId || !reason) {
+          return;
+        }
+        if (pluginHarnessOwnsTransport && reason === "timeout") {
+          // Harness-owned transport timeouts are lifecycle failures, not
+          // credential evidence. Do not poison OpenClaw auth cooldowns.
           return;
         }
         await markAuthProfileFailure({
@@ -1438,6 +1485,7 @@ export async function runEmbeddedPiAgent(
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,
+            userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
             currentInboundEventKind: params.currentInboundEventKind,
             currentInboundContext: params.currentInboundContext,
             images: params.images,
@@ -2393,6 +2441,7 @@ export async function runEmbeddedPiAgent(
               fallbackConfigured,
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
+              harnessOwnsTransport: pluginHarnessOwnsTransport,
               profileRotated: false,
             });
             if (
@@ -2431,6 +2480,7 @@ export async function runEmbeddedPiAgent(
                 fallbackConfigured,
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
+                harnessOwnsTransport: pluginHarnessOwnsTransport,
                 profileRotated: true,
               });
             }
@@ -2597,6 +2647,7 @@ export async function runEmbeddedPiAgent(
             idleTimedOut,
             timedOutDuringCompaction,
             timedOutDuringToolExecution,
+            harnessOwnsTransport: pluginHarnessOwnsTransport,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({

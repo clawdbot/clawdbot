@@ -37,7 +37,10 @@ install method:
 - **`stable`** (package installs): updates via npm dist-tag `latest`.
 - **`beta`** (package installs): prefers npm dist-tag `beta`, but falls back to
   `latest` when `beta` is missing or older than the current stable tag.
-- **`stable`** (git installs): checks out the latest stable git tag.
+- **`stable`** (git installs): checks out the latest stable git tag, excluding
+  semver prerelease tags such as `-alpha.N`, `-beta.N`, `-rc.N`, `-dev.N`,
+  `-next.N`, `-preview.N`, `-canary.N`, `-nightly.N`, and other prerelease
+  suffixes.
 - **`beta`** (git installs): prefers the latest beta git tag, but falls back to
   the latest stable git tag when beta is missing or older.
 - **`dev`**: ensures a git checkout (default `~/openclaw`, or
@@ -121,9 +124,11 @@ source (config, git tag, git branch, or default).
 ## Tagging best practices
 
 - Tag releases you want git checkouts to land on (`vYYYY.M.D` for stable,
-  `vYYYY.M.D-beta.N` for beta).
+  `vYYYY.M.D-beta.N` for beta; named semver prerelease suffixes such as
+  `-alpha.N`, `-rc.N`, and `-next.N` are not stable targets).
+- Legacy numeric stable tags such as `vYYYY.M.D-1` and `v1.0.1-1` are still
+  recognized as stable git tags for compatibility.
 - `vYYYY.M.D.beta.N` is also recognized for compatibility, but prefer `-beta.N`.
-- Legacy `vYYYY.M.D-<patch>` tags are still recognized as stable (non-beta).
 - Keep tags immutable: never move or reuse a tag.
 - npm dist-tags remain the source of truth for npm installs:
   - `latest` -> stable

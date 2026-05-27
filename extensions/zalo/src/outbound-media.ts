@@ -11,9 +11,20 @@ import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 const ZALO_OUTBOUND_MEDIA_TTL_MS = 2 * 60_000;
 const ZALO_OUTBOUND_MEDIA_SEGMENT = "media";
 const ZALO_OUTBOUND_MEDIA_PREFIX = `/${ZALO_OUTBOUND_MEDIA_SEGMENT}/`;
+const ZALO_OUTBOUND_MEDIA_DIR_NAME = "openclaw-zalo-outbound-media";
+
+function resolveHostedZaloMediaDirName(): string {
+  const workerId = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
+  if (!workerId) {
+    return ZALO_OUTBOUND_MEDIA_DIR_NAME;
+  }
+  const safeWorkerId = workerId.replaceAll(/[^a-zA-Z0-9_.-]/gu, "_");
+  return `${ZALO_OUTBOUND_MEDIA_DIR_NAME}-${safeWorkerId}`;
+}
+
 const ZALO_OUTBOUND_MEDIA_DIR = join(
   resolvePreferredOpenClawTmpDir(),
-  "openclaw-zalo-outbound-media",
+  resolveHostedZaloMediaDirName(),
 );
 const ZALO_OUTBOUND_MEDIA_ID_RE = /^[a-f0-9]{24}$/;
 

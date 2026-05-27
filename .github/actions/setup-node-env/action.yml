@@ -36,10 +36,13 @@ runs:
         fi
 
     - name: Setup Node.js
-      uses: actions/setup-node@v6
-      with:
-        node-version: ${{ inputs.node-version }}
-        check-latest: false
+      shell: bash
+      env:
+        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
+      run: |
+        set -euo pipefail
+        source "$GITHUB_ACTION_PATH/../setup-pnpm-store-cache/ensure-node.sh"
+        openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
     - name: Setup pnpm
       uses: ./.github/actions/setup-pnpm-store-cache
@@ -49,9 +52,10 @@ runs:
 
     - name: Setup Bun
       if: inputs.install-bun == 'true'
-      uses: oven-sh/setup-bun@v2.2.0
-      with:
-        bun-version: "1.3.13"
+      shell: bash
+      run: |
+        set -euo pipefail
+        npm install -g bun@1.3.14
 
     - name: Runtime versions
       shell: bash

@@ -183,6 +183,7 @@ function createHost(): TestGatewayHost {
     refreshSessionsAfterChat: new Set<string>(),
     chatSideResultTerminalRuns: new Set<string>(),
     execApprovalQueue: [],
+    execApprovalBusy: false,
     execApprovalError: null,
     updateAvailable: null,
     updateComplete: new Promise(() => undefined),
@@ -538,6 +539,77 @@ describe("connectGateway", () => {
     expect(host.execApprovalQueue[0]?.request.commandSpans).toEqual([
       { startIndex: 20, endIndex: 26 },
     ]);
+  });
+
+  it("clears stale approval modal errors without interrupting an in-flight local resolve", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "exec.approval.requested",
+      payload: {
+        id: "approval-external-1",
+        request: {
+          command: "pnpm test",
+          host: "gateway",
+        },
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 60_000,
+      },
+    });
+    host.execApprovalError = "Approval failed: approval already resolved";
+    host.execApprovalBusy = true;
+
+    client.emitEvent({
+      event: "exec.approval.resolved",
+      payload: { id: "approval-external-1", decision: "allow-once" },
+    });
+
+    expect(host.execApprovalQueue).toHaveLength(0);
+    expect(host.execApprovalError).toBeNull();
+    expect(host.execApprovalBusy).toBe(true);
+  });
+
+  it("clears active approval errors when event-enqueued approvals expire", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const { host, client } = connectHostGateway();
+      const queuedExpiresAtMs = Date.now() + 60_000;
+      const activeExpiresAtMs = Date.now() + 1_000;
+
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-queued",
+          request: {
+            command: "pnpm test",
+            host: "gateway",
+          },
+          createdAtMs: Date.now(),
+          expiresAtMs: queuedExpiresAtMs,
+        },
+      });
+      client.emitEvent({
+        event: "exec.approval.requested",
+        payload: {
+          id: "approval-active-expiring",
+          request: {
+            command: "pnpm check:changed",
+            host: "gateway",
+          },
+          createdAtMs: Date.now() + 1,
+          expiresAtMs: activeExpiresAtMs,
+        },
+      });
+      host.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
+      expect(host.execApprovalError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clears pending session reload timers when the active client closes", () => {
@@ -1369,6 +1441,15 @@ describe("connectGateway", () => {
           pluginId: "sage",
           agentId: "agent-1",
           sessionKey: "main",
+          allowedDecisions: ["deny"],
+          actions: [
+            {
+              kind: "command",
+              label: "Verify once",
+              style: "primary",
+              command: "/agentkit approve plugin-approval-1 allow-once",
+            },
+          ],
         },
       },
     });
@@ -1376,6 +1457,15 @@ describe("connectGateway", () => {
     expect(host.execApprovalQueue).toHaveLength(1);
     expect(host.execApprovalQueue[0]?.id).toBe("plugin-approval-1");
     expect((host.execApprovalQueue[0] as { kind: string }).kind).toBe("plugin");
+    expect(host.execApprovalQueue[0]?.allowedDecisions).toEqual(["deny"]);
+    expect(host.execApprovalQueue[0]?.actions).toEqual([
+      {
+        kind: "command",
+        label: "Verify once",
+        style: "primary",
+        command: "/agentkit approve plugin-approval-1 allow-once",
+      },
+    ]);
   });
 
   it("routes plugin.approval.resolved to remove from execApprovalQueue", () => {

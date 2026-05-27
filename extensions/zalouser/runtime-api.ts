@@ -49,7 +49,7 @@ export {
 } from "openclaw/plugin-sdk/allow-from";
 export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { buildBaseAccountStatusSnapshot } from "openclaw/plugin-sdk/status-helpers";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export {

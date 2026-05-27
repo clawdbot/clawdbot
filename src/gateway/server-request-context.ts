@@ -6,9 +6,11 @@ import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-gene
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };
   usesSharedGatewayAuth?: boolean;
+  invalidated?: boolean;
+  invalidatedReason?: string;
 };
 
-type GatewayRequestContextParams = {
+export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
@@ -131,6 +133,19 @@ export function createGatewayRequestContext(
       }
       return connIds;
     },
+    invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
+      const reason = opts?.reason ?? "device-invalidated";
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.connect.device?.id !== deviceId) {
+          continue;
+        }
+        if (opts?.role && gatewayClient.connect.role !== opts.role) {
+          continue;
+        }
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason = reason;
+      }
+    },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
       for (const gatewayClient of params.clients) {
         if (gatewayClient.connect.device?.id !== deviceId) {
@@ -139,6 +154,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
+        // Mark before closing so any RPCs already pipelined in the WS buffer
+        // are rejected at the per-request dispatch check, regardless of
+        // whether socket.close() takes effect synchronously.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason ??= "device-removed";
         try {
           gatewayClient.socket.close(4001, "device removed");
         } catch {

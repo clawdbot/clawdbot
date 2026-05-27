@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
@@ -14,7 +15,11 @@ import {
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
 
+const fixtureRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-npm-managed-root-",
+});
 const tempDirs: string[] = [];
+let previousNpmGlobalConfig: string | undefined;
 
 const successfulSpawn = {
   code: 0,
@@ -26,13 +31,30 @@ const successfulSpawn = {
 };
 
 async function makeTempRoot(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-managed-root-"));
+  const dir = await fixtureRootTracker.make("case");
   tempDirs.push(dir);
   return dir;
 }
 
+beforeAll(async () => {
+  const fixtureRoot = await fixtureRootTracker.setup();
+  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  const globalConfig = path.join(fixtureRoot, "global-npmrc");
+  await fs.writeFile(globalConfig, "", "utf8");
+  process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
+});
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+afterAll(async () => {
+  if (previousNpmGlobalConfig === undefined) {
+    delete process.env.NPM_CONFIG_GLOBALCONFIG;
+  } else {
+    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
+  }
+  await fixtureRootTracker.cleanup();
 });
 
 async function expectPathMissing(targetPath: string): Promise<void> {

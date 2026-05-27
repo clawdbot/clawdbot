@@ -49,7 +49,7 @@ describe("test-live-media", () => {
       "openai",
       "vydra",
     ]);
-    expect(requirePlanEntry(plan, "music").providers).toEqual(["google", "minimax"]);
+    expect(requirePlanEntry(plan, "music").providers).toEqual(["fal", "google", "minimax"]);
     expect(requirePlanEntry(plan, "video").providers).toEqual([
       "google",
       "minimax",

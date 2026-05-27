@@ -162,6 +162,72 @@ describe("formatAssistantErrorText", () => {
     });
     expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
   });
+  it("returns a billing message for xAI 429 credit exhaustion before rate-limit copy", () => {
+    const msg = makeAssistantError(
+      '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "xai",
+      model: "grok-4.3",
+    });
+    expect(result).toBe(formatBillingErrorMessage("xai", "grok-4.3"));
+  });
+  it("keeps known Moonshot 429 balance failures on billing copy", () => {
+    const msg = makeAssistantError(
+      '429 {"error":{"message":"Your account has insufficient balance. Please recharge to continue.","type":"rate_limit_reached"}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "moonshot",
+      model: "kimi-k2",
+    });
+    expect(result).toBe(formatBillingErrorMessage("moonshot", "kimi-k2"));
+  });
+  it("keeps high-confidence 429 insufficient quota failures on billing copy", () => {
+    const msg = makeAssistantError(
+      '429 {"type":"error","error":{"type":"insufficient_quota","message":"Your account has insufficient quota balance to run this request."}}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai", "gpt-5.5"));
+  });
+  it("keeps high-confidence 429 insufficient balance failures on billing copy", () => {
+    const msg = makeAssistantError(
+      '429 {"error":"insufficient_balance","message":"Your credit balance is too low."}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai-compatible",
+      model: "custom-model",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
+  });
+  it("keeps structured 429 insufficient balance codes on billing copy", () => {
+    const msg = makeAssistantError(
+      'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai-compatible",
+      model: "custom-model",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
+  });
+  it("keeps 429 more-credits failures on billing copy", () => {
+    const msg = makeAssistantError("429 This model requires more credits to use");
+    const result = formatAssistantErrorText(msg, {
+      provider: "openai-compatible",
+      model: "custom-model",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openai-compatible", "custom-model"));
+  });
+  it("keeps OpenRouter 429 key budget failures on billing copy", () => {
+    const msg = makeAssistantError("429 API key budget limit exceeded");
+    const result = formatAssistantErrorText(msg, {
+      provider: "openrouter",
+      model: "openai/gpt-5.5",
+    });
+    expect(result).toBe(formatBillingErrorMessage("openrouter", "openai/gpt-5.5"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");

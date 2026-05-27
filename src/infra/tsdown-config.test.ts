@@ -222,7 +222,6 @@ describe("tsdown config", () => {
       expect(neverBundle("@slack/web-api")).toBe(true);
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("prism-media")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -236,7 +235,6 @@ describe("tsdown config", () => {
         "@slack/web-api",
         "@vitest/expect",
         "matrix-js-sdk",
-        "prism-media",
         "qrcode-terminal",
         "vitest",
       ]) {

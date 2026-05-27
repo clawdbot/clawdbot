@@ -10,6 +10,7 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   parseAndSendMediaTags,
@@ -100,7 +101,7 @@ export async function dispatchOutbound(
   const sendErrorMessage = (errorText: string) => sendErrorToTarget(replyCtx, errorText);
 
   // ---- Build ctxPayload ----
-  const ctxPayload = buildCtxPayload(inbound, runtime, cfg);
+  const ctxPayload = await buildCtxPayload(inbound, runtime, cfg);
 
   // ---- Deliver state ----
   let hasResponse = false;
@@ -235,7 +236,7 @@ export async function dispatchOutbound(
   const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
     agentId,
   });
-  const dispatchPromise = runtime.channel.turn.run({
+  const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
     accountId: inbound.route.accountId,
     raw: inbound,
@@ -534,67 +535,91 @@ function resolveCommandSource(
   return "text";
 }
 
-function buildCtxPayload(
+async function buildCtxPayload(
   inbound: InboundContext,
   runtime: GatewayPluginRuntime,
   cfg: unknown,
-): FinalizedMsgContext {
+): Promise<FinalizedMsgContext> {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
-  return runtime.channel.reply.finalizeInboundContext({
-    Body: inbound.body,
-    BodyForAgent: inbound.agentBody,
-    RawBody: event.content,
-    CommandBody: event.content,
-    From: inbound.fromAddress,
-    To: inbound.fromAddress,
-    SessionKey: inbound.route.sessionKey,
-    AccountId: inbound.route.accountId,
-    ChatType: inbound.isGroupChat ? "group" : "direct",
-    GroupSystemPrompt: inbound.groupSystemPrompt,
-    SenderId: event.senderId,
-    SenderName: event.senderName,
-    Provider: "qqbot",
-    Surface: "qqbot",
-    MessageSid: event.messageId,
-    Timestamp: new Date(event.timestamp).getTime(),
-    OriginatingChannel: "qqbot",
-    OriginatingTo: inbound.fromAddress,
-    QQChannelId: event.channelId,
-    QQGuildId: event.guildId,
-    QQGroupOpenid: event.groupOpenid,
-    QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
-    QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
-    QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
-    QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
-    QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
-    QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
-    CommandAuthorized: inbound.commandAuthorized,
-    ...(commandSource ? { CommandSource: commandSource } : {}),
-    ...(inbound.voiceMediaTypes.length > 0
+  const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
+  return buildChannelInboundEventContext({
+    finalize: runtime.channel.reply.finalizeInboundContext,
+    channel: "qqbot",
+    accountId: inbound.route.accountId,
+    messageId: event.messageId,
+    timestamp: new Date(event.timestamp).getTime(),
+    from: inbound.fromAddress,
+    sender: {
+      id: event.senderId,
+      name: event.senderName,
+    },
+    conversation: {
+      kind: inbound.isGroupChat ? "group" : "direct",
+      id: inbound.peerId,
+    },
+    route: {
+      agentId: inbound.route.agentId ?? "main",
+      routeSessionKey: inbound.route.sessionKey,
+      accountId: inbound.route.accountId,
+    },
+    reply: {
+      to: inbound.fromAddress,
+    },
+    message: {
+      body: inbound.body,
+      bodyForAgent: inbound.agentBody,
+      rawBody: event.content,
+      commandBody: event.content,
+    },
+    access: {
+      commands: {
+        authorized: inbound.commandAuthorized,
+      },
+    },
+    command: commandSource
       ? {
-          MediaTypes: inbound.voiceMediaTypes,
-          MediaType: inbound.voiceMediaTypes[0],
+          kind: "text-slash",
+          body: event.content,
+          authorized: inbound.commandAuthorized,
         }
-      : {}),
-    ...(inbound.localMediaPaths.length > 0
-      ? {
-          MediaPaths: inbound.localMediaPaths,
-          MediaPath: inbound.localMediaPaths[0],
-          MediaTypes: inbound.localMediaTypes,
-          MediaType: inbound.localMediaTypes[0],
-        }
-      : {}),
-    ...(inbound.remoteMediaUrls.length > 0
-      ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
-      : {}),
-    ...(inbound.replyTo
-      ? {
-          ReplyToId: inbound.replyTo.id,
-          ReplyToBody: inbound.replyTo.body,
-          ReplyToSender: inbound.replyTo.sender,
-          ReplyToIsQuote: inbound.replyTo.isQuote,
-        }
-      : {}),
-  }) as FinalizedMsgContext;
+      : undefined,
+    media: hasImageMedia
+      ? undefined
+      : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
+    supplemental: {
+      quote: inbound.replyTo
+        ? {
+            id: inbound.replyTo.id,
+            body: inbound.replyTo.body,
+            sender: inbound.replyTo.sender,
+            isQuote: inbound.replyTo.isQuote,
+          }
+        : undefined,
+      groupSystemPrompt: inbound.groupSystemPrompt,
+    },
+    extra: {
+      QQChannelId: event.channelId,
+      QQGuildId: event.guildId,
+      QQGroupOpenid: event.groupOpenid,
+      QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
+      QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
+      QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
+      QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
+      QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
+      QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
+      ...(commandSource ? { CommandSource: commandSource } : {}),
+      ...(inbound.localMediaPaths.length > 0
+        ? {
+            MediaPaths: inbound.localMediaPaths,
+            MediaPath: inbound.localMediaPaths[0],
+            MediaTypes: inbound.localMediaTypes,
+            MediaType: inbound.localMediaTypes[0],
+          }
+        : {}),
+      ...(inbound.remoteMediaUrls.length > 0
+        ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
+        : {}),
+    },
+  });
 }

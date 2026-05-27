@@ -144,4 +144,15 @@ describe("web_search scoped config merge", () => {
       brave: { count: 5, apiKey: "brave-test-key" },
     });
   });
+
+  it("keeps newly injected legacy provider config runtime-only for validation", () => {
+    const merged = mergeScopedSearchConfig({ enabled: true, provider: "gemini" }, "perplexity", {
+      apiKey: "perplexity-test-key",
+    });
+
+    expect(merged?.perplexity).toEqual({ apiKey: "perplexity-test-key" });
+    expect(Object.keys(merged ?? {})).toEqual(["enabled", "provider"]);
+
+    expect(Object.getOwnPropertyDescriptor(merged, "perplexity")?.enumerable).toBe(false);
+  });
 });

@@ -1,4 +1,4 @@
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { chunkTextForOutbound } from "./channel-api.js";
 
 export const ircOutboundBaseAdapter = {

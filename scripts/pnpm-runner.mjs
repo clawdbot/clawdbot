@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { closeSync, openSync, readSync } from "node:fs";
+import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
@@ -31,6 +31,18 @@ function hasScriptShebang(value) {
     if (fd !== undefined) {
       closeSync(fd);
     }
+  }
+}
+
+function isExecutableFile(value) {
+  try {
+    if (!statSync(value).isFile()) {
+      return false;
+    }
+    accessSync(value, constants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -66,6 +78,13 @@ export function resolvePnpmRunner(params = {}) {
     }
 
     const npmExecExtension = getPortableExtension(npmExecPath);
+    if (platform !== "win32" && npmExecExtension.length === 0 && isExecutableFile(npmExecPath)) {
+      return {
+        command: npmExecPath,
+        args: pnpmArgs,
+        shell: false,
+      };
+    }
     if (platform === "win32" && npmExecExtension === ".exe") {
       return {
         command: npmExecPath,

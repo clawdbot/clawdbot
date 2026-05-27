@@ -250,6 +250,78 @@ describe("heartbeat runner skips when target session lane is busy", () => {
     });
   });
 
+  it("returns requests-in-flight when another session for the same agent has an active reply run", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      await seedHeartbeatTelegramSession(storePath, cfg);
+      const listActiveReplyRunSessionKeys = vi.fn(() => [
+        "agent:main:telegram:group:-1003966283270:topic:547",
+      ]);
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          listActiveReplyRunSessionKeys,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result).toEqual({ status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT });
+      expect(listActiveReplyRunSessionKeys).toHaveBeenCalledOnce();
+      expect(replySpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("ignores unscoped active reply runs when checking same-agent heartbeat work", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      await seedHeartbeatTelegramSession(storePath, cfg);
+      const listActiveReplyRunSessionKeys = vi.fn(() => ["legacy-session-key"]);
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          listActiveReplyRunSessionKeys,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("ran");
+      expect(listActiveReplyRunSessionKeys).toHaveBeenCalledOnce();
+      expect(replySpy).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("does not defer immediate heartbeat wakes for another active session", async () => {
+    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+      const cfg = createHeartbeatTelegramConfig();
+      await seedHeartbeatTelegramSession(storePath, cfg);
+      const listActiveReplyRunSessionKeys = vi.fn(() => [
+        "agent:main:telegram:group:-1003966283270:topic:547",
+      ]);
+      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        intent: "immediate",
+        deps: {
+          getQueueSize: vi.fn((_lane?: string) => 0),
+          listActiveReplyRunSessionKeys,
+          nowMs: () => Date.now(),
+          getReplyFromConfig: replySpy,
+        } as HeartbeatDeps,
+      });
+
+      expect(result.status).toBe("ran");
+      expect(replySpy).toHaveBeenCalledOnce();
+    });
+  });
+
   it("does not defer on a recent heartbeat ack pending final delivery", async () => {
     await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();

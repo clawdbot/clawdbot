@@ -227,16 +227,25 @@ steps:
                 altText: red on top blue on bottom
                 contentBase64:
                   expr: imageUnderstandingValidPngBase64
-      - call: waitForOutboundMessage
-        saveAs: imageOutbound
-        args:
-          - ref: state
-          - lambda:
-              params: [candidate]
-              expr: "candidate.conversation.id === config.conversationId && config.requiredColorGroups.every((group) => group.some((color) => normalizeLowercaseStringOrEmpty(candidate.text).includes(color)))"
-          - expr: liveTurnTimeoutMs(env, 45000)
-          - sinceIndex:
-              ref: secondOutboundStartIndex
+      - try:
+          actions:
+            - call: waitForOutboundMessage
+              saveAs: imageOutbound
+              args:
+                - ref: state
+                - lambda:
+                    params: [candidate]
+                    expr: "candidate.conversation.id === config.conversationId && config.requiredColorGroups.every((group) => group.some((color) => normalizeLowercaseStringOrEmpty(candidate.text).includes(color)))"
+                - expr: liveTurnTimeoutMs(env, 90000)
+                - sinceIndex:
+                    ref: secondOutboundStartIndex
+          catchAs: imageWaitError
+          catch:
+            - set: imageDebugRequests
+              value:
+                expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(-16).map((request) => ({ plannedToolName: request.plannedToolName ?? null, prompt: String(request.prompt ?? '').slice(0, 260), allInputText: String(request.allInputText ?? '').slice(0, 260), imageInputCount: request.imageInputCount ?? null })) : []"
+            - throw:
+                expr: "`qa-channel image reply missing: ${imageWaitError?.message ?? imageWaitError}; outbound=${recentOutboundSummary(state, 8)} requests=${JSON.stringify(imageDebugRequests)}`"
       - set: missingColorGroup
         value:
           expr: "config.requiredColorGroups.find((group) => !group.some((color) => normalizeLowercaseStringOrEmpty(imageOutbound.text).includes(color)))"
@@ -272,7 +281,7 @@ steps:
                 - lambda:
                     async: true
                     expr: "await (async () => { const snapshot = await webSnapshot({ pageId: uiImagePageId, maxChars: 12000, timeoutMs: liveTurnTimeoutMs(env, 30000) }); const text = normalizeLowercaseStringOrEmpty(snapshot.text); const hasPrompt = text.includes(config.imagePromptNeedle); const hasColors = config.requiredColorGroups.every((group) => group.some((color) => text.includes(color))); return hasPrompt && hasColors ? snapshot : undefined; })()"
-                - expr: liveTurnTimeoutMs(env, 45000)
+                - expr: liveTurnTimeoutMs(env, 90000)
                 - 500
           catch:
             - call: webSnapshot

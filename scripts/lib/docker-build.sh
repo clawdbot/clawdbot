@@ -5,6 +5,9 @@ DOCKER_BUILD_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if ! declare -F run_logged >/dev/null 2>&1; then
   source "$DOCKER_BUILD_LIB_DIR/docker-e2e-logs.sh"
 fi
+if ! declare -F docker_e2e_timeout_cmd >/dev/null 2>&1; then
+  source "$DOCKER_BUILD_LIB_DIR/docker-e2e-container.sh"
+fi
 
 docker_build_on_missing_enabled() {
   case "${OPENCLAW_DOCKER_BUILD_ON_MISSING:-}" in
@@ -61,6 +64,27 @@ docker_build_retry_count() {
   echo 2
 }
 
+docker_build_timeout_required() {
+  case "${OPENCLAW_DOCKER_BUILD_REQUIRE_TIMEOUT:-0}" in
+    1 | true | TRUE | yes | YES)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+docker_build_run_command() {
+  local timeout_value="$1"
+  shift
+
+  if docker_e2e_timeout_bin >/dev/null 2>&1 || docker_build_timeout_required; then
+    docker_e2e_timeout_cmd "$timeout_value" "$@"
+    return
+  fi
+
+  "$@"
+}
+
 docker_build_with_retries() {
   local label="$1"
   shift
@@ -74,9 +98,10 @@ docker_build_with_retries() {
     command+=("$part")
   done < <(docker_build_command "$@")
 
+  local timeout_value="${OPENCLAW_DOCKER_BUILD_TIMEOUT:-3600s}"
   while true; do
     log_file="$(docker_e2e_run_log "$label")"
-    if "${command[@]}" >"$log_file" 2>&1; then
+    if docker_build_run_command "$timeout_value" "${command[@]}" >"$log_file" 2>&1; then
       rm -f "$log_file"
       return 0
     fi
@@ -103,5 +128,6 @@ docker_build_run() {
   local label="$1"
   shift
 
-  docker_build_with_retries "$label" "$@"
+  OPENCLAW_DOCKER_BUILD_REQUIRE_TIMEOUT="${OPENCLAW_DOCKER_BUILD_REQUIRE_TIMEOUT:-1}" \
+    docker_build_with_retries "$label" "$@"
 }

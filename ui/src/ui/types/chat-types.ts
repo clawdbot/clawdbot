@@ -77,6 +77,7 @@ export type ToolCard = {
   args?: unknown;
   inputText?: string;
   outputText?: string;
+  isError?: boolean;
   preview?: {
     kind: "canvas";
     surface: "assistant_message";

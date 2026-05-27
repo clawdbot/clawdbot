@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -73,6 +74,7 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
       "src/gateway/gateway-acp-bind.live.test.ts",
       "src/gateway/gateway-cli-backend.live.test.ts",
+      "src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts",
       "src/gateway/gateway-codex-bind.live.test.ts",
       "src/gateway/gateway-codex-harness.live.test.ts",
     ]);
@@ -131,6 +133,17 @@ describe("scripts/test-live-shard", () => {
     expect(() => parseLiveShardArgs(["--lisst", "native-live-src-agents"])).toThrow(
       /Unknown option: --lisst/u,
     );
+  });
+
+  it("prints CLI help before validating shard options", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-live-shard.mjs", "--help"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("Usage: node scripts/test-live-shard.mjs");
   });
 
   it("preserves Vitest passthrough args after the live shard separator", () => {

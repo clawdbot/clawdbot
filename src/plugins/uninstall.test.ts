@@ -717,9 +717,13 @@ describe("uninstallPlugin", () => {
       termination: "exit",
     });
     tempDir = await makeTrackedTempDirAsync("uninstall-test", tempDirs);
+    const globalConfig = path.join(tempDir, "global-npmrc");
+    await fs.writeFile(globalConfig, "", "utf8");
+    vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await cleanupTrackedTempDirsAsync(tempDirs);
   });
 

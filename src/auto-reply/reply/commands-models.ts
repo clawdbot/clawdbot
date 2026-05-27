@@ -21,7 +21,10 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import {
+  RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
+  createModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -161,6 +164,7 @@ export async function buildModelsProviderData(
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault.model,
     agentId,
+    ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   });
   const visibleCatalog = await resolveVisibleModelCatalog({
     cfg,

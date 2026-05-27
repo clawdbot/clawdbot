@@ -85,6 +85,42 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
+  it("uses the latest real behavior proof section when duplicates exist", () => {
+    const validProof = proofBody(
+      [
+        "Terminal transcript:",
+        "```text",
+        "$ openclaw doctor --non-interactive",
+        "Discord external plugin is installed without explicit trust.",
+        "Add plugins.entries.discord.enabled=true to trust it.",
+        "```",
+      ].join("\n"),
+    );
+    const mockOnlyProof = proofBody("Focused tests passed: 2 files, 36 tests.", {
+      steps: "pnpm test",
+      observedResult: "CI passes.",
+    });
+
+    const laterValid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [mockOnlyProof, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
+      ),
+    });
+    const laterInvalid = evaluateRealBehaviorProof({
+      pullRequest: externalPr(
+        [validProof, "## Summary", "- Latest edit replaced proof with tests.", mockOnlyProof].join(
+          "\n\n",
+        ),
+      ),
+    });
+
+    expect(laterValid.status).toBe("passed");
+    expect(laterValid.fields?.evidence).toContain("openclaw doctor --non-interactive");
+    expect(labelsForRealBehaviorProof(laterValid)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(laterInvalid.status).toBe("mock_only");
+    expect(labelsForRealBehaviorProof(laterInvalid)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+  });
+
   it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
     const body = [
       "## Real behavior proof",

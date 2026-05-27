@@ -2319,6 +2319,117 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
+  it("sets top_p=1 for native Ollama greedy sampling requests", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: {
+            params: {
+              num_ctx: 4096,
+              top_p: 0.9,
+              thinking: false,
+            },
+          },
+          options: { temperature: 0 },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: {
+            temperature?: number;
+            top_p?: number;
+          };
+        };
+        expect(requestBody.options.temperature).toBe(0);
+        expect(requestBody.options.top_p).toBe(1);
+      },
+    );
+  });
+
+  it("sets top_p=1 for native Ollama greedy requests without configured top_p", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: {
+            params: {
+              num_ctx: 4096,
+              thinking: false,
+            },
+          },
+          options: { temperature: 0 },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: {
+            temperature?: number;
+            top_p?: number;
+          };
+        };
+        expect(requestBody.options.temperature).toBe(0);
+        expect(requestBody.options.top_p).toBe(1);
+      },
+    );
+  });
+
+  it("preserves configured top_p for native Ollama non-greedy sampling requests", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const stream = await createOllamaTestStream({
+          baseUrl: "http://ollama-host:11434",
+          model: {
+            params: {
+              top_p: 0.9,
+            },
+          },
+          options: { temperature: 0.2 },
+        });
+
+        const events = await collectStreamEvents(stream);
+        expect(events.at(-1)?.type).toBe("done");
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          options: {
+            temperature?: number;
+            top_p?: number;
+          };
+        };
+        expect(requestBody.options.temperature).toBe(0.2);
+        expect(requestBody.options.top_p).toBe(0.9);
+      },
+    );
+  });
+
   it("omits num_ctx when the model has no params.num_ctx and no catalog window", async () => {
     await withMockNdjsonFetch(
       [

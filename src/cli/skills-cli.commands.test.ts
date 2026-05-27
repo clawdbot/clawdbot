@@ -289,6 +289,13 @@ describe("skills cli commands", () => {
     ).toBe(true);
   });
 
+  it("rejects partial numeric search limits", async () => {
+    await expect(runCommand(["skills", "search", "calendar", "--limit", "10ms"])).rejects.toThrow(
+      "--limit must be a positive integer.",
+    );
+    expect(searchSkillsFromClawHubMock).not.toHaveBeenCalled();
+  });
+
   it("installs a skill from ClawHub into the active workspace", async () => {
     installSkillFromClawHubMock.mockResolvedValue({
       ok: true,
@@ -697,6 +704,7 @@ describe("skills cli commands", () => {
     expect(defaultRuntime.writeStdout).toHaveBeenCalledTimes(1);
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     expect(defaultRuntime.log).not.toHaveBeenCalled();
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(runtimeErrors).toStrictEqual([]);
     expect(runtimeStdout).toHaveLength(1);
 

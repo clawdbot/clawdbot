@@ -1,5 +1,52 @@
-import { describe, expect, it } from "vitest";
-import { parseExecApprovalRequested, parsePluginApprovalRequested } from "./exec-approval.ts";
+import { describe, expect, it, vi } from "vitest";
+import {
+  addExecApproval,
+  isStaleApprovalResolutionError,
+  parseExecApprovalRequested,
+  parsePluginApprovalRequested,
+  clearResolvedExecApprovalPrompt,
+  refreshPendingApprovalQueue,
+  type ExecApprovalPromptState,
+  type ExecApprovalRequest,
+} from "./exec-approval.ts";
+
+type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+
+function createExecApproval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalRequest {
+  return {
+    id: "approval-1",
+    kind: "exec",
+    request: { command: "echo hello" },
+    createdAtMs: 1000,
+    expiresAtMs: Date.now() + 60_000,
+    ...overrides,
+  };
+}
+
+function createPromptState(
+  request: RequestFn,
+  queue: ExecApprovalRequest[] = [createExecApproval()],
+): ExecApprovalPromptState {
+  return {
+    client: { request },
+    execApprovalQueue: queue,
+    execApprovalBusy: false,
+    execApprovalError: null,
+  };
+}
+
+function createGatewayError(message: string, details?: unknown): Error {
+  const err = new Error(message);
+  Object.defineProperty(err, "gatewayCode", {
+    value: "INVALID_REQUEST",
+    enumerable: true,
+  });
+  Object.defineProperty(err, "details", {
+    value: details,
+    enumerable: true,
+  });
+  return err;
+}
 
 describe("parseExecApprovalRequested", () => {
   it("returns entries with kind 'exec'", () => {
@@ -11,6 +58,20 @@ describe("parseExecApprovalRequested", () => {
     });
     expect(result?.kind).toBe("exec");
     expect(result?.request.command).toBe("rm -rf /");
+  });
+
+  it("preserves allowed approval decisions", () => {
+    const result = parseExecApprovalRequested({
+      id: "exec-1",
+      request: {
+        command: "pwd",
+        allowedDecisions: ["allow-once", "bad", "deny", "allow-always"],
+      },
+      createdAtMs: 1000,
+      expiresAtMs: 2000,
+    });
+
+    expect(result?.request.allowedDecisions).toEqual(["allow-once", "deny", "allow-always"]);
   });
 });
 
@@ -28,6 +89,22 @@ describe("parsePluginApprovalRequested", () => {
       pluginId: "sage",
       agentId: "agent-1",
       sessionKey: "sess-1",
+      allowedDecisions: ["deny"],
+      actions: [
+        {
+          kind: "command",
+          label: "Verify with World",
+          style: "primary",
+          command: "/agentkit approve plugin-1 allow-once",
+        },
+        {
+          kind: "decision",
+          label: "Deny",
+          style: "danger",
+          decision: "deny",
+          command: "/approve plugin-1 deny",
+        },
+      ],
     },
   };
 
@@ -38,6 +115,22 @@ describe("parsePluginApprovalRequested", () => {
     expect(result?.pluginDescription).toBe("chmod 777 script.sh modifies file permissions");
     expect(result?.pluginSeverity).toBe("high");
     expect(result?.pluginId).toBe("sage");
+    expect(result?.allowedDecisions).toEqual(["deny"]);
+    expect(result?.actions).toEqual([
+      {
+        kind: "command",
+        label: "Verify with World",
+        style: "primary",
+        command: "/agentkit approve plugin-1 allow-once",
+      },
+      {
+        kind: "decision",
+        label: "Deny",
+        style: "danger",
+        decision: "deny",
+        command: "/approve plugin-1 deny",
+      },
+    ]);
     expect(result?.request.command).toBe("Dangerous command detected");
     expect(result?.request.agentId).toBe("agent-1");
     expect(result?.request.sessionKey).toBe("sess-1");
@@ -140,5 +233,257 @@ describe("parseExecApprovalRequested command spans", () => {
       { startIndex: 5, endIndex: 9 },
       { startIndex: 10, endIndex: 15 },
     ]);
+  });
+});
+
+describe("isStaleApprovalResolutionError", () => {
+  it("detects already-resolved approval errors", () => {
+    expect(
+      isStaleApprovalResolutionError(
+        createGatewayError("approval already resolved", {
+          reason: "APPROVAL_ALREADY_RESOLVED",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("detects unknown or expired approval errors", () => {
+    expect(
+      isStaleApprovalResolutionError(createGatewayError("unknown or expired approval id")),
+    ).toBe(true);
+  });
+
+  it("detects missing approval errors", () => {
+    expect(
+      isStaleApprovalResolutionError(
+        createGatewayError("approval not found", {
+          reason: "APPROVAL_NOT_FOUND",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("ignores unrelated approval resolve errors", () => {
+    expect(isStaleApprovalResolutionError(createGatewayError("gateway unavailable"))).toBe(false);
+  });
+});
+
+describe("clearResolvedExecApprovalPrompt", () => {
+  it("does not clear the active prompt error when another approval resolves", () => {
+    const active = createExecApproval({ id: "approval-active", createdAtMs: 2 });
+    const queued = createExecApproval({ id: "approval-queued", createdAtMs: 1 });
+    const state = createPromptState(
+      vi.fn<RequestFn>(async () => ({})),
+      [active, queued],
+    );
+    state.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+    clearResolvedExecApprovalPrompt(state, "approval-queued");
+
+    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-active"]);
+    expect(state.execApprovalError).toBe("Approval failed: Error: gateway unavailable");
+  });
+
+  it("clears the active prompt error when the active approval resolves", () => {
+    const state = createPromptState(vi.fn<RequestFn>(async () => ({})));
+    state.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+    clearResolvedExecApprovalPrompt(state, "approval-1");
+
+    expect(state.execApprovalQueue).toEqual([]);
+    expect(state.execApprovalError).toBeNull();
+  });
+});
+
+describe("refreshPendingApprovalQueue", () => {
+  it("keeps approvals received while a refresh is in flight", async () => {
+    let resolveExecList: (value: unknown[]) => void = () => {};
+    const execApprovalList = new Promise<unknown[]>((resolve) => {
+      resolveExecList = resolve;
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return execApprovalList;
+      }
+      if (method === "plugin.approval.list") {
+        return [];
+      }
+      return {};
+    });
+    const state = createPromptState(request, []);
+
+    const refreshPromise = refreshPendingApprovalQueue(state);
+    state.execApprovalQueue = addExecApproval(
+      state.execApprovalQueue,
+      createExecApproval({ id: "approval-arrived-during-refresh", createdAtMs: 2000 }),
+    );
+    resolveExecList([]);
+    await refreshPromise;
+
+    expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual([
+      "approval-arrived-during-refresh",
+    ]);
+  });
+
+  it("does not requeue approvals resolved while a refresh is in flight", async () => {
+    let resolveExecList: (value: unknown[]) => void = () => {};
+    const execApprovalList = new Promise<unknown[]>((resolve) => {
+      resolveExecList = resolve;
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return execApprovalList;
+      }
+      if (method === "plugin.approval.list") {
+        return [];
+      }
+      return {};
+    });
+    const resolvingApproval = createExecApproval({ id: "approval-resolving" });
+    const state = createPromptState(request, [resolvingApproval]);
+
+    const refreshPromise = refreshPendingApprovalQueue(state);
+    clearResolvedExecApprovalPrompt(state, "approval-resolving");
+    resolveExecList([resolvingApproval]);
+    await refreshPromise;
+
+    expect(state.execApprovalQueue).toEqual([]);
+  });
+
+  it("does not requeue new approvals resolved before refresh completes", async () => {
+    let resolveExecList: (value: unknown[]) => void = () => {};
+    let resolvePluginList: (value: unknown[]) => void = () => {};
+    const execApprovalList = new Promise<unknown[]>((resolve) => {
+      resolveExecList = resolve;
+    });
+    const pluginApprovalList = new Promise<unknown[]>((resolve) => {
+      resolvePluginList = resolve;
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.list") {
+        return execApprovalList;
+      }
+      if (method === "plugin.approval.list") {
+        return pluginApprovalList;
+      }
+      return {};
+    });
+    const state = createPromptState(request, []);
+    const transientApproval = createExecApproval({ id: "approval-transient" });
+
+    const refreshPromise = refreshPendingApprovalQueue(state);
+    state.execApprovalQueue = addExecApproval(state.execApprovalQueue, transientApproval);
+    resolveExecList([transientApproval]);
+    clearResolvedExecApprovalPrompt(state, "approval-transient");
+    resolvePluginList([]);
+    await refreshPromise;
+
+    expect(state.execApprovalQueue).toEqual([]);
+  });
+
+  it("removes refreshed approvals after their expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const expiresAtMs = Date.now() + 1_000;
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "exec.approval.list") {
+          return [
+            {
+              id: "approval-refreshed-1",
+              request: { command: "pnpm check:changed" },
+              createdAtMs: Date.now(),
+              expiresAtMs,
+            },
+          ];
+        }
+        if (method === "plugin.approval.list") {
+          return [];
+        }
+        return {};
+      });
+      const state = createPromptState(request, []);
+
+      await refreshPendingApprovalQueue(state);
+      expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-refreshed-1"]);
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(state.execApprovalQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clears active prompt errors when expiry advances the queue", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const activeExpiresAtMs = Date.now() + 1_000;
+      const queuedExpiresAtMs = Date.now() + 60_000;
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "exec.approval.list") {
+          return [
+            {
+              id: "approval-active-expiring",
+              request: { command: "pnpm check:changed" },
+              createdAtMs: Date.now() + 1,
+              expiresAtMs: activeExpiresAtMs,
+            },
+            {
+              id: "approval-queued",
+              request: { command: "pnpm test" },
+              createdAtMs: Date.now(),
+              expiresAtMs: queuedExpiresAtMs,
+            },
+          ];
+        }
+        if (method === "plugin.approval.list") {
+          return [];
+        }
+        return {};
+      });
+      const state = createPromptState(request, []);
+
+      await refreshPendingApprovalQueue(state);
+      state.execApprovalError = "Approval failed: Error: gateway unavailable";
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(state.execApprovalQueue.map((entry) => entry.id)).toEqual(["approval-queued"]);
+      expect(state.execApprovalError).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not requeue expired approvals returned by refresh lists", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const request = vi.fn<RequestFn>(async (method) => {
+        if (method === "exec.approval.list") {
+          return [
+            {
+              id: "approval-expired-1",
+              request: { command: "pnpm check:changed" },
+              createdAtMs: Date.now() - 2_000,
+              expiresAtMs: Date.now() - 1_000,
+            },
+          ];
+        }
+        if (method === "plugin.approval.list") {
+          return [];
+        }
+        return {};
+      });
+      const state = createPromptState(request, []);
+
+      await refreshPendingApprovalQueue(state);
+
+      expect(state.execApprovalQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -29,6 +29,15 @@ describe("voice receive recovery", () => {
     });
   });
 
+  it("treats premature stream close as an expected receive end", () => {
+    expect(analyzeVoiceReceiveError(new Error("Premature close"))).toEqual({
+      message: "Premature close",
+      isAbortLike: true,
+      shouldAttemptPassthrough: false,
+      countsAsDecryptFailure: false,
+    });
+  });
+
   it("gates recovery after repeated decrypt failures in the same window", () => {
     const state = createVoiceReceiveRecoveryState();
 

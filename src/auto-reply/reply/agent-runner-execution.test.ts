@@ -3,6 +3,10 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type PersistedUserTurnMessage,
+} from "../../sessions/user-turn-transcript.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -195,6 +199,7 @@ async function getApplyFallbackCandidateSelectionToEntry() {
 type FallbackRunnerParams = {
   provider: string;
   model: string;
+  abortSignal?: AbortSignal;
   run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
@@ -271,6 +276,14 @@ function createFollowupRun(): FollowupRun {
       blockReplyBreak: "message_end",
     },
   } as unknown as FollowupRun;
+}
+
+function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
+  return createUserTurnTranscriptRecorder({
+    message,
+    target: { transcriptPath: "/tmp/session.jsonl" },
+    updateMode: "none",
+  });
 }
 
 function createMockReplyOperation(): {
@@ -1104,6 +1117,31 @@ describe("runAgentTurnWithFallback", () => {
     vi.clearAllMocks();
   });
 
+  it("passes the reply abort signal to fallback orchestration and candidates", async () => {
+    const { replyOperation } = createMockReplyOperation();
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams(),
+      replyOperation,
+    });
+
+    const fallbackCall = requireRecord(
+      state.runWithModelFallbackMock.mock.calls[0]?.[0],
+      "runWithModelFallback params",
+    );
+    const embeddedCall = requireRecord(
+      state.runEmbeddedPiAgentMock.mock.calls[0]?.[0],
+      "runEmbeddedPiAgent params",
+    );
+    expect(fallbackCall.abortSignal).toBe(replyOperation.abortSignal);
+    expect(embeddedCall.abortSignal).toBe(replyOperation.abortSignal);
+  });
+
   it("rechecks queued auto fallback primary probes before running", async () => {
     const { markAutoFallbackPrimaryProbe } = await import("../../agents/agent-scope.js");
     const probe = {
@@ -1764,6 +1802,65 @@ describe("runAgentTurnWithFallback", () => {
       messageChannel: "telegram",
       messageProvider: "telegram",
     });
+  });
+
+  it("passes prepared CLI user turns to the runtime persistence boundary", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const preparedUserTurnMessage = {
+      role: "user",
+      content: "describe this",
+      MediaPath: "/tmp/image.png",
+      MediaPaths: ["/tmp/image.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    } as never;
+    followupRun.userTurnTranscriptRecorder = createTestUserTurnRecorder(preparedUserTurnMessage);
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: "/tmp/session.jsonl",
+      updatedAt: 1,
+    };
+    const activeSessionStore = { main: sessionEntry };
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      commandBody: "runtime prompt",
+      transcriptCommandBody: "display prompt",
+      activeSessionStore,
+      storePath: "/tmp/sessions.json",
+      getActiveSessionEntry: () => activeSessionStore.main,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI runtime", {
+      sessionKey: "main",
+      agentId: "agent",
+      sessionId: "session",
+      suppressNextUserMessagePersistence: false,
+    });
+    const call = requireMockCall(state.runCliAgentMock, 0, "CLI runtime");
+    const callParams = requireRecord(call[0], "CLI runtime");
+    expect(callParams.userTurnTranscriptRecorder).toEqual(expect.any(Object));
+    expect(requireRecord(callParams.userTurnTranscriptRecorder, "user turn recorder").message).toBe(
+      preparedUserTurnMessage,
+    );
+    expect(callParams.onUserMessagePersisted).toEqual(expect.any(Function));
   });
 
   it("does not reuse or persist CLI sessions for room-event turns", async () => {
@@ -4782,6 +4879,95 @@ describe("runAgentTurnWithFallback", () => {
       }
     },
   );
+
+  it.each(["group", "channel"] as const)(
+    "keeps classified non-transient failures visible in Discord %s chats",
+    async (chatType) => {
+      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+        new Error('No API key found for provider "openai"'),
+      );
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toContain('Missing API key for provider "openai"');
+      }
+    },
+  );
+
+  it.each(["group", "channel"] as const)(
+    "keeps rate-limit fallback copy out of Discord %s chats",
+    async (chatType) => {
+      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+      }
+    },
+  );
+
+  it("surfaces rate-limit fallback copy in Discord group chats when silentReply.group is disallow", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          silentReply: { group: "disallow" },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          GroupSubject: "agent group",
+          GroupChannel: "#general",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+      expect(result.payload.text).toContain("rate-limited");
+    }
+  });
 
   it("uses compact generic copy for raw runner failures in normal Discord direct chats", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(

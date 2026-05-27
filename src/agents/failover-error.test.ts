@@ -544,6 +544,49 @@ describe("failover-error", () => {
         message: INSUFFICIENT_QUOTA_PAYLOAD,
       }),
     ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: INSUFFICIENT_QUOTA_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: '{"error":"insufficient_balance","message":"Your credit balance is too low."}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: '{"error":"insufficient_balance","message":"Insufficient account balance"}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message:
+          'HTTP 429: {"error":"insufficient_balance","message":"Insufficient account balance"}',
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: "This model requires more credits to use",
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        status: 429,
+        message: "Key limit exceeded",
+      }),
+    ).toBe("billing");
   });
 
   it("lets structured HTTP 400 payloads reuse provider-specific message classification", () => {

@@ -6,13 +6,15 @@ import concurrent.futures
 import copy
 import json
 import os
+import queue
 import subprocess
 import sys
 import tempfile
 import textwrap
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 ENGINES = ("codex", "claude", "droid", "copilot")
@@ -100,7 +102,18 @@ def run_with_heartbeat(
     input_text: str | None = None,
     label: str,
     heartbeat_seconds: int = 60,
+    stream_output: bool = False,
+    stream_display: Callable[[str, str], str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    if stream_output:
+        return run_with_stream(
+            args,
+            cwd,
+            input_text=input_text,
+            label=label,
+            heartbeat_seconds=heartbeat_seconds,
+            stream_display=stream_display,
+        )
     started = time.monotonic()
     proc = subprocess.Popen(
         args,
@@ -122,6 +135,82 @@ def run_with_heartbeat(
             first_communicate = False
             elapsed = int(time.monotonic() - started)
             print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+
+
+def run_with_stream(
+    args: list[str],
+    cwd: Path,
+    *,
+    input_text: str | None,
+    label: str,
+    heartbeat_seconds: int,
+    stream_display: Callable[[str, str], str | None] | None,
+) -> subprocess.CompletedProcess[str]:
+    started = time.monotonic()
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdin=subprocess.PIPE if input_text is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    events: queue.Queue[tuple[str, str | None]] = queue.Queue()
+    stdout_parts: list[str] = []
+    stderr_parts: list[str] = []
+
+    def read_stream(name: str, stream: Any) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                events.put((name, line))
+        finally:
+            events.put((name, None))
+
+    def write_stdin() -> None:
+        if proc.stdin is None or input_text is None:
+            return
+        try:
+            proc.stdin.write(input_text)
+            proc.stdin.close()
+        except BrokenPipeError:
+            return
+
+    threads = [
+        threading.Thread(target=read_stream, args=("stdout", proc.stdout), daemon=True),
+        threading.Thread(target=read_stream, args=("stderr", proc.stderr), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    stdin_thread = threading.Thread(target=write_stdin, daemon=True)
+    stdin_thread.start()
+
+    open_streams = 2
+    while open_streams:
+        try:
+            name, line = events.get(timeout=heartbeat_seconds)
+        except queue.Empty:
+            elapsed = int(time.monotonic() - started)
+            print(f"review still running: {label} elapsed={elapsed}s pid={proc.pid}", file=sys.stderr, flush=True)
+            continue
+        if line is None:
+            open_streams -= 1
+            continue
+        if name == "stdout":
+            stdout_parts.append(line)
+        else:
+            stderr_parts.append(line)
+        display = stream_display(name, line) if stream_display else line
+        if display:
+            target = sys.stdout if name == "stdout" else sys.stderr
+            target.write(display)
+            target.flush()
+
+    for thread in threads:
+        thread.join()
+    stdin_thread.join(timeout=1)
+    returncode = proc.wait()
+    return subprocess.CompletedProcess(args, returncode, "".join(stdout_parts), "".join(stderr_parts))
 
 
 def git(repo: Path, *args: str, check: bool = True) -> str:
@@ -336,9 +425,11 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--model", args.model])
     if args.thinking:
         cmd.extend(["-c", f'model_reasoning_effort="{args.thinking}"'])
+    cmd.append("exec")
+    if args.stream_engine_output:
+        cmd.append("--json")
     cmd.extend(
         [
-            "exec",
             "--ephemeral",
             "-C",
             str(repo),
@@ -351,7 +442,14 @@ def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "-",
         ]
     )
-    result = run_with_heartbeat(cmd, repo, input_text=prompt, label="codex")
+    result = run_with_heartbeat(
+        cmd,
+        repo,
+        input_text=prompt,
+        label="codex",
+        stream_output=args.stream_engine_output,
+        stream_display=CodexStreamDisplay() if args.stream_engine_output else None,
+    )
     try:
         output = output_path.read_text()
     finally:
@@ -368,7 +466,7 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         "--print",
         "--no-session-persistence",
         "--output-format",
-        "json",
+        "stream-json" if args.stream_engine_output else "json",
         "--json-schema",
         json.dumps(SCHEMA),
     ]
@@ -376,11 +474,20 @@ def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--allowedTools", claude_allowed_tools(args)])
     else:
         cmd.extend(["--tools", ""])
+    if args.stream_engine_output:
+        cmd.append("--verbose")
     if args.model:
         cmd.extend(["--model", args.model])
     if args.thinking:
         cmd.extend(["--effort", args.thinking])
-    result = run_with_heartbeat(cmd, repo, input_text=prompt, label="claude")
+    result = run_with_heartbeat(
+        cmd,
+        repo,
+        input_text=prompt,
+        label="claude",
+        stream_output=args.stream_engine_output,
+        stream_display=ClaudeStreamDisplay() if args.stream_engine_output else None,
+    )
     if result.returncode != 0:
         raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
@@ -405,7 +512,7 @@ def run_droid(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         cmd.extend(["--model", args.model])
     if not args.tools:
         cmd.extend(["--disabled-tools", "*"])
-    result = run_with_heartbeat(cmd, repo, label="droid")
+    result = run_with_heartbeat(cmd, repo, label="droid", stream_output=args.stream_engine_output)
     prompt_path.unlink(missing_ok=True)
     if result.returncode != 0:
         raise SystemExit(f"droid engine failed ({result.returncode})\n{result.stderr or result.stdout}")
@@ -430,7 +537,7 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
             "--output-format",
             "json",
             "--stream",
-            "off",
+            "on" if args.stream_engine_output else "off",
             "--no-ask-user",
             "--disable-builtin-mcps",
         ]
@@ -447,10 +554,140 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         )
         if args.web_search:
             cmd.append("--allow-all-urls")
-        result = run_with_heartbeat(cmd, Path(tempdir), label="copilot")
+        result = run_with_heartbeat(cmd, Path(tempdir), label="copilot", stream_output=args.stream_engine_output)
     if result.returncode != 0:
         raise SystemExit(f"copilot engine failed ({result.returncode})\n{result.stderr or result.stdout}")
     return result.stdout
+
+
+class CodexStreamDisplay:
+    def __init__(self, *, activity_seconds: int = 20) -> None:
+        self.activity_seconds = activity_seconds
+        self.hidden_events = 0
+        self.last_visible = time.monotonic()
+
+    def __call__(self, name: str, line: str) -> str | None:
+        if name != "stdout":
+            return line
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return self.visible(line)
+        event_type = event.get("type")
+        if event_type == "thread.started":
+            return self.visible(f"codex thread: {event.get('thread_id', '<unknown>')}\n")
+        if event_type == "turn.started":
+            return self.visible("codex turn started\n")
+        if event_type == "turn.completed":
+            usage = event.get("usage")
+            message = format_codex_usage(usage) + "\n" if isinstance(usage, dict) else "codex turn completed\n"
+            return self.visible(self.flush_hidden() + message)
+        item = event.get("item")
+        if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+            return self.visible(self.flush_hidden() + item["text"].rstrip() + "\n")
+        return self.hidden_activity()
+
+    def hidden_activity(self) -> str | None:
+        self.hidden_events += 1
+        if time.monotonic() - self.last_visible < self.activity_seconds:
+            return None
+        return self.visible(self.flush_hidden())
+
+    def flush_hidden(self) -> str:
+        if not self.hidden_events:
+            return ""
+        count = self.hidden_events
+        self.hidden_events = 0
+        return f"codex activity: {count} hidden tool/status events\n"
+
+    def visible(self, text: str) -> str:
+        self.last_visible = time.monotonic()
+        return text
+
+
+class ClaudeStreamDisplay:
+    def __init__(self, *, activity_seconds: int = 20) -> None:
+        self.activity_seconds = activity_seconds
+        self.hidden_events = 0
+        self.last_visible = time.monotonic()
+        self.started = False
+
+    def __call__(self, name: str, line: str) -> str | None:
+        if name != "stdout":
+            return line
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return self.visible(line)
+        event_type = event.get("type")
+        if event_type == "system" and not self.started:
+            self.started = True
+            return self.visible("claude turn started\n")
+        if event_type == "assistant":
+            return self.assistant_message(event)
+        if event_type == "result":
+            return self.visible(self.flush_hidden() + self.result_summary(event))
+        return self.hidden_activity()
+
+    def assistant_message(self, event: dict[str, Any]) -> str | None:
+        message = event.get("message")
+        if not isinstance(message, dict):
+            return self.hidden_activity()
+        chunks: list[str] = []
+        for item in message.get("content", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text" and isinstance(item.get("text"), str):
+                chunks.append(item["text"].rstrip())
+        if chunks:
+            return self.visible(self.flush_hidden() + "\n".join(chunks) + "\n")
+        return self.hidden_activity()
+
+    def result_summary(self, event: dict[str, Any]) -> str:
+        usage = event.get("usage")
+        fields: list[str] = []
+        if isinstance(usage, dict):
+            for key in (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+                "output_tokens",
+            ):
+                value = usage.get(key)
+                if isinstance(value, int):
+                    fields.append(f"{key}={value}")
+        cost = event.get("total_cost_usd")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            fields.append(f"cost_usd={cost:.6f}")
+        return "claude usage: " + " ".join(fields) + "\n" if fields else "claude turn completed\n"
+
+    def hidden_activity(self) -> str | None:
+        self.hidden_events += 1
+        if time.monotonic() - self.last_visible < self.activity_seconds:
+            return None
+        return self.visible(self.flush_hidden())
+
+    def flush_hidden(self) -> str:
+        if not self.hidden_events:
+            return ""
+        count = self.hidden_events
+        self.hidden_events = 0
+        return f"claude activity: {count} hidden tool/status events\n"
+
+    def visible(self, text: str) -> str:
+        self.last_visible = time.monotonic()
+        return text
+
+
+def format_codex_usage(usage: dict[str, Any]) -> str:
+    fields = [
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    ]
+    parts = [f"{field}={usage[field]}" for field in fields if isinstance(usage.get(field), int)]
+    return "codex usage: " + " ".join(parts) if parts else "codex usage: unavailable"
 
 
 def claude_allowed_tools(args: argparse.Namespace) -> str:
@@ -490,7 +727,7 @@ def extract_json(text: str) -> dict[str, Any]:
 
 
 def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
-    candidates: list[str] = []
+    candidates: list[str | dict[str, Any]] = []
     for line in text.splitlines():
         line = line.strip()
         if not line:
@@ -509,7 +746,13 @@ def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
             candidates.append(data["content"])
         if isinstance(event.get("result"), str):
             candidates.append(event["result"])
+        if isinstance(event.get("structured_output"), dict):
+            candidates.append(event["structured_output"])
     for candidate in reversed(candidates):
+        if isinstance(candidate, dict):
+            if "findings" in candidate:
+                return candidate
+            continue
         parsed = parse_json_candidate(candidate)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
@@ -673,6 +916,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", action="append", help="Extra evidence file to include in the review bundle.")
     parser.add_argument("--output", help="Write human output to a file as well as stdout.")
     parser.add_argument("--json-output", help="Write validated structured review JSON.")
+    parser.add_argument(
+        "--stream-engine-output",
+        action="store_true",
+        default=os.environ.get("AUTOREVIEW_STREAM_ENGINE_OUTPUT") == "1",
+        help="Stream review engine output while preserving buffered output for validation. Codex output is filtered to hide tool/file chatter.",
+    )
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
     parser.add_argument("--require-finding", action="append", default=[], help="Require finding text to contain this substring.")
     parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")

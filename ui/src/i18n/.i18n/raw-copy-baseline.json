@@ -172,6 +172,13 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Tool returned an error"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Delete"
@@ -196,6 +203,13 @@
       "name": "text",
       "path": "ui/src/ui/chat/grouped-render.ts",
       "text": "Context"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/chat/grouped-render.ts",
+      "text": "Error"
     },
     {
       "count": 2,
@@ -305,16 +319,23 @@
     {
       "count": 1,
       "kind": "html-attribute",
+      "name": "aria-label",
+      "path": "ui/src/ui/chat/tool-cards.ts",
+      "text": "Tool returned an error"
+    },
+    {
+      "count": 1,
+      "kind": "html-attribute",
       "name": "title",
       "path": "ui/src/ui/chat/tool-cards.ts",
       "text": "Open in the side panel"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/chat/tool-cards.ts",
-      "text": "Completed"
+      "text": "Error"
     },
     {
       "count": 1,
@@ -331,7 +352,7 @@
       "text": "Tool input"
     },
     {
-      "count": 2,
+      "count": 1,
       "kind": "object-property",
       "name": "label",
       "path": "ui/src/ui/chat/tool-cards.ts",

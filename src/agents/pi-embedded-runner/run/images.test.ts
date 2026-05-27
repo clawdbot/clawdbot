@@ -353,6 +353,68 @@ describe("modelSupportsImages", () => {
 });
 
 describe("loadImageFromRef", () => {
+  it("hydrates managed inbound media URIs before workspace path resolution", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-uri-"));
+    const workspaceDir = path.join(stateDir, "workspace-agent");
+    const inboundDir = path.join(stateDir, "media", "inbound");
+    const mediaId = "telegram-photo.png";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    try {
+      const image = await loadImageFromRef(
+        {
+          raw: `media://inbound/${mediaId}`,
+          type: "media-uri",
+          resolved: `media://inbound/${mediaId}`,
+        },
+        workspaceDir,
+        { workspaceOnly: true },
+      );
+
+      expect(image?.type).toBe("image");
+      expect(image?.mimeType).toBe("image/png");
+      expect(image?.data).toBe(TINY_PNG_BASE64);
+    } finally {
+      vi.unstubAllEnvs();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("hydrates sandbox-staged inbound media URIs", async () => {
+    const sandboxRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sbx-uri-"));
+    const inboundDir = path.join(sandboxRoot, "media", "inbound");
+    const mediaId = "telegram-photo.png";
+    await fs.mkdir(inboundDir, { recursive: true });
+    await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    try {
+      const image = await loadImageFromRef(
+        {
+          raw: `media://inbound/${mediaId}`,
+          type: "media-uri",
+          resolved: `media://inbound/${mediaId}`,
+        },
+        sandboxRoot,
+        {
+          workspaceOnly: true,
+          sandbox: {
+            root: sandboxRoot,
+            bridge: createHostSandboxFsBridge(sandboxRoot),
+          },
+        },
+      );
+
+      expect(image?.type).toBe("image");
+      expect(image?.mimeType).toBe("image/png");
+      expect(image?.data).toBe(TINY_PNG_BASE64);
+    } finally {
+      await fs.rm(sandboxRoot, { recursive: true, force: true });
+    }
+  });
+
   it("allows sandbox-validated host paths outside default media roots", async () => {
     const homeDir = os.homedir();
     await fs.mkdir(homeDir, { recursive: true });

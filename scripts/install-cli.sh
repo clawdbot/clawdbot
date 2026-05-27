@@ -749,7 +749,6 @@ install_node() {
   local url
   local tmp
   local dir
-  local current_major
   local base_url
   local tarball
   local expected_sha
@@ -764,12 +763,9 @@ install_node() {
     return
   fi
 
-  if [[ -x "$(node_bin)" ]]; then
-    current_major="$("$(node_bin)" -v 2>/dev/null | tr -d 'v' | cut -d'.' -f1 || echo "")"
-    if [[ -n "$current_major" && "$current_major" -ge 22 ]]; then
-      emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"skip\",\"path\":\"${dir//\"/\\\\\\\"}\"}"
-      return
-    fi
+  if linked_node_is_usable; then
+    emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"skip\",\"path\":\"${dir//\"/\\\\\\\"}\"}"
+    return
   fi
 
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"start\",\"version\":\"${NODE_VERSION}\"}"
@@ -803,8 +799,12 @@ install_node() {
 
   ln -sfn "$dir" "${PREFIX}/tools/node"
 
-  if ! "$(node_bin)" -e "require('node:sqlite')" >/dev/null 2>&1; then
-    fail "Installed Node ${NODE_VERSION} is missing node:sqlite; re-run with --node-version 22.22.0 (or newer)"
+  if ! linked_node_is_usable; then
+    local installed_version
+    local required_version
+    installed_version="$("$(node_bin)" -v 2>/dev/null || echo unknown)"
+    required_version="$(required_node_version)"
+    fail "Installed Node ${NODE_VERSION} must provide Node >= ${required_version} with node:sqlite; found ${installed_version}. Re-run with --node-version 22.22.0 (or newer)"
   fi
   emit_json "{\"event\":\"step\",\"name\":\"node\",\"status\":\"ok\",\"version\":\"${NODE_VERSION}\"}"
 }

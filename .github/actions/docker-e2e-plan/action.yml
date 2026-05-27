@@ -123,14 +123,14 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        docker pull "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
+        bash scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_BARE_IMAGE}"
 
     - name: Pull shared functional Docker E2E image
       if: inputs.hydrate-artifacts == 'true' && steps.plan.outputs.needs_functional_image == '1'
       shell: bash
       run: |
         set -euo pipefail
-        docker pull "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
+        bash scripts/ci-docker-pull-retry.sh "${OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE}"
 
     - name: Validate Docker E2E credentials
       if: inputs.hydrate-artifacts == 'true'

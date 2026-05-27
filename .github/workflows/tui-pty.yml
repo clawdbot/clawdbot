@@ -38,4 +38,4 @@ jobs:
           install-bun: "false"
 
       - name: Run TUI PTY tests
-        run: timeout 120s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts
+        run: timeout --kill-after=30s 120s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts

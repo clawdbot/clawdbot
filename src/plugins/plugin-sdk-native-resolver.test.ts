@@ -28,6 +28,7 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
       "./cli-entry": "./dist/cli-entry.js",
       "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",
       "./plugin-sdk/channel-message": "./dist/plugin-sdk/channel-message.js",
+      "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
       "./plugin-sdk/source-only": "./dist/plugin-sdk/source-only.js",
     },
   });
@@ -38,6 +39,11 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
   fs.writeFileSync(path.join(pluginSdkDir, "root-alias.cjs"), "module.exports = {};\n", "utf8");
   fs.writeFileSync(
     path.join(pluginSdkDir, "channel-message.js"),
+    ['export * from "./channel-outbound.js";', ""].join("\n"),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(pluginSdkDir, "channel-outbound.js"),
     ['export const defineChannelMessageAdapter = () => "adapter";', ""].join("\n"),
     "utf8",
   );
@@ -62,9 +68,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
   it("keeps native aliases on JS dist artifacts when source files exist", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-source-resolver-"));
     const { loaderModulePath } = writeFakeOpenClawPackage(root);
-    const sourceChannelMessagePath = path.join(root, "src", "plugin-sdk", "channel-message.ts");
-    fs.mkdirSync(path.dirname(sourceChannelMessagePath), { recursive: true });
-    fs.writeFileSync(sourceChannelMessagePath, "export const sourceOnly = true;\n", "utf8");
+    const sourceChannelOutboundPath = path.join(root, "src", "plugin-sdk", "channel-outbound.ts");
+    fs.mkdirSync(path.dirname(sourceChannelOutboundPath), { recursive: true });
+    fs.writeFileSync(sourceChannelOutboundPath, "export const sourceOnly = true;\n", "utf8");
     const externalPluginEntry = writeExternalPluginEntry(path.join(root, "external-plugin"));
 
     const installedAliases = installOpenClawPluginSdkNativeResolver({
@@ -73,10 +79,10 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       pluginSdkResolution: "src",
     });
 
-    expect(installedAliases).toContain("openclaw/plugin-sdk/channel-message");
+    expect(installedAliases).toContain("openclaw/plugin-sdk/channel-outbound");
     const requireFromPlugin = createRequire(externalPluginEntry);
-    expect(fs.realpathSync(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-message"))).toBe(
-      fs.realpathSync(path.join(root, "dist", "plugin-sdk", "channel-message.js")),
+    expect(fs.realpathSync(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-outbound"))).toBe(
+      fs.realpathSync(path.join(root, "dist", "plugin-sdk", "channel-outbound.js")),
     );
   });
 
@@ -97,13 +103,13 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         pluginSdkResolution: "dist",
       });
 
-      expect(installedAliases).toContain("openclaw/plugin-sdk/channel-message");
+      expect(installedAliases).toContain("openclaw/plugin-sdk/channel-outbound");
       expect(fs.existsSync(path.join(distRoot, "extensions"))).toBe(false);
       const requireFromPlugin = createRequire(externalPluginEntry);
       expect(
-        fs.realpathSync(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-message")),
-      ).toBe(fs.realpathSync(path.join(root, "dist", "plugin-sdk", "channel-message.js")));
-      const sdk = requireFromPlugin("openclaw/plugin-sdk/channel-message") as {
+        fs.realpathSync(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-outbound")),
+      ).toBe(fs.realpathSync(path.join(root, "dist", "plugin-sdk", "channel-outbound.js")));
+      const sdk = requireFromPlugin("openclaw/plugin-sdk/channel-outbound") as {
         defineChannelMessageAdapter?: () => string;
       };
 
@@ -133,8 +139,8 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
 
     const requireFromPlugin = createRequire(externalPluginEntry);
     const requireFromOutside = createRequire(unrelatedEntry);
-    expect(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-message")).toBeTruthy();
-    expect(() => requireFromOutside.resolve("openclaw/plugin-sdk/channel-message")).toThrow();
+    expect(requireFromPlugin.resolve("openclaw/plugin-sdk/channel-outbound")).toBeTruthy();
+    expect(() => requireFromOutside.resolve("openclaw/plugin-sdk/channel-outbound")).toThrow();
   });
 
   it("does not register source-only SDK subpaths for native resolution", () => {
@@ -151,7 +157,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       pluginSdkResolution: "src",
     });
 
-    expect(installedAliases).toContain("openclaw/plugin-sdk/channel-message");
+    expect(installedAliases).toContain("openclaw/plugin-sdk/channel-outbound");
     expect(installedAliases).not.toContain("openclaw/plugin-sdk/source-only");
     const requireFromPlugin = createRequire(externalPluginEntry);
     expect(() => requireFromPlugin.resolve("openclaw/plugin-sdk/source-only")).toThrow();

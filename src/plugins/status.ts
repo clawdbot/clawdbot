@@ -199,7 +199,7 @@ function buildPluginRecordFromInstalledIndex(
     ],
     realtimeVoiceProviderIds: [...(manifest?.contracts?.realtimeVoiceProviders ?? [])],
     mediaUnderstandingProviderIds: [...(manifest?.contracts?.mediaUnderstandingProviders ?? [])],
-    meetingNotesSourceProviderIds: [...(manifest?.contracts?.meetingNotesSourceProviders ?? [])],
+    transcriptSourceProviderIds: [...(manifest?.contracts?.transcriptSourceProviders ?? [])],
     imageGenerationProviderIds: [...(manifest?.contracts?.imageGenerationProviders ?? [])],
     videoGenerationProviderIds: [...(manifest?.contracts?.videoGenerationProviders ?? [])],
     musicGenerationProviderIds: [...(manifest?.contracts?.musicGenerationProviders ?? [])],

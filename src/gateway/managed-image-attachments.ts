@@ -8,10 +8,9 @@ import { tryReadJson, writeJson } from "../infra/json-files.js";
 import { safeFileURLToPath } from "../infra/local-file-access.js";
 import { assertLocalMediaAllowed } from "../media/local-media-access.js";
 import {
+  createImageProcessor,
   getImageMetadata,
-  hasAlphaChannel,
-  resizeToJpeg,
-  resizeToPng,
+  readImageProbeFromHeader,
 } from "../media/media-services.js";
 import { isPassThroughRemoteMediaSource } from "../media/media-source-url.js";
 import { MEDIA_MAX_BYTES, saveMediaBuffer, saveMediaSource } from "../media/store.js";
@@ -190,74 +189,40 @@ function getManagedImageMetadataLimitError(
   return null;
 }
 
-function computeManagedImageResizeTarget(
-  metadata: { width: number; height: number },
-  limits: ManagedImageAttachmentLimits,
+function orientManagedImageMetadata(
+  buffer: Buffer,
+  metadata: { width: number; height: number } | null,
 ): { width: number; height: number } | null {
-  const scale = Math.min(
-    1,
-    limits.maxWidth / metadata.width,
-    limits.maxHeight / metadata.height,
-    Math.sqrt(limits.maxPixels / (metadata.width * metadata.height)),
-  );
-  if (!Number.isFinite(scale) || scale >= 1) {
+  if (!metadata) {
     return null;
   }
-
-  let width = Math.max(1, Math.floor(metadata.width * scale));
-  let height = Math.max(1, Math.floor(metadata.height * scale));
-  while (
-    width > limits.maxWidth ||
-    height > limits.maxHeight ||
-    width * height > limits.maxPixels
-  ) {
-    if (width >= height && width > 1) {
-      width -= 1;
-    } else if (height > 1) {
-      height -= 1;
-    } else {
-      break;
-    }
-  }
-  return { width, height };
+  const orientation = readImageProbeFromHeader(buffer)?.orientation;
+  return orientation === 5 || orientation === 6 || orientation === 7 || orientation === 8
+    ? { width: metadata.height, height: metadata.width }
+    : metadata;
 }
 
 async function resizeManagedImageBufferToLimits(params: {
   buffer: Buffer;
-  contentType: string;
-  metadata: { width: number; height: number };
   limits: ManagedImageAttachmentLimits;
 }): Promise<{ buffer: Buffer; contentType: string; width: number; height: number }> {
-  const target = computeManagedImageResizeTarget(params.metadata, params.limits);
-  if (!target) {
-    return {
-      buffer: params.buffer,
-      contentType: params.contentType,
-      width: params.metadata.width,
-      height: params.metadata.height,
-    };
-  }
-
-  const preserveAlpha = await hasAlphaChannel(params.buffer).catch(() => false);
-  const resizedBuffer = preserveAlpha
-    ? await resizeToPng({
-        buffer: params.buffer,
-        maxSide: Math.max(target.width, target.height),
-        compressionLevel: 9,
-        withoutEnlargement: true,
-      })
-    : await resizeToJpeg({
-        buffer: params.buffer,
-        maxSide: Math.max(target.width, target.height),
-        quality: 92,
-        withoutEnlargement: true,
-      });
+  const resized = await createImageProcessor().encode(params.buffer, {
+    format: "auto",
+    limits: {
+      maxWidth: params.limits.maxWidth,
+      maxHeight: params.limits.maxHeight,
+      maxPixels: params.limits.maxPixels,
+    },
+    opaque: { format: "jpeg", quality: 92 },
+    transparent: { format: "png", compressionLevel: 9 },
+    transparency: "auto",
+  });
 
   return {
-    buffer: resizedBuffer,
-    contentType: preserveAlpha ? "image/png" : "image/jpeg",
-    width: target.width,
-    height: target.height,
+    buffer: resized.data,
+    contentType: resized.mimeType,
+    width: resized.width,
+    height: resized.height,
   };
 }
 
@@ -854,7 +819,8 @@ export async function createManagedOutgoingImageBlocks(params: {
         originalStats.width != null && originalStats.height != null
           ? { width: originalStats.width, height: originalStats.height }
           : await getImageMetadata(originalBuffer);
-      let effectiveMetadata = originalMetadata;
+      const originalDisplayMetadata = orientManagedImageMetadata(originalBuffer, originalMetadata);
+      let effectiveMetadata = originalDisplayMetadata;
       let metadataLimitError = getManagedImageMetadataLimitError(effectiveMetadata, alt, limits);
       for (let resizeAttempt = 0; metadataLimitError; resizeAttempt += 1) {
         if (!effectiveMetadata) {
@@ -865,8 +831,6 @@ export async function createManagedOutgoingImageBlocks(params: {
         }
         const resized = await resizeManagedImageBufferToLimits({
           buffer: originalBuffer,
-          contentType: savedOriginalContentType,
-          metadata: effectiveMetadata,
           limits,
         });
         validateManagedImageBuffer(resized.buffer, alt, limits);
@@ -883,16 +847,20 @@ export async function createManagedOutgoingImageBlocks(params: {
         savedOriginalPath = savedOriginal.path;
         originalBuffer = resized.buffer;
         originalStats = await getVariantStats(savedOriginal.path);
-        effectiveMetadata =
+        effectiveMetadata = orientManagedImageMetadata(
+          originalBuffer,
           originalStats.width != null && originalStats.height != null
             ? { width: originalStats.width, height: originalStats.height }
-            : await getImageMetadata(originalBuffer);
+            : await getImageMetadata(originalBuffer),
+        );
         metadataLimitError = getManagedImageMetadataLimitError(effectiveMetadata, alt, limits);
         if (!metadataLimitError) {
           resizeWarning = buildManagedImageResizeWarningBlock({
             alt,
-            originalWidth: originalMetadata?.width ?? effectiveMetadata?.width ?? resized.width,
-            originalHeight: originalMetadata?.height ?? effectiveMetadata?.height ?? resized.height,
+            originalWidth:
+              originalDisplayMetadata?.width ?? effectiveMetadata?.width ?? resized.width,
+            originalHeight:
+              originalDisplayMetadata?.height ?? effectiveMetadata?.height ?? resized.height,
             resizedWidth: effectiveMetadata?.width ?? resized.width,
             resizedHeight: effectiveMetadata?.height ?? resized.height,
           });

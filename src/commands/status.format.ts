@@ -1,3 +1,4 @@
+import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -101,6 +102,7 @@ export const formatDaemonRuntimeShort = (runtime?: {
   status?: string;
   pid?: number;
   state?: string;
+  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
   detail?: string;
   missingUnit?: boolean;
 }) => {
@@ -114,6 +116,10 @@ export const formatDaemonRuntimeShort = (runtime?: {
     normalizeLowercaseStringOrEmpty(detail).includes("could not find service");
   if (detail && !noisyLaunchctlDetail) {
     details.push(detail);
+  }
+  const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
+  if (cgroupSummary) {
+    details.push(cgroupSummary);
   }
   return formatRuntimeStatusWithDetails({
     status: runtime.status,

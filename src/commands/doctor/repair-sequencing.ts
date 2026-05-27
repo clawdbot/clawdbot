@@ -5,6 +5,7 @@ import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
+import { collectActiveToolSchemaProjectionWarnings } from "./shared/active-tool-schema-warnings.js";
 import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
@@ -163,6 +164,14 @@ export async function runDoctorRepairSequence(params: {
   }
   if (staleOAuthShadowRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
+  }
+
+  const activeToolSchemaWarnings = collectActiveToolSchemaProjectionWarnings({
+    cfg: state.candidate,
+    env,
+  });
+  if (activeToolSchemaWarnings.length > 0) {
+    warningNotes.push(sanitizeLines(activeToolSchemaWarnings));
   }
 
   return { state, changeNotes, warningNotes };

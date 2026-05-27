@@ -25,8 +25,31 @@ export const getCronChannelOptions = () => {
   return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-id>";
 };
 
+function addCronRunCauseFields(value: unknown): unknown {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  const entries = record.entries;
+  if (!Array.isArray(entries)) {
+    return value;
+  }
+  const nextEntries = entries.map((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return entry;
+    }
+    const item = entry as Record<string, unknown>;
+    if (item.action !== "finished" || typeof item.errorReason !== "string") {
+      return item;
+    }
+    const cause = item.errorReason.trim();
+    return cause ? Object.assign({}, item, { cause }) : item;
+  });
+  return { ...record, entries: nextEntries };
+}
+
 export function printCronJson(value: unknown) {
-  defaultRuntime.writeJson(value);
+  defaultRuntime.writeJson(addCronRunCauseFields(value));
 }
 
 /**

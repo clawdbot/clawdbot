@@ -10,12 +10,14 @@ const listToolsMock = vi.hoisted(() => vi.fn(async () => ({ tools: [] })));
 const callToolMock = vi.hoisted(() => vi.fn(async () => ({ content: [] })));
 const closeMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveQaNodeExecPathMock = vi.hoisted(() => vi.fn(async () => "/usr/bin/node"));
+const stderrOnMock = vi.hoisted(() => vi.fn());
 const stdioTransportMock = vi.hoisted(() =>
   vi.fn().mockImplementation(function StdioClientTransport(
-    this: { params?: unknown },
+    this: { params?: unknown; stderr?: { on: typeof stderrOnMock } },
     params: unknown,
   ) {
     this.params = params;
+    this.stderr = { on: stderrOnMock };
   }),
 );
 
@@ -66,6 +68,7 @@ describe("qa suite runtime agent tools helpers", () => {
     callToolMock.mockReset();
     closeMock.mockClear();
     resolveQaNodeExecPathMock.mockClear();
+    stderrOnMock.mockClear();
     stdioTransportMock.mockClear();
   });
 
@@ -146,10 +149,17 @@ describe("qa suite runtime agent tools helpers", () => {
         OPENCLAW_KEY: "1",
       },
     });
-    expect(callToolMock).toHaveBeenCalledWith({
-      name: "plugin.echo",
-      arguments: { text: "hello" },
-    });
+    expect(stderrOnMock).toHaveBeenCalledWith("data", expect.any(Function));
+    expect(connectMock).toHaveBeenCalledWith(expect.anything(), { timeout: 180_000 });
+    expect(listToolsMock).toHaveBeenCalledWith({}, { timeout: 180_000 });
+    expect(callToolMock).toHaveBeenCalledWith(
+      {
+        name: "plugin.echo",
+        arguments: { text: "hello" },
+      },
+      undefined,
+      { timeout: 180_000 },
+    );
     expect(closeMock).toHaveBeenCalled();
   });
 

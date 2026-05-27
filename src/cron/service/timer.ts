@@ -755,14 +755,20 @@ function emitFailureAlert(
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
+    provider?: string;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
+  const errorReason =
+    params.status === "error" && typeof params.error === "string"
+      ? (resolveFailoverReasonFromError(params.error, params.provider) ?? undefined)
+      : undefined;
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
   const text = [
     `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    ...(errorReason ? [`Cause: ${errorReason}`] : []),
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
 
@@ -802,6 +808,7 @@ function maybeEmitFailureAlert(
     alertConfig: ResolvedFailureAlert | null;
     status: "error" | "skipped";
     error?: string;
+    provider?: string;
     consecutiveCount: number;
   },
 ) {
@@ -828,6 +835,7 @@ function maybeEmitFailureAlert(
     mode: params.alertConfig.mode,
     accountId: params.alertConfig.accountId,
     status: params.status,
+    provider: params.provider,
   });
   params.job.state.lastFailureAlertAtMs = now;
 }
@@ -845,6 +853,7 @@ export function applyJobResult(
     error?: string;
     diagnostics?: CronRunOutcome["diagnostics"];
     delivered?: boolean;
+    provider?: string;
     startedAt: number;
     endedAt: number;
   },
@@ -873,7 +882,7 @@ export function applyJobResult(
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
     result.status === "error" && typeof result.error === "string"
-      ? (resolveFailoverReasonFromError(result.error) ?? undefined)
+      ? (resolveFailoverReasonFromError(result.error, result.provider) ?? undefined)
       : undefined;
   if (result.status === "error") {
     state.deps.log.warn(
@@ -915,6 +924,7 @@ export function applyJobResult(
       alertConfig,
       status: "error",
       error: result.error,
+      provider: result.provider,
       consecutiveCount: job.state.consecutiveErrors,
     });
   } else if (result.status === "skipped") {
@@ -926,6 +936,7 @@ export function applyJobResult(
         alertConfig,
         status: "skipped",
         error: result.error,
+        provider: result.provider,
         consecutiveCount: job.state.consecutiveSkipped,
       });
     } else {
@@ -1080,6 +1091,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
         error: result.error,
         diagnostics: result.diagnostics,
         delivered: result.delivered,
+        provider: result.provider,
         startedAt: result.startedAt,
         endedAt: result.endedAt,
       });
@@ -1102,6 +1114,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     error: result.error,
     diagnostics: result.diagnostics,
     delivered: result.delivered,
+    provider: result.provider,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -1952,6 +1965,7 @@ export async function executeJob(
     error: coreResult.error,
     diagnostics: coreResult.diagnostics,
     delivered: coreResult.delivered,
+    provider: coreResult.provider,
     startedAt,
     endedAt,
   });

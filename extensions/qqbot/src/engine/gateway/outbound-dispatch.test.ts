@@ -78,7 +78,7 @@ function makeInbound(overrides: Partial<InboundContext> = {}): InboundContext {
   };
 }
 
-function makeTurnRuntime(): GatewayPluginRuntime["channel"]["turn"] {
+function makeInboundRuntime(): GatewayPluginRuntime["channel"]["inbound"] {
   return {
     run: vi.fn(async (rawParams: unknown) => {
       const params = rawParams as {
@@ -147,7 +147,7 @@ function makeRuntime(params: {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      turn: makeTurnRuntime(),
+      inbound: makeInboundRuntime(),
       text: {
         chunkMarkdownText: (text: string) => [text],
       },

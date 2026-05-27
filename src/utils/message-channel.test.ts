@@ -80,4 +80,22 @@ describe("message-channel", () => {
     );
     expect(isMarkdownCapableMessageChannel("demo-markdown-channel")).toBe(true);
   });
+
+  it("treats registered plugin channels without markdown metadata as plain text", () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "qa-channel",
+          plugin: createChannelTestPluginBase({
+            id: "qa-channel",
+            label: "QA Channel",
+            docsPath: "/channels/qa-channel",
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    expect(isMarkdownCapableMessageChannel("qa-channel")).toBe(false);
+  });
 });

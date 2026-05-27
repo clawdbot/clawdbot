@@ -122,6 +122,29 @@ async function compactCodexNativeThread(
   params: CompactEmbeddedPiSessionParams,
   options: { pluginConfig?: unknown; clientFactory?: CodexAppServerClientFactory } = {},
 ): Promise<EmbeddedPiCompactResult | undefined> {
+  if (params.trigger !== "manual") {
+    embeddedAgentLog.info("skipping codex app-server compaction for non-manual trigger", {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      trigger: params.trigger,
+    });
+    return {
+      ok: true,
+      compacted: false,
+      reason: "codex app-server owns automatic compaction",
+      result: {
+        summary: "",
+        firstKeptEntryId: "",
+        tokensBefore: params.currentTokenCount ?? 0,
+        details: {
+          backend: "codex-app-server",
+          skipped: true,
+          reason: "non_manual_trigger",
+          trigger: params.trigger ?? "unknown",
+        },
+      },
+    };
+  }
   const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: params.config,
     sessionKey: params.sandboxSessionKey ?? params.sessionKey,

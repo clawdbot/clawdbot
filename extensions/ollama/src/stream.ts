@@ -343,6 +343,18 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
   return options;
 }
 
+function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>): void {
+  if (options.temperature !== 0) {
+    return;
+  }
+  if (
+    options.top_p === undefined ||
+    (typeof options.top_p === "number" && Number.isFinite(options.top_p) && options.top_p !== 1)
+  ) {
+    options.top_p = 1;
+  }
+}
+
 function resolveOllamaTopLevelParams(
   model: ProviderRuntimeModel,
 ): Record<string, unknown> | undefined {
@@ -1098,6 +1110,7 @@ export function createOllamaStreamFn(
         if (typeof options?.maxTokens === "number") {
           ollamaOptions.num_predict = options.maxTokens;
         }
+        normalizeOllamaGreedySamplingOptions(ollamaOptions);
 
         const body = buildOllamaChatRequest({
           modelId: model.id,

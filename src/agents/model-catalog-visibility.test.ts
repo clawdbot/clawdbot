@@ -37,6 +37,24 @@ describe("resolveVisibleModelCatalog", () => {
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
   });
 
+  it("does not runtime-normalize unrestricted default browse", async () => {
+    normalizeProviderModelIdWithRuntimeMock.mockImplementation(() => "custom-modern-model");
+
+    const result = await resolveVisibleModelCatalog({
+      cfg: {} as OpenClawConfig,
+      catalog: [{ provider: "custom-provider", id: "custom-legacy-model", name: "Custom Legacy" }],
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+      runtimeAuthDiscovery: false,
+      providerAuthChecker: vi.fn(() => true),
+    });
+
+    expect(result).toEqual([
+      { provider: "custom-provider", id: "custom-legacy-model", name: "Custom Legacy" },
+    ]);
+    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
   it("limits visible catalog to provider wildcard entries after default discovery", async () => {
     const authChecker = vi.fn((provider: string) => provider !== "blocked");
     const catalog: ModelCatalogEntry[] = [
@@ -76,6 +94,41 @@ describe("resolveVisibleModelCatalog", () => {
       { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
     ]);
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("uses runtime model normalization for exact allowlist entries", async () => {
+    normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom-provider/custom-legacy-model": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await resolveVisibleModelCatalog({
+      cfg,
+      catalog: [{ provider: "custom-provider", id: "custom-modern-model", name: "Custom Modern" }],
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: false,
+      providerAuthChecker: vi.fn(() => true),
+    });
+
+    expect(result).toEqual([
+      { provider: "custom-provider", id: "custom-modern-model", name: "Custom Modern" },
+    ]);
+    expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalled();
   });
 
   it("does not broaden visibility when selected providers have no catalog rows", async () => {

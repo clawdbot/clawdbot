@@ -2640,7 +2640,7 @@ describe("createTelegramBot", () => {
           message_id: messageId,
           message_thread_id: 99,
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "openclaw_bot", has_topics_enabled: true },
         getFile: async () => ({ download: async () => new Uint8Array() }),
       });
     };

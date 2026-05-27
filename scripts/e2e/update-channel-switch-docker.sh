@@ -60,7 +60,7 @@ tar -xzf "$package_tgz" -C "$git_root" --strip-components=1
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  if ! npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
     cat /tmp/openclaw-git-install.log >&2 || true
     exit 1
   fi
@@ -79,12 +79,18 @@ fixture_sha="$(git -C "$git_root" rev-parse HEAD)"
 
 pkg_tgz_path="$package_tgz"
 
-npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path"
+package_install_log="/tmp/openclaw-update-channel-switch-package-install.log"
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path" >"$package_install_log" 2>&1; then
+  cat "$package_install_log" >&2 || true
+  exit 1
+fi
 package_version="$(node -p "JSON.parse(require(\"node:fs\").readFileSync(\"/tmp/npm-prefix/lib/node_modules/openclaw/package.json\", \"utf8\")).version")"
 OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
   node scripts/e2e/lib/package-compat.mjs "$package_version"
 )"
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
+command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 

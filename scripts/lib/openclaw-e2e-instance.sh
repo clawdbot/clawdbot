@@ -38,19 +38,138 @@ openclaw_e2e_package_entrypoint() {
   echo "OpenClaw package entrypoint not found under $root/dist/" >&2
   return 1
 }
+openclaw_e2e_maybe_timeout() {
+  local timeout_value="$1"
+  shift
+  if [ -z "$timeout_value" ] || [ "$timeout_value" = "0" ]; then
+    "$@"
+    return
+  fi
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -z "$timeout_bin" ]; then
+    if command -v node >/dev/null 2>&1; then
+      echo "timeout command not found; using Node watchdog for OpenClaw E2E command timeout $timeout_value" >&2
+      node - "$timeout_value" "$@" <<'NODE'
+const [, , timeoutValue, command, ...args] = process.argv;
+const parseTimeoutMs = (value) => {
+  const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
+  if (!match) {
+    throw new Error(`unsupported timeout value: ${value}`);
+  }
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "s";
+  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
+  return Math.max(1, Math.ceil(amount * multiplier));
+};
+if (!command) {
+  console.error("missing command for Node watchdog");
+  process.exit(1);
+}
+const { spawn } = await import("node:child_process");
+let timeoutMs;
+try {
+  timeoutMs = parseTimeoutMs(timeoutValue);
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
+const child = spawn(command, args, {
+  detached: process.platform !== "win32",
+  stdio: "inherit",
+});
+let timedOut = false;
+const killTarget = process.platform === "win32" ? child.pid : -child.pid;
+const killChild = (signal) => {
+  if (!child.pid) {
+    return;
+  }
+  try {
+    process.kill(killTarget, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {}
+  }
+};
+const timer = setTimeout(() => {
+  timedOut = true;
+  console.error(`OpenClaw E2E command timed out after ${timeoutValue}`);
+  killChild("SIGTERM");
+  setTimeout(() => killChild("SIGKILL"), 30_000).unref();
+}, timeoutMs);
+const forwardSignal = (signal) => {
+  killChild(signal);
+};
+process.once("SIGINT", forwardSignal);
+process.once("SIGTERM", forwardSignal);
+child.on("exit", (code, signal) => {
+  clearTimeout(timer);
+  if (timedOut) {
+    process.exit(124);
+  }
+  if (code !== null) {
+    process.exit(code);
+  }
+  if (signal) {
+    process.kill(process.pid, signal);
+  }
+  process.exit(1);
+});
+child.on("error", (error) => {
+  clearTimeout(timer);
+  console.error(error.message);
+  process.exit(127);
+});
+NODE
+      return
+    fi
+    echo "timeout command not found and Node is unavailable; cannot bound OpenClaw E2E command after $timeout_value" >&2
+    return 127
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+  else
+    "$timeout_bin" "$timeout_value" "$@"
+  fi
+}
 openclaw_e2e_install_package() {
   local log_file="$1"
   local label="${2:-mounted OpenClaw package}"
   local prefix="${3:-}"
   local package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
+  local timeout_value="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
   local args=(-g)
   if [ -n "$prefix" ]; then
     args+=("--prefix" "$prefix")
   fi
   echo "Installing $label..."
-  if ! npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1; then
+  local had_errexit=0
+  case "$-" in
+    *e*) had_errexit=1 ;;
+  esac
+  set +e
+  openclaw_e2e_maybe_timeout "$timeout_value" npm install "${args[@]}" "$package_tgz" --no-fund --no-audit >"$log_file" 2>&1
+  local install_status=$?
+  if [ "$had_errexit" -eq 1 ]; then
+    set -e
+  else
+    set +e
+  fi
+  if [ "$install_status" -ne 0 ]; then
+    if [ "$install_status" -eq 124 ] || [ "$install_status" -eq 137 ]; then
+      echo "npm install timed out after $timeout_value for $label" >&2
+    fi
     echo "npm install failed for $label" >&2
-    cat "$log_file" >&2 || true
+    if [ -f "$log_file" ]; then
+      while IFS= read -r line || [ -n "$line" ]; do
+        printf '%s\n' "$line" >&2
+      done <"$log_file"
+    fi
     exit 1
   fi
 }
@@ -121,12 +240,13 @@ TRASH
 openclaw_e2e_run_script_with_pty() {
   local command="$1"
   local log_path="$2"
+  local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
   if script --version >/dev/null 2>&1; then
-    script -q -f -c "$command" "$log_path"
+    openclaw_e2e_maybe_timeout "$timeout_value" script -q -f -c "$command" "$log_path"
   elif node -e 'import("@lydell/node-pty")' >/dev/null 2>&1; then
-    node scripts/e2e/lib/run-with-pty.mjs "$log_path" /bin/bash -lc "$command"
+    openclaw_e2e_maybe_timeout "$timeout_value" node scripts/e2e/lib/run-with-pty.mjs "$log_path" /bin/bash -lc "$command"
   else
-    script -q -F "$log_path" /bin/bash -lc "$command"
+    openclaw_e2e_maybe_timeout "$timeout_value" script -q -F "$log_path" /bin/bash -lc "$command"
   fi
 }
 openclaw_e2e_stop_process() {
@@ -171,13 +291,12 @@ openclaw_e2e_terminate_gateways() {
 }
 openclaw_e2e_start_mock_openai() { MOCK_PORT="$1" node scripts/e2e/mock-openai-server.mjs >"$2" 2>&1 & printf '%s\n' "$!"; }
 openclaw_e2e_wait_mock_openai() {
-  local port="$1" attempts="${2:-80}" _
-  local probe="fetch('http://127.0.0.1:' + process.argv[1] + '/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  local port="$1" attempts="${2:-80}" timeout_ms="${3:-400}" _
   for _ in $(seq 1 "$attempts"); do
-    node -e "$probe" "$port" && return 0
+    openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms" && return 0
     sleep 0.1
   done
-  node -e "$probe" "$port"
+  openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms"
 }
 openclaw_e2e_start_gateway() { node "$1" gateway --port "$2" --bind loopback --allow-unconfigured >"$3" 2>&1 & printf '%s\n' "$!"; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }
@@ -206,8 +325,27 @@ openclaw_e2e_probe_tcp() {
     socket.on("error", () => { clearTimeout(timeout); process.exit(1); });
   ' "$1" "$2" "${3:-400}"
 }
+openclaw_e2e_probe_http() {
+  node --input-type=module -e '
+    const expected = process.argv[2] ?? "ok";
+    const timeoutMs = Number(process.argv[3] ?? 400);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let exitCode = 1;
+    try {
+      const response = await fetch(process.argv[1], { signal: controller.signal });
+      const passed = expected === "ok" ? response.ok : response.status === Number(expected);
+      exitCode = passed ? 0 : 1;
+    } catch {
+      exitCode = 1;
+    } finally {
+      clearTimeout(timer);
+    }
+    process.exit(exitCode);
+  ' "$1" "${2:-ok}" "${3:-400}"
+}
 openclaw_e2e_probe_http_status() {
-  node -e 'fetch(process.argv[1]).then(r=>process.exit(r.status===Number(process.argv[2])?0:1)).catch(()=>process.exit(1))' "$1" "${2:-200}"
+  openclaw_e2e_probe_http "$1" "${2:-200}" "${3:-400}"
 }
 openclaw_e2e_assert_file() { [ -f "$1" ] || { echo "Missing file: $1"; exit 1; }; }
 openclaw_e2e_assert_dir() { [ -d "$1" ] || { echo "Missing dir: $1"; exit 1; }; }
@@ -217,7 +355,22 @@ openclaw_e2e_assert_log_not_contains() {
 openclaw_e2e_run_logged() {
   local label="$1" log_path="/tmp/openclaw-onboard-${1}.log"
   shift
-  "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
+  openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
+}
+openclaw_e2e_run_command() {
+  local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
+  openclaw_e2e_maybe_timeout "$timeout_value" "$@"
+}
+openclaw_e2e_enable_openclaw_cli_timeout() {
+  OPENCLAW_E2E_CLI_BIN="$(type -P openclaw)"
+  if [ -z "$OPENCLAW_E2E_CLI_BIN" ]; then
+    echo "OpenClaw CLI binary not found on PATH" >&2
+    return 1
+  fi
+  export OPENCLAW_E2E_CLI_BIN
+  openclaw() {
+    openclaw_e2e_run_command "$OPENCLAW_E2E_CLI_BIN" "$@"
+  }
 }
 openclaw_e2e_dump_logs() {
   local path

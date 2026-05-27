@@ -77,6 +77,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
         { text: "NO_REPLY" },
+        { text: "NO_REPLY\n\nNO_REPLY" },
         { text: "Reasoning:\n_step_", isReasoning: true },
         { text: "final answer" },
       ]),
@@ -157,6 +158,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       normalizeReplyPayloadsForDelivery([
         { text: "NO_REPLY thanks for the update" },
         { text: "NO_REPLY" },
+        { text: "NO_REPLY\n\nNO_REPLY" },
         { text: "thanks NO_REPLY" },
       ]),
     ).toEqual([

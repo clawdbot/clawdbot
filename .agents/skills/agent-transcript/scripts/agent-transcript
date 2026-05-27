@@ -56,10 +56,19 @@ function openClawSessionRoots() {
   const agentsDir = path.join(stateDir, "agents");
   if (!fs.existsSync(agentsDir)) return [];
   try {
-    return fs
+    const roots = fs
       .readdirSync(agentsDir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(agentsDir, entry.name, "sessions"));
+      .flatMap((entry) => {
+        const agentDir = path.join(agentsDir, entry.name);
+        return [
+          path.join(agentDir, "sessions"),
+          path.join(agentDir, "agent", "sessions"),
+          path.join(agentDir, "agent", "codex-home", "sessions"),
+        ];
+      })
+      .filter((root) => fs.existsSync(root));
+    return [...new Set(roots)];
   } catch {
     return [];
   }

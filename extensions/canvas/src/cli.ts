@@ -68,6 +68,20 @@ export type CanvasCliDependencies = {
 };
 
 type CanvasNodeCandidate = NodeMatchCandidate;
+type CanvasSnapshotRequestFormat = "png" | "jpeg";
+
+function parseCanvasSnapshotRequestFormat(raw: unknown): CanvasSnapshotRequestFormat {
+  const format = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "jpg");
+  switch (format) {
+    case "png":
+      return "png";
+    case "jpg":
+    case "jpeg":
+      return "jpeg";
+    default:
+      throw new Error(`invalid format: ${String(raw)} (expected png|jpg|jpeg)`);
+  }
+}
 
 function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
@@ -234,19 +248,11 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
       .action(async (opts: CanvasNodesRpcOpts) => {
         await deps.runNodesCommand("canvas snapshot", async () => {
-          const formatOpt = normalizeLowercaseStringOrEmpty(
-            normalizeOptionalString(opts.format) ?? "jpg",
-          );
-          const formatForParams =
-            formatOpt === "jpg" ? "jpeg" : formatOpt === "jpeg" ? "jpeg" : "png";
-          if (formatForParams !== "png" && formatForParams !== "jpeg") {
-            throw new Error(`invalid format: ${String(opts.format)} (expected png|jpg|jpeg)`);
-          }
-
+          const format = parseCanvasSnapshotRequestFormat(opts.format);
           const maxWidth = opts.maxWidth ? Number.parseInt(opts.maxWidth, 10) : undefined;
           const quality = opts.quality ? Number.parseFloat(opts.quality) : undefined;
           const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
-            format: formatForParams,
+            format,
             maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
             quality: Number.isFinite(quality) ? quality : undefined,
           });

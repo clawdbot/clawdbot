@@ -32,7 +32,7 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
-  meetingNotesSourceProviders: [],
+  transcriptSourceProviders: [],
   imageGenerationProviders: [],
   videoGenerationProviders: [],
   musicGenerationProviders: [],

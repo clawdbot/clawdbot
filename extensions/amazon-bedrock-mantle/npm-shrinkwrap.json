@@ -122,23 +122,6 @@
         "node": ">=20.0.0"
       }
     },
-    "node_modules/@aws-sdk/client-bedrock-runtime/node_modules/@aws-sdk/token-providers": {
-      "version": "3.1053.0",
-      "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1053.0.tgz",
-      "integrity": "sha512-laSwHLYMMrXQRl2mFDXszF43m/F4pKWyGr7hCLfJmV8rn8c6CnI/hp/bf/Gn7gLcjz0SY4evd7SBpqtnIhzA/A==",
-      "license": "Apache-2.0",
-      "dependencies": {
-        "@aws-sdk/core": "^3.974.13",
-        "@aws-sdk/nested-clients": "^3.997.11",
-        "@aws-sdk/types": "^3.973.9",
-        "@smithy/core": "^3.24.3",
-        "@smithy/types": "^4.14.2",
-        "tslib": "^2.6.2"
-      },
-      "engines": {
-        "node": ">=20.0.0"
-      }
-    },
     "node_modules/@aws-sdk/client-cognito-identity": {
       "version": "3.1051.0",
       "resolved": "https://registry.npmjs.org/@aws-sdk/client-cognito-identity/-/client-cognito-identity-3.1051.0.tgz",
@@ -457,9 +440,9 @@
       }
     },
     "node_modules/@aws-sdk/token-providers": {
-      "version": "3.1052.0",
-      "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1052.0.tgz",
-      "integrity": "sha512-QqZNB3so7UIDxZtroc85TQaLVxdZRFm0eWM1CSR2N+b06as9TOrilvrlTZuj3guYlxMs6yLOgGxnklJ5qMYtTw==",
+      "version": "3.1053.0",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1053.0.tgz",
+      "integrity": "sha512-laSwHLYMMrXQRl2mFDXszF43m/F4pKWyGr7hCLfJmV8rn8c6CnI/hp/bf/Gn7gLcjz0SY4evd7SBpqtnIhzA/A==",
       "license": "Apache-2.0",
       "dependencies": {
         "@aws-sdk/core": "^3.974.13",
@@ -586,20 +569,6 @@
       },
       "engines": {
         "node": ">=22.19.0"
-      }
-    },
-    "node_modules/@earendil-works/pi-ai/node_modules/@smithy/node-http-handler": {
-      "version": "4.7.3",
-      "resolved": "https://registry.npmjs.org/@smithy/node-http-handler/-/node-http-handler-4.7.3.tgz",
-      "integrity": "sha512-/jPhevcTFPMVl6KNjbaI47iOg1zxC7IsnX4PQDGVZKMFceOXtB8IEYaB7a9VvkP/3oC60WzTeKocvSI7vLT0vA==",
-      "license": "Apache-2.0",
-      "dependencies": {
-        "@smithy/core": "^3.24.3",
-        "@smithy/types": "^4.14.2",
-        "tslib": "^2.6.2"
-      },
-      "engines": {
-        "node": ">=18.0.0"
       }
     },
     "node_modules/@google/genai": {

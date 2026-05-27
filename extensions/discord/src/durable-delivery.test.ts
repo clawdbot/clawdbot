@@ -1,4 +1,4 @@
-import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-message";
+import { sendDurableMessageBatch } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createEmptyPluginRegistry,
   createTestRegistry,

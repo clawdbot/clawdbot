@@ -1,4 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+
+const DEFAULT_TIMEOUT_KILL_GRACE_MS = 30_000;
 
 const usage = () => {
   console.error("Usage: assertions.mjs <run-with-timeout|assert-image-providers> [...]");
@@ -7,16 +9,72 @@ const usage = () => {
 
 const [mode, ...args] = process.argv.slice(2);
 
-if (mode === "run-with-timeout") {
-  const [timeoutMs, command, ...commandArgs] = args;
-  const timeout = Number(timeoutMs);
-  if (!Number.isFinite(timeout) || timeout <= 0 || !command) {
-    usage();
+const parsePositiveNumber = (value, label) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number`);
   }
+  return parsed;
+};
 
-  const result = spawnSync(command, commandArgs, { encoding: "utf8", env: process.env, timeout });
-  process.stdout.write(result.stdout ?? "");
-  process.stderr.write(result.stderr ?? "");
+const signalChild = (child, signal) => {
+  if (!child.pid) {
+    return;
+  }
+  try {
+    if (process.platform === "win32") {
+      child.kill(signal);
+      return;
+    }
+    process.kill(-child.pid, signal);
+  } catch (error) {
+    if (error?.code !== "ESRCH") {
+      throw error;
+    }
+  }
+};
+
+const runWithTimeout = async (timeout, command, commandArgs) => {
+  const killGrace = parsePositiveNumber(
+    process.env.OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS ??
+      String(DEFAULT_TIMEOUT_KILL_GRACE_MS),
+    "OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_KILL_GRACE_MS",
+  );
+  const child = spawn(command, commandArgs, {
+    detached: process.platform !== "win32",
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let timedOut = false;
+  let killTimer;
+
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => process.stdout.write(chunk));
+  child.stderr.on("data", (chunk) => process.stderr.write(chunk));
+
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true;
+    signalChild(child, "SIGTERM");
+    killTimer = setTimeout(() => signalChild(child, "SIGKILL"), killGrace);
+    killTimer.unref();
+  }, timeout);
+  timeoutTimer.unref();
+
+  let spawnError;
+  child.on("error", (error) => {
+    spawnError = error;
+  });
+  const result = await new Promise((resolve) => {
+    child.on("close", (status, signal) => resolve({ error: spawnError, signal, status }));
+  });
+
+  clearTimeout(timeoutTimer);
+  clearTimeout(killTimer);
+  if (timedOut) {
+    console.error(`command timed out after ${timeout}ms: ${command}`);
+    process.exit(1);
+  }
   if (result.error) {
     console.error(`command failed: ${command}: ${result.error.message}`);
     process.exit(1);
@@ -26,6 +84,20 @@ if (mode === "run-with-timeout") {
     process.exit(1);
   }
   process.exit(result.status ?? 0);
+};
+
+if (mode === "run-with-timeout") {
+  const [timeoutMs, command, ...commandArgs] = args;
+  if (!command) {
+    usage();
+  }
+  let timeout;
+  try {
+    timeout = parsePositiveNumber(timeoutMs, "timeoutMs");
+  } catch {
+    usage();
+  }
+  await runWithTimeout(timeout, command, commandArgs);
 }
 
 if (mode === "assert-image-providers") {

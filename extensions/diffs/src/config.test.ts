@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,

@@ -541,7 +541,7 @@ Supported `appServer` fields:
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                               |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
+`appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 90 second
 OpenClaw watchdog by default. A positive per-call `timeoutMs` argument extends
 or shortens that specific tool budget. The `image_generate` tool uses
 `agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not

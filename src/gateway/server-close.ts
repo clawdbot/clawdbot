@@ -527,6 +527,13 @@ export function createGatewayCloseHandler(params: {
       if (params.tailscaleCleanup) {
         await shutdownStep("tailscale", () => params.tailscaleCleanup!(), warnings);
       }
+      if (params.postReadySidecars?.length) {
+        await measureCloseStep("post-ready-sidecars", async () => {
+          for (const [index, sidecar] of params.postReadySidecars!.entries()) {
+            await shutdownStep(`post-ready-sidecar/${index}`, () => sidecar.stop(), warnings);
+          }
+        });
+      }
       if (params.pluginServices) {
         await measureCloseStep("plugin-services", () =>
           shutdownStep("plugin-services", () => params.pluginServices!.stop(), warnings),

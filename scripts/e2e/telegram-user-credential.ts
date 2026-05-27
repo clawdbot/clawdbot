@@ -1,12 +1,12 @@
 #!/usr/bin/env -S node --import tsx
 
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, mkdtemp, readFile, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { normalizeCredentialPayloadForKind } from "../../qa/convex-credential-broker/convex/payload-validation.js";
+import { fetchJsonWithTimeout, runCommand } from "./telegram-user-credential-io.ts";
 import { expandHome, writePrivateJson } from "./telegram-user-credential-paths.ts";
 
 type JsonObject = Record<string, unknown>;
@@ -17,6 +17,14 @@ const DEFAULT_BOT_CREDENTIALS_FILE =
 const DEFAULT_CONVEX_ENV_FILE = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
 const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";
+const COMMAND_TIMEOUT_MS = optionalPositiveInteger(
+  process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_COMMAND_TIMEOUT_MS?.trim(),
+  120_000,
+);
+const BROKER_TIMEOUT_MS = optionalPositiveInteger(
+  process.env.OPENCLAW_TELEGRAM_USER_CREDENTIAL_BROKER_TIMEOUT_MS?.trim(),
+  30_000,
+);
 
 function usage(): never {
   throw new Error(
@@ -162,32 +170,6 @@ async function tgzBase64(path: string) {
   return (await readFile(path)).toString("base64");
 }
 
-function runCommand(command: string, args: string[], cwd?: string) {
-  return new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString();
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    child.on("error", reject);
-    child.on("close", (code, signal) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      const detail = signal ? `signal ${signal}` : `exit code ${code ?? "unknown"}`;
-      reject(new Error(`${command} ${args.join(" ")} failed with ${detail}\n${stdout}${stderr}`));
-    });
-  });
-}
-
 function joinBrokerEndpoint(siteUrl: string, endpoint: string) {
   const normalized = siteUrl.replace(/\/+$/u, "");
   return `${normalized}/qa-credentials/v1/${endpoint}`;
@@ -210,15 +192,19 @@ async function postBroker(params: {
   siteUrl: string;
   token: string;
 }) {
-  const response = await fetch(joinBrokerEndpoint(params.siteUrl, params.action), {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${params.token}`,
-      "content-type": "application/json",
+  const { payload, response } = await fetchJsonWithTimeout({
+    url: joinBrokerEndpoint(params.siteUrl, params.action),
+    label: `credential broker ${params.action}`,
+    timeoutMs: BROKER_TIMEOUT_MS,
+    init: {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${params.token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(params.body),
     },
-    body: JSON.stringify(params.body),
   });
-  const payload = (await response.json()) as JsonObject;
   if (!response.ok) {
     assertBrokerSuccess(payload, params.action);
     throw new Error(`${params.action} failed with HTTP ${response.status}.`);
@@ -371,29 +357,36 @@ async function createTelegramUserPayload(opts: Map<string, string>) {
   const tdlibArchive = path.join(tempRoot, "tdlib.tgz");
   const desktopArchive = path.join(tempRoot, "desktop-tdata.tgz");
   try {
-    await runCommand("tar", ["-C", userDriverDir, "-czf", tdlibArchive, "db", "files"]);
+    await runCommand("tar", ["-C", userDriverDir, "-czf", tdlibArchive, "db", "files"], undefined, {
+      timeoutMs: COMMAND_TIMEOUT_MS,
+    });
     if (desktopTdataArchiveInput) {
       await copyFile(expandHome(desktopTdataArchiveInput), desktopArchive);
     } else {
-      await runCommand("tar", [
-        "-C",
-        path.dirname(expandHome(desktopTdataDir!)),
-        "--exclude",
-        "tdata/countries",
-        "--exclude",
-        "tdata/dictionaries",
-        "--exclude",
-        "tdata/dumps",
-        "--exclude",
-        "tdata/emoji",
-        "--exclude",
-        "tdata/user_data",
-        "--exclude",
-        "tdata/working",
-        "-czf",
-        desktopArchive,
-        "tdata",
-      ]);
+      await runCommand(
+        "tar",
+        [
+          "-C",
+          path.dirname(expandHome(desktopTdataDir!)),
+          "--exclude",
+          "tdata/countries",
+          "--exclude",
+          "tdata/dictionaries",
+          "--exclude",
+          "tdata/dumps",
+          "--exclude",
+          "tdata/emoji",
+          "--exclude",
+          "tdata/user_data",
+          "--exclude",
+          "tdata/working",
+          "-czf",
+          desktopArchive,
+          "tdata",
+        ],
+        undefined,
+        { timeoutMs: COMMAND_TIMEOUT_MS },
+      );
     }
 
     const payload = parseTelegramUserQaCredentialPayload({
@@ -461,8 +454,12 @@ async function restoreTelegramUserPayload(params: {
       throw new Error("Telegram Desktop archive SHA-256 mismatch.");
     }
 
-    await runCommand("tar", ["-C", expandHome(userDriverDir), "-xzf", tdlibArchive]);
-    await runCommand("tar", ["-C", expandHome(desktopWorkdir), "-xzf", desktopArchive]);
+    await runCommand("tar", ["-C", expandHome(userDriverDir), "-xzf", tdlibArchive], undefined, {
+      timeoutMs: COMMAND_TIMEOUT_MS,
+    });
+    await runCommand("tar", ["-C", expandHome(desktopWorkdir), "-xzf", desktopArchive], undefined, {
+      timeoutMs: COMMAND_TIMEOUT_MS,
+    });
     await writePrivateJson(`${expandHome(userDriverDir)}/config.local.json`, {
       apiId: Number(requireString(payload, "telegramApiId")),
       apiHash: requireString(payload, "telegramApiHash"),

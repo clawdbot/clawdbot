@@ -73,7 +73,7 @@ export async function dispatchSynologyChatInboundEvent(params: {
     userId: params.msg.from,
   });
 
-  await resolved.rt.channel.turn.run({
+  await resolved.rt.channel.inbound.run({
     channel: CHANNEL_ID,
     accountId: params.account.accountId,
     raw: params.msg,
@@ -86,12 +86,12 @@ export async function dispatchSynologyChatInboundEvent(params: {
         textForCommands: msg.body,
         raw: msg,
       }),
-      resolveTurn: (input) => {
+      resolveTurn: async (input) => {
         const chatKind =
           params.msg.chatType === "group" || params.msg.chatType === "channel"
             ? params.msg.chatType
             : "direct";
-        const msgCtx = resolved.rt.channel.turn.buildContext({
+        const msgCtx = resolved.rt.channel.inbound.buildContext({
           channel: CHANNEL_ID,
           accountId: params.account.accountId,
           timestamp: input.timestamp,
@@ -104,10 +104,6 @@ export async function dispatchSynologyChatInboundEvent(params: {
             kind: chatKind,
             id: params.msg.from,
             label: params.msg.senderName || params.msg.from,
-            routePeer: {
-              kind: "direct",
-              id: params.msg.from,
-            },
           },
           route: {
             agentId: resolved.route.agentId,
@@ -117,13 +113,11 @@ export async function dispatchSynologyChatInboundEvent(params: {
           },
           reply: {
             to: `synology-chat:${params.msg.from}`,
-            originatingTo: `synology-chat:${params.msg.from}`,
           },
           message: {
             rawBody: input.rawText,
             commandBody: input.textForCommands,
             bodyForAgent: input.textForAgent,
-            envelopeFrom: params.msg.senderName,
           },
           extra: {
             ChatType: params.msg.chatType,

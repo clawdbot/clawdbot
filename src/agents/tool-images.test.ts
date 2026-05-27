@@ -8,22 +8,6 @@ import { getImageMetadata } from "../media/image-ops.js";
 import { sanitizeContentBlocksImages, sanitizeImageBlocks } from "./tool-images.js";
 
 describe("tool image sanitizing", () => {
-  const unavailableImageBackend = process.platform === "win32" ? "sips" : "windows-native";
-
-  async function withUnavailableImageBackend<T>(fn: () => Promise<T>): Promise<T> {
-    const previousBackend = process.env.OPENCLAW_IMAGE_BACKEND;
-    process.env.OPENCLAW_IMAGE_BACKEND = unavailableImageBackend;
-    try {
-      return await fn();
-    } finally {
-      if (previousBackend === undefined) {
-        delete process.env.OPENCLAW_IMAGE_BACKEND;
-      } else {
-        process.env.OPENCLAW_IMAGE_BACKEND = previousBackend;
-      }
-    }
-  }
-
   const getImageBlock = (
     blocks: Awaited<ReturnType<typeof sanitizeContentBlocksImages>>,
   ): (typeof blocks)[number] & { type: "image"; data: string; mimeType?: string } => {
@@ -93,29 +77,6 @@ describe("tool image sanitizing", () => {
     expect(meta?.width).toBeLessThanOrEqual(120);
     expect(meta?.height).toBeLessThanOrEqual(120);
     expect(image.mimeType).toBe("image/jpeg");
-  }, 20_000);
-
-  it("drops images above max dimension when no image processor is available", async () => {
-    const png = await createWidePng();
-    expect(png.byteLength).toBeLessThan(5 * 1024 * 1024);
-
-    const blocks = [
-      {
-        type: "image" as const,
-        data: png.toString("base64"),
-        mimeType: "image/png",
-      },
-    ];
-
-    const out = await withUnavailableImageBackend(() =>
-      sanitizeContentBlocksImages(blocks, "test", { maxDimensionPx: 120 }),
-    );
-
-    expect(out).toHaveLength(1);
-    expect(out[0].type).toBe("text");
-    if (out[0].type === "text") {
-      expect(out[0].text).toMatch(/image processor unavailable/i);
-    }
   }, 20_000);
 
   it("corrects mismatched jpeg mimeType", async () => {

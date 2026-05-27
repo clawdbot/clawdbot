@@ -41,7 +41,12 @@ import {
   shouldSkipLiveModelImageProbe,
 } from "./live-model-turn-probes.js";
 import { createLiveTargetMatcher } from "./live-target-matcher.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
+import {
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
+} from "./live-test-helpers.js";
 import {
   isLiveBillingDrift,
   isLiveRateLimitDrift,
@@ -60,7 +65,6 @@ import {
 const LIVE = isLiveTestEnabled();
 const DIRECT_ENABLED = Boolean(process.env.OPENCLAW_LIVE_MODELS?.trim());
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const LIVE_HEARTBEAT_MS = Math.max(1_000, toInt(process.env.OPENCLAW_LIVE_HEARTBEAT_MS, 30_000));
 const LIVE_SETUP_TIMEOUT_MS = Math.max(
   1_000,
@@ -369,12 +373,12 @@ function resolveLiveModelsJsonTimeoutMs(
   modelsJsonTimeoutRaw?: string,
   setupTimeoutMs = LIVE_SETUP_TIMEOUT_MS,
 ): number {
-  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 120_000));
+  return Math.max(setupTimeoutMs, toInt(modelsJsonTimeoutRaw, 180_000));
 }
 
 describe("resolveLiveModelsJsonTimeoutMs", () => {
   it("defaults models.json preparation to a longer setup timeout", () => {
-    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(120_000);
+    expect(resolveLiveModelsJsonTimeoutMs(undefined, 45_000)).toBe(180_000);
   });
 
   it("never goes below the shared live setup timeout", () => {
@@ -862,9 +866,15 @@ describeLive("live models (profile keys)", () => {
           const apiKeyInfo = await getApiKeyForModel({
             model,
             cfg,
-            credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+            credentialPrecedence: resolveLiveCredentialPrecedence(
+              model.provider,
+              REQUIRE_PROFILE_KEYS,
+            ),
           });
-          if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+          if (
+            requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+            !apiKeyInfo.source.startsWith("profile:")
+          ) {
             skipped.push({
               model: id,
               reason: `non-profile credential source: ${apiKeyInfo.source}`,

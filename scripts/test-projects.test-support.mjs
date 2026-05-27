@@ -8,8 +8,10 @@ import {
   resolveCommandsLightIncludePattern,
 } from "../test/vitest/vitest.commands-light-paths.mjs";
 import { isAcpxExtensionRoot } from "../test/vitest/vitest.extension-acpx-paths.mjs";
+import { isActiveMemoryExtensionRoot } from "../test/vitest/vitest.extension-active-memory-paths.mjs";
 import { isBrowserExtensionRoot } from "../test/vitest/vitest.extension-browser-paths.mjs";
 import { resolveSplitChannelExtensionShard } from "../test/vitest/vitest.extension-channel-split-paths.mjs";
+import { isCodexExtensionRoot } from "../test/vitest/vitest.extension-codex-paths.mjs";
 import { isDiffsExtensionRoot } from "../test/vitest/vitest.extension-diffs-paths.mjs";
 import { isFeishuExtensionRoot } from "../test/vitest/vitest.extension-feishu-paths.mjs";
 import { isIrcExtensionRoot } from "../test/vitest/vitest.extension-irc-paths.mjs";
@@ -45,7 +47,11 @@ import {
   listChangedPathsFromGit as listChangedPathsFromGitSource,
 } from "./changed-lanes.mjs";
 import { isCiLikeEnv, resolveLocalFullSuiteProfile } from "./lib/vitest-local-scheduling.mjs";
-import { resolveVitestCliEntry, resolveVitestNodeArgs } from "./run-vitest.mjs";
+import {
+  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+  resolveVitestCliEntry,
+  resolveVitestNodeArgs,
+} from "./run-vitest.mjs";
 
 const DEFAULT_VITEST_CONFIG = "test/vitest/vitest.unit.config.ts";
 const AGENTS_CORE_VITEST_CONFIG = "test/vitest/vitest.agents-core.config.ts";
@@ -76,8 +82,11 @@ const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.conf
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
+const EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG =
+  "test/vitest/vitest.extension-active-memory.config.ts";
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
+const EXTENSION_CODEX_VITEST_CONFIG = "test/vitest/vitest.extension-codex.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
@@ -134,6 +143,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [AGENTS_PI_EMBEDDED_VITEST_CONFIG, 169],
   [AGENTS_SUPPORT_VITEST_CONFIG, 168],
   [AGENTS_TOOLS_VITEST_CONFIG, 167],
+  [EXTENSION_CODEX_VITEST_CONFIG, 168],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -183,6 +193,7 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [EXTENSION_SIGNAL_VITEST_CONFIG, 11],
   [EXTENSION_ACPX_VITEST_CONFIG, 10],
   [EXTENSION_DIFFS_VITEST_CONFIG, 8],
+  [EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG, 7],
   [EXTENSION_MEMORY_VITEST_CONFIG, 6],
   [EXTENSION_MSTEAMS_VITEST_CONFIG, 4],
 ]);
@@ -232,6 +243,7 @@ const UTILS_VITEST_CONFIG = "test/vitest/vitest.utils.config.ts";
 const WIZARD_VITEST_CONFIG = "test/vitest/vitest.wizard.config.ts";
 const INCLUDE_FILE_ENV_KEY = "OPENCLAW_VITEST_INCLUDE_FILE";
 const FS_MODULE_CACHE_PATH_ENV_KEY = "OPENCLAW_VITEST_FS_MODULE_CACHE_PATH";
+const FAILED_SHARD_DIGEST_LIMIT = 12;
 const CHANGED_ARGS_PATTERN = /^--changed(?:=(.+))?$/u;
 const VITEST_CONFIG_BY_KIND = {
   acp: ACP_VITEST_CONFIG,
@@ -264,9 +276,11 @@ const VITEST_CONFIG_BY_KIND = {
   e2e: E2E_VITEST_CONFIG,
   extension: EXTENSIONS_VITEST_CONFIG,
   extensionFull: FULL_EXTENSIONS_VITEST_CONFIG,
+  extensionActiveMemory: EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG,
   extensionAcpx: EXTENSION_ACPX_VITEST_CONFIG,
   extensionBrowser: EXTENSION_BROWSER_VITEST_CONFIG,
   extensionChannel: EXTENSION_CHANNELS_VITEST_CONFIG,
+  extensionCodex: EXTENSION_CODEX_VITEST_CONFIG,
   extensionDiffs: EXTENSION_DIFFS_VITEST_CONFIG,
   extensionDiscord: EXTENSION_DISCORD_VITEST_CONFIG,
   extensionFeishu: EXTENSION_FEISHU_VITEST_CONFIG,
@@ -337,15 +351,19 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map([
     ],
   ],
 ]);
+const BROAD_ONLY_TEST_HELPERS = new Set(["test/helpers/poll.ts"]);
 const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/github/barnacle-auto-response.mjs", ["test/scripts/barnacle-auto-response.test.ts"]],
   ["scripts/changed-lanes.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-changed.mjs", ["test/scripts/changed-lanes.test.ts"]],
   ["scripts/check-deadcode-unused-files.mjs", ["test/scripts/check-deadcode-unused-files.test.ts"]],
+  ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   [
     "scripts/deadcode-unused-files.allowlist.mjs",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
   ],
+  ["scripts/lib/docker-e2e-container.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  ["scripts/lib/docker-e2e-package.sh", ["test/scripts/docker-build-helper.test.ts"]],
   ["scripts/lib/live-docker-stage.sh", ["test/scripts/live-docker-stage.test.ts"]],
   ["scripts/lib/openclaw-test-state.mjs", ["test/scripts/openclaw-test-state.test.ts"]],
   ["scripts/lib/vitest-local-scheduling.mjs", ["test/scripts/vitest-local-scheduling.test.ts"]],
@@ -358,6 +376,7 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/mantis-build-telegram-desktop-proof-evidence.test.ts"],
   ],
   ["scripts/mantis/publish-pr-evidence.mjs", ["test/scripts/mantis-publish-pr-evidence.test.ts"]],
+  ["scripts/qa-lab-up.ts", ["test/scripts/qa-lab-up.test.ts"]],
   [
     "scripts/run-vitest.mjs",
     [
@@ -369,6 +388,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/run-oxlint.mjs", ["test/scripts/run-oxlint.test.ts"]],
   ["scripts/run-node.mjs", ["src/infra/run-node.test.ts"]],
   ["scripts/ci-run-timings.mjs", ["test/scripts/ci-run-timings.test.ts"]],
+  ["scripts/docker-e2e.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
+  ["scripts/docker-e2e-rerun.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
+  ["scripts/docker-e2e-timings.mjs", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
+  ["scripts/kova-ci-summary.mjs", ["test/scripts/kova-ci-summary.test.ts"]],
   ["scripts/test-extension-batch.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/extension-test-plan.mjs", ["test/scripts/test-extension.test.ts"]],
   ["scripts/lib/vitest-batch-runner.mjs", ["test/scripts/test-extension.test.ts"]],
@@ -405,8 +428,13 @@ const TOOLING_TEST_TARGETS = new Map([
     "test/scripts/check-deadcode-unused-files.test.ts",
     ["test/scripts/check-deadcode-unused-files.test.ts"],
   ],
+  ["test/scripts/ci-docker-pull-retry.test.ts", ["test/scripts/ci-docker-pull-retry.test.ts"]],
+  ["test/scripts/docker-build-helper.test.ts", ["test/scripts/docker-build-helper.test.ts"]],
+  ["test/scripts/docker-e2e-helper-cli.test.ts", ["test/scripts/docker-e2e-helper-cli.test.ts"]],
+  ["test/scripts/kova-ci-summary.test.ts", ["test/scripts/kova-ci-summary.test.ts"]],
   ["test/scripts/live-docker-stage.test.ts", ["test/scripts/live-docker-stage.test.ts"]],
   ["test/scripts/openclaw-test-state.test.ts", ["test/scripts/openclaw-test-state.test.ts"]],
+  ["test/scripts/qa-lab-up.test.ts", ["test/scripts/qa-lab-up.test.ts"]],
   [
     "test/scripts/mantis-publish-pr-evidence.test.ts",
     ["test/scripts/mantis-publish-pr-evidence.test.ts"],
@@ -475,6 +503,7 @@ const SOURCE_TEST_TARGETS = new Map([
     CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
   ],
   ["test/helpers/normalize-text.ts", TEST_HELPER_NORMALIZE_TEXT_TARGETS],
+  ["ui/config/control-ui-chunking.ts", ["ui/src/ui/control-ui-chunking.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -564,14 +593,26 @@ const GENERATED_CHANGED_TEST_TARGET_PATTERNS = [
   /^extensions\/[^/]+\/src\/host\/.+\/\.bundle\.hash$/u,
   /^extensions\/[^/]+\/src\/host\/.+\/[^/]+\.bundle\.js$/u,
 ];
-const SOURCE_ROOTS_FOR_IMPORT_GRAPH = ["src", "extensions", "packages", "ui/src", "ui/config", "test"];
+const SOURCE_ROOTS_FOR_IMPORT_GRAPH = [
+  "src",
+  "extensions",
+  "packages",
+  "ui/src",
+  "ui/config",
+  "test",
+];
 const IMPORTABLE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
+const IMPORT_GRAPH_GREP_PATHS = SOURCE_ROOTS_FOR_IMPORT_GRAPH.flatMap((root) =>
+  IMPORTABLE_FILE_EXTENSIONS.map((ext) => `:(glob)${root}/**/*${ext}`),
+);
 const IMPORT_SPECIFIER_PATTERN =
   /\b(?:import|export)\s+(?:type\s+)?(?:[^'"]*?\s+from\s+)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/gu;
 const BROAD_CHANGED_ENV_KEY = "OPENCLAW_TEST_CHANGED_BROAD";
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_RETRY_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_RETRY";
-export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = "300000";
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(
+  DEFAULT_VITEST_NO_OUTPUT_TIMEOUT_MS,
+);
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
 const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
   "src/gateway/embeddings-http.test.ts",
@@ -739,7 +780,7 @@ function isPathLikeTargetArg(arg, cwd) {
   if (!arg || arg === "--" || arg.startsWith("-")) {
     return false;
   }
-  return isExistingPathTarget(arg, cwd) || isGlobTarget(arg) || isFileLikeTarget(arg);
+  return isGlobTarget(arg) || isFileLikeTarget(arg) || isExistingPathTarget(arg, cwd);
 }
 
 function toRepoRelativeTarget(arg, cwd) {
@@ -815,7 +856,11 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
     return [];
   }
 
-  const candidateFiles = listExplicitTestTargetFilesForCwd(cwd);
+  let candidateFiles = null;
+  const getCandidateFiles = () => {
+    candidateFiles ??= listExplicitTestTargetFilesForCwd(cwd);
+    return candidateFiles;
+  };
   const unmatched = [];
   for (const targetArg of targetArgs) {
     const relative = toRepoRelativeTarget(targetArg, cwd);
@@ -827,7 +872,7 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
       continue;
     }
     if (isGlobTarget(relative)) {
-      if (!includePatternMatchesAnyFile(relative, candidateFiles)) {
+      if (!includePatternMatchesAnyFile(relative, getCandidateFiles())) {
         unmatched.push({
           target: targetArg,
           reason: "glob-matched-no-files",
@@ -850,7 +895,7 @@ export function findUnmatchedExplicitTestTargets(args, cwd = process.cwd()) {
     }
 
     const includePattern = toScopedIncludePattern(targetArg, cwd);
-    if (!includePatternMatchesAnyFile(includePattern, candidateFiles)) {
+    if (!includePatternMatchesAnyFile(includePattern, getCandidateFiles())) {
       unmatched.push({
         target: targetArg,
         reason: "target-matched-no-test-files",
@@ -919,6 +964,8 @@ let cachedImportGraph = null;
 let cachedImportGraphCwd = null;
 let cachedImportGraphFiles = null;
 let cachedImportGraphFilesCwd = null;
+const cachedImportGraphGrepMatches = new Map();
+const cachedDirectImporters = new Map();
 
 function isImportableGraphFile(relative) {
   return IMPORTABLE_FILE_EXTENSIONS.some((ext) => relative.endsWith(ext));
@@ -960,18 +1007,33 @@ function stripImportableGraphExtension(relative) {
   return relative;
 }
 
-function resolveImportGraphSearchTerm(relative) {
+function resolveImportGraphSearchTerms(relative) {
+  const withoutExtension = stripImportableGraphExtension(relative);
   const basename = path.posix.basename(stripImportableGraphExtension(relative));
   if (basename === "index" || basename.length < 3) {
-    return null;
+    return [];
   }
-  return basename;
+  const terms = [];
+  const segments = withoutExtension.split("/");
+  if (segments.length > 1) {
+    terms.push(segments.slice(-2).join("/"), withoutExtension);
+  }
+  if (relative.startsWith("test/helpers/")) {
+    return [...new Set(terms)];
+  }
+  terms.push(basename);
+  return [...new Set(terms)];
 }
 
 function listImportGraphGrepMatches(cwd, term) {
+  const cacheKey = `${cwd}\0${term}`;
+  if (cachedImportGraphGrepMatches.has(cacheKey)) {
+    return cachedImportGraphGrepMatches.get(cacheKey);
+  }
+
   const result = spawnSync(
     "git",
-    ["grep", "-l", "--fixed-strings", term, "--", ...SOURCE_ROOTS_FOR_IMPORT_GRAPH],
+    ["grep", "-l", "--fixed-strings", term, "--", ...IMPORT_GRAPH_GREP_PATHS],
     {
       cwd,
       encoding: "utf8",
@@ -979,48 +1041,73 @@ function listImportGraphGrepMatches(cwd, term) {
     },
   );
   if (result.status === 1) {
+    cachedImportGraphGrepMatches.set(cacheKey, []);
     return [];
   }
   if (result.status !== 0) {
+    cachedImportGraphGrepMatches.set(cacheKey, null);
     return null;
   }
-  return result.stdout
+  const matches = result.stdout
     .split("\n")
     .map((line) => normalizePathPattern(line.trim()))
     .filter((line) => line.length > 0 && isImportableGraphFile(line));
+  cachedImportGraphGrepMatches.set(cacheKey, matches);
+  return matches;
 }
 
 function findDirectImportersWithGitGrep(cwd, importedFile, fileSet) {
-  const term = resolveImportGraphSearchTerm(importedFile);
-  if (!term) {
+  const cacheKey = `${cwd}\0${importedFile}`;
+  if (cachedDirectImporters.has(cacheKey)) {
+    return cachedDirectImporters.get(cacheKey);
+  }
+
+  const terms = resolveImportGraphSearchTerms(importedFile);
+  if (terms.length === 0) {
+    cachedDirectImporters.set(cacheKey, null);
     return null;
   }
 
-  const candidates = listImportGraphGrepMatches(cwd, term);
-  if (!candidates || candidates.length > 800) {
-    return null;
-  }
-
+  let skippedBroadTerm = false;
   const importers = [];
-  for (const file of candidates) {
-    if (file === importedFile || !fileSet.has(file)) {
+  for (const term of terms) {
+    const candidates = listImportGraphGrepMatches(cwd, term);
+    if (!candidates) {
+      cachedDirectImporters.set(cacheKey, null);
+      return null;
+    }
+    if (candidates.length > 800) {
+      skippedBroadTerm = true;
       continue;
     }
-    let source = "";
-    try {
-      source = fs.readFileSync(path.join(cwd, file), "utf8");
-    } catch {
-      continue;
-    }
-    for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
-      const imported = resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet);
-      if (imported === importedFile) {
-        importers.push(file);
-        break;
+    for (const file of candidates) {
+      if (file === importedFile || !fileSet.has(file) || importers.includes(file)) {
+        continue;
+      }
+      let source = "";
+      try {
+        source = fs.readFileSync(path.join(cwd, file), "utf8");
+      } catch {
+        continue;
+      }
+      for (const match of source.matchAll(IMPORT_SPECIFIER_PATTERN)) {
+        const imported = resolveImportSpecifier(file, match[1] ?? match[2] ?? "", fileSet);
+        if (imported === importedFile) {
+          importers.push(file);
+          break;
+        }
       }
     }
+    if (importedFile.startsWith("test/helpers/") && importers.length > 0 && term.includes("/")) {
+      break;
+    }
   }
-  return importers;
+  const result =
+    skippedBroadTerm && importers.length === 0 && !importedFile.startsWith("test/helpers/")
+      ? null
+      : importers;
+  cachedDirectImporters.set(cacheKey, result);
+  return result;
 }
 
 function resolveAffectedTestsFromTargetedImportScan(changedPath, cwd) {
@@ -1051,6 +1138,7 @@ function resolveAffectedTestsFromTargetedImportScan(changedPath, cwd) {
       seen.add(importer);
       if (testFiles.has(importer)) {
         targets.push(importer);
+        continue;
       }
       queue.push(importer);
     }
@@ -1275,6 +1363,13 @@ function resolveSiblingTestTarget(changedPath, cwd) {
   return fs.existsSync(path.join(cwd, sibling)) ? sibling : null;
 }
 
+function shouldRouteChangedTargetWithoutImportGraph(changedPath) {
+  return (
+    changedPath.endsWith(".live.test.ts") ||
+    (changedPath.startsWith("ui/src/") && !changedPath.startsWith("ui/src/ui/"))
+  );
+}
+
 function resolvePreciseChangedTestTargets(changedPath, options) {
   const cwd = options.cwd ?? process.cwd();
   const mappedTargets =
@@ -1288,6 +1383,12 @@ function resolvePreciseChangedTestTargets(changedPath, options) {
   const siblingTest = resolveSiblingTestTarget(changedPath, cwd);
   if (siblingTest) {
     return [siblingTest];
+  }
+  if (BROAD_ONLY_TEST_HELPERS.has(changedPath)) {
+    return null;
+  }
+  if (shouldRouteChangedTargetWithoutImportGraph(changedPath)) {
+    return changedPath.startsWith("ui/src/") ? [changedPath] : null;
   }
   if (/^(?:src|test\/helpers|extensions|packages|ui\/src|ui\/config)\//u.test(changedPath)) {
     const affectedTests = resolveAffectedTestsFromImportGraph(changedPath, cwd);
@@ -1367,11 +1468,14 @@ function classifyTarget(arg, cwd) {
   if (configTargetKind) {
     return configTargetKind;
   }
-  if (resolveUnitFastTestIncludePattern(relative)) {
-    return "unitFast";
-  }
   if (isControlUiE2eTarget(relative)) {
     return "uiE2e";
+  }
+  if (relative.startsWith("ui/src/")) {
+    if (isUnitUiTestTarget(relative)) {
+      return "unitUi";
+    }
+    return "ui";
   }
   if (relative.startsWith("src/tui/tui-pty-")) {
     return "tuiPty";
@@ -1385,6 +1489,16 @@ function classifyTarget(arg, cwd) {
     relative === "src/gateway/sessions-history-http.test.ts"
   ) {
     return "e2e";
+  }
+  const channelContractKind = resolveChannelContractTargetKind(relative);
+  if (channelContractKind) {
+    return channelContractKind;
+  }
+  if (relative.startsWith("src/plugins/contracts/")) {
+    return "contractsPlugin";
+  }
+  if (resolveUnitFastTestIncludePattern(relative)) {
+    return "unitFast";
   }
   if (relative === "extensions") {
     return "extensionFull";
@@ -1406,6 +1520,12 @@ function classifyTarget(arg, cwd) {
     }
     if (isAcpxExtensionRoot(extensionRoot)) {
       return "extensionAcpx";
+    }
+    if (isActiveMemoryExtensionRoot(extensionRoot)) {
+      return "extensionActiveMemory";
+    }
+    if (isCodexExtensionRoot(extensionRoot)) {
+      return "extensionCodex";
     }
     if (isDiffsExtensionRoot(extensionRoot)) {
       return "extensionDiffs";
@@ -1453,13 +1573,6 @@ function classifyTarget(arg, cwd) {
       return "extensionMisc";
     }
     return isProviderExtensionRoot(extensionRoot) ? "extensionProvider" : "extension";
-  }
-  const channelContractKind = resolveChannelContractTargetKind(relative);
-  if (channelContractKind) {
-    return channelContractKind;
-  }
-  if (relative.startsWith("src/plugins/contracts/")) {
-    return "contractsPlugin";
   }
   if (isChannelSurfaceTestFile(relative)) {
     return "channel";
@@ -1544,15 +1657,6 @@ function classifyTarget(arg, cwd) {
   }
   if (relative.startsWith("src/plugins/")) {
     return "plugin";
-  }
-  if (relative.startsWith("ui/src/")) {
-    if (isControlUiE2eTarget(relative)) {
-      return "uiE2e";
-    }
-    if (isUnitUiTestTarget(relative)) {
-      return "unitUi";
-    }
-    return "ui";
   }
   if (relative.startsWith("src/utils/")) {
     return "utils";
@@ -2055,6 +2159,75 @@ export function shouldAcquireLocalHeavyCheckLock(runSpecs, env = process.env) {
 
 export function writeVitestIncludeFile(filePath, includePatterns) {
   fs.writeFileSync(filePath, `${JSON.stringify(includePatterns, null, 2)}\n`);
+}
+
+function shellQuote(value) {
+  const text = `${value}`;
+  if (text === "") {
+    return "''";
+  }
+  if (/^[A-Za-z0-9_./:=@%+-]+$/u.test(text)) {
+    return text;
+  }
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+function formatFailedShardRerunCommand(failure) {
+  const includePatterns = failure.includePatterns ?? [];
+  if (includePatterns.length > 0) {
+    return ["pnpm", "test", ...includePatterns.map(shellQuote), "--", "--reporter=verbose"].join(
+      " ",
+    );
+  }
+  return [
+    "node",
+    "scripts/run-vitest.mjs",
+    "run",
+    "--config",
+    shellQuote(failure.config),
+    "--reporter=verbose",
+  ].join(" ");
+}
+
+function formatFailedShardStatus(failure) {
+  const details = [];
+  if (failure.code !== undefined && failure.code !== null) {
+    details.push(`exit ${failure.code}`);
+  }
+  if (failure.signal) {
+    details.push(`signal ${failure.signal}`);
+  }
+  if (failure.noOutputTimedOut) {
+    details.push("no-output timeout");
+  }
+  return details.length > 0 ? ` (${details.join(", ")})` : "";
+}
+
+export function formatFailedShardDigest(failures, options = {}) {
+  if (failures.length === 0) {
+    return [];
+  }
+
+  const limit = options.limit ?? FAILED_SHARD_DIGEST_LIMIT;
+  const orderedFailures = failures.toSorted((left, right) => {
+    const leftOrder = typeof left.order === "number" ? left.order : Number.MAX_SAFE_INTEGER;
+    const rightOrder = typeof right.order === "number" ? right.order : Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder || left.config.localeCompare(right.config);
+  });
+  const shown = orderedFailures.slice(0, limit);
+  const lines = [`[test] failed shard digest (${failures.length}):`];
+  for (const failure of shown) {
+    const includes =
+      failure.includePatterns?.length > 0
+        ? ` includes=${failure.includePatterns.map(shellQuote).join(",")}`
+        : "";
+    lines.push(`[test] - ${failure.config}${formatFailedShardStatus(failure)}${includes}`);
+    lines.push(`[test]   rerun: ${formatFailedShardRerunCommand(failure)}`);
+  }
+  if (shown.length < failures.length) {
+    lines.push(`[test] - ... ${failures.length - shown.length} more failed shard(s) omitted`);
+  }
+  return lines;
 }
 
 export function buildVitestArgs(args, cwd = process.cwd()) {

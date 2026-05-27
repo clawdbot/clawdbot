@@ -194,7 +194,7 @@ npm_install_global() {
   local label="$1"
   shift
   run_with_heartbeat "$label" \
-    timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+    timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s" \
       npm \
       --loglevel=error \
       --logs-max=0 \
@@ -223,7 +223,7 @@ run_installer_for_package_spec() {
   local install_url="$1"
   local package_spec="$2"
 
-  timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+  timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s" \
     bash -c "curl -fsSL \"\$1\" | bash -s -- --install-method npm --version \"\$2\" --no-prompt --no-onboard" \
     _ "$install_url" "$package_spec"
 }
@@ -520,7 +520,7 @@ run_freshness_smoke() {
   echo "==> Verify user npm freshness policy blocks plain npm install"
   set +e
   HOME="$policy_home" NPM_CONFIG_USERCONFIG="${policy_home}/.npmrc" \
-    timeout --foreground "${INSTALL_COMMAND_TIMEOUT}s" \
+    timeout --kill-after=30s "${INSTALL_COMMAND_TIMEOUT}s" \
       npm \
       --loglevel=error \
       --logs-max=0 \

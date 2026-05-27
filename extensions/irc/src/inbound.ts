@@ -377,7 +377,7 @@ export async function handleIrcInbound(params: {
     RawBody: rawBody,
     CommandBody: rawBody,
     From: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
-    To: `irc:${peerId}`,
+    To: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
     SessionKey: route.sessionKey,
     AccountId: route.accountId,
     ChatType: message.isGroup ? "group" : "direct",
@@ -396,7 +396,7 @@ export async function handleIrcInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,

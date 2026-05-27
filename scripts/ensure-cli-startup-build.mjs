@@ -30,6 +30,9 @@ export function ensureCliStartupBuild(params = {}) {
     env: params.env ?? process.env,
     stdio: params.stdio ?? "inherit",
   });
+  if (result.error) {
+    throw result.error;
+  }
   const status = result.status ?? (result.signal ? 1 : 0);
   if (status !== 0) {
     throw new Error(`cliStartup build profile failed with exit code ${status}`);

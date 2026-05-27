@@ -14,7 +14,11 @@ import {
   makeAgentUserMessage,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { attachCodexMirrorIdentity, mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
+import {
+  attachCodexMirrorIdentity,
+  buildCodexUserPromptMessage,
+  mirrorCodexAppServerTranscript,
+} from "./transcript-mirror.js";
 
 const emitSessionTranscriptUpdateMock = vi.hoisted(() => vi.fn());
 
@@ -56,6 +60,37 @@ async function makeRoot(prefix: string): Promise<string> {
   tempDirs.push(root);
   return root;
 }
+
+describe("buildCodexUserPromptMessage", () => {
+  it("uses the prepared user transcript message for app-server prompt mirrors", () => {
+    const message = buildCodexUserPromptMessage({
+      prompt: "[Mon 2026-05-25 19:14 GMT+1] What is in this image?",
+      messageChannel: "webchat",
+      userTurnTranscriptRecorder: {
+        message: {
+          role: "user",
+          content: "What is in this image?",
+          timestamp: 1779732875151,
+          MediaPath: "/tmp/image.png",
+          MediaPaths: ["/tmp/image.png"],
+          MediaType: "image/png",
+          MediaTypes: ["image/png"],
+        },
+      },
+    } as unknown as Parameters<typeof buildCodexUserPromptMessage>[0]);
+
+    expect(message).toMatchObject({
+      role: "user",
+      content: "What is in this image?",
+      timestamp: 1779732875151,
+      sourceChannel: "webchat",
+      MediaPath: "/tmp/image.png",
+      MediaPaths: ["/tmp/image.png"],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
+  });
+});
 
 function parseJsonLines<T>(raw: string): T[] {
   const records: T[] = [];
@@ -126,13 +161,13 @@ describe("mirrorCodexAppServerTranscript", () => {
       "turn-1:prompt",
     );
 
-    await mirrorCodexAppServerTranscript({
+    const firstMirror = await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "agent:main:main",
       messages: [userMessage],
       idempotencyScope: "codex-app-server:thread-1",
     });
-    await mirrorCodexAppServerTranscript({
+    const secondMirror = await mirrorCodexAppServerTranscript({
       sessionFile,
       sessionKey: "agent:main:main",
       messages: [userMessage],
@@ -152,6 +187,18 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
     expect(updates[0]?.messageSeq).toBe(1);
+    expect(firstMirror.userMessagesPresent).toHaveLength(1);
+    expect(firstMirror.userMessagesPresent[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "show me live" }],
+      idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+    });
+    expect(secondMirror.userMessagesPresent).toHaveLength(1);
+    expect(secondMirror.userMessagesPresent[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "show me live" }],
+      idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
+    });
   });
 
   it("emits stable sequence numbers for multi-message mirror batches", async () => {
@@ -276,6 +323,52 @@ describe("mirrorCodexAppServerTranscript", () => {
     expect(raw).toContain(
       `"idempotencyKey":"scope-1:assistant:${expectedFingerprint(sourceMessage)}"`,
     );
+  });
+
+  it("returns the persisted user message for duplicate mirror hits", async () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: (event) => ({
+            message: castAgentMessage({
+              ...((event as { message: unknown }).message as Record<string, unknown>),
+              content: [{ type: "text", text: "[redacted by hook]" }],
+            }),
+          }),
+        },
+      ]),
+    );
+    const sessionFile = await createTempSessionFile();
+    const sourceMessage = makeAgentUserMessage({
+      content: [{ type: "text", text: "secret prompt" }],
+      timestamp: Date.now(),
+    });
+
+    const first = await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [sourceMessage],
+      idempotencyScope: "scope-1",
+    });
+    const second = await mirrorCodexAppServerTranscript({
+      sessionFile,
+      sessionKey: "session-1",
+      messages: [sourceMessage],
+      idempotencyScope: "scope-1",
+    });
+
+    expect(first.userMessagesPresent[0]?.content).toEqual([
+      { type: "text", text: "[redacted by hook]" },
+    ]);
+    expect(second.userMessagesPresent[0]?.content).toEqual([
+      { type: "text", text: "[redacted by hook]" },
+    ]);
+    expect(JSON.stringify(second.userMessagesPresent)).not.toContain("secret prompt");
+    const records = parseJsonLines<{ type?: string; message?: { role?: string } }>(
+      await fs.readFile(sessionFile, "utf8"),
+    );
+    expect(records.filter((record) => record.message?.role === "user")).toHaveLength(1);
   });
 
   it("preserves the computed idempotency key when hooks rewrite message keys", async () => {

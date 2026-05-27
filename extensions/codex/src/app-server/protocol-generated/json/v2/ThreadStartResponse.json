@@ -52,18 +52,6 @@
     "modelProvider": {
       "type": "string"
     },
-    "permissionProfile": {
-      "description": "Full active permissions for this thread. `activePermissionProfile` carries display/provenance metadata for this runtime profile.",
-      "default": null,
-      "anyOf": [
-        {
-          "$ref": "#/definitions/PermissionProfile"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "reasoningEffort": {
       "anyOf": [
         {
@@ -83,7 +71,7 @@
       }
     },
     "sandbox": {
-      "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions.",
+      "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `activePermissionProfile` for profile provenance.",
       "allOf": [
         {
           "$ref": "#/definitions/SandboxPolicy"
@@ -570,202 +558,6 @@
         "failed"
       ]
     },
-    "FileSystemAccessMode": {
-      "type": "string",
-      "enum": [
-        "read",
-        "write",
-        "none"
-      ]
-    },
-    "FileSystemPath": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "path",
-            "type"
-          ],
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "path"
-              ],
-              "title": "PathFileSystemPathType"
-            }
-          },
-          "title": "PathFileSystemPath"
-        },
-        {
-          "type": "object",
-          "required": [
-            "pattern",
-            "type"
-          ],
-          "properties": {
-            "pattern": {
-              "type": "string"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "glob_pattern"
-              ],
-              "title": "GlobPatternFileSystemPathType"
-            }
-          },
-          "title": "GlobPatternFileSystemPath"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type",
-            "value"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "special"
-              ],
-              "title": "SpecialFileSystemPathType"
-            },
-            "value": {
-              "$ref": "#/definitions/FileSystemSpecialPath"
-            }
-          },
-          "title": "SpecialFileSystemPath"
-        }
-      ]
-    },
-    "FileSystemSandboxEntry": {
-      "type": "object",
-      "required": [
-        "access",
-        "path"
-      ],
-      "properties": {
-        "access": {
-          "$ref": "#/definitions/FileSystemAccessMode"
-        },
-        "path": {
-          "$ref": "#/definitions/FileSystemPath"
-        }
-      }
-    },
-    "FileSystemSpecialPath": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "root"
-              ]
-            }
-          },
-          "title": "RootFileSystemSpecialPath"
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "minimal"
-              ]
-            }
-          },
-          "title": "MinimalFileSystemSpecialPath"
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "project_roots"
-              ]
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          "title": "KindFileSystemSpecialPath"
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "tmpdir"
-              ]
-            }
-          },
-          "title": "TmpdirFileSystemSpecialPath"
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "slash_tmp"
-              ]
-            }
-          },
-          "title": "SlashTmpFileSystemSpecialPath"
-        },
-        {
-          "type": "object",
-          "required": [
-            "kind",
-            "path"
-          ],
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": [
-                "unknown"
-              ]
-            },
-            "path": {
-              "type": "string"
-            },
-            "subpath": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          }
-        }
-      ]
-    },
     "FileUpdateChange": {
       "type": "object",
       "required": [
@@ -822,6 +614,13 @@
           "type": "string"
         }
       }
+    },
+    "ImageDetail": {
+      "type": "string",
+      "enum": [
+        "high",
+        "original"
+      ]
     },
     "McpToolCallError": {
       "type": "object",
@@ -1003,135 +802,6 @@
           "title": "UpdatePatchChangeKind"
         }
       ]
-    },
-    "PermissionProfile": {
-      "oneOf": [
-        {
-          "description": "Codex owns sandbox construction for this profile.",
-          "type": "object",
-          "required": [
-            "fileSystem",
-            "network",
-            "type"
-          ],
-          "properties": {
-            "fileSystem": {
-              "$ref": "#/definitions/PermissionProfileFileSystemPermissions"
-            },
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "managed"
-              ],
-              "title": "ManagedPermissionProfileType"
-            }
-          },
-          "title": "ManagedPermissionProfile"
-        },
-        {
-          "description": "Do not apply an outer sandbox.",
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "disabled"
-              ],
-              "title": "DisabledPermissionProfileType"
-            }
-          },
-          "title": "DisabledPermissionProfile"
-        },
-        {
-          "description": "Filesystem isolation is enforced by an external caller.",
-          "type": "object",
-          "required": [
-            "network",
-            "type"
-          ],
-          "properties": {
-            "network": {
-              "$ref": "#/definitions/PermissionProfileNetworkPermissions"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "external"
-              ],
-              "title": "ExternalPermissionProfileType"
-            }
-          },
-          "title": "ExternalPermissionProfile"
-        }
-      ]
-    },
-    "PermissionProfileFileSystemPermissions": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": [
-            "entries",
-            "type"
-          ],
-          "properties": {
-            "entries": {
-              "type": "array",
-              "items": {
-                "$ref": "#/definitions/FileSystemSandboxEntry"
-              }
-            },
-            "globScanMaxDepth": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "uint",
-              "minimum": 1
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "restricted"
-              ],
-              "title": "RestrictedPermissionProfileFileSystemPermissionsType"
-            }
-          },
-          "title": "RestrictedPermissionProfileFileSystemPermissions"
-        },
-        {
-          "type": "object",
-          "required": [
-            "type"
-          ],
-          "properties": {
-            "type": {
-              "type": "string",
-              "enum": [
-                "unrestricted"
-              ],
-              "title": "UnrestrictedPermissionProfileFileSystemPermissionsType"
-            }
-          },
-          "title": "UnrestrictedPermissionProfileFileSystemPermissions"
-        }
-      ]
-    },
-    "PermissionProfileNetworkPermissions": {
-      "type": "object",
-      "required": [
-        "enabled"
-      ],
-      "properties": {
-        "enabled": {
-          "type": "boolean"
-        }
-      }
     },
     "ReasoningEffort": {
       "description": "See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning",
@@ -2442,6 +2112,17 @@
             "url"
           ],
           "properties": {
+            "detail": {
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "type": {
               "type": "string",
               "enum": [
@@ -2462,6 +2143,17 @@
             "type"
           ],
           "properties": {
+            "detail": {
+              "default": null,
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/ImageDetail"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "path": {
               "type": "string"
             },

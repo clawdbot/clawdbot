@@ -5,12 +5,14 @@ import {
   shouldSkipRespawnForArgv,
   shouldSkipStartupEnvironmentRespawnForArgv,
 } from "./cli/respawn-policy.js";
+import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue } from "./infra/env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
 const CLI_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 const CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
 
@@ -58,6 +60,16 @@ function hasExperimentalWarningSuppressed(
   return execArgv.some((arg) => arg === EXPERIMENTAL_WARNING_FLAG || arg === "--no-warnings");
 }
 
+function hasStackSizeConfigured(execArgv: string[]): boolean {
+  return execArgv.some(
+    (arg) =>
+      arg === "--stack-size" ||
+      arg.startsWith("--stack-size=") ||
+      arg === "--stack_size" ||
+      arg.startsWith("--stack_size="),
+  );
+}
+
 export function buildCliRespawnPlan(
   params: {
     argv?: string[];
@@ -73,21 +85,36 @@ export function buildCliRespawnPlan(
   const execArgv = params.execArgv ?? process.execArgv;
   const execPath = params.execPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
+  const normalizedArgv =
+    platform === "win32" ? normalizeWindowsArgv(argv, { platform, execPath }) : argv;
 
   if (
-    shouldSkipStartupEnvironmentRespawnForArgv(argv) ||
+    shouldSkipStartupEnvironmentRespawnForArgv(normalizedArgv) ||
     isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)
   ) {
-    return null;
-  }
-
-  if (platform === "win32") {
     return null;
   }
 
   const childEnv: NodeJS.ProcessEnv = { ...env };
   const childExecArgv = [...execArgv];
   let needsRespawn = false;
+
+  if (platform === "win32") {
+    if (!hasStackSizeConfigured(childExecArgv)) {
+      childExecArgv.unshift(WINDOWS_STACK_SIZE_FLAG);
+      needsRespawn = true;
+    }
+
+    if (!needsRespawn) {
+      return null;
+    }
+
+    return {
+      command: resolveCliRespawnCommand({ execPath, platform }),
+      argv: [...childExecArgv, ...normalizedArgv.slice(1)],
+      env: childEnv,
+    };
+  }
 
   const autoNodeExtraCaCerts =
     params.autoNodeExtraCaCerts ??

@@ -291,6 +291,38 @@ describe("appendSessionTranscriptMessage - redaction", () => {
     expect(msg.details.password).toBe("***");
     expect(msg.details.nested.accessToken[0]).toBe("nested…t123");
   });
+
+  it("preserves env placeholders in persisted tool results", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(
+      "issue-80379-tool-result-env-placeholders",
+      fixture.sessionsDir(),
+    );
+    const config: OpenClawConfig = { logging: { redactSensitive: "tools" } };
+    const toolOutput =
+      'DISCORD_BOT_TOKEN="${DISCORD_BOT_TOKEN:-}"\nTELEGRAM_BOT_TOKEN="${TELEGRAM_BOT_TOKEN:-}"';
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "toolResult",
+        toolCallId: "call_80379",
+        toolName: "read",
+        content: [{ type: "text", text: toolOutput }],
+        isError: false,
+        timestamp: Date.now(),
+      },
+      config,
+    });
+
+    const raw = fs.readFileSync(sessionFile, "utf-8");
+    expect(raw).toContain("${DISCORD_BOT_TOKEN:-}");
+    expect(raw).toContain("${TELEGRAM_BOT_TOKEN:-}");
+
+    const [msg] = readMessages(sessionFile) as Array<{
+      content: Array<{ text: string }>;
+    }>;
+    expect(msg.content[0].text).toBe(toolOutput);
+  });
 });
 
 describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {

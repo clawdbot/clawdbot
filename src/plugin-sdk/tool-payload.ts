@@ -60,6 +60,7 @@ const END_TOOL_REQUEST = "[END_TOOL_REQUEST]";
 const HARMONY_CHANNEL_MARKER = "<|channel|>";
 const HARMONY_MESSAGE_MARKER = "<|message|>";
 const HARMONY_CALL_MARKER = "<|call|>";
+const XMLISH_PARAMETER_CLOSE = "</parameter>";
 
 type PlainTextToolCallOpening = {
   end: number;
@@ -166,6 +167,14 @@ function parseHarmonyOpening(text: string, start: number): PlainTextToolCallOpen
     cursor = skipWhitespace(text, cursor + HARMONY_MESSAGE_MARKER.length);
   }
   return { end: cursor, name, requiresClosing: false };
+}
+
+function parseXmlishFunctionOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  const match = /^<function=([A-Za-z0-9_.:-]{1,120})>\s*/i.exec(text.slice(start));
+  if (!match?.[1]) {
+    return null;
+  }
+  return { end: start + match[0].length, name: match[1], requiresClosing: false };
 }
 
 function parseOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -282,6 +291,78 @@ function parsePlainTextToolCallBlockAt(
   };
 }
 
+function consumeXmlishParameterBlock(
+  text: string,
+  start: number,
+  maxPayloadBytes: number,
+): number | null {
+  const cursor = skipWhitespace(text, start);
+  const openMatch = /^<parameter=[A-Za-z0-9_.:-]{1,120}>\s*/i.exec(text.slice(cursor));
+  if (!openMatch) {
+    return null;
+  }
+  const payloadStart = cursor + openMatch[0].length;
+  const closeStart = text.toLowerCase().indexOf(XMLISH_PARAMETER_CLOSE, payloadStart);
+  if (closeStart === -1 || closeStart + XMLISH_PARAMETER_CLOSE.length - cursor > maxPayloadBytes) {
+    return null;
+  }
+  return closeStart + XMLISH_PARAMETER_CLOSE.length;
+}
+
+function consumeXmlishParameterBlocks(
+  text: string,
+  start: number,
+  maxPayloadBytes: number,
+): number | null {
+  let cursor = start;
+  let consumed = false;
+  while (true) {
+    const next = consumeXmlishParameterBlock(text, cursor, maxPayloadBytes);
+    if (next === null) {
+      break;
+    }
+    if (next - start > maxPayloadBytes) {
+      return null;
+    }
+    cursor = next;
+    consumed = true;
+  }
+  return consumed ? cursor : null;
+}
+
+function consumeOptionalXmlishFunctionClose(text: string, start: number): number {
+  const cursor = skipWhitespace(text, start);
+  return text.slice(cursor).toLowerCase().startsWith("</function>")
+    ? cursor + "</function>".length
+    : start;
+}
+
+function parseXmlishPlainTextToolCallBlockEndAt(
+  text: string,
+  start: number,
+  options?: PlainTextToolCallParseOptions,
+): number | null {
+  const opening = parseBracketOpening(text, start) ?? parseXmlishFunctionOpening(text, start);
+  if (!opening) {
+    return null;
+  }
+  const allowedToolNames = options?.allowedToolNames
+    ? new Set(options.allowedToolNames)
+    : undefined;
+  if (allowedToolNames && !allowedToolNames.has(opening.name)) {
+    return null;
+  }
+  const payloadEnd = consumeXmlishParameterBlocks(
+    text,
+    opening.end,
+    options?.maxPayloadBytes ?? DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES,
+  );
+  if (payloadEnd === null) {
+    return null;
+  }
+  return consumeOptionalXmlishFunctionClose(text, payloadEnd);
+}
+
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
@@ -303,7 +384,8 @@ export function stripPlainTextToolCallBlocks(text: string): string {
   if (
     !text ||
     (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
-      !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text))
+      !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text) &&
+      !/(?:^|\n)\s*<function=[A-Za-z0-9_.:-]{1,120}>/i.test(text))
   ) {
     return text;
   }
@@ -318,12 +400,13 @@ export function stripPlainTextToolCallBlocks(text: string): string {
     }
     const blockStart = skipHorizontalWhitespace(text, index);
     const block = parsePlainTextToolCallBlockAt(text, blockStart);
-    if (!block) {
+    const blockEnd = block?.end ?? parseXmlishPlainTextToolCallBlockEndAt(text, blockStart);
+    if (blockEnd === null) {
       index += 1;
       continue;
     }
     result += text.slice(cursor, index);
-    cursor = block.end;
+    cursor = blockEnd;
     const afterBlockLineBreak = consumeLineBreak(text, cursor);
     if (afterBlockLineBreak !== null) {
       cursor = afterBlockLineBreak;

@@ -624,6 +624,7 @@ export function createFollowupRunner(params: {
       fallbackProvider = run.provider;
       fallbackModel = run.model;
       replyOperation.setPhase("running");
+      const runAbortSignal = replyOperation.abortSignal;
       let pendingDeferredCliTerminal:
         | {
             provider: string;
@@ -639,6 +640,7 @@ export function createFollowupRunner(params: {
           ...resolveModelFallbackOptions(run, runtimeConfig),
           cfg: runtimeConfig,
           runId,
+          abortSignal: runAbortSignal,
           resolveAgentHarnessRuntimeOverride: (provider) =>
             resolveSessionRuntimeOverrideForProvider({
               provider,
@@ -693,6 +695,11 @@ export function createFollowupRunner(params: {
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
+            const userTurnTranscriptRecorder =
+              effectiveQueued.userTurnTranscriptRecorder ?? opts?.userTurnTranscriptRecorder;
+            const notifyUserMessagePersisted = () => {
+              queuedUserMessagePersistedAcrossFallback = true;
+            };
             try {
               if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
                 const isRoomEventCliRun = queued.currentInboundEventKind === "room_event";
@@ -723,6 +730,9 @@ export function createFollowupRunner(params: {
                     config: runtimeConfig,
                     prompt: queued.prompt,
                     transcriptPrompt: queued.transcriptPrompt,
+                    suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                    userTurnTranscriptRecorder,
+                    onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: queued.currentInboundEventKind,
                     currentInboundContext: queued.currentInboundContext,
                     inputProvenance: run.inputProvenance,
@@ -756,7 +766,7 @@ export function createFollowupRunner(params: {
                     }),
                     agentAccountId: run.agentAccountId,
                     disableTools: opts?.disableTools,
-                    abortSignal: queued.abortSignal,
+                    abortSignal: runAbortSignal,
                   },
                   transformResult: (rawResult) =>
                     isRoomEventCliRun && rawResult.meta.agentMeta
@@ -813,6 +823,7 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
+                userTurnTranscriptRecorder,
                 currentInboundEventKind: queued.currentInboundEventKind,
                 currentInboundContext: queued.currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,
@@ -820,9 +831,7 @@ export function createFollowupRunner(params: {
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
                 suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
-                onUserMessagePersisted: () => {
-                  queuedUserMessagePersistedAcrossFallback = true;
-                },
+                onUserMessagePersisted: notifyUserMessagePersisted,
                 suppressTranscriptOnlyAssistantPersistence:
                   run.suppressTranscriptOnlyAssistantPersistence,
                 suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,
@@ -843,7 +852,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
-                abortSignal: queued.abortSignal,
+                abortSignal: runAbortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,

@@ -9,7 +9,7 @@ struct TalkRealtimeClientCreateParams: Encodable {
     var voice: String?
 }
 
-struct TalkRealtimeClientSession: Decodable, Sendable {
+struct TalkRealtimeClientSession: Decodable {
     let provider: String
     let transport: String
     let clientSecret: String
@@ -24,12 +24,12 @@ struct TalkRealtimeClientSession: Decodable, Sendable {
     }
 }
 
-struct TalkRealtimeToolCallResponse: Decodable, Sendable {
+struct TalkRealtimeToolCallResponse: Decodable {
     let runId: String?
     let idempotencyKey: String?
 }
 
-struct TalkRealtimeServerEvent: Decodable, Sendable {
+struct TalkRealtimeServerEvent: Decodable {
     let type: String
     let itemId: String?
     let item: TalkRealtimeServerItem?
@@ -69,7 +69,7 @@ struct TalkRealtimeServerEvent: Decodable, Sendable {
     }
 }
 
-struct TalkRealtimeServerItem: Decodable, Sendable {
+struct TalkRealtimeServerItem: Decodable {
     let id: String?
     let type: String?
     let callId: String?

@@ -1,5 +1,8 @@
 import fs from "node:fs";
-import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { memoryConfigSchema } from "./config.js";
 
@@ -73,7 +76,7 @@ describe("memory-lancedb config", () => {
     expect(manifestResult.ok).toBe(false);
     if (!manifestResult.ok) {
       expect(manifestResult.errors.map((error) => error.text)).toContain(
-        "embedding: must NOT have fewer than 1 properties",
+        "embedding: must not have fewer than 1 properties",
       );
     }
 

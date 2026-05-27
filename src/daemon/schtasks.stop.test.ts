@@ -168,6 +168,27 @@ describe("Scheduled Task stop/restart cleanup", () => {
     });
   });
 
+  it("does not reclaim gateway listeners when stopping a node Scheduled Task", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(3);
+      env.OPENCLAW_SERVICE_KIND = "node";
+      env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      inspectPortUsage.mockResolvedValue(busyPortUsage(4242));
+
+      await stopScheduledTask({ env, stdout });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Node"],
+        ["/End", "/TN", "OpenClaw Node"],
+      ]);
+    });
+  });
+
   it("kills lingering verified gateway listeners and waits for port release before restart", async () => {
     await withPreparedGatewayTask(async ({ env, stdout }) => {
       pushSuccessfulSchtasksResponses(4);
@@ -190,6 +211,32 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Run", "/TN", "OpenClaw Gateway"],
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
+      ]);
+    });
+  });
+
+  it("does not wait on or force-kill the gateway port when restarting a node Scheduled Task", async () => {
+    await withPreparedGatewayTask(async ({ env, stdout }) => {
+      pushSuccessfulSchtasksResponses(4);
+      env.OPENCLAW_SERVICE_KIND = "node";
+      env.OPENCLAW_WINDOWS_TASK_NAME = "OpenClaw Node";
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([5151]);
+      inspectPortUsage.mockResolvedValue(busyPortUsage(5151));
+
+      await expect(restartScheduledTask({ env, stdout })).resolves.toEqual({
+        outcome: "completed",
+      });
+
+      expect(findVerifiedGatewayListenerPidsOnPortSync).not.toHaveBeenCalled();
+      expect(inspectPortUsage).not.toHaveBeenCalled();
+      expect(killProcessTree).not.toHaveBeenCalled();
+      expect(schtasksCalls).toEqual([
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Node"],
+        ["/End", "/TN", "OpenClaw Node"],
+        ["/Run", "/TN", "OpenClaw Node"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
       ]);
     });
   });

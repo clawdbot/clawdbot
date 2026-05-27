@@ -40,6 +40,7 @@ import {
   shouldAckReaction,
 } from "../../channels/ack-reactions.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
+import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
@@ -51,11 +52,10 @@ import {
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
-  buildChannelInboundEventContext,
-  runChannelTurn,
-  runPreparedChannelTurn,
+  dispatchChannelInboundReply,
+  runChannelInboundEvent,
+  runPreparedInboundReply,
   runResolvedChannelTurn,
-  dispatchAssembledChannelTurn,
 } from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,
@@ -180,13 +180,19 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
     },
+    inbound: {
+      buildContext: buildChannelInboundEventContext,
+      run: runChannelInboundEvent,
+      runPreparedReply: runPreparedInboundReply,
+      dispatchReply: dispatchChannelInboundReply,
+    },
     turn: {
-      run: runChannelTurn,
-      runAssembled: dispatchAssembledChannelTurn,
+      run: runChannelInboundEvent,
+      runAssembled: dispatchChannelInboundReply,
       runResolved: runResolvedChannelTurn,
       buildContext: buildChannelInboundEventContext,
-      runPrepared: runPreparedChannelTurn,
-      dispatchAssembled: dispatchAssembledChannelTurn,
+      runPrepared: runPreparedInboundReply,
+      dispatchAssembled: dispatchChannelInboundReply,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

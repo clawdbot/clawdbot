@@ -5,6 +5,7 @@ import {
   loadRunOverflowCompactionHarness,
   MockedFailoverError,
   mockedClassifyFailoverReason,
+  mockedMarkAuthProfileFailure,
   mockedRunEmbeddedAttempt,
   overflowBaseRunParams,
   resetRunOverflowCompactionHarnessMocks,
@@ -203,6 +204,7 @@ describe("runEmbeddedPiAgent Codex app-server recovery", () => {
       "codex app-server turn idle timed out waiting for turn/completed",
     );
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 
   it("does not retry after visible assistant output", async () => {

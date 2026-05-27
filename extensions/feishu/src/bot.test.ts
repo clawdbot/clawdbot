@@ -199,7 +199,7 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         upsertPairingRequest: vi.fn(),
         buildPairingReply: vi.fn(),
       },
-      turn: {
+      inbound: {
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
           const turn = await params.adapter.resolveTurn(input, {
@@ -219,9 +219,6 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             dispatchResult: await turn.runDispatch(),
           };
         }),
-        runPrepared: vi.fn(async (params) => ({
-          dispatchResult: await params.runDispatch(),
-        })),
       },
       ...overrides.channel,
     },
@@ -1237,13 +1234,13 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     const context = mockCallArg<{
-      ReplyToBody?: string;
       ReplyToId?: string;
       RootMessageId?: string;
+      SupplementalContext?: { quote?: { body?: string } };
     }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ReplyToId).toBe("om_parent_001");
     expect(context.RootMessageId).toBe("om_root_001");
-    expect(context.ReplyToBody).toBe("quoted content");
+    expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
   });
 
   it("uses message create_time as Timestamp instead of Date.now()", async () => {
@@ -1748,13 +1745,12 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const context = mockCallArg<{ ReplyToBody?: string; ReplyToId?: string }>(
-      mockFinalizeInboundContext,
-      0,
-      0,
-    );
+    const context = mockCallArg<{
+      ReplyToId?: string;
+      SupplementalContext?: { quote?: { body?: string } };
+    }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ReplyToId).toBe("om_parent_blocked");
-    expect(context.ReplyToBody).toBeUndefined();
+    expect(context.SupplementalContext?.quote?.body).toBeUndefined();
   });
 
   it("keeps quoted group context from non-allowlisted senders in default all mode", async () => {
@@ -1800,13 +1796,12 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    const context = mockCallArg<{ ReplyToBody?: string; ReplyToId?: string }>(
-      mockFinalizeInboundContext,
-      0,
-      0,
-    );
+    const context = mockCallArg<{
+      ReplyToId?: string;
+      SupplementalContext?: { quote?: { body?: string } };
+    }>(mockFinalizeInboundContext, 0, 0);
     expect(context.ReplyToId).toBe("om_parent_visible");
-    expect(context.ReplyToBody).toBe("visible quoted content");
+    expect(context.SupplementalContext?.quote?.body).toBe("visible quoted content");
   });
 
   it("dispatches group image message when groupPolicy is open (requireMention defaults to false)", async () => {
@@ -3273,13 +3268,15 @@ describe("handleFeishuMessage command authorization", () => {
     expect(listRequest.rootMessageId).toBe("om_topic_root");
     const context = mockCallArg<{
       MessageThreadId?: string;
-      ThreadHistoryBody?: string;
-      ThreadLabel?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: {
+        thread?: { historyBody?: string; label?: string; starterBody?: string };
+      };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBe("root starter");
-    expect(context.ThreadHistoryBody).toBe("assistant reply\n\nfollow-up question");
-    expect(context.ThreadLabel).toBe("Feishu thread in oc-group");
+    expect(context.SupplementalContext?.thread?.starterBody).toBe("root starter");
+    expect(context.SupplementalContext?.thread?.historyBody).toBe(
+      "assistant reply\n\nfollow-up question",
+    );
+    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
     expect(context.MessageThreadId).toBe("om_topic_root");
   });
 
@@ -3318,13 +3315,13 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockListFeishuThreadMessages).not.toHaveBeenCalled();
     const context = mockCallArg<{
       MessageThreadId?: string;
-      ThreadHistoryBody?: string;
-      ThreadLabel?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: {
+        thread?: { historyBody?: string; label?: string; starterBody?: string };
+      };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBeUndefined();
-    expect(context.ThreadHistoryBody).toBeUndefined();
-    expect(context.ThreadLabel).toBe("Feishu thread in oc-group");
+    expect(context.SupplementalContext?.thread?.starterBody).toBeUndefined();
+    expect(context.SupplementalContext?.thread?.historyBody).toBeUndefined();
+    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
     expect(context.MessageThreadId).toBe("om_topic_root");
   });
 
@@ -3390,13 +3387,15 @@ describe("handleFeishuMessage command authorization", () => {
 
     const context = mockCallArg<{
       MessageThreadId?: string;
-      ThreadHistoryBody?: string;
-      ThreadLabel?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: {
+        thread?: { historyBody?: string; label?: string; starterBody?: string };
+      };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBe("root starter");
-    expect(context.ThreadHistoryBody).toBe("assistant reply\n\nfollow-up question");
-    expect(context.ThreadLabel).toBe("Feishu thread in oc-group");
+    expect(context.SupplementalContext?.thread?.starterBody).toBe("root starter");
+    expect(context.SupplementalContext?.thread?.historyBody).toBe(
+      "assistant reply\n\nfollow-up question",
+    );
+    expect(context.SupplementalContext?.thread?.label).toBe("Feishu thread in oc-group");
     expect(context.MessageThreadId).toBe("om_topic_root");
   });
 
@@ -3470,11 +3469,12 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     const context = mockCallArg<{
-      ThreadHistoryBody?: string;
-      ThreadStarterBody?: string;
+      SupplementalContext?: { thread?: { historyBody?: string; starterBody?: string } };
     }>(mockFinalizeInboundContext, 0, 0);
-    expect(context.ThreadStarterBody).toBe("assistant reply");
-    expect(context.ThreadHistoryBody).toBe("assistant reply\n\nallowed follow-up");
+    expect(context.SupplementalContext?.thread?.starterBody).toBe("assistant reply");
+    expect(context.SupplementalContext?.thread?.historyBody).toBe(
+      "assistant reply\n\nallowed follow-up",
+    );
   });
 
   it("does not dispatch twice for the same image message_id (concurrent dedupe)", async () => {

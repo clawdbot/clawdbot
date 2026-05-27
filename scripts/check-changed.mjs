@@ -80,9 +80,6 @@ export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env
   if (!isTruthyEnvFlag(env.OPENCLAW_TESTBOX)) {
     return false;
   }
-  if (isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN)) {
-    return false;
-  }
   if (isTruthyEnvFlag(env.CI) || isTruthyEnvFlag(env.GITHUB_ACTIONS)) {
     return false;
   }
@@ -112,13 +109,6 @@ export function buildChangedCheckCrabboxArgs(argv = []) {
     "240m",
     "--timing-json",
     "--",
-    "CI=1",
-    "NODE_OPTIONS=--max-old-space-size=4096",
-    "OPENCLAW_TEST_PROJECTS_PARALLEL=6",
-    "OPENCLAW_VITEST_MAX_WORKERS=1",
-    "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
-    "OPENCLAW_TESTBOX=1",
-    "OPENCLAW_TESTBOX_REMOTE_RUN=1",
     "corepack",
     "pnpm",
     "check:changed",
@@ -378,11 +368,7 @@ async function runPlanCommand(command, timings) {
 
 export function createPnpmManagedCommand(command, env = process.env) {
   const commandEnv = command.env ?? resolveLocalHeavyCheckEnv(env);
-  if (
-    isTruthyEnvFlag(commandEnv.OPENCLAW_TESTBOX_REMOTE_RUN) ||
-    isTruthyEnvFlag(commandEnv.CI) ||
-    isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)
-  ) {
+  if (isTruthyEnvFlag(commandEnv.CI) || isTruthyEnvFlag(commandEnv.GITHUB_ACTIONS)) {
     const shimmedEnv = prependCorepackPnpmShim(commandEnv);
     return {
       ...command,
@@ -448,6 +434,7 @@ function parseArgs(argv) {
     staged: false,
     dryRun: false,
     timed: false,
+    help: false,
     paths: [],
   };
   return parseFlagArgs(
@@ -459,6 +446,8 @@ function parseArgs(argv) {
       booleanFlag("--staged", "staged"),
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
+      booleanFlag("--help", "help"),
+      booleanFlag("-h", "help"),
     ],
     {
       onUnhandledArg(arg, target) {
@@ -472,16 +461,36 @@ function parseArgs(argv) {
   );
 }
 
+function printUsage() {
+  process.stdout.write(
+    [
+      "Usage: node scripts/check-changed.mjs [options] [-- <paths...>]",
+      "",
+      "Options:",
+      "  --base <ref>     Base ref for changed paths (default: origin/main)",
+      "  --head <ref>     Head ref for changed paths (default: HEAD)",
+      "  --staged         Check staged paths instead of git diff paths",
+      "  --dry-run        Print the planned checks without running them",
+      "  --timed          Print timing summary",
+      "  -h, --help       Show this help",
+      "",
+    ].join("\n"),
+  );
+}
+
 function isDirectRun() {
   return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
 if (isDirectRun()) {
   const argv = process.argv.slice(2);
-  if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
+  const args = parseArgs(argv);
+  if (args.help) {
+    printUsage();
+    process.exitCode = 0;
+  } else if (shouldDelegateChangedCheckToCrabbox(argv, process.env)) {
     process.exitCode = await runChangedCheckViaCrabbox(argv, process.env);
   } else {
-    const args = parseArgs(argv);
     const paths =
       args.paths.length > 0
         ? args.paths

@@ -36,7 +36,44 @@ vi.mock("../plugins/provider-runtime.js", async () => {
   };
 });
 
+vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
+  loadManifestMetadataSnapshot: () => ({
+    plugins: [
+      {
+        id: "minimax",
+        origin: "bundled",
+        providers: ["minimax", "minimax-portal"],
+      },
+    ],
+  }),
+}));
+
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  resolveProviderAuthEvidence: () => ({}),
+  resolveProviderAuthEnvVarCandidates: () => ({
+    anthropic: ["ANTHROPIC_API_KEY"],
+    minimax: ["MINIMAX_CODE_PLAN_KEY"],
+  }),
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {
+      anthropic: ["ANTHROPIC_API_KEY"],
+      minimax: ["MINIMAX_CODE_PLAN_KEY"],
+    },
+    authEvidenceMap: {},
+  }),
+}));
+
 let resolveProviderAuths: typeof import("./provider-usage.auth.js").resolveProviderAuths;
+
+function resolveProviderAuthsForTest(
+  params: Parameters<typeof resolveProviderAuths>[0],
+): ReturnType<typeof resolveProviderAuths> {
+  return resolveProviderAuths({
+    config: {},
+    ...params,
+  });
+}
 
 async function withTempHome<T>(fn: (homeDir: string) => Promise<T>): Promise<T> {
   const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-provider-usage-"));
@@ -83,7 +120,7 @@ describe("resolveProviderAuths plugin boundary", () => {
     });
 
     await expect(
-      resolveProviderAuths({
+      resolveProviderAuthsForTest({
         providers: ["zai"],
       }),
     ).resolves.toEqual([
@@ -98,7 +135,7 @@ describe("resolveProviderAuths plugin boundary", () => {
   it("skips plugin usage auth when requested and no direct credential source exists", async () => {
     await withTempHome(async (homeDir) => {
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["zai"],
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
@@ -121,7 +158,7 @@ describe("resolveProviderAuths plugin boundary", () => {
         token: "legacy-zai-token",
       });
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["zai"],
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
@@ -150,7 +187,7 @@ describe("resolveProviderAuths plugin boundary", () => {
       });
 
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["anthropic", "zai"],
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
@@ -191,7 +228,7 @@ describe("resolveProviderAuths plugin boundary", () => {
 
     await withTempHome(async (homeDir) => {
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["anthropic", "zai"],
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
@@ -233,7 +270,7 @@ describe("resolveProviderAuths plugin boundary", () => {
 
     await withTempHome(async (homeDir) => {
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["minimax"],
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
@@ -258,7 +295,7 @@ describe("resolveProviderAuths plugin boundary", () => {
 
     await withTempHome(async (homeDir) => {
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["minimax"],
           skipPluginAuthWithoutCredentialSource: true,
           env: {
@@ -283,7 +320,7 @@ describe("resolveProviderAuths plugin boundary", () => {
 
     await withTempHome(async (homeDir) => {
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["anthropic"],
           skipPluginAuthWithoutCredentialSource: true,
           env: { HOME: homeDir },
@@ -299,7 +336,7 @@ describe("resolveProviderAuths plugin boundary", () => {
   it("skips plugin usage auth per provider when only another provider has direct credentials", async () => {
     await withTempHome(async (homeDir) => {
       await expect(
-        resolveProviderAuths({
+        resolveProviderAuthsForTest({
           providers: ["anthropic", "zai"],
           skipPluginAuthWithoutCredentialSource: true,
           env: {

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -363,8 +364,8 @@ export function registerCronEditCommand(cron: Command) {
           } else if (failureAlertFlag === true || hasFailureAlertFields) {
             const failureAlert: Record<string, unknown> = {};
             if (hasFailureAlertAfter) {
-              const after = Number.parseInt(String(opts.failureAlertAfter), 10);
-              if (!Number.isFinite(after) || after <= 0) {
+              const after = parseStrictPositiveInteger(opts.failureAlertAfter);
+              if (after === undefined) {
                 throw new Error("Invalid --failure-alert-after (must be a positive integer).");
               }
               failureAlert.after = after;

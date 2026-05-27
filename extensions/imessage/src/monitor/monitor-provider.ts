@@ -5,12 +5,13 @@ import { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 import {
   createChannelInboundDebouncer,
   resolveEnvelopeFormatOptions,
+  runChannelInboundEvent,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   deliverInboundReplyWithMessageSendContext,
   createChannelMessageReplyPipeline,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import {
@@ -19,7 +20,6 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
-import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { isInboundPathAllowed, kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
@@ -651,7 +651,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
-    const { ctxPayload, chatTarget } = buildIMessageInboundContext({
+    const { ctxPayload, chatTarget } = await buildIMessageInboundContext({
       cfg,
       decision,
       message,
@@ -811,7 +811,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       sessionKey: decision.route.sessionKey,
     });
 
-    await runInboundReplyTurn({
+    await runChannelInboundEvent({
       channel: "imessage",
       accountId: decision.route.accountId,
       raw: decision,

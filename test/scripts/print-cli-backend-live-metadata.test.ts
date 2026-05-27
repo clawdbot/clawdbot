@@ -1,15 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { resolveCliBackendLiveMetadata } from "../../scripts/print-cli-backend-live-metadata.js";
 
 describe("print-cli-backend-live-metadata", () => {
-  it("prints one parseable unsupported codex-cli JSON payload", () => {
-    const stdout = execFileSync(
-      process.execPath,
-      ["--import", "tsx", "scripts/print-cli-backend-live-metadata.ts", "codex-cli"],
-      { encoding: "utf8" },
-    );
-
-    expect(JSON.parse(stdout)).toEqual({
+  it("builds one unsupported codex-cli metadata payload", async () => {
+    expect(await resolveCliBackendLiveMetadata("codex-cli")).toEqual({
       provider: "codex-cli",
       unsupported: true,
       reason:

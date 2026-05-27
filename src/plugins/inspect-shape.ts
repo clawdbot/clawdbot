@@ -9,7 +9,7 @@ export type PluginCapabilityKind =
   | "realtime-transcription"
   | "realtime-voice"
   | "media-understanding"
-  | "meeting-notes-source"
+  | "transcript-source"
   | "image-generation"
   | "video-generation"
   | "music-generation"
@@ -48,7 +48,7 @@ function buildPluginCapabilityEntries(
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
-    { kind: "meeting-notes-source" as const, ids: plugin.meetingNotesSourceProviderIds },
+    { kind: "transcript-source" as const, ids: plugin.transcriptSourceProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
     { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },

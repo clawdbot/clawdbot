@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { formatChannelProgressDraftLine } from "../channels/streaming.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
-import { formatChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 

@@ -167,6 +167,42 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   });
 
+  it("prepares wildcard open-policy account DMs", async () => {
+    const ctx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            accounts: {
+              soltea: {
+                dmPolicy: "open",
+                dm: { enabled: true, policy: "open" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+    ctx.accountId = "soltea";
+    ctx.allowFrom = ["*"];
+    ctx.dmPolicy = "open";
+    ctx.resolveUserName = async () => ({ name: "External User" }) as any;
+
+    const prepared = await prepareSlackMessage({
+      ctx,
+      account: createSlackAccount({
+        dmPolicy: "open",
+        dm: { enabled: true, policy: "open" },
+      }),
+      message: createSlackMessage({ channel: "D999", user: "U123", text: "hello" }),
+      opts: { source: "message" },
+    });
+
+    assertPrepared(prepared, "open-policy Slack DM");
+    expect(prepared.ctxPayload.RawBody).toContain("hello");
+    expect(prepared.ctxPayload.From).toBe("slack:U123");
+  });
+
   it("keeps Slack assistant DM threads in a thread-scoped session with assistant context", async () => {
     const ctx = createDefaultSlackCtx();
     ctx.saveSlackAssistantThreadContext({

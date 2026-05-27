@@ -94,7 +94,8 @@ steps:
           expr: "!env.mock || Boolean((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => request.plannedToolName === 'image_generate' && String(request.prompt ?? '').includes(config.generatePromptSnippet)))"
           message: expected image_generate call before roundtrip inspection
       - assert:
-          expr: "!env.mock || (((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).find((request) => String(request.prompt ?? '').includes(config.inspectPrompt))?.imageInputCount ?? 0) >= 1)"
-          message: expected generated artifact to be reattached on follow-up turn
+          expr: "!env.mock || (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).some((request) => String(request.prompt ?? '').includes(config.inspectPrompt) && (request.imageInputCount ?? 0) >= 1)"
+          message:
+            expr: "`expected generated artifact to be reattached on follow-up turn; recentRequests=${JSON.stringify((await fetchJson(`${env.mock.baseUrl}/debug/requests`)).slice(-12).map((request) => ({ prompt: String(request.prompt ?? '').slice(0, 240), imageInputCount: request.imageInputCount, allInputText: String(request.allInputText ?? '').slice(0, 240) })))}`"
     detailsExpr: "`MEDIA:${mediaPath}\\n${outbound.text}`"
 ```

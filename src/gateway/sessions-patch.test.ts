@@ -804,4 +804,107 @@ describe("gateway sessions patch", () => {
     expect(entry.providerOverride).toBe("synthetic");
     expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
   });
+
+  test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6@myprofile" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("myprofile");
+    expect(entry.authProfileOverrideSource).toBe("user");
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("marks same-model @profile patches as pending live model switches", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        sessionId: "sess-live-profile-only",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        authProfileOverride: "oldprofile",
+        authProfileOverrideSource: "user",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6@newprofile" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("newprofile");
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("does not set authProfileOverride when profile suffix is missing", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBeUndefined();
+  });
+
+  test("persists full provider:profile authProfileOverride on model patch", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: {
+          key: MAIN_SESSION_KEY,
+          model: "anthropic/claude-sonnet-4-6@openai-codex:user@example.com",
+        },
+        loadGatewayModelCatalog: async () => [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(entry.authProfileOverride).toBe("openai-codex:user@example.com");
+    expect(entry.authProfileOverrideSource).toBe("user");
+  });
+
+  test("resolves bare allowlisted model ids before persisting @profile suffix", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4" },
+              models: {
+                "opencode-go/kimi-k2.6": {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "kimi-k2.6@work" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+          { provider: "opencode-go", id: "kimi-k2.6", name: "kimi-k2.6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("opencode-go");
+    expect(entry.modelOverride).toBe("kimi-k2.6");
+    expect(entry.authProfileOverride).toBe("work");
+  });
 });

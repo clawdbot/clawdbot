@@ -3034,6 +3034,186 @@ describe("qa mock openai server", () => {
     expect(requireRecord(await debug.json(), "debug request").imageInputCount).toBe(1);
   });
 
+  it("answers image prompts when media context is the latest text part", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.5",
+        input: [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: "Image understanding check: what do you see?" },
+              {
+                type: "input_image",
+                source: {
+                  type: "base64",
+                  mime_type: "image/png",
+                  data: QA_IMAGE_PNG_BASE64,
+                },
+              },
+              {
+                type: "input_text",
+                text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text = payload.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text.toLowerCase()).toContain("red");
+    expect(text.toLowerCase()).toContain("blue");
+  });
+
+  it("lets image prompts beat stale exact marker directives from chat history", async () => {
+    const server = await startMockServer();
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.5",
+        input: [
+          makeUserInput("Control UI bridge check. Marker exact marker: `ui bridge armed`"),
+          {
+            role: "assistant",
+            content: [{ type: "output_text", text: "ui bridge armed" }],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Image understanding check: describe the top and bottom colors.",
+              },
+              {
+                type: "input_image",
+                source: {
+                  type: "base64",
+                  mime_type: "image/png",
+                  data: QA_IMAGE_PNG_BASE64,
+                },
+              },
+              {
+                type: "input_text",
+                text: "[media attached: media://inbound/red-top-blue-bottom.png (image/png)]",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    const text = payload.output?.[0]?.content?.[0]?.text ?? "";
+    expect(text.toLowerCase()).toContain("red");
+    expect(text.toLowerCase()).toContain("blue");
+    expect(text).not.toBe("ui bridge armed");
+  });
+
+  it("keeps stale image prompts from overriding later marker turns", async () => {
+    const server = await startMockServer();
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.5",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Image understanding check: describe the top and bottom colors.",
+              },
+              {
+                type: "input_image",
+                source: {
+                  type: "base64",
+                  mime_type: "image/png",
+                  data: QA_IMAGE_PNG_BASE64,
+                },
+              },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "output_text",
+                text: "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
+              },
+            ],
+          },
+          makeUserInput("Marker exact marker: `fresh-marker-ok`"),
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    expect(payload.output?.[0]?.content?.[0]?.text).toBe("fresh-marker-ok");
+  });
+
+  it("keeps stale consecutive image prompts from overriding later marker turns", async () => {
+    const server = await startMockServer();
+
+    const response = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: false,
+        model: "mock-openai/gpt-5.5",
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Image understanding check: describe the top and bottom colors.",
+              },
+              {
+                type: "input_image",
+                source: {
+                  type: "base64",
+                  mime_type: "image/png",
+                  data: QA_IMAGE_PNG_BASE64,
+                },
+              },
+            ],
+          },
+          makeUserInput("Marker exact marker: `fresh-consecutive-marker-ok`"),
+        ],
+      }),
+    });
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    };
+    expect(payload.output?.[0]?.content?.[0]?.text).toBe("fresh-consecutive-marker-ok");
+  });
+
   it("handles deeply nested image input shapes without recursive traversal failure", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -3859,6 +4039,34 @@ describe("qa mock openai server", () => {
     expect(maxReasoning.summary).toEqual([]);
     expect(outputItem(maxPayload, 1).type).toBe("message");
     expect(outputText(maxPayload, 1)).toBe("THINKING-MAX-OK");
+
+    const maxStream = await expectResponsesText(server, {
+      stream: true,
+      model: "gpt-5.5",
+      input: [makeUserInput(QA_THINKING_VISIBILITY_MAX_PROMPT)],
+    });
+    expect(maxStream).toContain('"type":"response.output_text.delta"');
+    expect(maxStream).toContain('"delta":"THINKING-MAX-OK"');
+  });
+
+  it("keeps stale thinking visibility prompts from overriding later marker turns", async () => {
+    const server = await startMockServer();
+
+    const payload = await expectResponsesJson<{
+      output?: Array<{ content?: Array<{ text?: string }> }>;
+    }>(server, {
+      stream: false,
+      model: "gpt-5.5",
+      input: [
+        makeUserInput(QA_THINKING_VISIBILITY_MAX_PROMPT),
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "THINKING-MAX-OK" }],
+        },
+        makeUserInput("Marker exact marker: `fresh-thinking-marker`"),
+      ],
+    });
+    expect(outputText(payload)).toBe("fresh-thinking-marker");
   });
 
   it("keeps the reasoning-only side-effect path ready for no-auto-retry QA coverage", async () => {

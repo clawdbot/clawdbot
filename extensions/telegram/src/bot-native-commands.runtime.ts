@@ -13,3 +13,4 @@ export {
   resolveChunkMode,
 } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 export { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
+export { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";

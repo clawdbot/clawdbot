@@ -3,6 +3,7 @@ import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
+import { parseStrictPositiveIntOption } from "./program/helpers.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginUpdateOptions = {
@@ -75,7 +76,7 @@ export function registerPluginsCli(program: Command) {
     .command("search")
     .description("Search ClawHub plugin packages")
     .argument("[query...]", "Search query")
-    .option("--limit <n>", "Max results", (value) => Number.parseInt(value, 10))
+    .option("--limit <n>", "Max results", (value) => parseStrictPositiveIntOption(value, "--limit"))
     .option("--json", "Print JSON", false)
     .action(async (queryParts: string[], opts: PluginSearchOptions) => {
       const { runPluginsSearchCommand } = await import("./plugins-search-command.js");

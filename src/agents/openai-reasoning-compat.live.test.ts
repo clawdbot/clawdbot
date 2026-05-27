@@ -10,6 +10,8 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
@@ -18,8 +20,7 @@ import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
-const DEFAULT_TARGET_MODEL_REF = "openai-codex/gpt-5.1-codex-mini";
+const DEFAULT_TARGET_MODEL_REF = "openai-codex/gpt-5.4-mini";
 const TARGET_MODEL_REF =
   process.env.OPENCLAW_LIVE_OPENAI_REASONING_COMPAT_MODEL?.trim() || DEFAULT_TARGET_MODEL_REF;
 const describeLive = LIVE ? describe : describe.skip;
@@ -116,14 +117,20 @@ describeLive("openai reasoning compat live", () => {
         apiKeyInfo = await getApiKeyForModel({
           model,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          credentialPrecedence: resolveLiveCredentialPrecedence(
+            model.provider,
+            REQUIRE_PROFILE_KEYS,
+          ),
         });
       } catch (error) {
         logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
         return;
       }
 
-      if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+      if (
+        requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+        !apiKeyInfo.source.startsWith("profile:")
+      ) {
         logProgress(
           `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
         );
@@ -170,14 +177,20 @@ describeLive("openai reasoning compat live", () => {
         apiKeyInfo = await getApiKeyForModel({
           model,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          credentialPrecedence: resolveLiveCredentialPrecedence(
+            model.provider,
+            REQUIRE_PROFILE_KEYS,
+          ),
         });
       } catch (error) {
         logProgress(`[openai-reasoning-compat] skip (${String(error)})`);
         return;
       }
 
-      if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+      if (
+        requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
+        !apiKeyInfo.source.startsWith("profile:")
+      ) {
         logProgress(
           `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
         );

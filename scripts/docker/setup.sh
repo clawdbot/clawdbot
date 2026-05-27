@@ -14,6 +14,7 @@ DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
 RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
 SKIP_ONBOARDING=""
+DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -31,6 +32,19 @@ run_docker_build() {
   # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
   # BuildKit so hosts defaulting to the legacy builder do not fail.
   docker_build_exec "$@"
+}
+
+run_docker_pull() {
+  local image="$1"
+  if command -v timeout >/dev/null 2>&1; then
+    if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+      timeout --kill-after=30s "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+    else
+      timeout "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+    fi
+    return
+  fi
+  docker pull "$image"
 }
 
 is_truthy_value() {
@@ -534,7 +548,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
     "$ROOT_DIR"
 else
   echo "==> Pulling Docker image: $IMAGE_NAME"
-  if ! docker pull "$IMAGE_NAME"; then
+  if ! run_docker_pull "$IMAGE_NAME"; then
     echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
     exit 1
   fi

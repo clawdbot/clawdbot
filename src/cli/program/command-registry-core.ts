@@ -107,6 +107,11 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<
         loadModule: () => import("../mcp-cli.js"),
         exportName: "registerMcpCli",
       },
+      {
+        commandNames: ["transcripts"],
+        loadModule: () => import("./register.transcripts.js"),
+        exportName: "registerTranscriptsCli",
+      },
     ]),
   ),
   defineImportedCommandGroupSpec(

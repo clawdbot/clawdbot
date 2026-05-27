@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalForwardingFallbackSuppressor,
   type NativeApprovalTarget,
   nativeApprovalTargetsMatch,
+  shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-native-helpers.js";
 import type { OpenClawConfig } from "./config-runtime.js";
 
@@ -269,5 +271,176 @@ describe("createChannelApproverDmTargetResolver", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+});
+
+describe("createNativeApprovalForwardingFallbackSuppressor", () => {
+  const execRequest = {
+    id: "req-1",
+    request: {
+      command: "echo hi",
+      turnSourceChannel: "matrix",
+      turnSourceTo: "room-1",
+      turnSourceAccountId: "default",
+    },
+    createdAtMs: 0,
+    expiresAtMs: 1000,
+  };
+
+  function createSuppressor(
+    overrides: Partial<Parameters<typeof createNativeApprovalForwardingFallbackSuppressor>[0]> = {},
+  ) {
+    return createNativeApprovalForwardingFallbackSuppressor({
+      channel: "matrix",
+      normalizeForwardTarget: (target) =>
+        target.channel === "matrix"
+          ? { to: target.to, accountId: target.accountId ?? undefined }
+          : null,
+      resolveForwardingTargetForMatch: ({ forwardingTarget, accountId }) => ({
+        ...forwardingTarget,
+        accountId,
+      }),
+      isSessionRouteEligible: ({ approvalKind }) => approvalKind === "exec",
+      resolveOriginTarget: () => ({ to: "room-1", accountId: "default" }),
+      resolveApproverDmTargets: () => [{ to: "user-1", accountId: "default" }],
+      ...overrides,
+    });
+  }
+
+  it("suppresses session forwarding only when a native origin or approver DM matches", () => {
+    const shouldSuppress = createSuppressor();
+
+    expect(
+      shouldSuppress({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "room-1", source: "session" },
+        request: execRequest,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppress({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "user-1", source: "session" },
+        request: execRequest,
+      }),
+    ).toBe(true);
+    expect(
+      shouldSuppress({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "other-room", source: "session" },
+        request: execRequest,
+      }),
+    ).toBe(false);
+  });
+
+  it("requires explicit-target eligibility before suppressing target forwarding", () => {
+    expect(
+      createSuppressor()({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "room-1", source: "target" },
+        request: execRequest,
+      }),
+    ).toBe(false);
+
+    expect(
+      createSuppressor({
+        isExplicitTargetEligible: () => true,
+      })({
+        cfg: {},
+        approvalKind: "exec",
+        target: { channel: "matrix", to: "room-1", source: "target" },
+        request: execRequest,
+      }),
+    ).toBe(true);
+  });
+});
+
+describe("shouldSuppressLocalNativeExecApprovalPrompt", () => {
+  const payload = {
+    text: "Approval required.",
+    channelData: {
+      execApproval: {
+        approvalId: "12345678-1234-1234-1234-123456789012",
+        approvalSlug: "12345678",
+        approvalKind: "exec",
+        agentId: "main",
+        sessionKey: "agent:main:discord:direct:123",
+      },
+    },
+  };
+  const activeExecHint = {
+    kind: "approval-pending",
+    approvalKind: "exec",
+    nativeRouteActive: true,
+  } as const;
+
+  it("supports strict top-level native exec suppression", () => {
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {
+          approvals: {
+            exec: {
+              enabled: true,
+              agentFilter: ["main"],
+            },
+          },
+        },
+        payload,
+        hint: activeExecHint,
+        isTransportEnabled: () => true,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {
+          approvals: {
+            exec: {
+              enabled: true,
+              agentFilter: ["other"],
+            },
+          },
+        },
+        payload,
+        hint: activeExecHint,
+        isTransportEnabled: () => true,
+      }),
+    ).toBe(false);
+  });
+
+  it("supports channel-specific native exec client gates", () => {
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {},
+        payload,
+        hint: activeExecHint,
+        isNativeDeliveryEnabled: () => true,
+        resolveApprovalConfig: () => ({
+          enabled: true,
+          sessionFilter: ["discord:direct"],
+        }),
+        enforceForwardingMode: false,
+        fallbackAgentIdFromSessionKey: false,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {},
+        payload,
+        hint: activeExecHint,
+        isNativeDeliveryEnabled: () => false,
+        resolveApprovalConfig: () => ({
+          enabled: true,
+          sessionFilter: ["discord:direct"],
+        }),
+        enforceForwardingMode: false,
+        fallbackAgentIdFromSessionKey: false,
+      }),
+    ).toBe(false);
   });
 });

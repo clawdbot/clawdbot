@@ -16,10 +16,10 @@ export type {
   ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-contract";
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-export { logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
+export { logTypingFailure } from "openclaw/plugin-sdk/channel-outbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 export { resolveToolsBySender } from "openclaw/plugin-sdk/channel-policy";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export {
   PAIRING_APPROVED_MESSAGE,
   buildProbeChannelStatusSummary,
@@ -44,7 +44,7 @@ export type {
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 export { withFileLock } from "openclaw/plugin-sdk/file-lock";
-export { keepHttpServerTaskAlive } from "openclaw/plugin-sdk/channel-lifecycle";
+export { keepHttpServerTaskAlive } from "openclaw/plugin-sdk/channel-outbound";
 export {
   detectMime,
   extensionForMime,
@@ -52,7 +52,7 @@ export {
   getFileExtension,
   resolveChannelMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-runtime";
-export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+export { dispatchReplyFromConfigWithSettledDispatcher } from "openclaw/plugin-sdk/channel-inbound";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { buildMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 export type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";

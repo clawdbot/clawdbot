@@ -3637,10 +3637,26 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--card);
-  max-height: calc(100vh - 280px); /* top nav + filter bar + page padding + breathing room */
+  /* Default sizing for non-fill-height hosts; .card--fill-height overrides below. */
+  max-height: calc(100vh - 280px);
   min-height: 200px;
   overflow: auto;
   container-type: inline-size;
+}
+
+/* Fill-height card: flex column that consumes the remaining settings-workspace
+   body height. `.content--logs` owns the ancestor chain. */
+.card--fill-height {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.card--fill-height .log-stream {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
 }
 
 .log-row {
@@ -4425,11 +4441,39 @@ td.data-table-key-col {
   color: var(--danger);
 }
 
+.exec-approval-warning {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--warning, #b7791f);
+}
+
 .exec-approval-actions {
   margin-top: 16px;
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.exec-approval-command-action {
+  flex: 1 1 100%;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  font-size: 13px;
+}
+
+.exec-approval-command-action span {
+  font-weight: 500;
+}
+
+.exec-approval-command-action code {
+  font-family: var(--mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--muted);
 }
 
 /* ===========================================

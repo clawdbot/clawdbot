@@ -44,4 +44,13 @@ describe("light vitest path routing", () => {
     expect(isCommandsLightTarget("src/commands/channels.add.ts")).toBe(false);
     expect(resolveCommandsLightIncludePattern("src/commands/channels.add.ts")).toBeNull();
   });
+
+  it("can route broad command test files without narrowing their source files", () => {
+    expect(isCommandsLightTarget("src/commands/auth-choice.test.ts")).toBe(true);
+    expect(resolveCommandsLightIncludePattern("src/commands/auth-choice.test.ts")).toBe(
+      "src/commands/auth-choice.test.ts",
+    );
+    expect(isCommandsLightTarget("src/commands/auth-choice.ts")).toBe(false);
+    expect(resolveCommandsLightIncludePattern("src/commands/auth-choice.ts")).toBeNull();
+  });
 });

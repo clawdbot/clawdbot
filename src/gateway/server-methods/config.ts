@@ -702,12 +702,17 @@ export const configHandlers: GatewayRequestHandlers = {
       await execConfigOpenCommand(resolveConfigOpenCommand(configPath));
       respond(true, { ok: true, path: configPath }, undefined);
     } catch (error) {
+      const errorMessage = formatConfigOpenError(error);
+      const isHeadlessError = errorMessage.includes("xdg-open") && errorMessage.includes("no method available");
+      const detailedError = isHeadlessError
+        ? `Cannot open file in headless environment. File path: ${configPath}. This environment appears to lack a graphical or terminal browser handler.`
+        : `Failed to open config file: ${errorMessage}`;
       context?.logGateway?.warn(
-        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${formatConfigOpenError(error)}`,
+        `config.openFile failed path=${sanitizeLookupPathForLog(configPath)}: ${errorMessage}`,
       );
       respond(
         true,
-        { ok: false, path: configPath, error: "failed to open config file" },
+        { ok: false, path: configPath, error: detailedError },
         undefined,
       );
     }

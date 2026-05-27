@@ -3,6 +3,7 @@ import {
   resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -20,12 +21,20 @@ import { stripStructuralPrefixes } from "./mentions.js";
 import type { createTypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]> | undefined;
+type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
 
 const commandsRuntimeLoader = createLazyImportLoader(() => import("./commands.runtime.js"));
+const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
+  () => import("../skill-commands.runtime.js"),
+);
 const statusCommandRuntimeLoader = createLazyImportLoader(() => import("./commands-status.js"));
 
 function loadCommandsRuntime() {
   return commandsRuntimeLoader.load();
+}
+
+function loadSkillCommandsRuntime() {
+  return skillCommandsRuntimeLoader.load();
 }
 
 function loadStatusCommandRuntime() {
@@ -139,6 +148,17 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     };
   }
 
+  let loadedSkillCommands: SkillCommandSpec[] | undefined;
+  const loadNativeSkillCommands = async () => {
+    loadedSkillCommands ??= (await loadSkillCommandsRuntime()).listSkillCommandsForWorkspace({
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+      agentId: params.agentId,
+      skillFilter: params.skillFilter,
+    });
+    return loadedSkillCommands;
+  };
+
   const commandResult = await (
     await loadCommandsRuntime()
   ).handleCommands({
@@ -174,7 +194,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     model: params.model,
     contextTokens: params.agentCfg?.contextTokens ?? 0,
     isGroup: sessionState.isGroup,
-    skillCommands: [],
+    loadSkillCommands: loadNativeSkillCommands,
     typing: params.typing,
   });
   if (!commandResult.shouldContinue) {
@@ -232,7 +252,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     allowTextCommands: directiveResult.result.allowTextCommands,
     inlineStatusRequested: directiveResult.result.inlineStatusRequested,
     command: directiveResult.result.command,
-    skillCommands: directiveResult.result.skillCommands,
+    skillCommands: loadedSkillCommands ?? directiveResult.result.skillCommands,
     directives: directiveResult.result.directives,
     cleanedBody: directiveResult.result.cleanedBody,
     elevatedEnabled: directiveResult.result.elevatedEnabled,

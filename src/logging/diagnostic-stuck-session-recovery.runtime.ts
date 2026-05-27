@@ -4,7 +4,9 @@ import {
   isEmbeddedPiRunActive,
   isEmbeddedPiRunHandleActive,
   resolveActiveEmbeddedRunSessionId,
+  resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId,
+  resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/pi-embedded-runner/runs.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
@@ -126,12 +128,22 @@ export async function recoverStuckDiagnosticSession(
       params.sessionId && isEmbeddedPiRunHandleActive(params.sessionId)
         ? params.sessionId
         : undefined;
+    const fileActiveSessionId = params.sessionFile
+      ? resolveActiveEmbeddedRunHandleSessionIdBySessionFile(params.sessionFile)
+      : undefined;
     let activeSessionId = params.sessionKey
-      ? (resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) ?? fallbackActiveSessionId)
-      : fallbackActiveSessionId;
+      ? (resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) ??
+        fileActiveSessionId ??
+        fallbackActiveSessionId)
+      : (fileActiveSessionId ?? fallbackActiveSessionId);
+    const fileActiveWorkSessionId = params.sessionFile
+      ? resolveActiveEmbeddedRunSessionIdBySessionFile(params.sessionFile)
+      : undefined;
     const activeWorkSessionId = params.sessionKey
-      ? (resolveActiveEmbeddedRunSessionId(params.sessionKey) ?? params.sessionId)
-      : params.sessionId;
+      ? (resolveActiveEmbeddedRunSessionId(params.sessionKey) ??
+        fileActiveWorkSessionId ??
+        params.sessionId)
+      : (fileActiveWorkSessionId ?? params.sessionId);
     const laneKey = params.sessionKey?.trim() || params.sessionId?.trim();
     const sessionLane = laneKey ? resolveEmbeddedSessionLane(laneKey) : null;
     let aborted = false;

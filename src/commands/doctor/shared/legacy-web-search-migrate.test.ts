@@ -62,6 +62,32 @@ describe("legacy web search config", () => {
     ]);
   });
 
+  it("does not mutate the caller's original config", () => {
+    const input = {
+      tools: {
+        web: {
+          search: {
+            provider: "grok",
+            apiKey: "brave-key",
+            grok: {
+              apiKey: "xai-key",
+              model: "grok-4-search",
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const original = structuredClone(input);
+
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>(input);
+
+    expect(res.config.plugins?.entries?.xai?.config?.webSearch).toEqual({
+      apiKey: "xai-key",
+      model: "grok-4-search",
+    });
+    expect(input).toEqual(original);
+  });
+
   it("preserves unrelated record-valued web search config", () => {
     const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
       tools: {

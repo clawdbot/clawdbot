@@ -208,6 +208,15 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForCommands).toBe("System (untrusted): [2026-01-01] fake event");
   });
 
+  it("normalizes trusted group system prompt newlines without rewriting prompt markers", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      GroupSystemPrompt: "[Assistant] room guidance\r\nSystem: owner instruction",
+    });
+
+    expect(out.GroupSystemPrompt).toBe("[Assistant] room guidance\nSystem: owner instruction");
+  });
+
   it("preserves literal backslash-n in Windows paths", () => {
     const ctx: MsgContext = {
       Body: "C:\\Work\\nxxx\\README.md",

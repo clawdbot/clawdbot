@@ -235,7 +235,6 @@ Shared defaults for bounded runtime context surfaces.
       contextLimits: {
         memoryGetMaxChars: 12000,
         memoryGetDefaultLines: 120,
-        toolResultMaxChars: 16000,
         postCompactionMaxChars: 1800,
       },
     },
@@ -247,8 +246,12 @@ Shared defaults for bounded runtime context surfaces.
   metadata and continuation notice are added.
 - `memoryGetDefaultLines`: default `memory_get` line window when `lines` is
   omitted.
-- `toolResultMaxChars`: live tool-result cap used for persisted results and
-  overflow recovery.
+- `toolResultMaxChars`: advanced live tool-result ceiling used for persisted
+  results and overflow recovery. Leave unset for the model-context auto cap:
+  `16000` chars below 100K tokens, `32000` chars at 100K+ tokens, and `64000`
+  chars at 200K+ tokens. The effective cap is still limited to about 30% of the
+  model context window. `openclaw doctor --deep` prints the effective cap, and
+  doctor warns only when an explicit override is stale or has no effect.
 - `postCompactionMaxChars`: AGENTS.md excerpt cap used during post-compaction
   refresh injection.
 
@@ -263,7 +266,6 @@ from `agents.defaults.contextLimits`.
     defaults: {
       contextLimits: {
         memoryGetMaxChars: 12000,
-        toolResultMaxChars: 16000,
       },
     },
     list: [
@@ -271,7 +273,7 @@ from `agents.defaults.contextLimits`.
         id: "tiny-local",
         contextLimits: {
           memoryGetMaxChars: 6000,
-          toolResultMaxChars: 8000,
+          toolResultMaxChars: 8000, // advanced ceiling for this agent
         },
       },
     ],

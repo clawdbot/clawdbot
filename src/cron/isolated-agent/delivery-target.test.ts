@@ -42,10 +42,6 @@ vi.mock("../../infra/outbound/target-id-resolution.js", () => ({
   maybeResolveIdLikeTarget: vi.fn(),
 }));
 
-vi.mock("../../pairing/allow-from-store-read.js", () => ({
-  readChannelAllowFromStoreEntriesSync: vi.fn(() => []),
-}));
-
 vi.mock("../../infra/outbound/targets.runtime.js", () => ({
   resolveOutboundTarget: vi.fn(),
 }));
@@ -57,14 +53,12 @@ const mockedModuleIds = [
   "../../infra/outbound/channel-selection.runtime.js",
   "../../infra/outbound/targets.runtime.js",
   "../../infra/outbound/target-id-resolution.js",
-  "../../pairing/allow-from-store-read.js",
 ];
 
 import { loadSessionStore, readSessionEntry } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
-import { readChannelAllowFromStoreEntriesSync } from "../../pairing/allow-from-store-read.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
 
 afterAll(() => {
@@ -118,8 +112,6 @@ beforeEach(() => {
   extractDeliveryInfoMock.mockReset();
   extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   normalizeTelegramTargetForDeliveryTest.mockClear();
-  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
-  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(resolveOutboundTarget).mockReset();
   vi.mocked(loadSessionStore).mockReset().mockReturnValue({});
   vi.mocked(readSessionEntry).mockReset().mockReturnValue(undefined);
@@ -258,10 +250,6 @@ function setLastSessionEntry(params: {
   });
 }
 
-function setStoredAlphaAllowFrom(allowFrom: string[]) {
-  vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue(allowFrom);
-}
-
 async function resolveForAgent(params: {
   cfg: OpenClawConfig;
   target?: { channel?: "last" | "forum" | "alpha"; to?: string };
@@ -339,8 +327,6 @@ describe("resolveDeliveryTarget", () => {
       lastChannel: "alpha",
       lastTo: "room-denied",
     });
-    setStoredAlphaAllowFrom(["room-allowed"]);
-
     const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
     const result = await resolveDeliveryTarget(cfg, AGENT_ID, {
       channel: "alpha",
@@ -352,7 +338,6 @@ describe("resolveDeliveryTarget", () => {
 
   it("does not use pairing-store entries as implicit automation recipients", async () => {
     setMainSessionEntry(undefined);
-    setStoredAlphaAllowFrom(["room-paired"]);
 
     const cfg = makeCfg({ bindings: [], channels: { alpha: { allowFrom: [] } } });
     const result = await resolveLastTarget(cfg);
@@ -360,7 +345,6 @@ describe("resolveDeliveryTarget", () => {
     expect(result.ok).toBe(false);
     expect(result.channel).toBe("alpha");
     expect(result.to).toBeUndefined();
-    expect(readChannelAllowFromStoreEntriesSync).not.toHaveBeenCalled();
   });
 
   it("falls back to bound accountId when session has no lastAccountId", async () => {

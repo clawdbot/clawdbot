@@ -511,9 +511,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         runtime,
         botUserId,
       });
-      const { setDiscordMeetingNotesVoiceManager } =
-        await import("../voice/meeting-notes-source.js");
-      setDiscordMeetingNotesVoiceManager({
+      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
+      setDiscordTranscriptsVoiceManager({
         accountId: account.accountId,
         manager: voiceManager,
       });

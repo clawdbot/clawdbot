@@ -92,8 +92,16 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources) && !hasFlag(nextArgs, "--threads")) {
-    insertBeforeSeparator(nextArgs, "--threads=1");
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
+    if (!hasFlag(nextArgs, "--threads")) {
+      insertBeforeSeparator(nextArgs, "--threads=1");
+    }
+    if (!nextEnv.GOGC) {
+      nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
+    }
+    if (!nextEnv.GOMEMLIMIT) {
+      nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
+    }
   }
 
   return { env: nextEnv, args: nextArgs };

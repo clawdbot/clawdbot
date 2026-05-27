@@ -633,7 +633,7 @@ describe("DiscordVoiceManager", () => {
     expectConnectedStatus(manager, "1002");
   });
 
-  it("attaches meeting notes capture to an existing voice session", async () => {
+  it("attaches transcripts capture to an existing voice session", async () => {
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
@@ -641,7 +641,7 @@ describe("DiscordVoiceManager", () => {
     const result = await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -649,17 +649,17 @@ describe("DiscordVoiceManager", () => {
     );
 
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof onUtterance };
     };
     expect(result.ok).toBe(true);
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
-    expect(entry.meetingNotes).toEqual({
+    expect(entry.transcripts).toEqual({
       sessionId: "notes-1",
       onUtterance,
     });
   });
 
-  it("does not leave a newer meeting-notes-only session for a stale stop", async () => {
+  it("does not leave a newer transcripts-only session for a stale stop", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -671,10 +671,11 @@ describe("DiscordVoiceManager", () => {
     const firstUtterance = vi.fn();
     const secondUtterance = vi.fn();
 
+    await manager.join({ guildId: "g1", channelId: "1001" });
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance: firstUtterance,
         },
@@ -683,7 +684,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-2",
           onUtterance: secondUtterance,
         },
@@ -692,21 +693,21 @@ describe("DiscordVoiceManager", () => {
 
     const result = await manager.leave(
       { guildId: "g1", channelId: "1001" },
-      { meetingNotesSessionId: "notes-1" },
+      { transcriptsSessionId: "notes-1" },
     );
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof secondUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof secondUtterance };
     };
 
     expect(result.ok).toBe(false);
-    expect(entry.meetingNotes).toEqual({
+    expect(entry.transcripts).toEqual({
       sessionId: "notes-2",
       onUtterance: secondUtterance,
     });
     expectConnectedStatus(manager, "1001");
   });
 
-  it("upgrades a meeting-notes-only session to realtime on a normal join", async () => {
+  it("upgrades a transcripts-only session to realtime on a normal join", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -720,7 +721,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -729,7 +730,7 @@ describe("DiscordVoiceManager", () => {
     expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
 
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof onUtterance };
       realtime?: unknown;
     };
     let resolveRealtimeReady!: () => void;
@@ -750,7 +751,7 @@ describe("DiscordVoiceManager", () => {
     expect(joinVoiceChannelMock).toHaveBeenCalledTimes(1);
     expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1);
     expect(realtimeSessionMock.connect).toHaveBeenCalledTimes(1);
-    expect(entry.meetingNotes).toEqual({
+    expect(entry.transcripts).toEqual({
       sessionId: "notes-1",
       onUtterance,
     });
@@ -758,11 +759,11 @@ describe("DiscordVoiceManager", () => {
 
     const stopNotesResult = await manager.leave(
       { guildId: "g1", channelId: "1001" },
-      { meetingNotesSessionId: "notes-1" },
+      { transcriptsSessionId: "notes-1" },
     );
 
     expect(stopNotesResult.ok).toBe(true);
-    expect(entry.meetingNotes).toBeUndefined();
+    expect(entry.transcripts).toBeUndefined();
     expect(entry.realtime).toBeTruthy();
     expect(realtimeSessionMock.close).not.toHaveBeenCalled();
     expectConnectedStatus(manager, "1001");
@@ -782,7 +783,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -818,7 +819,7 @@ describe("DiscordVoiceManager", () => {
     expect(entry.realtime).toBeUndefined();
   });
 
-  it("detaches meeting notes without leaving voice during pending realtime upgrade", async () => {
+  it("detaches transcripts without leaving voice during pending realtime upgrade", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -832,14 +833,14 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
       },
     );
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: typeof onUtterance };
+      transcripts?: { sessionId: string; onUtterance: typeof onUtterance };
       pendingRealtime?: unknown;
       realtime?: unknown;
     };
@@ -854,11 +855,11 @@ describe("DiscordVoiceManager", () => {
     await vi.waitFor(() => expect(createRealtimeVoiceBridgeSessionMock).toHaveBeenCalledTimes(1));
     const stopNotesResult = await manager.leave(
       { guildId: "g1", channelId: "1001" },
-      { meetingNotesSessionId: "notes-1" },
+      { transcriptsSessionId: "notes-1" },
     );
 
     expect(stopNotesResult.ok).toBe(true);
-    expect(entry.meetingNotes).toBeUndefined();
+    expect(entry.transcripts).toBeUndefined();
     expect(entry.pendingRealtime).toBeTruthy();
     expect(entry.realtime).toBeUndefined();
 
@@ -885,7 +886,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -912,7 +913,7 @@ describe("DiscordVoiceManager", () => {
     expect(createRealtimeVoiceBridgeSessionMock).not.toHaveBeenCalled();
   });
 
-  it("keeps realtime playback alive when meeting notes attaches to an existing voice session", async () => {
+  it("keeps realtime playback alive when transcripts attaches to an existing voice session", async () => {
     const manager = createManager({
       groupPolicy: "open",
       voice: {
@@ -925,7 +926,7 @@ describe("DiscordVoiceManager", () => {
     await manager.join({ guildId: "g1", channelId: "1001" });
     const player = getLastAudioPlayer();
     const entry = getSessionEntry(manager) as {
-      meetingNotes?: { sessionId: string; onUtterance: (event: unknown) => Promise<void> };
+      transcripts?: { sessionId: string; onUtterance: (event: unknown) => Promise<void> };
       realtime?: {
         beginSpeakerTurn: (
           context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
@@ -941,13 +942,13 @@ describe("DiscordVoiceManager", () => {
       | undefined;
 
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(24_000));
-    const stopCallsBeforeMeetingNotes = player.stop.mock.calls.length;
+    const stopCallsBeforeTranscripts = player.stop.mock.calls.length;
     const onUtterance = vi.fn(async () => undefined);
 
     const result = await manager.join(
       { guildId: "g1", channelId: "1001" },
       {
-        meetingNotes: {
+        transcripts: {
           sessionId: "notes-1",
           onUtterance,
         },
@@ -955,9 +956,9 @@ describe("DiscordVoiceManager", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(entry.meetingNotes?.sessionId).toBe("notes-1");
+    expect(entry.transcripts?.sessionId).toBe("notes-1");
     expect(realtimeSessionMock.close).not.toHaveBeenCalled();
-    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeMeetingNotes);
+    expect(player.stop).toHaveBeenCalledTimes(stopCallsBeforeTranscripts);
 
     const turn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
@@ -2114,7 +2115,11 @@ describe("DiscordVoiceManager", () => {
 
     await manager.join({ guildId: "g1", channelId: "1001" });
 
-    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 45_000);
+    const readyCall = entersStateMock.mock.calls[0];
+    expect(readyCall?.[0]).toBe(connection);
+    expect(readyCall?.[1]).toBe("ready");
+    expect(readyCall?.[2]).toBeGreaterThanOrEqual(44_900);
+    expect(readyCall?.[2]).toBeLessThanOrEqual(45_000);
 
     entersStateMock.mockClear();
     entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
@@ -3001,6 +3006,80 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("wake answer");
   });
 
+  it("treats a bare wake name as an activation for the next realtime transcript", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "follow-up answer" }] });
+    const onUtterance = vi.fn();
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        voice: {
+          enabled: true,
+          mode: "agent-proxy",
+          realtime: { provider: "openai", consultPolicy: "auto", requireWakeName: true },
+        },
+      },
+      undefined,
+      {
+        agents: {
+          list: [{ id: "agent-1", identity: { name: "Molty" } }],
+        },
+      },
+    );
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    await manager.join(
+      { guildId: "g1", channelId: "1001" },
+      {
+        transcripts: {
+          sessionId: "notes-1",
+          onUtterance,
+        },
+      },
+    );
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const ownerTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: "owner prompt", senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    ownerTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Multy?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+    expect(agentCommandMock).not.toHaveBeenCalled();
+
+    bridgeParams?.onTranscript?.("user", "What's your take on rebuilding everything?", true);
+
+    await vi.waitFor(() => expect(agentCommandMock).toHaveBeenCalledTimes(1));
+    expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+    expect(lastAgentCommandArgs().message).toContain("What's your take on rebuilding everything?");
+    expect(lastAgentCommandArgs().message).not.toContain("Multy");
+    expect(lastAgentCommandArgs().extraSystemPrompt).toBe("owner prompt");
+    expectUserMessageIncludes("follow-up answer");
+    await vi.waitFor(() =>
+      expect(onUtterance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionId: "notes-1",
+          text: "What's your take on rebuilding everything?",
+          speaker: { id: "u-owner", label: "Owner" },
+        }),
+      ),
+    );
+  });
+
   it("reuses recently ignored speaker context when wake-name consult has no pending turn", async () => {
     agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "wake answer" }] });
     const manager = createManager(
@@ -3282,6 +3361,17 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandArgsAt(7).message).toContain("Can you still hear trailing");
     expect(agentCommandArgsAt(7).message).not.toContain("Molty");
 
+    const trailingMaltyTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    trailingMaltyTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "What's going on today, Malty?", true);
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(agentCommandArgsAt(8).message).toContain("What's going on today");
+    expect(agentCommandArgsAt(8).message).not.toContain("Malty");
+
     const openChatTurn = entry.realtime?.beginSpeakerTurn(
       { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
       "u-owner",
@@ -3290,7 +3380,7 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.onTranscript?.("user", "Open chat, can you hear me now?", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
-    expect(agentCommandMock).toHaveBeenCalledTimes(8);
+    expect(agentCommandMock).toHaveBeenCalledTimes(9);
   });
 
   it("rejects non-wake fuzzy leading phrases before realtime agent-proxy consults", async () => {

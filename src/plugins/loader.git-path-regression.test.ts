@@ -31,7 +31,7 @@ describe("plugin loader git path regression", () => {
     fs.writeFileSync(sourceLoaderBaseFile, "export {};\n", "utf-8");
     fs.writeFileSync(
       path.join(copiedSourceDir, "channel.runtime.ts"),
-      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
+      `import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { PAIRING_APPROVED_MESSAGE } from "../runtime-api.js";
 
 export const copiedRuntimeMarker = {
@@ -47,7 +47,7 @@ export const copiedRuntimeMarker = {
 `,
       "utf-8",
     );
-    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "outbound-send-deps.ts");
+    const copiedChannelRuntimeShim = path.join(copiedPluginSdkDir, "channel-outbound.ts");
     fs.writeFileSync(
       copiedChannelRuntimeShim,
       `export function resolveOutboundSendDep() {
@@ -75,7 +75,7 @@ export const copiedRuntimeMarker = {
         tryNative: false,
         extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
         alias: {
-          "openclaw/plugin-sdk/outbound-send-deps": ${JSON.stringify(copiedChannelRuntimeShim)},
+          "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(copiedChannelRuntimeShim)},
         },
       });
       const mod = withAlias(${JSON.stringify(copiedChannelRuntime)});

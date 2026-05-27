@@ -174,7 +174,8 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const argv = options.argv ?? process.argv;
-  if (!process.stdout.isTTY) {
+  const isTty = options.isTty ?? process.stdout.isTTY;
+  if (!isTty) {
     return;
   }
   if (hasJsonFlag(argv)) {

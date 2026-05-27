@@ -163,7 +163,7 @@ export type PluginManifestContractListKey =
   | "externalAuthProviders"
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
-  | "meetingNotesSourceProviders"
+  | "transcriptSourceProviders"
   | "documentExtractors"
   | "realtimeVoiceProviders"
   | "realtimeTranscriptionProviders"
@@ -384,7 +384,7 @@ function mergeManifestContracts(
     "realtimeTranscriptionProviders",
     "realtimeVoiceProviders",
     "mediaUnderstandingProviders",
-    "meetingNotesSourceProviders",
+    "transcriptSourceProviders",
     "documentExtractors",
     "imageGenerationProviders",
     "videoGenerationProviders",

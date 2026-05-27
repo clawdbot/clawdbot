@@ -1,4 +1,4 @@
-import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
@@ -121,9 +121,7 @@ function installRuntime(params: {
   const readSessionUpdatedAt = vi.fn(
     (_params?: { storePath: string; sessionKey: string }): number | undefined => undefined,
   );
-  type ResolvedTurn =
-    | Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0]
-    | Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0];
+  type ResolvedTurn = Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0];
   const dispatchAssembled = vi.fn(async (turn: ResolvedTurn) => {
     await turn.recordInboundSession({
       storePath: turn.storePath,
@@ -134,16 +132,6 @@ function installRuntime(params: {
       updateLastRoute: turn.record?.updateLastRoute,
       onRecordError: turn.record?.onRecordError ?? (() => undefined),
     });
-    if ("runDispatch" in turn) {
-      const dispatchResult = await turn.runDispatch();
-      return {
-        admission: { kind: "dispatch" as const },
-        dispatched: true,
-        ctxPayload: turn.ctxPayload,
-        routeSessionKey: turn.routeSessionKey,
-        dispatchResult,
-      };
-    }
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
       cfg: turn.cfg,
       agentId: turn.agentId,
@@ -177,7 +165,7 @@ function installRuntime(params: {
     };
   });
   const buildContext = vi.fn(
-    (params: Parameters<PluginRuntime["channel"]["turn"]["buildContext"]>[0]) =>
+    (params: Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0]) =>
       ({
         Body: params.message.body ?? params.message.rawBody,
         BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -200,7 +188,7 @@ function installRuntime(params: {
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         ...params.extra,
-      }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
+      }) as Awaited<ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>>,
   );
   const buildAgentSessionKey = vi.fn(
     (input: {
@@ -280,10 +268,11 @@ function installRuntime(params: {
         finalizeInboundContext: vi.fn((ctx) => ctx),
         dispatchReplyWithBufferedBlockDispatcher,
       },
-      turn: {
-        runAssembled:
-          dispatchAssembled as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
-        buildContext: buildContext as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+      inbound: {
+        dispatchReply:
+          dispatchAssembled as unknown as PluginRuntime["channel"]["inbound"]["dispatchReply"],
+        buildContext:
+          buildContext as unknown as PluginRuntime["channel"]["inbound"]["buildContext"],
       },
       text: {
         resolveMarkdownTableMode: vi.fn(() => "code"),

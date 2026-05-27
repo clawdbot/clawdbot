@@ -656,11 +656,11 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
-      { provider: "anthropic", id: "claude-opus-4-7" },
-      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
+      { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
+      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "deepseek", id: "deepseek-v4-flash" },
       { provider: "deepseek", id: "deepseek-v4-pro" },
       { provider: "minimax", id: "minimax-m2.7" },
@@ -682,6 +682,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 describe("selectHighSignalLiveItems", () => {
   it("prefers curated Google replacements before fallback provider spread", () => {
     const items = [
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
@@ -699,8 +700,8 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item.provider,
       ),
     ).toEqual([
+      { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
-      { provider: "anthropic", id: "claude-opus-4-6" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
       { provider: "google", id: "gemini-3-flash-preview" },
     ]);

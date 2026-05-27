@@ -11,7 +11,6 @@ import { resolveCronStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
-import { hasConfiguredChannelsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
@@ -25,6 +24,9 @@ import type { HeartbeatStatus, SessionStatus, StatusSummary } from "./status.typ
 const channelSummaryModuleLoader = createLazyImportLoader(
   () => import("../infra/channel-summary.js"),
 );
+const channelPluginIdsModuleLoader = createLazyImportLoader(
+  () => import("../plugins/channel-plugin-ids.js"),
+);
 const linkChannelModuleLoader = createLazyImportLoader(() => import("./status.link-channel.js"));
 const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
   () => import("../tasks/task-registry.maintenance.js"),
@@ -32,6 +34,10 @@ const taskRegistryMaintenanceModuleLoader = createLazyImportLoader(
 
 function loadChannelSummaryModule() {
   return channelSummaryModuleLoader.load();
+}
+
+function loadChannelPluginIdsModule() {
+  return channelPluginIdsModuleLoader.load();
 }
 
 function loadLinkChannelModule() {
@@ -152,7 +158,10 @@ export async function getStatusSummary(
       ? { config: cfg }
       : { config: cfg, activationSourceConfig: options.sourceConfig };
   const needsChannelPlugins =
-    includeChannelSummary && hasConfiguredChannelsForReadOnlyScope(channelScopeConfig);
+    includeChannelSummary &&
+    (await loadChannelPluginIdsModule().then(({ hasConfiguredChannelsForReadOnlyScope }) =>
+      hasConfiguredChannelsForReadOnlyScope(channelScopeConfig),
+    ));
   const linkContext = needsChannelPlugins
     ? await loadLinkChannelModule().then(({ resolveLinkChannelContext }) =>
         resolveLinkChannelContext(cfg, { sourceConfig: options.sourceConfig }),

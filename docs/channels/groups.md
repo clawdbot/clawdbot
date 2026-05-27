@@ -51,7 +51,7 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
 `openclaw doctor` warns about this mismatch.
 
-For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Some harnesses, including Codex, also default direct/source chats to message-tool delivery when this is unset. Set `messages.visibleReplies: "automatic"` to force the old automatic final-reply path. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
+For direct chats and any other source event, use `messages.visibleReplies: "message_tool"` to apply the same tool-only visible-reply behavior globally. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms.
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 

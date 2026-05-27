@@ -13,12 +13,16 @@ export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: str
   const mainModel = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
+    // Default-model lookup is on every reply; plugin runtime normalization can
+    // cold-load plugins, so keep this to static/configured model aliases here.
+    allowPluginNormalization: false,
   });
   const defaultProvider = mainModel.provider;
   const defaultModel = mainModel.model;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider,
+    allowPluginNormalization: false,
   });
   return { defaultProvider, defaultModel, aliasIndex };
 }

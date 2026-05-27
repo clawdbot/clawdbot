@@ -6,8 +6,11 @@ type SessionRunState = {
 };
 
 export function isSessionRunActive(state: SessionRunState): boolean {
-  if (state.status) {
-    return state.status === "running";
+  if (state.status && state.status !== "running") {
+    return false;
   }
-  return state.hasActiveRun === true;
+  if (typeof state.hasActiveRun === "boolean") {
+    return state.hasActiveRun;
+  }
+  return state.status === "running";
 }

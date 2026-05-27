@@ -736,6 +736,46 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("dedupes concurrent exact assistant appends by idempotency key", async () => {
+    writeTranscriptStore();
+    const idempotencyKey = "mirror:concurrent-assistant";
+
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () =>
+        appendExactAssistantMessageToSessionTranscript({
+          sessionKey,
+          storePath: fixture.storePath(),
+          idempotencyKey,
+          updateMode: "none",
+          message: createExactAssistantMessage({
+            text: "Mirrored reply",
+            provider: "openclaw",
+            model: "delivery-mirror",
+          }),
+        }),
+      ),
+    );
+
+    expect(results.every((result) => result.ok)).toBe(true);
+    const messageIds = results.map((result) => (result.ok ? result.messageId : ""));
+    expect(new Set(messageIds).size).toBe(1);
+
+    const firstOk = results.find((result) => result.ok);
+    if (!firstOk?.ok) {
+      throw new Error("expected exact assistant append to succeed");
+    }
+    const records = fs
+      .readFileSync(firstOk.sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { message?: { role?: string; idempotencyKey?: string } })
+      .filter(
+        (record) =>
+          record.message?.role === "assistant" && record.message.idempotencyKey === idempotencyKey,
+      );
+    expect(records).toHaveLength(1);
+  });
+
   it("can emit file-only transcript refresh events for exact assistant appends", async () => {
     writeTranscriptStore();
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
@@ -815,6 +855,56 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     for (let index = 1; index < records.length; index += 1) {
       expect(records[index]?.parentId).toBe(records[index - 1]?.id);
     }
+  });
+
+  it("requires explicit idempotency scanning for direct transcript appends", async () => {
+    const uncheckedSessionFile = resolveSessionTranscriptPathInDir(
+      "unchecked-idempotency-session",
+      fixture.sessionsDir(),
+    );
+    const checkedSessionFile = resolveSessionTranscriptPathInDir(
+      "checked-idempotency-session",
+      fixture.sessionsDir(),
+    );
+    const message = {
+      role: "assistant",
+      content: "fresh keyed append",
+      idempotencyKey: "fresh-key",
+    };
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: uncheckedSessionFile,
+      message,
+    });
+    const uncheckedSecondAppend = await appendSessionTranscriptMessage({
+      transcriptPath: uncheckedSessionFile,
+      message,
+    });
+
+    const checkedFirstAppend = await appendSessionTranscriptMessage({
+      transcriptPath: checkedSessionFile,
+      message,
+      idempotencyLookup: "scan",
+    });
+    const checkedSecondAppend = await appendSessionTranscriptMessage({
+      transcriptPath: checkedSessionFile,
+      message,
+      idempotencyLookup: "scan",
+    });
+
+    const countMessages = (sessionFile: string) =>
+      fs
+        .readFileSync(sessionFile, "utf-8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type?: string })
+        .filter((record) => record.type === "message").length;
+
+    expect(uncheckedSecondAppend.appended).toBe(true);
+    expect(countMessages(uncheckedSessionFile)).toBe(2);
+    expect(checkedSecondAppend.appended).toBe(false);
+    expect(checkedSecondAppend.messageId).toBe(checkedFirstAppend.messageId);
+    expect(countMessages(checkedSessionFile)).toBe(1);
   });
 
   it("redacts structured message content before transcript persistence", async () => {

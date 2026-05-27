@@ -244,4 +244,24 @@ describe("builder compatibility", () => {
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });
+
+  it("strips stale message-tool delivery hints from replayed user text", () => {
+    const input = [
+      "Delivery: to send a message, use the `message` tool.",
+      "",
+      "Actual user message",
+    ].join("\n");
+
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
+
+  it("strips current message-tool-only delivery hints from replayed user text", () => {
+    const input = [
+      "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+      "",
+      "Actual user message",
+    ].join("\n");
+
+    expect(stripInboundMetadata(input)).toBe("Actual user message");
+  });
 });

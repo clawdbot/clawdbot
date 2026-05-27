@@ -21,6 +21,7 @@ export type TelegramMenuCommand = {
   command: string;
   description: string;
   descriptionLocalizations?: Record<string, string>;
+  isAlias?: boolean;
 };
 
 type TelegramCommandMenuScope =
@@ -255,11 +256,19 @@ function buildUncachedCappedTelegramMenuCommands(params: {
   const { maxCommands, maxTotalChars } = params;
   const totalCommands = allCommands.length;
   const overflowCount = Math.max(0, totalCommands - maxCommands);
+  const canonicalCommands = allCommands.filter((command) => !command.isAlias);
+  const aliasCommands = allCommands.filter((command) => command.isAlias);
+  const aliasBudget = Math.max(0, maxCommands - canonicalCommands.length);
+  const budgetedCommands =
+    overflowCount === 0
+      ? allCommands
+      : [...canonicalCommands, ...aliasCommands.slice(0, aliasBudget)];
   const {
-    commands: commandsToRegister,
+    commands: fittedCommands,
     descriptionTrimmed,
     textBudgetDropCount,
-  } = fitTelegramCommandsWithinTextBudget(allCommands.slice(0, maxCommands), maxTotalChars);
+  } = fitTelegramCommandsWithinTextBudget(budgetedCommands.slice(0, maxCommands), maxTotalChars);
+  const commandsToRegister = fittedCommands.map(({ isAlias: _isAlias, ...command }) => command);
   return {
     commandsToRegister,
     totalCommands,
@@ -282,6 +291,7 @@ function buildTelegramMenuResultCacheKey(params: {
   for (const command of params.allCommands) {
     updateTelegramCommandDigestField(digest, command.command);
     updateTelegramCommandDigestField(digest, command.description);
+    updateTelegramCommandDigestField(digest, command.isAlias ? "1" : "0");
     updateTelegramCommandLocalizationDigest(digest, command.descriptionLocalizations);
   }
   return digest.digest("hex").slice(0, 16);

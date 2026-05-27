@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          docker build -t openclaw-sandbox-smoke-base:bookworm-slim - <<'EOF'
+          timeout --kill-after=30s 5m docker build -t openclaw-sandbox-smoke-base:bookworm-slim - <<'EOF'
           FROM debian:bookworm-slim
           RUN useradd --create-home --shell /bin/bash sandbox
           USER sandbox
@@ -63,5 +63,5 @@ jobs:
             FINAL_USER=sandbox \
             scripts/sandbox-common-setup.sh
 
-          u="$(docker run --rm openclaw-sandbox-common-smoke:bookworm-slim sh -lc 'id -un')"
+          u="$(timeout --kill-after=30s 2m docker run --rm openclaw-sandbox-common-smoke:bookworm-slim sh -lc 'id -un')"
           test "$u" = "sandbox"

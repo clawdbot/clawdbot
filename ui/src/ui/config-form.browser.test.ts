@@ -372,6 +372,31 @@ describe("config form renderer", () => {
     let analysis = analyzeConfigSchema(renderableUnionSchema);
     expect(analysis.unsupportedPaths).toEqual([]);
 
+    const typedWithAnyBranchSchema = {
+      type: "object",
+      properties: {
+        lastTouchedAt: {
+          title: "Config Last Touched At",
+          description: "ISO timestamp of the last config write.",
+          anyOf: [{ type: "string" }, {}],
+        },
+      },
+    };
+    analysis = analyzeConfigSchema(typedWithAnyBranchSchema);
+    expect(analysis.unsupportedPaths).toEqual(["lastTouchedAt"]);
+
+    const nullableSingleBranchSchema = {
+      type: "object",
+      properties: {
+        note: {
+          anyOf: [{ type: "string", nullable: true }],
+        },
+      },
+    };
+    analysis = analyzeConfigSchema(nullableSingleBranchSchema);
+    expect(analysis.unsupportedPaths).toEqual([]);
+    expect(analysis.schema?.properties?.note?.nullable).toBe(true);
+
     const nullableSchema = {
       type: "object",
       properties: {
@@ -400,6 +425,47 @@ describe("config form renderer", () => {
     };
     analysis = analyzeConfigSchema(untypedAdditionalPropertiesSchema);
     expect(analysis.unsupportedPaths).toEqual([]);
+  });
+
+  it("accepts transform-backed public config schema shapes", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        lastTouchedAt: {
+          anyOf: [{ type: "string" }, { type: "number" }],
+        },
+        setupCommand: {
+          anyOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
+        },
+        allowedDomains: {
+          type: "array",
+          items: { type: "string" },
+        },
+        chatMessageMaxWidth: {
+          type: "string",
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toEqual([]);
+
+    const container = document.createElement("div");
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {
+          lastTouchedAt: "2026-05-05T00:00:00.000Z",
+          setupCommand: "apt-get update",
+          allowedDomains: ["example.com"],
+          chatMessageMaxWidth: "960px",
+        },
+        onPatch: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.textContent).not.toContain("Unsupported schema node");
   });
 
   it("treats additionalProperties true as editable map fields", () => {

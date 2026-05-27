@@ -89,11 +89,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-message", () => ({
-  createChannelMessageReplyPipeline: vi.fn(() => ({})),
-  hasFinalChannelTurnDispatch: vi.fn(() => false),
-}));
-
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/webhook-ingress")>(
     "openclaw/plugin-sdk/webhook-ingress",
@@ -153,7 +148,6 @@ describe("monitorLineProvider lifecycle", () => {
     vi.doUnmock("./bot.js");
     vi.doUnmock("openclaw/plugin-sdk/reply-runtime");
     vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-    vi.doUnmock("openclaw/plugin-sdk/channel-message");
     vi.doUnmock("openclaw/plugin-sdk/webhook-ingress");
     vi.doUnmock("./webhook-node.js");
     vi.doUnmock("./auto-reply-delivery.js");

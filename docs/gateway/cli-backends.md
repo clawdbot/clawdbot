@@ -161,13 +161,14 @@ told us OpenClaw-style Claude CLI usage is allowed again, so OpenClaw treats
 a new policy.
 </Note>
 
-The bundled Anthropic `claude-cli` backend receives the OpenClaw skills snapshot
-two ways: the compact OpenClaw skills catalog in the appended system prompt, and
-a temporary Claude Code plugin passed with `--plugin-dir`. The plugin contains
-only the eligible skills for that agent/session, so Claude Code's native skill
-resolver sees the same filtered set that OpenClaw would otherwise advertise in
-the prompt. Skill env/API key overrides are still applied by OpenClaw to the
-child process environment for the run.
+The bundled Anthropic `claude-cli` backend prefers Claude Code's native skill
+resolver for OpenClaw skills. When the current skills snapshot includes at least
+one selected skill with a materialized path, OpenClaw passes a temporary Claude
+Code plugin with `--plugin-dir` and omits the duplicate OpenClaw skills catalog
+from the appended system prompt. If the snapshot has no materialized plugin
+skill, OpenClaw keeps the prompt catalog as a fallback. Skill env/API key
+overrides are still applied by OpenClaw to the child process environment for the
+run.
 
 Claude CLI also has its own noninteractive permission mode. OpenClaw maps that
 to the existing exec policy instead of adding Claude-specific policy config.
@@ -398,6 +399,22 @@ reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10
 minutes; set `0` to disable). One-shot embedded runs such as auth probes,
 slug generation, and active-memory recall request cleanup at run end so stdio
 children and Streamable HTTP/SSE streams do not outlive the run.
+
+## Reseed history cap
+
+When a fresh CLI session is seeded from a prior OpenClaw transcript (for
+example after a `session_expired` retry), the rendered
+`<conversation_history>` block is capped to keep reseed prompts from
+exploding. The default is `12288` characters (about 3000 tokens).
+
+Claude CLI backends automatically use a larger cap derived from the resolved
+Claude context tier. Standard 200K-token Claude runs keep a larger transcript
+slice, and 1M-token Claude runs keep a larger slice again, while other CLI
+backends keep the conservative default.
+
+- The cap only governs the reseed prompt's prior-history block. Live-session
+  output limits are tuned separately under `reliability.outputLimits`
+  (see [Sessions](#sessions)).
 
 ## Limitations
 

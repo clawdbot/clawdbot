@@ -72,6 +72,65 @@ describe("bot-native-command-menu", () => {
     });
   });
 
+  it("does not let aliases consume command slots before canonical commands", () => {
+    const canonicalCommands = Array.from({ length: 100 }, (_, i) => ({
+      command: `cmd_${i}`,
+      description: `Command ${i}`,
+    }));
+    const allCommands = [
+      ...canonicalCommands.slice(0, 99),
+      { command: "side", description: "Alias", isAlias: true },
+      canonicalCommands[99],
+    ];
+
+    const result = buildCappedTelegramMenuCommands({ allCommands });
+
+    expect(result.commandsToRegister).toEqual(canonicalCommands);
+    expect(result.totalCommands).toBe(101);
+    expect(result.overflowCount).toBe(1);
+  });
+
+  it("preserves alias order when the Telegram command cap is not exceeded", () => {
+    const allCommands = [
+      { command: "btw", description: "Ask a side question" },
+      { command: "side", description: "Alias", isAlias: true },
+      { command: "plugin_command", description: "Plugin command" },
+    ];
+
+    const result = buildCappedTelegramMenuCommands({ allCommands });
+
+    expect(result.commandsToRegister).toEqual([
+      { command: "btw", description: "Ask a side question" },
+      { command: "side", description: "Alias" },
+      { command: "plugin_command", description: "Plugin command" },
+    ]);
+    expect(result.totalCommands).toBe(3);
+    expect(result.overflowCount).toBe(0);
+  });
+
+  it("counts aliases dropped by the Telegram command cap", () => {
+    const canonicalCommands = Array.from({ length: 99 }, (_, i) => ({
+      command: `cmd_${i}`,
+      description: `Command ${i}`,
+    }));
+    const aliasCommands = Array.from({ length: 5 }, (_, i) => ({
+      command: `alias_${i}`,
+      description: `Alias ${i}`,
+      isAlias: true,
+    }));
+
+    const result = buildCappedTelegramMenuCommands({
+      allCommands: [...canonicalCommands, ...aliasCommands],
+    });
+
+    expect(result.commandsToRegister).toEqual([
+      ...canonicalCommands,
+      { command: "alias_0", description: "Alias 0" },
+    ]);
+    expect(result.totalCommands).toBe(104);
+    expect(result.overflowCount).toBe(4);
+  });
+
   it("shortens descriptions before dropping commands to fit Telegram payload budget", () => {
     const allCommands = Array.from({ length: 92 }, (_, i) => ({
       command: `cmd_${i}`,

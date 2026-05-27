@@ -10,7 +10,11 @@ import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/sto
 export const loadSessionStore = loadSessionStoreImpl;
 
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
-export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
+export {
+  resolveSessionFilePath,
+  resolveSessionTranscriptPathInDir,
+  resolveStorePath,
+} from "../config/sessions/paths.js";
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

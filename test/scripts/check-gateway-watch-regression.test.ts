@@ -1,10 +1,12 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   hasGatewayReadyLog,
   shouldRefreshBuildStampForRestoredArtifacts,
+  stopTimedWatchChild,
   writeBuildAndRuntimePostBuildStamps,
 } from "../../scripts/check-gateway-watch-regression.mjs";
 import {
@@ -56,5 +58,39 @@ describe("check-gateway-watch-regression", () => {
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
+  });
+
+  it("bounds teardown when the watch process ignores termination signals", async () => {
+    const child = new EventEmitter() as EventEmitter & {
+      exitCode: number | null;
+      signalCode: NodeJS.Signals | null;
+      stderr: { destroy: ReturnType<typeof vi.fn> };
+      stdin: { destroy: ReturnType<typeof vi.fn> };
+      stdout: { destroy: ReturnType<typeof vi.fn> };
+      unref: ReturnType<typeof vi.fn>;
+    };
+    child.exitCode = null;
+    child.signalCode = null;
+    child.stderr = { destroy: vi.fn() };
+    child.stdin = { destroy: vi.fn() };
+    child.stdout = { destroy: vi.fn() };
+    child.unref = vi.fn();
+    const killProcess = vi.fn();
+
+    await expect(
+      stopTimedWatchChild(
+        child,
+        1234,
+        { sigkillExitGraceMs: 1, sigkillGraceMs: 1 },
+        { killProcess },
+      ),
+    ).resolves.toEqual({ code: null, signal: "SIGKILL" });
+
+    expect(killProcess).toHaveBeenNthCalledWith(1, 1234, "SIGTERM");
+    expect(killProcess).toHaveBeenNthCalledWith(2, 1234, "SIGKILL");
+    expect(child.stdin.destroy).toHaveBeenCalledOnce();
+    expect(child.stdout.destroy).toHaveBeenCalledOnce();
+    expect(child.stderr.destroy).toHaveBeenCalledOnce();
+    expect(child.unref).toHaveBeenCalledOnce();
   });
 });

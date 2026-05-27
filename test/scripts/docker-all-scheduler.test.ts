@@ -4,6 +4,7 @@ import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
+  dockerPreflightContainerNames,
   parseDockerAllCliArgs,
 } from "../../scripts/test-docker-all.mjs";
 
@@ -205,6 +206,28 @@ describe("scripts/test-docker-all scheduler", () => {
 
   it("serializes live OpenAI Docker lanes by default", () => {
     expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
+  });
+
+  it("cleans stale stopped containers from all named Docker E2E lanes", () => {
+    expect(
+      dockerPreflightContainerNames(`
+openclaw-gateway-e2e-123 Exited (1) 2 minutes ago
+openclaw-config-reload-e2e-234 Created
+openclaw-plugin-binding-command-escape-e2e-345 Dead
+openclaw-kitchen-sink-rpc-e2e-456 Exited (137) 10 seconds ago
+openclaw-openwebui-gateway-567 Exited (1) 3 minutes ago
+openclaw-openwebui-678 Created
+openclaw-not-an-e2e-container Exited (1) 2 minutes ago
+postgres Created
+`),
+    ).toEqual([
+      "openclaw-gateway-e2e-123",
+      "openclaw-config-reload-e2e-234",
+      "openclaw-plugin-binding-command-escape-e2e-345",
+      "openclaw-kitchen-sink-rpc-e2e-456",
+      "openclaw-openwebui-gateway-567",
+      "openclaw-openwebui-678",
+    ]);
   });
 
   it("describes effective scheduler limits for operator errors", () => {

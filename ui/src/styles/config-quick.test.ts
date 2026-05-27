@@ -70,6 +70,14 @@ describe("config-quick styles", () => {
     );
   });
 
+  it("scopes the logs fill-height chain to the explicit logs route class", () => {
+    expect(css).toContain(".content--logs {");
+    expectSelectorBlockToMatch(".content--logs", /overflow:\s*hidden;/);
+    expectSelectorBlockToMatch(".content--logs .settings-workspace", /display:\s*flex;/);
+    expectSelectorBlockToMatch(".content--logs .settings-workspace__body", /min-height:\s*0;/);
+    expect(css).not.toContain(":has(.card--fill-height)");
+  });
+
   it("avoids transition-all in the quick settings surface", () => {
     expect(css).not.toContain("transition: all");
   });

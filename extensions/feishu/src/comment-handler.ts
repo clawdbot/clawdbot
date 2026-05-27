@@ -235,7 +235,7 @@ export async function handleFeishuCommentEvent(
       `feishu[${account.accountId}]: dispatching drive comment to agent ` +
         `(session=${commentSessionKey} comment=${turn.commentId} type=${turn.noticeType})`,
     );
-    const turnResult = await core.channel.turn.run({
+    const turnResult = await core.channel.inbound.run({
       channel: "feishu",
       accountId: route.accountId,
       raw: turn,

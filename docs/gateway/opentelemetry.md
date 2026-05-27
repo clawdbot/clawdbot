@@ -223,8 +223,8 @@ message bodies are also approved for export.
 - `openclaw.queue.depth` (histogram, attrs: `openclaw.lane` or `openclaw.channel=heartbeat`)
 - `openclaw.queue.wait_ms` (histogram, attrs: `openclaw.lane`)
 - `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
-- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
-- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
+- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
+- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
 - `openclaw.session.turn.created` (counter, attrs: `openclaw.agent`, `openclaw.channel`, `openclaw.trigger`)
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
@@ -249,8 +249,9 @@ OpenClaw classifies sessions by the work it can still observe:
   turns behind the lane can resume. When unset, the abort threshold defaults to
   the safer extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
-- `session.stuck`: stale session bookkeeping with no active work. This releases
-  the affected session lane immediately.
+- `session.stuck`: stale session bookkeeping with no active work, or an idle
+  queued session with stale ownerless model/tool activity. This releases the
+  affected session lane immediately after recovery gates pass.
 
 Recovery emits structured `session.recovery.requested` and
 `session.recovery.completed` events. Diagnostic session state is marked idle

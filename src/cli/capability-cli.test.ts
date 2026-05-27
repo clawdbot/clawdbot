@@ -119,6 +119,9 @@ const mocks = vi.hoisted(() => ({
         : {}),
     }),
   ),
+  getProviderEnvVars: vi.fn((providerId: string) => [
+    `${providerId.toUpperCase().replaceAll("-", "_")}_API_KEY`,
+  ]),
   createEmbeddingProvider: vi.fn(async () => ({
     provider: {
       id: "openai",
@@ -136,6 +139,37 @@ const mocks = vi.hoisted(() => ({
   convertHeicToJpeg: vi.fn(async () => Buffer.from("jpeg-normalized")),
   isWebSearchProviderConfigured: vi.fn(() => false),
   isWebFetchProviderConfigured: vi.fn(() => false),
+  getModelsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
+  getMemoryEmbeddingCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
+  getTtsCommandSecretTargetIds: vi.fn(() => new Set(["models.providers.*.apiKey"])),
+  getCapabilityWebSearchCommandSecretTargets: vi.fn(
+    (
+      config: { tools?: { web?: { search?: { provider?: string } } } },
+      options?: { providerId?: string },
+    ) => {
+      const providerId = options?.providerId ?? config.tools?.web?.search?.provider ?? "tavily";
+      const path = `plugins.entries.${providerId}.config.webSearch.apiKey`;
+      return {
+        targetIds: new Set([path]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+      };
+    },
+  ),
+  getCapabilityWebFetchCommandSecretTargets: vi.fn(
+    (
+      _config: { tools?: { web?: { fetch?: { provider?: string } } } },
+      options?: { providerId?: string },
+    ) => {
+      const path =
+        options?.providerId === "firecrawl"
+          ? "plugins.entries.firecrawl.config.webSearch.apiKey"
+          : "plugins.entries.firecrawl.config.webFetch.apiKey";
+      return {
+        targetIds: new Set([path]),
+        ...(options?.providerId ? { forcedActivePaths: new Set([path]) } : {}),
+      };
+    },
+  ),
   resolveCommandConfigWithSecrets: vi.fn(
     async ({ config }: { config: Record<string, unknown> }) => ({
       resolvedConfig: config,
@@ -156,6 +190,15 @@ vi.mock("../runtime.js", () => ({
     runtime.writeJson(value),
 }));
 
+vi.mock("../secrets/provider-env-vars.js", () => ({
+  getProviderEnvVars: mocks.getProviderEnvVars,
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
+}));
+
 vi.mock("../config/config.js", () => ({
   getRuntimeConfigSourceSnapshot:
     mocks.getRuntimeConfigSourceSnapshot as typeof import("../config/config.js").getRuntimeConfigSourceSnapshot,
@@ -167,6 +210,14 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
+}));
+
+vi.mock("./command-secret-targets.js", () => ({
+  getCapabilityWebFetchCommandSecretTargets: mocks.getCapabilityWebFetchCommandSecretTargets,
+  getCapabilityWebSearchCommandSecretTargets: mocks.getCapabilityWebSearchCommandSecretTargets,
+  getMemoryEmbeddingCommandSecretTargetIds: mocks.getMemoryEmbeddingCommandSecretTargetIds,
+  getModelsCommandSecretTargetIds: mocks.getModelsCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds: mocks.getTtsCommandSecretTargetIds,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -443,6 +494,7 @@ describe("capability cli", () => {
     mocks.textToSpeech.mockClear();
     mocks.setTtsProvider.mockClear();
     mocks.resolveExplicitTtsOverrides.mockClear();
+    mocks.getProviderEnvVars.mockClear();
     mocks.buildMediaUnderstandingRegistry.mockReset().mockReturnValue(new Map());
     mocks.convertHeicToJpeg.mockClear();
     mocks.createEmbeddingProvider.mockClear();
@@ -450,6 +502,11 @@ describe("capability cli", () => {
     mocks.registerBuiltInMemoryEmbeddingProviders.mockClear();
     mocks.isWebSearchProviderConfigured.mockReset().mockReturnValue(false);
     mocks.isWebFetchProviderConfigured.mockReset().mockReturnValue(false);
+    mocks.getModelsCommandSecretTargetIds.mockClear();
+    mocks.getMemoryEmbeddingCommandSecretTargetIds.mockClear();
+    mocks.getTtsCommandSecretTargetIds.mockClear();
+    mocks.getCapabilityWebSearchCommandSecretTargets.mockClear();
+    mocks.getCapabilityWebFetchCommandSecretTargets.mockClear();
     mocks.resolveCommandConfigWithSecrets
       .mockReset()
       .mockImplementation(async ({ config }: { config: Record<string, unknown> }) => ({
@@ -1839,6 +1896,28 @@ describe("capability cli", () => {
     expectRuntimeErrorContains("Video asset at index 0 has neither buffer nor url");
   });
 
+  it("rejects partial image generate count before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--count", "2x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--count must be a positive integer");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
+  it("rejects partial image generate timeout before provider dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "image", "generate", "--prompt", "portrait", "--timeout-ms", "1000ms"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--timeout-ms must be a finite number");
+    expect(mocks.generateImage).not.toHaveBeenCalled();
+  });
+
   it("routes audio transcribe through transcription, not realtime", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -2416,6 +2495,19 @@ describe("capability cli", () => {
         config: resolvedConfig,
       }),
     );
+  });
+
+  it("rejects partial web search limit before provider dispatch", async () => {
+    const webSearchRuntime = await import("../web-search/runtime.js");
+    vi.mocked(webSearchRuntime.runWebSearch).mockClear();
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: ["capability", "web", "search", "--query", "ping", "--limit", "3x"],
+      }),
+    ).rejects.toThrow("exit 1");
+    expectRuntimeErrorContains("--limit must be a positive integer");
+    expect(webSearchRuntime.runWebSearch).not.toHaveBeenCalled();
   });
 
   it("uses the infer web search provider override when resolving SecretRefs", async () => {

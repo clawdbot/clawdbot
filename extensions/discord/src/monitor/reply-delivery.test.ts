@@ -12,9 +12,9 @@ const sendDurableMessageBatchMock = vi.hoisted(() =>
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/channel-message", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-message")>(
-    "openclaw/plugin-sdk/channel-message",
+vi.mock("openclaw/plugin-sdk/channel-outbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-outbound")>(
+    "openclaw/plugin-sdk/channel-outbound",
   );
   return {
     ...actual,
@@ -188,6 +188,41 @@ describe("deliverDiscordReply", () => {
             "🛠️ elevated · `cd /tmp && pnpm test`",
             "🛠️ pty · `apply_patch update`",
             "📖 Read: lines 1-40 from secret.md",
+            "Visible reply.",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "final",
+    });
+
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
+  });
+
+  it("strips serialized tool call blocks at the final Discord send boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "[tool:exec]",
+            "<parameter=command>",
+            'cat /proc/mounts 2>/dev/null | grep -i "libra|rav|openclaw" | head -20',
+            "</parameter>",
+            "",
+            "<function=exec>",
+            "<parameter=command>",
+            'find / -maxdepth 4 -type d \\( -name "ravdb" -o -name "librav" \\) 2>/dev/null | head -20',
+            "</parameter>",
+            "<parameter=timeout_ms>",
+            "1000",
+            "</parameter>",
+            "</function>",
+            "",
             "Visible reply.",
           ].join("\n"),
         },

@@ -68,6 +68,7 @@ scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
 pnpm changed:lanes --json
 pnpm check:changed       # changed typecheck/lint/guards; no Vitest
 pnpm test:changed        # cheap smart changed Vitest targets
+pnpm verify              # full check, then full Vitest
 OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed
 pnpm test <path-or-filter> -- --reporter=verbose
 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
@@ -89,6 +90,8 @@ status checks or install reconciliation in a linked worktree.
 - `pnpm check` and `pnpm check:changed` do not run Vitest tests. They are for
   typecheck, lint, and guard proof.
 - `pnpm test` and `pnpm test:changed` run Vitest tests.
+- `pnpm verify` runs `pnpm check`, then `pnpm test`, with Crabbox phase markers
+  so remote summaries show which half failed.
 - `pnpm test:changed` is intentionally cheap by default: direct test edits,
   sibling tests, explicit source mappings, and import-graph dependents.
 - `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` is the explicit broad

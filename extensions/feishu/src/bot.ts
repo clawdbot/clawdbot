@@ -1,11 +1,15 @@
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
+import {
+  buildChannelInboundEventContext,
+  toInboundMediaFacts,
+} from "openclaw/plugin-sdk/channel-inbound";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import {
   ensureConfiguredBindingRouteReady,
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
   createChannelHistoryWindow,
@@ -30,7 +34,6 @@ import {
   resolveFeishuMediaList,
 } from "./bot-content.js";
 import {
-  buildAgentMediaPayload,
   evaluateSupplementalContextVisibility,
   normalizeAgentId,
   resolveChannelContextVisibilityMode,
@@ -926,7 +929,6 @@ export async function handleFeishuMessage(params: {
       return;
     }
 
-    const mediaPayload = buildAgentMediaPayload(mediaList);
     const audioTranscript = await resolveFeishuAudioPreflightTranscript({
       cfg: effectiveCfg,
       mediaList,
@@ -938,6 +940,9 @@ export async function handleFeishuMessage(params: {
       audioTranscript === undefined
         ? -1
         : mediaList.findIndex((media) => media.contentType?.startsWith("audio/"));
+    const inboundMedia = toInboundMediaFacts(mediaList, {
+      transcribed: (_media, index) => index === preflightAudioIndex,
+    });
     const agentFacingContent = audioTranscript ?? ctx.content;
     const agentFacingCtx =
       audioTranscript === undefined
@@ -1269,42 +1274,65 @@ export async function handleFeishuMessage(params: {
     ) => {
       const groupName = await resolveGroupNameForLabel();
       const threadContext = await resolveThreadContextForAgent(agentId, agentSessionKey, groupName);
-      return core.channel.reply.finalizeInboundContext({
-        Body: combinedBody,
-        BodyForAgent: messageBody,
-        InboundHistory: inboundHistory,
-        ReplyToId: ctx.parentId,
-        RootMessageId: ctx.rootId,
-        RawBody: agentFacingContent,
-        CommandBody: agentFacingContent,
-        Transcript: audioTranscript,
-        From: feishuFrom,
-        To: feishuTo,
-        SessionKey: agentSessionKey,
-        AccountId: agentAccountId,
-        ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
-        ConversationLabel: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
-        SenderName: ctx.senderName ?? ctx.senderOpenId,
-        SenderId: ctx.senderOpenId,
-        Provider: "feishu" as const,
-        Surface: "feishu" as const,
-        MessageSid: ctx.messageId,
-        ReplyToBody: quotedContent ?? undefined,
-        ThreadStarterBody: threadContext.threadStarterBody,
-        ThreadHistoryBody: threadContext.threadHistoryBody,
-        ThreadLabel: threadContext.threadLabel,
-        // Only use rootId (om_* message anchor) — threadId (omt_*) is a container
-        // ID and would produce invalid reply targets downstream.
-        MessageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
-        Timestamp: messageCreateTimeMs,
-        WasMentioned: wasMentioned,
-        CommandAuthorized: commandAuthorized,
-        OriginatingChannel: "feishu" as const,
-        OriginatingTo: feishuTo,
-        GroupSystemPrompt: isGroup ? normalizeOptionalString(groupConfig?.systemPrompt) : undefined,
-        ...mediaPayload,
-        ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
+      return buildChannelInboundEventContext({
+        channel: "feishu",
+        finalize: core.channel.reply.finalizeInboundContext,
+        supplemental: {
+          quote: quotedContent ? { id: ctx.parentId, body: quotedContent } : undefined,
+          thread: {
+            starterBody: threadContext.threadStarterBody,
+            historyBody: threadContext.threadHistoryBody,
+            label: threadContext.threadLabel,
+          },
+          groupSystemPrompt: isGroup
+            ? normalizeOptionalString(groupConfig?.systemPrompt)
+            : undefined,
+        },
+        media: inboundMedia,
+        messageId: ctx.messageId,
+        timestamp: messageCreateTimeMs,
+        from: feishuFrom,
+        sender: {
+          id: ctx.senderOpenId,
+          name: ctx.senderName ?? ctx.senderOpenId,
+        },
+        conversation: {
+          kind: isGroup ? "group" : "direct",
+          id: ctx.chatId,
+          label: isGroup && groupName && !isTopicSessionForThread ? groupName : undefined,
+          threadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
+        },
+        route: {
+          agentId,
+          accountId: agentAccountId,
+          routeSessionKey: agentSessionKey,
+        },
+        reply: {
+          to: feishuTo,
+          replyToId: ctx.parentId,
+          messageThreadId: ctx.rootId && isTopicSessionForThread ? ctx.rootId : undefined,
+        },
+        message: {
+          body: combinedBody,
+          bodyForAgent: messageBody,
+          inboundHistory,
+          rawBody: agentFacingContent,
+          commandBody: agentFacingContent,
+        },
+        access: {
+          mentions: {
+            canDetectMention: isGroup,
+            wasMentioned,
+          },
+          commands: {
+            authorized: commandAuthorized,
+          },
+        },
+        extra: {
+          RootMessageId: ctx.rootId,
+          Transcript: audioTranscript,
+          GroupSubject: isGroup ? groupName || ctx.chatId : undefined,
+        },
       });
     };
 
@@ -1465,7 +1493,7 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast active dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.turn.run({
+          await core.channel.inbound.run({
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
@@ -1524,7 +1552,7 @@ export async function handleFeishuMessage(params: {
           log(
             `feishu[${account.accountId}]: broadcast observer dispatch agent=${agentId} (session=${agentSessionKey})`,
           );
-          await core.channel.turn.run({
+          await core.channel.inbound.run({
             channel: "feishu",
             accountId: route.accountId,
             raw: ctx,
@@ -1628,7 +1656,7 @@ export async function handleFeishuMessage(params: {
       });
 
       log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-      const turnResult = await core.channel.turn.run({
+      const turnResult = await core.channel.inbound.run({
         channel: "feishu",
         accountId: route.accountId,
         raw: ctx,

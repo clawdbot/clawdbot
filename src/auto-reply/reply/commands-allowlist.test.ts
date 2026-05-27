@@ -37,10 +37,12 @@ vi.mock("../../config/config.js", () => ({
     transform: (
       currentConfig: OpenClawConfig,
       context: { snapshot: ConfigSnapshotMock; previousHash: string | null; attempt: number },
-    ) => Promise<{ nextConfig: OpenClawConfig; result?: unknown }> | {
-      nextConfig: OpenClawConfig;
-      result?: unknown;
-    };
+    ) =>
+      | Promise<{ nextConfig: OpenClawConfig; result?: unknown }>
+      | {
+          nextConfig: OpenClawConfig;
+          result?: unknown;
+        };
   }) => {
     const snapshot = (await readConfigFileSnapshotMock()) as ConfigSnapshotMock;
     const previousHash = snapshot.hash ?? null;
@@ -584,6 +586,121 @@ describe("handleAllowlistCommand", () => {
     expect(result?.reply).toBeUndefined();
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks cross-channel config edits when the command origin disables writes", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: { allowFrom: ["123"], configWrites: false },
+        discord: { allowFrom: ["456"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    readConfigFileSnapshotMock.mockResolvedValueOnce({
+      valid: true,
+      parsed: structuredClone(cfg),
+    });
+    const params = buildAllowlistParams("/allowlist add dm --channel discord --config 789", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    params.command.senderIsOwner = true;
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("channels.telegram.accounts.default.configWrites=true");
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks store-targeted allowlist edits when channel configWrites is false", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          allowFrom: ["123"],
+          configWrites: false,
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist add dm --store 789", cfg);
+    params.command.senderIsOwner = true;
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("channels.telegram.accounts.default.configWrites=true");
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks store-targeted allowlist edits when account configWrites is false", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          configWrites: true,
+          accounts: {
+            work: { configWrites: false, allowFrom: ["123"] },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist add dm --store --account work 789", cfg, {
+      AccountId: "work",
+    });
+    params.command.senderIsOwner = true;
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("channels.telegram.accounts.work.configWrites=true");
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks cross-channel store edits when the command origin disables writes", async () => {
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: { allowFrom: ["123"], configWrites: false },
+        discord: { allowFrom: ["456"], configWrites: true },
+      },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist add dm --channel discord --store 789", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+    });
+    params.command.senderIsOwner = true;
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("channels.telegram.accounts.default.configWrites=true");
+    expect(addChannelAllowFromStoreEntryMock).not.toHaveBeenCalled();
+  });
+
+  it("allows store-targeted allowlist edits when configWrites is true", async () => {
+    addChannelAllowFromStoreEntryMock.mockResolvedValueOnce({
+      changed: true,
+      allowFrom: ["789"],
+    });
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: {
+        telegram: {
+          allowFrom: ["123"],
+          configWrites: true,
+        },
+      },
+    } as OpenClawConfig;
+    const params = buildAllowlistParams("/allowlist add dm --store 789", cfg);
+    params.command.senderIsOwner = true;
+    const result = await handleAllowlistCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("DM allowlist added in pairing store");
+    expect(addChannelAllowFromStoreEntryMock).toHaveBeenCalledWith({
+      channel: "telegram",
+      entry: "789",
+      accountId: "default",
+    });
   });
 
   it("removes default-account entries from scoped and legacy pairing stores", async () => {

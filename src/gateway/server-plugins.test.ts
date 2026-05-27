@@ -93,7 +93,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],
   mediaUnderstandingProviders: [],
-  meetingNotesSourceProviders: [],
+  transcriptSourceProviders: [],
   imageGenerationProviders: [],
   musicGenerationProviders: [],
   videoGenerationProviders: [],

@@ -16,6 +16,10 @@ import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  appendUserTurnTranscriptMessage,
+  type PersistedUserTurnMessage,
+} from "../../sessions/user-turn-transcript.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
@@ -24,6 +28,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
+import { runAgentHarnessBeforeMessageWriteHook } from "../harness/hook-helpers.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { isCliProvider } from "../model-selection.js";
@@ -94,6 +99,7 @@ type TranscriptUsage = {
 type PersistTextTurnTranscriptParams = {
   body: string;
   transcriptBody?: string;
+  userMessage?: PersistedUserTurnMessage;
   finalText: string;
   sessionId: string;
   sessionKey: string;
@@ -130,6 +136,7 @@ function resolveProfileAuthFromStore(params: { agentDir: string; profileId: stri
   }
   const credential = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
+    externalCliProfileIds: [profileId],
   }).profiles[profileId];
   return { provider: credential?.provider, mode: credential?.type };
 }
@@ -176,6 +183,7 @@ function resolveHarnessAuthProfileSelection(params: {
 
   const store = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
+    externalCliProviderIds: [harnessAuthProvider],
   });
   const authProfileId = resolveAuthProfileOrder({
     cfg: params.config,
@@ -229,17 +237,24 @@ async function persistTextTurnTranscript(
     allowReentrant: true,
   });
   try {
-    if (promptText) {
-      await appendSessionTranscriptMessage({
+    const userMessage = params.userMessage;
+    if (userMessage || promptText) {
+      await appendUserTurnTranscriptMessage({
         transcriptPath: sessionFile,
         sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
         cwd: params.sessionCwd,
         config: params.config,
-        message: {
-          role: "user",
-          content: promptText,
-          timestamp: Date.now(),
-        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        ...(userMessage
+          ? { message: userMessage }
+          : {
+              input: {
+                text: promptText,
+                timestamp: Date.now(),
+              },
+            }),
+        updateMode: "none",
       });
     }
 
@@ -324,6 +339,7 @@ export async function persistAcpTurnTranscript(params: {
 export async function persistCliTurnTranscript(params: {
   body: string;
   transcriptBody?: string;
+  userMessage?: PersistedUserTurnMessage;
   result: EmbeddedPiRunResult;
   sessionId: string;
   sessionKey: string;
@@ -344,6 +360,7 @@ export async function persistCliTurnTranscript(params: {
   return await persistTextTurnTranscript({
     body: gapFill ? "" : params.body,
     transcriptBody: gapFill ? undefined : params.transcriptBody,
+    ...(!gapFill && params.userMessage ? { userMessage: params.userMessage } : {}),
     finalText: replyText,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

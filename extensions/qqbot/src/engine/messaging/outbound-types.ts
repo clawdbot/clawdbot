@@ -1,4 +1,4 @@
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { GatewayAccount } from "../types.js";
 
 export interface OutboundContext {

@@ -1,5 +1,6 @@
 import {
   createReplyOperation,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
   type ReplyOperation,
@@ -54,7 +55,10 @@ export async function admitReplyTurn(params: {
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
-      const ended = await replyRunRegistry.waitForIdle(params.sessionKey, params.waitTimeoutMs, {
+      const waitTimeoutMs =
+        params.waitTimeoutMs ??
+        (params.kind === "queued_followup" ? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS : undefined);
+      const ended = await replyRunRegistry.waitForIdle(params.sessionKey, waitTimeoutMs, {
         signal: params.upstreamAbortSignal,
       });
       if (!ended) {

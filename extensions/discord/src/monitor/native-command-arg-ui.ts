@@ -109,7 +109,7 @@ export async function handleDiscordCommandArgInteraction(params: {
     await clearWithMessage("Sorry, that command is no longer available.");
     return;
   }
-  const argUpdateResult = await clearWithMessage(`✅ Selected ${parsed.value}.`);
+  const argUpdateResult = await clearWithMessage(`⏳ Applying ${parsed.value}...`);
   if (argUpdateResult === null) {
     return;
   }

@@ -263,6 +263,15 @@ export class ChatLog extends Container {
     return component;
   }
 
+  reserveAssistantSlot(runId?: string) {
+    const effectiveRunId = this.resolveRunId(runId);
+    const existing = this.streamingRuns.get(effectiveRunId);
+    if (existing) {
+      return existing;
+    }
+    return this.startAssistant("", runId);
+  }
+
   updateAssistant(text: string, runId?: string) {
     const effectiveRunId = this.resolveRunId(runId);
     const existing = this.streamingRuns.get(effectiveRunId);

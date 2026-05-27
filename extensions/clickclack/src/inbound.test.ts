@@ -3,7 +3,7 @@ import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
-import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
+import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const sendClickClackTextMock = vi.hoisted(() => vi.fn());
 
@@ -72,6 +72,58 @@ function createRuntime(): PluginRuntime {
   } as unknown as PluginRuntime);
 }
 
+function createAgentAccount(
+  overrides: Partial<ResolvedClickClackAccount> = {},
+): ResolvedClickClackAccount {
+  const base = {
+    accountId: "default",
+    enabled: true,
+    configured: true,
+    baseUrl: "http://127.0.0.1:8080",
+    token: "ccb_default",
+    workspace: "wsp_1",
+    replyMode: "agent",
+    toolsAllow: [],
+    defaultTo: "channel:general",
+    allowFrom: ["*"],
+    reconnectMs: 1_500,
+    config: {
+      allowFrom: ["*"],
+    },
+  } satisfies ResolvedClickClackAccount;
+
+  return {
+    ...base,
+    ...overrides,
+    config: {
+      ...base.config,
+      ...overrides.config,
+    },
+  };
+}
+
+function createMessage(overrides: Partial<ClickClackMessage> = {}): ClickClackMessage {
+  return {
+    id: "msg_1",
+    workspace_id: "wsp_1",
+    channel_id: "chn_1",
+    author_id: "usr_owner",
+    thread_root_id: "msg_1",
+    body: "/fast on",
+    body_format: "markdown",
+    created_at: "2026-05-09T12:00:00.000Z",
+    author: {
+      id: "usr_owner",
+      kind: "human",
+      display_name: "Peter",
+      handle: "steipete",
+      avatar_url: "",
+      created_at: "2026-05-09T12:00:00.000Z",
+    },
+    ...overrides,
+  };
+}
+
 describe("handleClickClackInbound", () => {
   it("runs model-mode bot accounts without tools and posts the bot reply", async () => {
     sendClickClackTextMock.mockReset();
@@ -124,7 +176,7 @@ describe("handleClickClackInbound", () => {
       },
     });
 
-    expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
     expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
@@ -138,5 +190,96 @@ describe("handleClickClackInbound", () => {
     expect(sendRequest?.to).toBe("channel:chn_1");
     expect(sendRequest?.text).toBe("service bot online");
     expect(sendRequest?.replyToId).toBe("msg_1");
+  });
+
+  it("marks agent turns command-authorized for allowlisted senders", async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
+    setClickClackRuntime(runtime);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        allowFrom: ["usr_owner"],
+        config: { allowFrom: ["usr_owner"] },
+      }),
+      config: cfg,
+      message: createMessage(),
+    });
+
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+  });
+
+  it("accepts ClickClack DM target syntax in allowFrom", async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
+    setClickClackRuntime(runtime);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        allowFrom: ["dm:usr_owner"],
+        config: { allowFrom: ["dm:usr_owner"] },
+      }),
+      config: cfg,
+      message: createMessage({
+        channel_id: undefined,
+        direct_conversation_id: "dcn_1",
+      }),
+    });
+
+    const dispatchReply = vi.mocked(runtime.channel.inbound.dispatchReply);
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.ChatType).toBe("direct");
+    expect(dispatchReply.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+  });
+
+  it("does not dispatch agent turns from senders outside allowFrom", async () => {
+    const runtime = createRuntime();
+    vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockReturnValue(true);
+    setClickClackRuntime(runtime);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4-mini",
+        },
+      },
+    } satisfies CoreConfig;
+
+    await handleClickClackInbound({
+      account: createAgentAccount({
+        allowFrom: ["usr_owner"],
+        config: { allowFrom: ["usr_owner"] },
+      }),
+      config: cfg,
+      message: createMessage({
+        author_id: "usr_attacker",
+        author: {
+          id: "usr_attacker",
+          kind: "human",
+          display_name: "Attacker",
+          handle: "attacker",
+          avatar_url: "",
+          created_at: "2026-05-09T12:00:00.000Z",
+        },
+      }),
+    });
+
+    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
+    expect(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 });

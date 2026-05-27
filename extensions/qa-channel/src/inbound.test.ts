@@ -47,7 +47,7 @@ function createQaInboundParams(
 }
 
 function firstRunAssembledParams(runtime: ReturnType<typeof createPluginRuntimeMock>) {
-  const call = vi.mocked(runtime.channel.turn.runAssembled).mock.calls[0];
+  const call = vi.mocked(runtime.channel.inbound.dispatchReply).mock.calls[0];
   if (!call) {
     throw new Error("expected assembled turn call");
   }
@@ -85,7 +85,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
     const assembled = firstRunAssembledParams(runtime);
     expect(assembled.replyPipeline).toEqual({});
     expect(assembled.ctxPayload.WasMentioned).toBe(true);
@@ -103,7 +103,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runAssembled).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
   });
 
   it("allows direct messages from configured senders", async () => {
@@ -118,7 +118,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload?.CommandAuthorized).toBe(true);
     expect(ctxPayload?.SenderId).toBe("alice");
@@ -143,7 +143,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
     expect(ctxPayload.MediaPath).toBeUndefined();
     expect(ctxPayload.MediaPaths).toBeUndefined();
@@ -169,7 +169,7 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    expect(runtime.channel.inbound.dispatchReply).toHaveBeenCalledTimes(1);
   });
 
   it("skips configured group messages that miss mention activation", async () => {
@@ -197,6 +197,6 @@ describe("handleQaInbound", () => {
       }),
     );
 
-    expect(runtime.channel.turn.runAssembled).not.toHaveBeenCalled();
+    expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
   });
 });

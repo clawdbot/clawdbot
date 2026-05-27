@@ -22,3 +22,13 @@ export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
   import("./shared-client.js").then(({ getSharedCodexAppServerClient }) =>
     getSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config }),
   );
+
+export const defaultLeasedCodexAppServerClientFactory: CodexAppServerClientFactory = (
+  startOptions,
+  authProfileId,
+  agentDir,
+  config,
+) =>
+  import("./shared-client.js").then(({ getLeasedSharedCodexAppServerClient }) =>
+    getLeasedSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config }),
+  );

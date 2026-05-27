@@ -7,7 +7,7 @@ set -euo pipefail
 #   scripts/create-dmg.sh <app_path> [output_dmg]
 #
 # Env:
-#   DMG_VOLUME_NAME        default: CFBundleName (or "OpenClaw")
+#   DMG_VOLUME_NAME        default: CFBundleName
 #   DMG_BACKGROUND_PATH    default: apps/macos/Packaging/dmg-background.png
 #   DMG_BACKGROUND_SMALL   default: apps/macos/Packaging/dmg-background-small.png (recommended)
 #   DMG_WINDOW_BOUNDS      default: "400 100 900 420" (500x320)
@@ -30,11 +30,13 @@ if [[ ! -d "$APP_PATH" ]]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/plistbuddy.sh"
+
 BUILD_DIR="$ROOT_DIR/dist"
 mkdir -p "$BUILD_DIR"
 
-APP_NAME=$(/usr/libexec/PlistBuddy -c "Print CFBundleName" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "OpenClaw")
-VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PATH/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
+APP_NAME="$(plist_print_required "$APP_PATH/Contents/Info.plist" CFBundleName)"
+VERSION="$(plist_print_required "$APP_PATH/Contents/Info.plist" CFBundleShortVersionString)"
 
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"

@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  type HookContext,
+  wrapToolWithBeforeToolCallHook,
+} from "../agents/pi-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { PluginApprovalResolutions } from "../plugins/types.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 
 const callGatewayTool = vi.hoisted(() => vi.fn());
@@ -226,8 +231,9 @@ describe("plugin tools MCP server", () => {
     expect(failed.content).toEqual([{ type: "text", text: "Tool error: boom" }]);
   });
 
-  it("blocks tool execution when before_tool_call requires approval on the MCP bridge", async () => {
+  it("reports approval requirements without opening plugin approvals on the MCP bridge", async () => {
     let hookCalls = 0;
+    const onResolution = vi.fn();
     const execute = vi.fn().mockResolvedValue({
       content: "Stored.",
     });
@@ -242,13 +248,13 @@ describe("plugin tools MCP server", () => {
                 pluginId: "test-plugin",
                 title: "Approval required",
                 description: "Approval required",
+                onResolution,
               },
             };
           },
         },
       ]),
     );
-    callGatewayTool.mockRejectedValueOnce(new Error("gateway unavailable"));
     const tool = {
       name: "memory_store",
       description: "Store memory",
@@ -262,10 +268,72 @@ describe("plugin tools MCP server", () => {
       arguments: { text: "remember this" },
     });
     expect(hookCalls).toBe(1);
+    expect(callGatewayTool).not.toHaveBeenCalled();
     expect(execute).not.toHaveBeenCalled();
     expect(result.isError).toBe(true);
-    expect(result.content).toEqual([
-      { type: "text", text: "Tool error: Plugin approval required (gateway unavailable)" },
-    ]);
+    expect(result.content).toEqual([{ type: "text", text: "Tool error: Approval required" }]);
+    expect(onResolution).toHaveBeenCalledWith(PluginApprovalResolutions.CANCELLED);
+  });
+
+  it("switches pre-wrapped plugin tools to approval report mode on the MCP bridge", async () => {
+    const onResolution = vi.fn();
+    const execute = vi.fn().mockResolvedValue({
+      content: "Stored.",
+    });
+    const originalContext = {
+      agentId: "agent-with-plugins",
+      sessionKey: "session-with-plugins",
+    } satisfies HookContext;
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_tool_call",
+          handler: async (_event, ctx) => {
+            const hookContext = ctx as HookContext | undefined;
+            if (hookContext?.sessionKey !== originalContext.sessionKey) {
+              return undefined;
+            }
+            return {
+              requireApproval: {
+                pluginId: "test-plugin",
+                title: "Approval required",
+                description: "Approval required",
+                onResolution,
+              },
+            };
+          },
+        },
+      ]),
+    );
+    callGatewayTool.mockRejectedValue(new Error("gateway unavailable"));
+    const tool = wrapToolWithBeforeToolCallHook(
+      {
+        name: "memory_store",
+        description: "Store memory",
+        parameters: { type: "object", properties: {} },
+        execute,
+      } as unknown as AnyAgentTool,
+      originalContext,
+    );
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const result = await handlers.callTool({
+      name: "memory_store",
+      arguments: { text: "remember this" },
+    });
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "Tool error: Approval required" }]);
+    expect(onResolution).toHaveBeenCalledTimes(1);
+    expect(onResolution).toHaveBeenLastCalledWith(PluginApprovalResolutions.CANCELLED);
+
+    await expect(tool.execute("agent-tool-call", { text: "remember this" })).rejects.toThrow(
+      "Plugin approval required (gateway unavailable)",
+    );
+    expect(callGatewayTool).toHaveBeenCalledTimes(1);
+    expect(onResolution).toHaveBeenCalledTimes(2);
+    expect(onResolution).toHaveBeenLastCalledWith(PluginApprovalResolutions.CANCELLED);
+    expect(execute).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { validateJsonSchemaValue, type JsonSchemaObject } from "openclaw/plugin-sdk/config-schema";
+import {
+  validateJsonSchemaValue,
+  type JsonSchemaObject,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_WIKI_RENDER_MODE,

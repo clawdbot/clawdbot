@@ -16,10 +16,12 @@ import {
   diagnosticLogger as diag,
   logMessageQueued,
   logSessionStateChange,
+  updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   ACTIVE_EMBEDDED_RUNS,
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE,
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS,
   EMBEDDED_RUN_MODEL_SWITCH_REQUESTS,
@@ -31,6 +33,7 @@ import {
   type EmbeddedRunModelSwitchRequest,
   type EmbeddedRunWaiter,
 } from "./run-state.js";
+import { resolveEmbeddedSessionFileKey } from "./session-file-key.js";
 
 export {
   getActiveEmbeddedRunCount,
@@ -119,6 +122,31 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   for (const [key, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY) {
     if (activeSessionId === sessionId) {
       ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.delete(key);
+    }
+  }
+}
+
+function setActiveRunSessionFile(sessionFile: string | undefined, sessionId: string): void {
+  if (!sessionFile?.trim()) {
+    return;
+  }
+  ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(
+    resolveEmbeddedSessionFileKey(sessionFile),
+    sessionId,
+  );
+}
+
+function clearActiveRunSessionFiles(sessionId: string, sessionFile?: string): void {
+  const normalizedSessionFile = sessionFile?.trim();
+  if (normalizedSessionFile) {
+    const sessionFileKey = resolveEmbeddedSessionFileKey(normalizedSessionFile);
+    if (ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(sessionFileKey) === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
+    }
+  }
+  for (const [sessionFileKey, activeSessionId] of ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE) {
+    if (activeSessionId === sessionId) {
+      ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.delete(sessionFileKey);
     }
   }
 }
@@ -366,6 +394,18 @@ export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): str
   return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey);
 }
 
+export function resolveActiveEmbeddedRunHandleSessionIdBySessionFile(
+  sessionFile: string,
+): string | undefined {
+  const normalizedSessionFile = sessionFile.trim();
+  if (!normalizedSessionFile) {
+    return undefined;
+  }
+  return ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.get(
+    resolveEmbeddedSessionFileKey(normalizedSessionFile),
+  );
+}
+
 export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | undefined {
   const normalizedSessionKey = sessionKey.trim();
   if (!normalizedSessionKey) {
@@ -375,6 +415,12 @@ export function resolveActiveEmbeddedRunSessionId(sessionKey: string): string | 
     resolveActiveReplyRunSessionId(normalizedSessionKey) ??
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.get(normalizedSessionKey)
   );
+}
+
+export function resolveActiveEmbeddedRunSessionIdBySessionFile(
+  sessionFile: string,
+): string | undefined {
+  return resolveActiveEmbeddedRunHandleSessionIdBySessionFile(sessionFile);
 }
 
 export function getActiveEmbeddedRunSnapshot(
@@ -534,13 +580,17 @@ export function setActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
+  sessionFile?: string,
 ) {
   const wasActive = ACTIVE_EMBEDDED_RUNS.has(sessionId);
   ACTIVE_EMBEDDED_RUNS.set(sessionId, handle);
   setActiveRunSessionKey(sessionKey, sessionId);
+  clearActiveRunSessionFiles(sessionId);
+  setActiveRunSessionFile(sessionFile, sessionId);
   logSessionStateChange({
     sessionId,
     sessionKey,
+    sessionFile,
     state: "processing",
     reason: wasActive ? "run_replaced" : "run_started",
   });
@@ -560,10 +610,23 @@ export function updateActiveEmbeddedRunSnapshot(
   ACTIVE_EMBEDDED_RUN_SNAPSHOTS.set(sessionId, snapshot);
 }
 
+export function updateActiveEmbeddedRunSessionFile(
+  sessionId: string,
+  sessionFile: string | undefined,
+): void {
+  if (!ACTIVE_EMBEDDED_RUNS.has(sessionId)) {
+    return;
+  }
+  clearActiveRunSessionFiles(sessionId);
+  setActiveRunSessionFile(sessionFile, sessionId);
+  updateDiagnosticSessionFile({ sessionId, sessionFile });
+}
+
 export function clearActiveEmbeddedRun(
   sessionId: string,
   handle: EmbeddedPiQueueHandle,
   sessionKey?: string,
+  sessionFile?: string,
 ) {
   const activeHandle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (activeHandle === undefined) {
@@ -574,7 +637,14 @@ export function clearActiveEmbeddedRun(
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
-    logSessionStateChange({ sessionId, sessionKey, state: "idle", reason: "run_completed" });
+    clearActiveRunSessionFiles(sessionId, sessionFile);
+    logSessionStateChange({
+      sessionId,
+      sessionKey,
+      sessionFile,
+      state: "idle",
+      reason: "run_completed",
+    });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     if (!sessionId.startsWith("probe-")) {
       diag.debug(`run cleared: sessionId=${sessionId} totalActive=${ACTIVE_EMBEDDED_RUNS.size}`);
@@ -596,6 +666,7 @@ export function forceClearEmbeddedPiRun(
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.delete(sessionId);
     clearActiveRunSessionKeys(sessionId, sessionKey);
+    clearActiveRunSessionFiles(sessionId);
     logSessionStateChange({ sessionId, sessionKey, state: "idle", reason });
     markDiagnosticEmbeddedRunEnded({ sessionId, sessionKey });
     notifyEmbeddedRunEnded(sessionId);
@@ -617,6 +688,7 @@ export const testing = {
     ACTIVE_EMBEDDED_RUNS.clear();
     ACTIVE_EMBEDDED_RUN_SNAPSHOTS.clear();
     ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+    ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE.clear();
     EMBEDDED_RUN_MODEL_SWITCH_REQUESTS.clear();
   },
 };

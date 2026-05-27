@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
@@ -16,11 +18,13 @@ import {
 } from "../../plugins/loader-channel-setup.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginDiagnostic } from "../../plugins/manifest-types.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "../../plugins/plugin-module-loader-cache.js";
+import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { sortUniqueStrings, uniqueStrings } from "../../shared/string-normalization.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
@@ -142,6 +146,102 @@ export type ReadOnlyChannelPluginLoadFailure = {
   message: string;
   source?: string;
 };
+
+const readOnlyChannelPluginResolutionCache = new Map<string, ReadOnlyChannelPluginResolution>();
+const MAX_READ_ONLY_CHANNEL_PLUGIN_RESOLUTION_CACHE_SIZE = 8;
+const readOnlyChannelPluginObjectIds = new WeakMap<ChannelPlugin, number>();
+let nextReadOnlyChannelPluginObjectId = 1;
+
+registerPluginMetadataProcessMemoLifecycleClear(() => {
+  readOnlyChannelPluginResolutionCache.clear();
+});
+
+function cloneReadOnlyChannelPluginResolution(
+  resolution: ReadOnlyChannelPluginResolution,
+): ReadOnlyChannelPluginResolution {
+  return {
+    plugins: [...resolution.plugins],
+    configuredChannelIds: [...resolution.configuredChannelIds],
+    missingConfiguredChannelIds: [...resolution.missingConfiguredChannelIds],
+    loadFailures: resolution.loadFailures.map((failure) => ({ ...failure })),
+  };
+}
+
+function rememberReadOnlyChannelPluginResolution(
+  key: string,
+  resolution: ReadOnlyChannelPluginResolution,
+): void {
+  if (readOnlyChannelPluginResolutionCache.has(key)) {
+    readOnlyChannelPluginResolutionCache.delete(key);
+  }
+  readOnlyChannelPluginResolutionCache.set(key, cloneReadOnlyChannelPluginResolution(resolution));
+  while (
+    readOnlyChannelPluginResolutionCache.size > MAX_READ_ONLY_CHANNEL_PLUGIN_RESOLUTION_CACHE_SIZE
+  ) {
+    const oldestKey = readOnlyChannelPluginResolutionCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    readOnlyChannelPluginResolutionCache.delete(oldestKey);
+  }
+}
+
+function resolveReadOnlyChannelPluginResolutionCacheKey(params: {
+  cfg: OpenClawConfig;
+  options: ReadOnlyChannelPluginOptions;
+  env: NodeJS.ProcessEnv;
+  loadedChannelPlugins: readonly ChannelPlugin[];
+  workspaceDir?: string;
+}): string | null {
+  if (params.env !== process.env) {
+    return null;
+  }
+  if (params.options.includePersistedAuthState !== false) {
+    return null;
+  }
+  const activationSourceConfig = params.options.activationSourceConfig ?? params.cfg;
+  return [
+    resolveRuntimeConfigCacheKey(params.cfg),
+    activationSourceConfig === params.cfg
+      ? "activation:same"
+      : resolveRuntimeConfigCacheKey(activationSourceConfig),
+    `channel-registry:${getActivePluginChannelRegistryVersion()}`,
+    `loaded-channels:${fingerprintLoadedChannelPlugins(params.loadedChannelPlugins)}`,
+    `env:${hashEnvironment(params.env)}`,
+    `cwd:${process.cwd()}`,
+    `state:${params.options.stateDir ?? ""}`,
+    `workspace:${params.workspaceDir}`,
+    `setup:${params.options.includeSetupFallbackPlugins === true}`,
+  ].join("\0");
+}
+
+function resolveReadOnlyChannelPluginObjectId(plugin: ChannelPlugin): number {
+  const existing = readOnlyChannelPluginObjectIds.get(plugin);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const next = nextReadOnlyChannelPluginObjectId;
+  nextReadOnlyChannelPluginObjectId += 1;
+  readOnlyChannelPluginObjectIds.set(plugin, next);
+  return next;
+}
+
+function fingerprintLoadedChannelPlugins(plugins: readonly ChannelPlugin[]): string {
+  return plugins
+    .map((plugin) => `${plugin.id}:${resolveReadOnlyChannelPluginObjectId(plugin)}`)
+    .join(",");
+}
+
+function hashEnvironment(env: NodeJS.ProcessEnv): string {
+  const hash = createHash("sha256");
+  for (const key of Object.keys(env).toSorted((left, right) => left.localeCompare(right))) {
+    hash.update(key);
+    hash.update("\0");
+    hash.update(env[key] ?? "");
+    hash.update("\0");
+  }
+  return hash.digest("base64url");
+}
 
 function addChannelPlugins(
   byId: Map<string, ChannelPlugin>,
@@ -757,6 +857,18 @@ export function resolveReadOnlyChannelPluginsForConfig(
 ): ReadOnlyChannelPluginResolution {
   const env = options.env ?? process.env;
   const workspaceDir = resolveReadOnlyWorkspaceDir(cfg, options);
+  const loadedChannelPlugins = listChannelPlugins();
+  const cacheKey = resolveReadOnlyChannelPluginResolutionCacheKey({
+    cfg,
+    options,
+    env,
+    loadedChannelPlugins,
+    workspaceDir,
+  });
+  const cached = cacheKey ? readOnlyChannelPluginResolutionCache.get(cacheKey) : undefined;
+  if (cached) {
+    return cloneReadOnlyChannelPluginResolution(cached);
+  }
   const manifestRecords = resolvePluginMetadataSnapshot({
     config: cfg,
     stateDir: options.stateDir,
@@ -779,7 +891,7 @@ export function resolveReadOnlyChannelPluginsForConfig(
   const byId = new Map<string, ChannelPlugin>();
   const loadFailures: ReadOnlyChannelPluginLoadFailure[] = [];
 
-  addChannelPlugins(byId, listChannelPlugins());
+  addChannelPlugins(byId, loadedChannelPlugins);
 
   if (options.includeSetupFallbackPlugins === true) {
     for (const channelId of configuredChannelIds) {
@@ -879,10 +991,14 @@ export function resolveReadOnlyChannelPluginsForConfig(
   }
 
   const plugins = [...byId.values()];
-  return {
+  const resolution = {
     plugins,
     configuredChannelIds,
     missingConfiguredChannelIds: configuredChannelIds.filter((channelId) => !byId.has(channelId)),
     loadFailures,
   };
+  if (cacheKey) {
+    rememberReadOnlyChannelPluginResolution(cacheKey, resolution);
+  }
+  return cloneReadOnlyChannelPluginResolution(resolution);
 }

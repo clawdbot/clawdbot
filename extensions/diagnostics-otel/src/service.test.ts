@@ -53,6 +53,7 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 const metricExporterCtor = vi.hoisted(() => vi.fn());
 const logExporterCtor = vi.hoisted(() => vi.fn());
+const spanProcessorCtor = vi.hoisted(() => vi.fn());
 const unhandledRejectionHandlerState = vi.hoisted(() => {
   let handlers: Array<(reason: unknown) => boolean> = [];
   return {
@@ -136,6 +137,9 @@ vi.mock("@opentelemetry/sdk-metrics", () => ({
 }));
 
 vi.mock("@opentelemetry/sdk-trace-base", () => ({
+  BatchSpanProcessor: function BatchSpanProcessor(exporter?: unknown, options?: unknown) {
+    spanProcessorCtor(exporter, options);
+  },
   ParentBasedSampler: function ParentBasedSampler() {},
   TraceIdRatioBasedSampler: function TraceIdRatioBasedSampler() {},
 }));
@@ -259,6 +263,10 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, argIndex: number, c
 
 function firstExporterOptions(mock: { mock: { calls: unknown[][] } }): { url?: string } {
   return mockCallArg(mock, 0) as { url?: string };
+}
+
+function firstSpanProcessorOptions(): { scheduledDelayMillis?: number } {
+  return mockCallArg(spanProcessorCtor, 1) as { scheduledDelayMillis?: number };
 }
 
 function firstSetSpanContext(): Record<string, unknown> {
@@ -390,6 +398,7 @@ describe("diagnostics-otel service", () => {
     traceExporterCtor.mockClear();
     metricExporterCtor.mockClear();
     logExporterCtor.mockClear();
+    spanProcessorCtor.mockClear();
     unhandledRejectionHandlerState.reset();
     unhandledRejectionHandlerState.register.mockClear();
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
@@ -1192,6 +1201,18 @@ describe("diagnostics-otel service", () => {
 
     const options = firstExporterOptions(traceExporterCtor);
     expect(options.url).toBe("https://collector.example.com/v1/Traces");
+    await service.stop?.(ctx);
+  });
+
+  test("applies flush interval to trace batching", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext(OTEL_TEST_ENDPOINT);
+    ctx.config.diagnostics!.otel!.flushIntervalMs = 250;
+
+    await service.start(ctx);
+
+    expect(spanProcessorCtor).toHaveBeenCalledTimes(1);
+    expect(firstSpanProcessorOptions().scheduledDelayMillis).toBe(1000);
     await service.stop?.(ctx);
   });
 

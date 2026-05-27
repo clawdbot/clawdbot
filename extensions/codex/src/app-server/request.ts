@@ -9,7 +9,8 @@ import type {
 import { resolveCodexAppServerDirectSandboxBypassBlock } from "./sandbox-guard.js";
 import {
   createIsolatedCodexAppServerClient,
-  getSharedCodexAppServerClient,
+  getLeasedSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient,
 } from "./shared-client.js";
 import { withTimeout } from "./timeout.js";
 
@@ -63,7 +64,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   return await withTimeout(
     (async () => {
       const client = await (
-        params.isolated ? createIsolatedCodexAppServerClient : getSharedCodexAppServerClient
+        params.isolated ? createIsolatedCodexAppServerClient : getLeasedSharedCodexAppServerClient
       )({
         startOptions: params.startOptions,
         timeoutMs,
@@ -81,6 +82,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
           // underlying codex binary, so the unref'd close() path can leave
           // the child running and keep the parent's event loop alive.
           await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+        } else {
+          releaseLeasedSharedCodexAppServerClient(client);
         }
       }
     })(),

@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
@@ -229,6 +230,7 @@ export type RunEmbeddedPiAgentParams = {
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
   suppressAssistantErrorPersistence?: boolean;
+  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   onAssistantErrorMessagePersisted?: (
     message: Extract<AgentMessage, { role: "assistant" }>,

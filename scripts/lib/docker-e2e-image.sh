@@ -48,9 +48,9 @@ docker_e2e_build_or_reuse() {
 
   if [ "${OPENCLAW_SKIP_DOCKER_BUILD:-0}" = "1" ] || [ "$skip_build" = "1" ]; then
     echo "Reusing Docker image: $image_name"
-    if ! docker image inspect "$image_name" >/dev/null 2>&1; then
+    if ! docker_e2e_docker_cmd image inspect "$image_name" >/dev/null 2>&1; then
       echo "Docker image not found locally; pulling: $image_name"
-      if docker pull "$image_name"; then
+      if docker_e2e_docker_cmd pull "$image_name"; then
         return 0
       fi
       if docker_build_on_missing_enabled; then

@@ -3,9 +3,9 @@
 // the chunk so messages are only split when they truly exceed the limit.
 
 import type { ChannelId } from "../channels/plugins/types.core.js";
+import { resolveChannelStreamingChunkMode } from "../channels/streaming.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
-import { resolveChannelStreamingChunkMode } from "../plugin-sdk/channel-streaming.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";

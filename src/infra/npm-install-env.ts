@@ -43,6 +43,19 @@ type NpmFreshnessConfigScope = {
 };
 
 const NPM_CONFIG_PATH_PROBE_PARENT_ENV_KEYS = ["PATH", "Path", "PATHEXT", "SystemRoot", "ComSpec"];
+const NPM_GLOBAL_CONFIG_PATH_CACHE = new Map<string, string | null>();
+const NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS = [
+  ...NPM_CONFIG_PATH_PROBE_PARENT_ENV_KEYS,
+  "NPM_CONFIG_GLOBALCONFIG",
+  "npm_config_globalconfig",
+  "NPM_CONFIG_PREFIX",
+  "npm_config_prefix",
+  "NPM_CONFIG_USERCONFIG",
+  "npm_config_userconfig",
+  "HOME",
+  "PREFIX",
+  "USERPROFILE",
+] as const;
 
 function resolveEnvPath(env: NodeJS.ProcessEnv, upperKey: string, lowerKey: string): string | null {
   const raw = env[upperKey]?.trim() || env[lowerKey]?.trim();
@@ -94,6 +107,26 @@ function readNpmGlobalConfigPath(
   env: NodeJS.ProcessEnv,
   scope: NpmFreshnessConfigScope,
 ): string | null {
+  const scopedGlobalConfig = resolveScopedGlobalNpmrc(scope);
+  if (scopedGlobalConfig) {
+    return scopedGlobalConfig;
+  }
+  const configuredGlobalConfig = resolveEnvPath(
+    env,
+    "NPM_CONFIG_GLOBALCONFIG",
+    "npm_config_globalconfig",
+  );
+  if (configuredGlobalConfig) {
+    return configuredGlobalConfig;
+  }
+  const configuredPrefix = resolveEnvPath(env, "NPM_CONFIG_PREFIX", "npm_config_prefix");
+  if (configuredPrefix) {
+    return path.join(configuredPrefix, "etc", "npmrc");
+  }
+  const cacheKey = buildNpmGlobalConfigPathCacheKey(env, scope);
+  if (NPM_GLOBAL_CONFIG_PATH_CACHE.has(cacheKey)) {
+    return NPM_GLOBAL_CONFIG_PATH_CACHE.get(cacheKey) ?? null;
+  }
   try {
     const raw = execFileSync("npm", ["config", "get", "globalconfig"], {
       encoding: "utf-8",
@@ -104,9 +137,55 @@ function readNpmGlobalConfigPath(
       stdio: ["ignore", "pipe", "ignore"],
       timeout: 2_000,
     }).trim();
-    return raw && raw !== "null" && raw !== "undefined" ? raw : null;
+    const resolved = raw && raw !== "null" && raw !== "undefined" ? raw : null;
+    NPM_GLOBAL_CONFIG_PATH_CACHE.set(cacheKey, resolved);
+    return resolved;
   } catch {
+    NPM_GLOBAL_CONFIG_PATH_CACHE.set(cacheKey, null);
     return null;
+  }
+}
+
+function buildNpmGlobalConfigPathCacheKey(
+  env: NodeJS.ProcessEnv,
+  scope: NpmFreshnessConfigScope,
+): string {
+  const configFiles = uniqueStrings(
+    [
+      resolveScopedProjectNpmrc(scope),
+      resolveEnvPath(env, "NPM_CONFIG_USERCONFIG", "npm_config_userconfig") ??
+        resolveHomeNpmrc(env),
+      resolveEnvPath(env, "NPM_CONFIG_GLOBALCONFIG", "npm_config_globalconfig"),
+      resolveScopedGlobalNpmrc(scope),
+    ].filter((file): file is string => Boolean(file)),
+  );
+  return JSON.stringify({
+    cwd: scope.npmConfigCwd?.trim() || safeCwd(),
+    prefix: scope.npmConfigPrefix?.trim() ?? "",
+    env: Object.fromEntries(
+      NPM_GLOBAL_CONFIG_PATH_CACHE_ENV_KEYS.map((key) => [key, env[key] ?? process.env[key] ?? ""]),
+    ),
+    configFiles: configFiles.map((filePath) => ({
+      path: filePath,
+      signature: readFileSignature(filePath),
+    })),
+  });
+}
+
+function readFileSignature(filePath: string): string {
+  try {
+    const stat = fsSync.statSync(filePath);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return "missing";
+  }
+}
+
+function safeCwd(): string {
+  try {
+    return process.cwd();
+  } catch {
+    return "";
   }
 }
 

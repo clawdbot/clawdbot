@@ -215,6 +215,15 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("rejects partial gateway timeout values", async () => {
+    await withTempStore(async () => {
+      await expect(
+        agentCliCommand({ message: "hi", to: "+1555", timeout: "10s" }, runtime),
+      ).rejects.toThrow("Invalid --timeout");
+      expect(callGateway).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses gateway by default", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();

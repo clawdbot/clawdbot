@@ -197,14 +197,18 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
       "qa/scenarios/runtime/long-context-progress-watchdog.md",
     );
-    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
-      .toContain("EmbeddedAttemptSessionTakeoverError");
-    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
-      .toContain("AbortError");
-    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
-      .toContain("This operation was aborted");
-    expect(JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow))
-      .toContain("liveTurnTimeoutMs(env, 180000)");
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
+    ).toContain("EmbeddedAttemptSessionTakeoverError");
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
+    ).toContain("AbortError");
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
+    ).toContain("This operation was aborted");
+    expect(
+      JSON.stringify(readQaScenarioById("gateway-restart-inflight-run").execution.flow),
+    ).toContain("liveTurnTimeoutMs(env, 180000)");
     expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
       requiredProviderMode: "live-frontier",
       harnessRuntime: "codex",
@@ -323,8 +327,8 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("gpt55-thinking-visibility-switch");
     const config = readQaScenarioExecutionConfig("gpt55-thinking-visibility-switch") as
       | {
-          requiredLiveProvider?: string;
-          requiredLiveModel?: string;
+          requiredProvider?: string;
+          requiredModel?: string;
           offDirective?: string;
           maxDirective?: string;
           reasoningDirective?: string;
@@ -332,16 +336,15 @@ describe("qa scenario catalog", () => {
       | undefined;
 
     expect(scenario.sourcePath).toBe("qa/scenarios/models/gpt55-thinking-visibility-switch.md");
-    expect(config?.requiredLiveProvider).toBe("openai");
-    expect(config?.requiredLiveModel).toBe("gpt-5.5");
+    expect(config?.requiredProvider).toBe("openai");
+    expect(config?.requiredModel).toBe("gpt-5.5");
     expect(config?.offDirective).toBe("/think off");
     expect(config?.maxDirective).toBe("/think medium");
     expect(config?.reasoningDirective).toBe("/reasoning on");
     expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
       "enables reasoning display and disables thinking",
       "switches to medium thinking",
-      "verifies medium thinking emits visible reasoning",
-      "verifies medium thinking completes the answer",
+      "verifies medium thinking reaches the provider",
     ]);
   });
 

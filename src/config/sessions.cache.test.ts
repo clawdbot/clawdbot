@@ -20,6 +20,7 @@ import {
   readSessionUpdatedAt,
   saveSessionStore,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "./sessions/store.js";
 import type { SessionEntry } from "./sessions/types.js";
 
@@ -246,7 +247,7 @@ describe("Session Store Cache", () => {
     structuredCloneSpy.mockRestore();
   });
 
-  it("does not parse serialized stores when writing or reading object-cache hits", () => {
+  it("parses serialized stores only when cloning object-cache hits", () => {
     const testStore = createSingleSessionStore(
       createSessionEntry({
         origin: { provider: "openai" },
@@ -255,17 +256,19 @@ describe("Session Store Cache", () => {
     const serialized = JSON.stringify(testStore);
     const parseSpy = vi.spyOn(JSON, "parse");
 
-    writeSessionStoreCache({ storePath, store: testStore, serialized });
+    try {
+      writeSessionStoreCache({ storePath, store: testStore, serialized });
 
-    expect(parseSpy).not.toHaveBeenCalled();
+      expect(parseSpy).not.toHaveBeenCalled();
 
-    testStore["session:1"].origin = { provider: "mutated" };
-    const cached = readSessionStoreCache({ storePath });
+      testStore["session:1"].origin = { provider: "mutated" };
+      const cached = readSessionStoreCache({ storePath });
 
-    expect(cached?.["session:1"].origin?.provider).toBe("openai");
-    expect(parseSpy).not.toHaveBeenCalled();
-
-    parseSpy.mockRestore();
+      expect(cached?.["session:1"].origin?.provider).toBe("openai");
+      expect(parseSpy).toHaveBeenCalledOnce();
+    } finally {
+      parseSpy.mockRestore();
+    }
   });
 
   it("clones cached session records without invoking prototype setters", () => {
@@ -553,6 +556,46 @@ describe("Session Store Cache", () => {
     expect(after).not.toBe(before);
     expect(before["session:1"].displayName).toBe("Test Session 1");
     expect(after["session:1"].displayName).toBe("Updated Session");
+  });
+
+  it("can publish writer-owned session updates directly into the object cache", async () => {
+    await saveSessionStore(storePath, createSingleSessionStore());
+
+    const persisted = await updateSessionStore(
+      storePath,
+      (store) => {
+        const next = {
+          ...store["session:1"],
+          displayName: "Writer owned",
+          updatedAt: Date.now() + 1,
+        };
+        store["session:1"] = next;
+        return next;
+      },
+      { takeCacheOwnership: true },
+    );
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:1"]).toBe(persisted);
+    expect(cached["session:1"].displayName).toBe("Writer owned");
+  });
+
+  it("can publish writer-owned entry patches directly into the object cache", async () => {
+    await saveSessionStore(storePath, createSingleSessionStore());
+
+    const persisted = await updateSessionStoreEntry({
+      storePath,
+      sessionKey: "session:1",
+      takeCacheOwnership: true,
+      update: async () => ({
+        displayName: "Entry writer owned",
+        updatedAt: Date.now() + 1,
+      }),
+    });
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:1"]).toBe(persisted);
+    expect(cached["session:1"].displayName).toBe("Entry writer owned");
   });
 
   it("builds immutable session snapshots lazily after writes", async () => {

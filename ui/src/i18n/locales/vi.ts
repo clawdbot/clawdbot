@@ -362,6 +362,8 @@ export const vi: TranslationMap = {
     pending: "{count} đang chờ",
     allowOnce: "Cho phép một lần",
     alwaysAllow: "Luôn cho phép",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "Từ chối",
     labels: {
       host: "Máy chủ",

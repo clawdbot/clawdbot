@@ -5,7 +5,7 @@ import {
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveTelegramConversationBaseSessionKey,
   resolveTelegramConversationRoute,
@@ -15,6 +15,10 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
   const cfg: OpenClawConfig = {};
 
   beforeEach(() => {
+    conversationBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
+  afterEach(() => {
     conversationBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
@@ -152,10 +156,56 @@ describe("resolveTelegramConversationBaseSessionKey", () => {
     });
 
     expect(touch).not.toHaveBeenCalled();
-    expect(result.configuredBinding).toBeNull();
-    expect(result.configuredBindingSessionKey).toBe("");
+    expect(result.bindingMode).toEqual({ kind: "none" });
     expect(result.route.agentId).toBe("main");
     expect(result.route.sessionKey).toBe("agent:main:main");
+    expect(result.route.matchedBy).toBe("default");
+  });
+
+  it("detects plugin-owned runtime bindings without replacing the route", () => {
+    const touch = vi.fn<NonNullable<SessionBindingAdapter["touch"]>>();
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: () => ({
+        bindingId: "binding-plugin-owned",
+        targetSessionKey: "plugin-binding:openclaw-codex-app-server:abc123",
+        targetKind: "session",
+        conversation: {
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "-1001234567890:topic:11",
+        },
+        status: "active",
+        boundAt: 1,
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "openclaw-codex-app-server",
+          pluginRoot: "/tmp/openclaw-codex-app-server",
+        },
+      }),
+      touch,
+    });
+
+    const result = resolveTelegramConversationRoute({
+      cfg: {
+        session: {
+          dmScope: "main",
+        },
+      },
+      accountId: "default",
+      chatId: -1001234567890,
+      isGroup: true,
+      resolvedThreadId: 11,
+      replyThreadId: 11,
+      senderId: 12345,
+    });
+
+    expect(touch).toHaveBeenCalledWith("binding-plugin-owned", undefined);
+    expect(result.bindingMode).toEqual({ kind: "plugin-owned-runtime" });
+    expect(result.route.agentId).toBe("main");
+    expect(result.route.sessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:11");
     expect(result.route.matchedBy).toBe("default");
   });
 });

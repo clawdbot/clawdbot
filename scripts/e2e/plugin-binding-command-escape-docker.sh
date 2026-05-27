@@ -9,11 +9,12 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_E2E_IMAGE:-openclaw-plugin-binding-command-escape-e2e}"
 CONTAINER_NAME="openclaw-plugin-binding-command-escape-e2e-$$"
+DOCKER_RUN_TIMEOUT="${OPENCLAW_PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_RUN_TIMEOUT:-900s}"
 RUN_LOG="$(mktemp -t openclaw-plugin-binding-command-escape-log.XXXXXX)"
 FOCUSED_TEST_REGEX="lets authorized plugin-owned binding commands fall through to command processing|keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin|keeps unauthorized plugin-owned binding slash text routed to the bound plugin"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$RUN_LOG"
 }
 trap cleanup EXIT
@@ -26,7 +27,7 @@ docker_e2e_build_or_reuse \
 
 echo "Running plugin binding command escape Docker E2E..."
 set +e
-docker run --rm \
+DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --rm \
   --name "$CONTAINER_NAME" \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e "FOCUSED_TEST_REGEX=$FOCUSED_TEST_REGEX" \

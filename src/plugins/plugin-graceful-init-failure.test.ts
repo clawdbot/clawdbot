@@ -60,12 +60,15 @@ async function loadPlugins(pluginPaths: string[], warnings?: string[]) {
         allow,
       },
     },
+    installRecords: {},
     logger: {
       info: () => {},
       debug: () => {},
       error: () => {},
       warn: (message: string) => warnings?.push(message),
     },
+    onlyPluginIds: allow,
+    workspaceDir: fixtureRoot,
   });
 }
 

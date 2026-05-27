@@ -7,7 +7,11 @@ import {
 import { resolveDaemonContainerContext } from "../daemon/container-context.js";
 import { formatRuntimeStatus } from "../daemon/runtime-format.js";
 import { buildPlatformRuntimeLogHints } from "../daemon/runtime-hints.js";
-import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import {
+  getSystemdCgroupHygieneSummary,
+  isSystemdCgroupHygieneRisk,
+  type GatewayServiceRuntime,
+} from "../daemon/service-runtime.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -94,6 +98,20 @@ export function buildGatewayRuntimeHints(
         windowsTaskName: resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE),
       }),
     );
+  }
+  if (platform === "linux" && isSystemdCgroupHygieneRisk(runtime.systemd)) {
+    const unit =
+      runtime.systemd?.unit ?? `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+    const summary = getSystemdCgroupHygieneSummary(runtime.systemd);
+    if (summary) {
+      hints.push(
+        `Systemd cgroup hygiene looks elevated: ${summary}.`,
+        "This usually means old helper or browser processes may still be attached to the gateway service.",
+        `Run: systemctl --user show ${unit} -p KillMode -p TasksCurrent -p MemoryCurrent -p MainPID`,
+        `Run: systemd-cgls --user-unit ${unit}`,
+        `After reviewing service settings, run: ${formatCliCommand("openclaw gateway restart", env)}`,
+      );
+    }
   }
   return hints;
 }

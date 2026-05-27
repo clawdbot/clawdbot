@@ -164,7 +164,7 @@ describe("sandbox fs bridge anchored ops", () => {
             const target = getDockerArg(args, 1);
             return dockerExecResult(`${target.replace("/workspace/alias", "/workspace/real")}\n`);
           }
-          if (script.includes('stat -c "%F|%s|%Y"')) {
+          if (script.includes('stat -c "%F|%s|%y"')) {
             return dockerExecResult("regular file|1|2");
           }
           return dockerExecResult("");
@@ -209,7 +209,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await bridge.stat({ filePath: "nested/file.txt" });
 
-      const statCall = findCallByScriptFragment('stat -c "%F|%s|%Y" -- "$2"');
+      const statCall = findCallByScriptFragment('stat -c "%F|%s|%y" -- "$2"');
       const args = requireDockerCall(statCall, "stat")[0];
       expect(getDockerArg(args, 1)).toBe("/workspace/nested");
       expect(getDockerArg(args, 2)).toBe("file.txt");

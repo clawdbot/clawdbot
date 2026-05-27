@@ -2,11 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 BUN_BIN="${BUN_BIN:-bun}"
 HOST_BUILD="${OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD:-1}"
 DIST_IMAGE="${OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE:-}"
 PACKAGE_TGZ="${OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ:-}"
 COMMAND_TIMEOUT_MS="${OPENCLAW_BUN_GLOBAL_SMOKE_TIMEOUT_MS:-180000}"
+DOCKER_COMMAND_TIMEOUT="${DOCKER_COMMAND_TIMEOUT:-${OPENCLAW_BUN_GLOBAL_SMOKE_DOCKER_COMMAND_TIMEOUT:-600s}}"
 SMOKE_DIR=""
 PACK_DIR=""
 
@@ -32,13 +34,13 @@ restore_dist_from_image() {
   local container_id
 
   echo "==> Reuse dist/ from Docker image: $image"
-  container_id="$(docker create "$image")"
+  container_id="$(docker_e2e_docker_cmd create "$image")"
   rm -rf "$ROOT_DIR/dist"
-  if ! docker cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
-    docker rm -f "$container_id" >/dev/null 2>&1 || true
+  if ! docker_e2e_docker_cmd cp "${container_id}:/app/dist" "$ROOT_DIR/dist"; then
+    docker_e2e_docker_cmd rm -f "$container_id" >/dev/null 2>&1 || true
     return 1
   fi
-  docker rm -f "$container_id" >/dev/null
+  docker_e2e_docker_cmd rm -f "$container_id" >/dev/null
 }
 
 resolve_package_tgz() {

@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyConfigSnapshot,
   applyConfig,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
   loadConfig,
+  openConfigFile,
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
@@ -63,6 +64,10 @@ function requireRequestCall(request: ReturnType<typeof vi.fn>, index = 0): unkno
   }
   return call;
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("applyConfigSnapshot", () => {
   it("does not clobber form edits while dirty", () => {
@@ -268,6 +273,57 @@ describe("loadConfig", () => {
     expect(state.configFormDirty).toBe(false);
     expect(state.configForm).toEqual({ gateway: { mode: "remote" } });
     expect(state.configRawOriginal).toBe('{\n  "gateway": { "mode": "remote" }\n}\n');
+  });
+});
+
+describe("openConfigFile", () => {
+  it("surfaces failed open responses and copies the returned config path", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      path: "/tmp/openclaw.json",
+      error: "Cannot open file in headless environment.",
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.lastError = "stale error";
+
+    await openConfigFile(state);
+
+    expect(request).toHaveBeenCalledWith("config.openFile", {});
+    expect(writeText).toHaveBeenCalledWith("/tmp/openclaw.json");
+    expect(state.lastError).toBe(
+      "Cannot open file in headless environment.\n\nFile path copied to clipboard: /tmp/openclaw.json",
+    );
+  });
+
+  it("includes the config path in the visible error when clipboard fallback fails", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      error: "Failed to open config file",
+    });
+    const writeText = vi.fn().mockRejectedValue(new Error("clipboard denied"));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configSnapshot = {
+      config: {},
+      path: "/tmp/from-snapshot.json",
+      valid: true,
+      issues: [],
+    };
+
+    await openConfigFile(state);
+
+    expect(writeText).toHaveBeenCalledWith("/tmp/from-snapshot.json");
+    expect(state.lastError).toBe(
+      "Failed to open config file\n\nFile path: /tmp/from-snapshot.json",
+    );
   });
 });
 

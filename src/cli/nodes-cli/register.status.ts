@@ -427,10 +427,6 @@ export function registerNodesStatusCommands(nodes: Command) {
           });
           const filteredLabel =
             hasFilters && filteredPaired.length !== paired.length ? ` (of ${paired.length})` : "";
-          defaultRuntime.log(
-            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
-          );
-
           if (opts.json) {
             defaultRuntime.writeJson({
               pending: pendingRows,
@@ -438,6 +434,10 @@ export function registerNodesStatusCommands(nodes: Command) {
             });
             return;
           }
+
+          defaultRuntime.log(
+            `Pending: ${pendingRows.length} · Paired: ${filteredPaired.length}${filteredLabel}`,
+          );
 
           if (pendingRows.length > 0) {
             const rendered = renderPendingPairingRequestsTable({

@@ -11,8 +11,10 @@ export const nativeHookRelayHandlers: GatewayRequestHandlers = {
       const result: NativeHookRelayProcessResponse = await invokeNativeHookRelay({
         provider: params.provider,
         relayId: params.relayId,
+        generation: params.generation,
         event: params.event,
         rawPayload: params.rawPayload,
+        requireGeneration: true,
       });
       respond(true, result);
     } catch (error) {

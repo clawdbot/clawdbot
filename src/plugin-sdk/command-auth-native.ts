@@ -9,6 +9,7 @@ export {
   normalizeCommandBody,
   parseCommandArgs,
   serializeCommandArgs,
+  resolveCommandArgChoices,
   resolveCommandArgMenu,
 } from "../auto-reply/commands-registry.js";
 export type {
@@ -18,6 +19,7 @@ export type {
   CommandArgs,
   NativeCommandSpec,
 } from "../auto-reply/commands-registry.js";
+export type { CommandArgsParsing } from "../auto-reply/commands-registry.types.js";
 export {
   hasControlCommand,
   shouldComputeCommandAuthorized,

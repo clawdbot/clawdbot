@@ -1,4 +1,4 @@
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import {

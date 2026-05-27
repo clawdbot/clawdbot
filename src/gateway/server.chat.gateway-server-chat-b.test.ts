@@ -503,6 +503,7 @@ describe("gateway server chat", () => {
         expect(captured?.ctx?.MediaType).toBe("image/png");
         expect(captured?.ctx?.MediaTypes).toEqual(["image/png"]);
         expect(captured?.ctx?.MediaStaged).toBe(true);
+        await vi.waitFor(() => expect(context.removeChatRun).toHaveBeenCalledTimes(1));
       } finally {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
@@ -812,6 +813,130 @@ describe("gateway server chat", () => {
           process.env.HOME = originalHome;
         }
       }
+    });
+  });
+
+  test("chat.history overreads one local message to drop stale announce pairs at the limit boundary", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content: [
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+              "stale announce payload",
+            ].join("\n"),
+            provenance: {
+              kind: "inter_session",
+              sourceSessionKey: "agent:main:subagent:child",
+              sourceTool: "subagent_announce",
+            },
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 2 });
+      expect(messages).toHaveLength(1);
+      expect(JSON.stringify(messages)).not.toContain("stale announce reply");
+      expect(JSON.stringify(messages)).toContain("fresh turn");
+    });
+  });
+
+  test("chat.history does not surface an older stale assistant when overreading for pair context", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      const announce = {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "subagent_announce",
+      };
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({ type: "session", version: 1, id: "sess-main" }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:29.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:30.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "older stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "newer stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "fresh turn" }],
+          },
+        }),
+      ]);
+
+      const messages = await fetchHistoryMessages(ws, { limit: 3 });
+      const serialized = JSON.stringify(messages);
+      expect(serialized).not.toContain("older stale announce reply");
+      expect(serialized).not.toContain("newer stale announce reply");
+      expect(serialized).toContain("fresh turn");
     });
   });
 

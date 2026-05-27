@@ -2,7 +2,7 @@ import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "../runtime-api.js";

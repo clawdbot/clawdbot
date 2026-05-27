@@ -96,25 +96,28 @@ export function getProviderUsageMocks(): AnyMocks {
 
 vi.mock("../../../src/infra/provider-usage.js", () => providerUsageMocks);
 
+const DEFAULT_MODEL_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-7",
+    name: "Claude Opus 4.7",
+    contextWindow: 200000,
+  },
+  {
+    provider: "openrouter",
+    id: "anthropic/claude-opus-4-7",
+    name: "Claude Opus 4.7 (OpenRouter)",
+    contextWindow: 200000,
+  },
+  { provider: "openai", id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
+  { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+  { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)" },
+  { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
+];
+
 const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalog-mocks", () => ({
-  loadModelCatalog: vi.fn().mockResolvedValue([
-    {
-      provider: "anthropic",
-      id: "claude-opus-4-7",
-      name: "Claude Opus 4.7",
-      contextWindow: 200000,
-    },
-    {
-      provider: "openrouter",
-      id: "anthropic/claude-opus-4-7",
-      name: "Claude Opus 4.7 (OpenRouter)",
-      contextWindow: 200000,
-    },
-    { provider: "openai", id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
-    { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
-    { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)" },
-    { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
-  ]),
+  loadManifestModelCatalog: vi.fn(() => DEFAULT_MODEL_CATALOG),
+  loadModelCatalog: vi.fn().mockResolvedValue(DEFAULT_MODEL_CATALOG),
   resetModelCatalogCacheForTest: vi.fn(),
 }));
 
@@ -124,6 +127,7 @@ const installModelCatalogMock = () =>
 installModelCatalogMock();
 
 vi.doMock("../../../src/agents/model-catalog.runtime.js", () => ({
+  loadManifestModelCatalog: () => modelCatalogMocks.loadManifestModelCatalog(),
   loadModelCatalog: (...args: unknown[]) => modelCatalogMocks.loadModelCatalog(...args),
 }));
 

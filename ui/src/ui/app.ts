@@ -94,7 +94,12 @@ import type {
   WikiImportInsights,
   WikiMemoryPalace,
 } from "./controllers/dreaming.ts";
-import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
+import {
+  dismissExecApprovalPrompt,
+  isStaleApprovalResolutionError,
+  refreshPendingApprovalQueue,
+  type ExecApprovalRequest,
+} from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
 import type {
   ClawHubSearchResult,
@@ -1226,8 +1231,16 @@ export class OpenClawApp extends LitElement {
         id: active.id,
         decision,
       });
-      this.execApprovalQueue = this.execApprovalQueue.filter((entry) => entry.id !== active.id);
+      dismissExecApprovalPrompt(this, active.id);
     } catch (err) {
+      if (isStaleApprovalResolutionError(err)) {
+        dismissExecApprovalPrompt(this, active.id);
+        await refreshPendingApprovalQueue(this);
+        return;
+      }
+      if (!this.execApprovalQueue.some((entry) => entry.id === active.id)) {
+        return;
+      }
       this.execApprovalError = `Approval failed: ${String(err)}`;
     } finally {
       this.execApprovalBusy = false;

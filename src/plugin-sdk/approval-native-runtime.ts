@@ -1,6 +1,9 @@
 export {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalForwardingFallbackSuppressor,
+  nativeApprovalTargetsMatch,
+  shouldSuppressLocalNativeExecApprovalPrompt,
 } from "./approval-native-helpers.js";
 export {
   resolveApprovalRequestSessionConversation,

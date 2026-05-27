@@ -14,6 +14,27 @@ const USER_PROVIDER = "hatchery-qwen3.6-plus";
 const USER_MODEL = "qwen3.6-plus";
 const USER_PRIMARY = `${USER_PROVIDER}/${USER_MODEL}`;
 const CONFIG_API_KEY = "sk-user-configured-key"; // pragma: allowlist secret
+const USER_PROVIDER_AUTH_ENV_KEYS = [
+  "HATCHERY_QWEN3_6_PLUS_API_KEY",
+  "HATCHERY_QWEN3_6_PLUS_OAUTH_TOKEN",
+  "QWEN3_6_PLUS_API_KEY",
+  "QWEN3_6_PLUS_OAUTH_TOKEN",
+];
+const mediaRuntimeMock = {
+  loadWebMedia: vi.fn(async () => ({
+    buffer: Buffer.from("fixture-image"),
+    contentType: "image/png",
+    kind: "image" as const,
+  })),
+  optimizeImageBufferForWebMedia: vi.fn(
+    async (params: { buffer: Buffer; contentType?: string; fileName?: string }) => ({
+      buffer: params.buffer,
+      contentType: params.contentType ?? "image/png",
+      kind: "image" as const,
+      fileName: params.fileName,
+    }),
+  ),
+};
 
 const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
@@ -64,10 +85,10 @@ describe("image custom provider auth regression", () => {
   const priorFetch = global.fetch;
 
   beforeEach(() => {
-    for (const key of Object.keys(process.env)) {
-      if (key.endsWith("_API_KEY") || key.endsWith("_OAUTH_TOKEN")) {
-        vi.stubEnv(key, "");
-      }
+    mediaRuntimeMock.loadWebMedia.mockClear();
+    mediaRuntimeMock.optimizeImageBufferForWebMedia.mockClear();
+    for (const key of USER_PROVIDER_AUTH_ENV_KEYS) {
+      vi.stubEnv(key, "");
     }
     testing.setProviderDepsForTest({
       buildProviderRegistry: () => new Map(),
@@ -87,6 +108,7 @@ describe("image custom provider auth regression", () => {
         authStorage: {} as never,
         modelRegistry: {} as never,
       }),
+      loadImageWebMediaRuntime: async () => mediaRuntimeMock,
     });
   });
 
@@ -163,6 +185,7 @@ describe("image custom provider auth regression", () => {
       const text = payload.content?.find((entry) => entry.type === "text")?.text ?? "";
       expect(text).toContain(`seen:${USER_PRIMARY}`);
       expect(text).not.toMatch(/No image model is configured/i);
+      expect(mediaRuntimeMock.optimizeImageBufferForWebMedia).toHaveBeenCalledTimes(1);
     });
   });
 

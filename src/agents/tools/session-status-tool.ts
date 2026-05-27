@@ -16,6 +16,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -289,18 +290,33 @@ async function resolveModelOverride(params: {
     defaultProvider: currentProvider,
   });
   const catalog = await loadModelCatalog({ config: params.cfg });
+  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+    config: params.cfg,
+    workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
+    env: process.env,
+  });
+  const modelManifestContext = {
+    manifestPlugins: manifestMetadataSnapshot.plugins,
+  };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
     defaultProvider: currentProvider,
     defaultModel: currentModel,
     agentId: params.agentId,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
   });
 
   const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
     raw,
     defaultProvider: currentProvider,
     aliasIndex,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
   });
   if (!resolved) {
     throw new Error(`Unrecognized model "${raw}".`);

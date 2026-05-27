@@ -55,6 +55,12 @@ describe("buildQaGatewayConfig", () => {
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.5");
     expect(cfg.models?.providers?.["mock-openai"]?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(cfg.models?.providers?.["mock-openai"]?.request).toEqual({ allowPrivateNetwork: true });
+    expect(cfg.models?.providers?.["mock-openai"]?.models).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "gpt-5.5", reasoning: true }),
+        expect.objectContaining({ id: "gpt-5.5-alt", reasoning: true }),
+      ]),
+    );
     expect(cfg.models?.providers?.openai?.baseUrl).toBe("http://127.0.0.1:44080/v1");
     expect(cfg.models?.providers?.openai?.request).toEqual({ allowPrivateNetwork: true });
     expect(cfg.models?.providers?.anthropic?.baseUrl).toBe("http://127.0.0.1:44080");

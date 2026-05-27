@@ -8,6 +8,33 @@
   width: 100%;
 }
 
+/* Logs opt into a fill-height chain so the log stream, not the page, owns
+   desktop scrolling. Other settings routes keep the default `.content` scroll.
+
+   The chain works because the entire ancestor stack is converted to flex
+   columns so the workspace can take the remaining viewport after the
+   `.content-header` breadcrumb without triggering `.content`'s overflow scroll. */
+.content--logs {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content--logs .settings-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  height: auto;
+}
+
+.content--logs .settings-workspace__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 .settings-section-nav {
   display: flex;
   flex-wrap: wrap;

@@ -6,12 +6,19 @@ const groupId = process.env.OPENCLAW_QA_TELEGRAM_GROUP_ID;
 const driverToken = process.env.OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN;
 const sutToken = process.env.OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN;
 const outputDir = process.env.OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR ?? ".artifacts/rtt/raw";
+const telegramApiBaseUrl = (
+  process.env.OPENCLAW_QA_TELEGRAM_API_BASE_URL ?? "https://api.telegram.org"
+).replace(/\/+$/u, "");
 const timeoutMs = Number(process.env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS ?? "180000");
 const canaryTimeoutMs = Number(
   process.env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS ?? String(timeoutMs),
 );
 const warmSampleCount = Number(process.env.OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES ?? "20");
 const sampleTimeoutMs = Number(process.env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS ?? "30000");
+const botApiTimeoutMs = readPositiveInt(
+  process.env.OPENCLAW_NPM_TELEGRAM_BOT_API_TIMEOUT_MS,
+  30000,
+);
 const maxWarmFailures = Number(
   process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? String(warmSampleCount),
 );
@@ -44,18 +51,39 @@ if (!Number.isInteger(maxWarmFailures) || maxWarmFailures < 1) {
   );
 }
 
+function readPositiveInt(raw, fallback) {
+  const parsed = Number.parseInt(String(raw || ""), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+async function fetchTelegramJson(url, init) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort();
+  }, botApiTimeoutMs);
+  try {
+    const response = await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+    const payload = await response.json();
+    return { payload, response };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 class TelegramBot {
   constructor(token) {
-    this.baseUrl = `https://api.telegram.org/bot${token}`;
+    this.baseUrl = `${telegramApiBaseUrl}/bot${token}`;
   }
 
   async call(method, body) {
-    const response = await fetch(`${this.baseUrl}/${method}`, {
+    const { payload, response } = await fetchTelegramJson(`${this.baseUrl}/${method}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
-    const payload = await response.json();
     if (!response.ok || payload.ok !== true) {
       throw new Error(`${method} failed: ${JSON.stringify(payload)}`);
     }

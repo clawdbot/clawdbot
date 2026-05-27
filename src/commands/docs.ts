@@ -1,15 +1,10 @@
-import { hasBinary } from "../agents/skills.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 
-const SEARCH_TOOL = "https://docs.openclaw.ai/mcp.search_open_claw";
+const SEARCH_API = "https://docs.openclaw.ai/api/search";
 const SEARCH_TIMEOUT_MS = 30_000;
-const DEFAULT_SNIPPET_MAX = 220;
-const MCP_ERROR_PATTERN = /MCP error\s+-?\d+/i;
 
 type DocResult = {
   title: string;
@@ -17,102 +12,9 @@ type DocResult = {
   snippet?: string;
 };
 
-type NodeRunner = {
-  cmd: string;
-  args: string[];
+type DocsSearchResponse = {
+  results?: unknown;
 };
-
-type ToolRunOptions = {
-  input?: string;
-  timeoutMs?: number;
-};
-
-function resolveNodeRunner(): NodeRunner {
-  if (hasBinary("pnpm")) {
-    return { cmd: "pnpm", args: ["dlx"] };
-  }
-  if (hasBinary("npx")) {
-    return { cmd: "npx", args: ["-y"] };
-  }
-  throw new Error(
-    `Docs search needs pnpm or npx to run the docs search helper. Install pnpm, or run ${formatCliCommand("npm install -g pnpm")}.`,
-  );
-}
-
-async function runNodeTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
-  const runner = resolveNodeRunner();
-  const argv = [runner.cmd, ...runner.args, tool, ...toolArgs];
-  return await runCommandWithTimeout(argv, {
-    timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
-    input: options.input,
-  });
-}
-
-async function runTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
-  if (hasBinary(tool)) {
-    return await runCommandWithTimeout([tool, ...toolArgs], {
-      timeoutMs: options.timeoutMs ?? SEARCH_TIMEOUT_MS,
-      input: options.input,
-    });
-  }
-  return await runNodeTool(tool, toolArgs, options);
-}
-
-function extractLine(lines: string[], prefix: string): string | undefined {
-  const line = lines.find((value) => value.startsWith(prefix));
-  if (!line) {
-    return undefined;
-  }
-  return line.slice(prefix.length).trim();
-}
-
-function normalizeSnippet(raw: string | undefined, fallback: string): string {
-  const base = raw && raw.trim().length > 0 ? raw : fallback;
-  const cleaned = base.replace(/\s+/g, " ").trim();
-  if (!cleaned) {
-    return "";
-  }
-  if (cleaned.length <= DEFAULT_SNIPPET_MAX) {
-    return cleaned;
-  }
-  return `${cleaned.slice(0, DEFAULT_SNIPPET_MAX - 3)}...`;
-}
-
-function firstParagraph(text: string): string {
-  return (
-    text
-      .split(/\n\s*\n/)
-      .map((chunk) => chunk.trim())
-      .find(Boolean) ?? ""
-  );
-}
-
-function parseSearchOutput(raw: string): DocResult[] {
-  const normalized = raw.replace(/\r/g, "");
-  const blocks = normalizeStringEntries(normalized.split(/\n(?=Title: )/g));
-
-  const results: DocResult[] = [];
-  for (const block of blocks) {
-    const lines = block.split("\n");
-    const title = extractLine(lines, "Title:");
-    const link = extractLine(lines, "Link:");
-    if (!title || !link) {
-      continue;
-    }
-    const content = extractLine(lines, "Content:");
-    const contentIndex = lines.findIndex((line) => line.startsWith("Content:"));
-    const body =
-      contentIndex >= 0
-        ? lines
-            .slice(contentIndex + 1)
-            .join("\n")
-            .trim()
-        : "";
-    const snippet = normalizeSnippet(content, firstParagraph(body));
-    results.push({ title, link, snippet: snippet || undefined });
-  }
-  return results;
-}
 
 function escapeMarkdown(text: string): string {
   return text.replace(/[()[\]]/g, "\\$&");
@@ -159,6 +61,49 @@ async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
   runtime.log(markdown.trimEnd());
 }
 
+async function fetchDocsSearch(query: string): Promise<DocResult[]> {
+  const url = new URL(SEARCH_API);
+  url.searchParams.set("q", query);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = (await response.json()) as DocsSearchResponse;
+    return parseDocsSearchResults(payload.results);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function parseDocsSearchResults(raw: unknown): DocResult[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const results: DocResult[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.title !== "string" || typeof entry.link !== "string") {
+      continue;
+    }
+    results.push({
+      title: entry.title,
+      link: entry.link,
+      snippet:
+        typeof entry.snippet === "string" && entry.snippet.trim() ? entry.snippet : undefined,
+    });
+  }
+  return results;
+}
+
 export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEnv) {
   const query = queryParts.join(" ").trim();
   if (!query) {
@@ -173,31 +118,16 @@ export async function docsSearchCommand(queryParts: string[], runtime: RuntimeEn
     return;
   }
 
-  const payload = JSON.stringify({ query });
-  const res = await runTool(
-    "mcporter",
-    ["call", SEARCH_TOOL, "--args", payload, "--output", "text"],
-    { timeoutMs: SEARCH_TIMEOUT_MS },
-  );
-
-  if (res.code !== 0) {
-    const err = res.stderr.trim() || res.stdout.trim() || `exit ${res.code}`;
-    runtime.error(`Docs search failed: ${err}`);
+  let results: DocResult[];
+  try {
+    results = await fetchDocsSearch(query);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    runtime.error(`Docs search failed: ${message}`);
     runtime.exit(1);
     return;
   }
 
-  const combined = `${res.stdout}\n${res.stderr}`;
-  if (MCP_ERROR_PATTERN.test(combined)) {
-    const err = (res.stderr.trim() || res.stdout.trim())
-      .split("\n")
-      .find((line) => MCP_ERROR_PATTERN.test(line));
-    runtime.error(`Docs search failed: ${err ?? "MCP error reported by docs search tool"}`);
-    runtime.exit(1);
-    return;
-  }
-
-  const results = parseSearchOutput(res.stdout);
   if (isRich()) {
     renderRichResults(query, results, runtime);
     return;

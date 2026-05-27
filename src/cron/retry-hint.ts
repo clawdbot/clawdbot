@@ -11,7 +11,7 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
   overloaded:
     /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
   network:
-    /(network|fetch failed|socket|econnreset|econnrefused|eai_again|ehostunreach|ehostdown|enetreset|enetunreach|epipe)/i,
+    /(network|fetch failed|socket|econnreset|econnrefused|eai_again|enetdown|ehostunreach|ehostdown|enetreset|enetunreach|epipe)/i,
   timeout: /(timeout|etimedout)/i,
   server_error: /\b5\d{2}\b/,
 };

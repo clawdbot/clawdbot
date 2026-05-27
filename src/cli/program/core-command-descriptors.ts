@@ -72,6 +72,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "transcripts",
+    description: "Inspect stored transcripts",
+    hasSubcommands: true,
+  },
+  {
     name: "agent",
     description: "Run one agent turn via the Gateway",
     hasSubcommands: false,

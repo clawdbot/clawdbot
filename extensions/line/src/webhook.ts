@@ -3,7 +3,7 @@ import type { NextFunction, Request, Response } from "express";
 import {
   createMessageReceiveContext,
   type MessageReceiveContext,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { parseLineWebhookBody, validateLineSignature } from "./webhook-utils.js";
 

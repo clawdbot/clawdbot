@@ -5,6 +5,7 @@ import type { HealthSummary } from "../../../commands/health.types.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { PROTOCOL_VERSION } from "../../protocol/index.js";
+import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 
 const {
@@ -187,6 +188,322 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     vi.clearAllMocks();
   });
 
+  it("closes invalidated clients before dispatching queued requests", () => {
+    let onMessage: ((data: string) => void) | undefined;
+    const socket = {
+      _receiver: {},
+      on: vi.fn((event: string, handler: (data: string) => void) => {
+        if (event === "message") {
+          onMessage = handler;
+        }
+        return socket;
+      }),
+    } as unknown as WebSocket;
+    const close = vi.fn();
+    const setCloseCause = vi.fn();
+    const client = {
+      invalidated: true,
+      invalidatedReason: "device-token-revoked",
+      connect: {
+        client: {
+          id: "openclaw-control-ui",
+          version: "dev",
+          platform: "test",
+          mode: "ui",
+        },
+        role: "operator",
+        scopes: [],
+      },
+      connId: "conn-invalidated",
+      usesSharedGatewayAuth: false,
+    };
+
+    attachGatewayWsMessageHandler({
+      socket,
+      upgradeReq: {
+        headers: { host: "127.0.0.1:19001" },
+        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      connId: "conn-invalidated",
+      remoteAddr: "127.0.0.1",
+      localAddr: "127.0.0.1",
+      requestHost: "127.0.0.1:19001",
+      connectNonce: "nonce-invalidated",
+      getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+      gatewayMethods: [],
+      events: [],
+      extraHandlers: {},
+      buildRequestContext: () => ({}) as GatewayRequestContext,
+      refreshHealthSnapshot: vi.fn(async () => createHealthSummary()),
+      send: vi.fn(),
+      close,
+      isClosed: vi.fn(() => false),
+      clearHandshakeTimer: vi.fn(),
+      getClient: () => client as never,
+      setClient: vi.fn(() => true),
+      setHandshakeState: vi.fn(),
+      setCloseCause,
+      setLastFrameMeta: vi.fn(),
+      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+    });
+
+    if (onMessage === undefined) {
+      throw new Error("expected websocket message handler");
+    }
+
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "queued-1",
+        method: "status.summary",
+        params: {},
+      }),
+    );
+
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-token-revoked",
+      method: "status.summary",
+    });
+    expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
+    expect(handleGatewayRequest).not.toHaveBeenCalled();
+  });
+
+  it("waits for credential mutation requests before dispatching later queued requests", async () => {
+    let onMessage: ((data: string) => void) | undefined;
+    let releaseMutation: (() => void) | undefined;
+    const socket = {
+      _receiver: {},
+      on: vi.fn((event: string, handler: (data: string) => void) => {
+        if (event === "message") {
+          onMessage = handler;
+        }
+        return socket;
+      }),
+    } as unknown as WebSocket;
+    const close = vi.fn();
+    const setCloseCause = vi.fn();
+    const client = {
+      invalidated: false,
+      connect: {
+        client: {
+          id: "openclaw-control-ui",
+          version: "dev",
+          platform: "test",
+          mode: "ui",
+        },
+        role: "operator",
+        scopes: [],
+      },
+      connId: "conn-invalidating",
+      usesSharedGatewayAuth: false,
+    };
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      expect(opts.req.method).toBe("device.token.revoke");
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+      client.invalidated = true;
+      (client as { invalidatedReason?: string }).invalidatedReason = "device-token-revoked";
+    });
+
+    attachGatewayWsMessageHandler({
+      socket,
+      upgradeReq: {
+        headers: { host: "127.0.0.1:19001" },
+        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      connId: "conn-invalidating",
+      remoteAddr: "127.0.0.1",
+      localAddr: "127.0.0.1",
+      requestHost: "127.0.0.1:19001",
+      connectNonce: "nonce-invalidating",
+      getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+      gatewayMethods: [],
+      events: [],
+      extraHandlers: {},
+      buildRequestContext: () => ({}) as GatewayRequestContext,
+      refreshHealthSnapshot: vi.fn(async () => createHealthSummary()),
+      send: vi.fn(),
+      close,
+      isClosed: vi.fn(() => false),
+      clearHandshakeTimer: vi.fn(),
+      getClient: () => client as never,
+      setClient: vi.fn(() => true),
+      setHandshakeState: vi.fn(),
+      setCloseCause,
+      setLastFrameMeta: vi.fn(),
+      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+    });
+
+    if (onMessage === undefined) {
+      throw new Error("expected websocket message handler");
+    }
+
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "revoke-1",
+        method: "device.token.revoke",
+        params: { deviceId: "device-1", role: "operator" },
+      }),
+    );
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "queued-1",
+        method: "status.summary",
+        params: {},
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseMutation).toBeTypeOf("function");
+    });
+
+    releaseMutation?.();
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-token-revoked",
+      method: "status.summary",
+    });
+  });
+
+  it("drains credential mutation barriers installed by earlier queued requests", async () => {
+    let onMessage: ((data: string) => void) | undefined;
+    let releaseFirstMutation: (() => void) | undefined;
+    let releaseSecondMutation: (() => void) | undefined;
+    const socket = {
+      _receiver: {},
+      on: vi.fn((event: string, handler: (data: string) => void) => {
+        if (event === "message") {
+          onMessage = handler;
+        }
+        return socket;
+      }),
+    } as unknown as WebSocket;
+    const close = vi.fn();
+    const client = {
+      invalidated: false,
+      connect: {
+        client: {
+          id: "openclaw-control-ui",
+          version: "dev",
+          platform: "test",
+          mode: "ui",
+        },
+        role: "operator",
+        scopes: [],
+      },
+      connId: "conn-chained-invalidating",
+      usesSharedGatewayAuth: false,
+    };
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      if (opts.req.method === "device.token.rotate") {
+        await new Promise<void>((resolve) => {
+          releaseFirstMutation = resolve;
+        });
+        return;
+      }
+      expect(opts.req.method).toBe("device.token.revoke");
+      await new Promise<void>((resolve) => {
+        releaseSecondMutation = resolve;
+      });
+      client.invalidated = true;
+      (client as { invalidatedReason?: string }).invalidatedReason = "device-token-revoked";
+    });
+
+    attachGatewayWsMessageHandler({
+      socket,
+      upgradeReq: {
+        headers: { host: "127.0.0.1:19001" },
+        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      connId: "conn-chained-invalidating",
+      remoteAddr: "127.0.0.1",
+      localAddr: "127.0.0.1",
+      requestHost: "127.0.0.1:19001",
+      connectNonce: "nonce-chained-invalidating",
+      getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+      gatewayMethods: [],
+      events: [],
+      extraHandlers: {},
+      buildRequestContext: () => ({}) as GatewayRequestContext,
+      refreshHealthSnapshot: vi.fn(async () => createHealthSummary()),
+      send: vi.fn(),
+      close,
+      isClosed: vi.fn(() => false),
+      clearHandshakeTimer: vi.fn(),
+      getClient: () => client as never,
+      setClient: vi.fn(() => true),
+      setHandshakeState: vi.fn(),
+      setCloseCause: vi.fn(),
+      setLastFrameMeta: vi.fn(),
+      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+    });
+
+    if (onMessage === undefined) {
+      throw new Error("expected websocket message handler");
+    }
+
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "rotate-1",
+        method: "device.token.rotate",
+        params: { deviceId: "device-1", role: "operator" },
+      }),
+    );
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "revoke-1",
+        method: "device.token.revoke",
+        params: { deviceId: "device-1", role: "operator" },
+      }),
+    );
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "queued-1",
+        method: "status.summary",
+        params: {},
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseFirstMutation).toBeTypeOf("function");
+    });
+
+    releaseFirstMutation?.();
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
+      expect(releaseSecondMutation).toBeTypeOf("function");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
+
+    releaseSecondMutation?.();
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-token-revoked");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(2);
+  });
+
   it("uses the injected runtime-aware health refresh after hello", async () => {
     let resolveRefresh: (() => void) | undefined;
     const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
@@ -224,7 +541,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(hello.ok).toBe(true);
 
     await vi.waitFor(() => {
-      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
+      expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: false });
     });
     resolveRefresh?.();
   });

@@ -3,12 +3,14 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionStoreMock: vi.fn<(storePath: string) => Record<string, SessionEntry>>(),
+  loadSessionStoreMock:
+    vi.fn<(storePath: string, opts?: { clone?: boolean }) => Record<string, SessionEntry>>(),
   listAgentIdsMock: vi.fn<() => string[]>(),
 }));
 
 vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+  loadSessionStore: (storePath: string, opts?: { clone?: boolean }) =>
+    hoisted.loadSessionStoreMock(storePath, opts),
 }));
 
 vi.mock("../../config/sessions/paths.js", () => ({
@@ -126,5 +128,37 @@ describe("resolveSessionKeyForRequest", () => {
     expect(result.sessionStore).toBe(embeddedAgentStore);
     expect(result.storePath).toBe("/stores/embedded-agent.json");
     expect(hoisted.loadSessionStoreMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("borrows session stores when requested", () => {
+    const mainStore = {
+      "agent:main:main": { sessionId: "sid", updatedAt: 10 },
+    } satisfies Record<string, SessionEntry>;
+    const otherStore = {
+      "agent:other:acp:sid": { sessionId: "sid", updatedAt: 20 },
+    } satisfies Record<string, SessionEntry>;
+    mockSessionStores({
+      "/stores/main.json": mainStore,
+      "/stores/other.json": otherStore,
+    });
+
+    const result = resolveSessionKeyForRequest({
+      cfg: {
+        session: {
+          store: "/stores/{agentId}.json",
+        },
+      } satisfies OpenClawConfig,
+      sessionId: "sid",
+      clone: false,
+    });
+
+    expect(result.sessionKey).toBe("agent:other:acp:sid");
+    expect(result.sessionStore).toBe(otherStore);
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/stores/main.json", {
+      clone: false,
+    });
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/stores/other.json", {
+      clone: false,
+    });
   });
 });

@@ -18,10 +18,7 @@ import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
-import {
-  streamSessionTranscriptLines,
-  streamSessionTranscriptLinesReverse,
-} from "./transcript-stream.js";
+import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import {
   runWithOwnedSessionTranscriptWriteLock,
   runWithOwnedSessionTranscriptWritePublication,
@@ -323,18 +320,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       const explicitIdempotencyKey =
         params.idempotencyKey ??
         ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
-      const existingMessageId = explicitIdempotencyKey
-        ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey)
-        : undefined;
-      if (existingMessageId) {
-        return {
-          ok: true,
-          sessionFile,
-          messageId:
-            existingMessageId === true ? (explicitIdempotencyKey ?? "") : existingMessageId,
-        };
-      }
-
       const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
         ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message, params.config)
         : undefined;
@@ -345,18 +330,25 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...params.message,
         ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
       } as Parameters<SessionManager["appendMessage"]>[0];
-      const { messageId, message: appendedMessage } =
-        await runWithOwnedSessionTranscriptWritePublication(
-          { sessionFile, sessionKey: resolved.normalizedKey },
-          async () => {
-            await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
-            return await appendSessionTranscriptMessage({
-              transcriptPath: sessionFile,
-              message,
-              config: params.config,
-            });
-          },
-        );
+      const {
+        messageId,
+        message: appendedMessage,
+        appended,
+      } = await runWithOwnedSessionTranscriptWritePublication(
+        { sessionFile, sessionKey: resolved.normalizedKey },
+        async () => {
+          await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+          return await appendSessionTranscriptMessage({
+            transcriptPath: sessionFile,
+            message,
+            ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
+            config: params.config,
+          });
+        },
+      );
+      if (!appended) {
+        return { ok: true, sessionFile, messageId };
+      }
 
       switch (params.updateMode ?? "inline") {
         case "inline":
@@ -376,37 +368,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       return { ok: true, sessionFile, messageId };
     },
   );
-}
-
-async function transcriptHasIdempotencyKey(
-  transcriptPath: string,
-  idempotencyKey: string,
-): Promise<string | true | undefined> {
-  try {
-    for await (const line of streamSessionTranscriptLines(transcriptPath)) {
-      try {
-        const parsed = JSON.parse(line) as {
-          id?: unknown;
-          message?: { idempotencyKey?: unknown };
-        };
-        if (
-          parsed.message?.idempotencyKey === idempotencyKey &&
-          typeof parsed.id === "string" &&
-          parsed.id
-        ) {
-          return parsed.id;
-        }
-        if (parsed.message?.idempotencyKey === idempotencyKey) {
-          return true;
-        }
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    return undefined;
-  }
-  return undefined;
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {

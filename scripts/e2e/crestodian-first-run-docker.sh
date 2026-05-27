@@ -10,7 +10,7 @@ CONTAINER_NAME="openclaw-crestodian-first-run-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-crestodian-first-run-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$RUN_LOG"
 }
 trap cleanup EXIT

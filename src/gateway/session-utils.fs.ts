@@ -296,16 +296,33 @@ function extractJsonNullableStringFieldPrefix(
   return extractJsonStringFieldPrefix(prefix, field);
 }
 
+function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
+  const match = new RegExp(
+    `"${escapeRegExp(field)}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`,
+  ).exec(prefix);
+  if (!match) {
+    return undefined;
+  }
+  const decoded = Number(match[1]);
+  return Number.isFinite(decoded) ? decoded : undefined;
+}
+
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
+  const messageMatch = /"message"\s*:/.exec(prefix);
+  const recordPrefix = messageMatch ? prefix.slice(0, messageMatch.index) : prefix;
   const id = extractJsonStringFieldPrefix(prefix, "id");
   const parentId = extractJsonNullableStringFieldPrefix(prefix, "parentId");
   const type = extractJsonStringFieldPrefix(prefix, "type");
+  const timestamp =
+    extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
+    extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
   const record: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
     ...(parentId !== undefined ? { parentId } : {}),
+    ...(timestamp !== undefined ? { timestamp } : {}),
     message: {
       role,
       content: [{ type: "text", text: TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER }],
@@ -721,8 +738,15 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   }
   const entry = parsed as Record<string, unknown>;
   if (entry.message) {
+    const recordTimestampMs =
+      typeof entry.timestamp === "string"
+        ? Date.parse(entry.timestamp)
+        : typeof entry.timestamp === "number"
+          ? entry.timestamp
+          : Number.NaN;
     return attachOpenClawTranscriptMeta(entry.message, {
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+      ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
       seq,
     });
   }

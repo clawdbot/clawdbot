@@ -1,5 +1,5 @@
 import {
-  type BuildChannelInboundEventContextParams,
+  type BuildChannelInboundEventContextAsyncParams,
   type BuiltChannelInboundEventContext,
   classifyChannelInboundEvent,
   formatInboundEnvelope,
@@ -409,8 +409,24 @@ export async function buildTelegramInboundContextPayload(params: {
         })
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
-  const contextMedia = [...currentMediaForContext, ...replyMedia];
   const replyHead = visibleReplyChain[0];
+  const toInboundMedia = (media: TelegramMediaRef, index?: number) => ({
+    path: media.path,
+    url: media.path,
+    contentType: media.contentType,
+    transcribed: index !== undefined && audioTranscribedMediaIndex === index,
+  });
+  const currentMediaFacts = currentMediaForContext.map(toInboundMedia);
+  const replyMediaFacts =
+    visibleReplyChain.length > 0
+      ? visibleReplyChain.flatMap((entry) =>
+          entry.mediaPath
+            ? [{ path: entry.mediaPath, url: entry.mediaPath, contentType: entry.mediaType }]
+            : [],
+        )
+      : visibleReplyTarget
+        ? replyMedia.map((media) => toInboundMedia(media))
+        : [];
   const telegramFrom = isGroup
     ? buildTelegramGroupFrom(chatId, resolvedThreadId)
     : `telegram:${chatId}`;
@@ -433,11 +449,10 @@ export async function buildTelegramInboundContextPayload(params: {
     hasAbortRequest,
     commandSource,
   });
-  const ctxPayload = sessionRuntime.buildChannelInboundEventContext({
+  const ctxPayload = await sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
+    resolveSupplementalMedia: true,
     accountId: route.accountId,
-    provider: "telegram",
-    surface: "telegram",
     messageId: options?.messageIdOverride ?? String(msg.message_id),
     timestamp: msg.date ? msg.date * 1000 : undefined,
     from: telegramFrom,
@@ -451,10 +466,6 @@ export async function buildTelegramInboundContextPayload(params: {
       id: String(chatId),
       label: conversationLabel,
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
-      routePeer: {
-        kind: conversationKind,
-        id: String(chatId),
-      },
     },
     route: {
       agentId: route.agentId,
@@ -464,7 +475,6 @@ export async function buildTelegramInboundContextPayload(params: {
     },
     reply: {
       to: telegramTo,
-      originatingTo: telegramTo,
       replyToId: replyHead?.messageId ?? visibleReplyTarget?.id,
       messageThreadId: threadSpec.id,
     },
@@ -474,15 +484,11 @@ export async function buildTelegramInboundContextPayload(params: {
       rawBody,
       bodyForAgent: bodyText,
       commandBody,
-      envelopeFrom: conversationLabel,
       inboundHistory,
     },
     access: {
       commands: {
         authorized: commandAuthorized,
-        allowTextCommands: true,
-        useAccessGroups: cfg.commands?.useAccessGroups !== false,
-        authorizers: [],
       },
     },
     command:
@@ -499,12 +505,7 @@ export async function buildTelegramInboundContextPayload(params: {
               body: commandBody,
             }
           : undefined,
-    media: contextMedia.map((media, index) => ({
-      path: media.path,
-      url: media.path,
-      contentType: media.contentType,
-      transcribed: audioTranscribedMediaIndex === index,
-    })),
+    media: currentMediaFacts,
     supplemental: {
       quote:
         replyHead || visibleReplyTarget
@@ -515,6 +516,7 @@ export async function buildTelegramInboundContextPayload(params: {
               senderAllowed: true,
               isQuote:
                 replyHead?.isQuote ?? (visibleReplyTarget?.kind === "quote" ? true : undefined),
+              media: replyMediaFacts,
             }
           : undefined,
       forwarded: visibleForwardOrigin
@@ -560,7 +562,7 @@ export async function buildTelegramInboundContextPayload(params: {
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },
-  } satisfies BuildChannelInboundEventContextParams);
+  } satisfies BuildChannelInboundEventContextAsyncParams);
   if (inboundEventKind === "room_event" && historyKey) {
     channelHistory.record({
       historyKey,

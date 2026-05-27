@@ -138,7 +138,9 @@ describe("install.sh", () => {
     expect(script).toContain(
       'run_quiet_step "Installing Node.js" sudo apk add --no-cache nodejs npm',
     );
-    expect(script).toContain('run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm');
+    expect(script).toContain(
+      'run_quiet_step "Installing nodejs-current" apk add --no-cache nodejs-current npm',
+    );
     expect(script).toContain("if ! node_is_at_least_required; then");
 
     const apkIndex = script.indexOf("if command -v apk &> /dev/null && is_alpine_linux; then");
@@ -208,7 +210,9 @@ describe("install.sh", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("step:Installing Node.js|apk add --no-cache nodejs npm");
     expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
-    expect(result.stdout).toContain("step:Installing nodejs-current|apk add --no-cache nodejs-current npm");
+    expect(result.stdout).toContain(
+      "step:Installing nodejs-current|apk add --no-cache nodejs-current npm",
+    );
     expect(result.stdout).toContain("finish-linux-node");
   });
 
@@ -247,8 +251,12 @@ describe("install.sh", () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("warn:Alpine nodejs package installed v20.15.1");
-    expect(result.stdout).toContain("step:Installing nodejs-current|apk add --no-cache nodejs-current npm");
-    expect(result.stdout).toContain("error:Alpine apk repositories did not provide Node.js v22.19+");
+    expect(result.stdout).toContain(
+      "step:Installing nodejs-current|apk add --no-cache nodejs-current npm",
+    );
+    expect(result.stdout).toContain(
+      "error:Alpine apk repositories did not provide Node.js v22.19+",
+    );
     expect(result.stdout).toContain("Use Alpine 3.21+ or install Node.js 24 manually");
   });
 
@@ -758,9 +766,67 @@ describe("install.sh", () => {
     expect(result.stdout).not.toContain("[4/3] Verifying installation");
   });
 
+  it("bounds installer npm prefix probes during finalization helpers", () => {
+    const result = runInstallShell(
+      [
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "npm() {",
+        '  if [[ "$1" == "prefix" && "$2" == "-g" ]]; then sleep 2; return 0; fi',
+        '  if [[ "$1" == "config" && "$2" == "get" && "$3" == "prefix" ]]; then printf "/tmp/openclaw-npm\\n"; return 0; fi',
+        "  return 1",
+        "}",
+        "npm_global_bin_dir",
+      ].join("\n"),
+      { OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("/tmp/openclaw-npm/bin");
+    expect(result.stderr).toContain("timed out during installer finalization probe: npm prefix -g");
+  });
+
+  it("bounds daemon status probes during finalization helpers", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-probe-"));
+    const claw = join(tmp, "openclaw");
+    writeFileSync(
+      claw,
+      [
+        "#!/usr/bin/env bash",
+        'if [[ "$1" == "daemon" && "$2" == "status" && "$3" == "--json" ]]; then',
+        "  sleep 2",
+        "  exit 0",
+        "fi",
+        "exit 1",
+        "",
+      ].join("\n"),
+    );
+    chmodSync(claw, 0o755);
+    try {
+      const result = runInstallShell(
+        [
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `if is_gateway_daemon_loaded ${JSON.stringify(claw)}; then`,
+          '  printf "loaded\\n"',
+          "else",
+          '  printf "not-loaded\\n"',
+          "fi",
+        ].join("\n"),
+        { OPENCLAW_INSTALL_PROBE_TIMEOUT_SECONDS: "0.1" },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim()).toBe("not-loaded");
+      expect(result.stderr).toContain(
+        "timed out during installer finalization probe: openclaw daemon status --json",
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+  });
+
   it("loads nvm before checking Node.js so stale system Node does not win", () => {
     expect(script).toMatch(
-      /# Step 2: Node\.js\s+load_nvm_for_node_detection\s+if ! check_node; then/,
+      /# Step 1: Node\.js[\s\S]*?load_nvm_for_node_detection\s+if ! check_node; then/,
     );
 
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-nvm-"));
@@ -822,6 +888,22 @@ describe("install.sh", () => {
     expect(output).toContain("status=0");
     expect(output).toContain(`path=${nvmNode}`);
     expect(output).toContain("version=v22.22.1");
+  });
+
+  it("installs Homebrew lazily before macOS Git installs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      install_homebrew() { echo "install_homebrew"; }
+      run_quiet_step() { echo "run_quiet_step:$*"; return 0; }
+      install_git
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(
+      /install_homebrew\s+run_quiet_step:Installing Git brew install git/,
+    );
   });
 
   it("promotes a supported Linux Node binary over stale PATH entries", () => {

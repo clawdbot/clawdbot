@@ -42,6 +42,14 @@ export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
+
+/**
+ * Yield control to the event loop so other sessions can make progress
+ * while lock contention callbacks run synchronous I/O.
+ */
+function yieldEventLoop(): Promise<void> {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
 // A payload-less lock can be left behind if shutdown lands between open("wx")
 // and the owner metadata write. Keep the grace short so 10s callers recover.
 const ORPHAN_LOCK_PAYLOAD_GRACE_MS = 5_000;
@@ -657,7 +665,20 @@ export async function cleanStaleLockFiles(params: {
   );
   const removeStale = params.removeStale !== false;
   const nowMs = params.nowMs ?? Date.now();
-  const ownerProcessArgsReader = params.readOwnerProcessArgs ?? readProcessArgsSync;
+  const baseOwnerProcessArgsReader = params.readOwnerProcessArgs ?? readProcessArgsSync;
+  // Memoize per-invocation: many locks in the same sweep often share a pid (gateway, MCP),
+  // and resolving owner argv is the most expensive per-lock syscall (PowerShell on Windows
+  // is ~0.5–1s per pid) — pids do not recycle within a single sweep. (#86509)
+  const ownerArgsByPid = new Map<number, string[] | null>();
+  const ownerProcessArgsReader: SessionLockOwnerProcessArgsReader = (pid) => {
+    const cached = ownerArgsByPid.get(pid);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const args = baseOwnerProcessArgsReader(pid);
+    ownerArgsByPid.set(pid, args);
+    return args;
+  };
 
   let entries: fsSync.Dirent[] = [];
   try {
@@ -677,6 +698,11 @@ export async function cleanStaleLockFiles(params: {
     .toSorted((a, b) => a.name.localeCompare(b.name));
 
   for (const entry of lockEntries) {
+    // Yield to the event loop between locks so concurrent timers/HTTP polling can run
+    // while this sweep does per-lock sync syscalls (isPidAlive, /proc reads, PowerShell). (#86509)
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
     const lockPath = path.join(sessionsDir, entry.name);
     const payload = await readLockPayload(lockPath);
     const inspected = inspectLockPayloadForSession({
@@ -750,6 +776,9 @@ export async function acquireSessionWriteLock(params: {
           return lockPayload as Record<string, unknown>;
         },
         shouldReclaim: async ({ payload, nowMs, heldByThisProcess }) => {
+          // Yield to the event loop before synchronous process inspection
+          // to prevent lock contention retries from starving other sessions.
+          await yieldEventLoop();
           const inspected = inspectLockPayloadForSession({
             payload: payload as LockFilePayload | null,
             staleMs,
@@ -762,6 +791,7 @@ export async function acquireSessionWriteLock(params: {
           return await shouldReclaimContendedLockFile(lockPath, inspected, staleMs, nowMs);
         },
         shouldRemoveStaleLock: async ({ lockPath, normalizedTargetPath, payload }) => {
+          await yieldEventLoop();
           const nowMs = Date.now();
           const heldByThisProcess = sessionLockHeldByThisProcess(normalizedTargetPath);
           const inspected = inspectLockPayloadForSession({

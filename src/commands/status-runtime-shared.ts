@@ -1,5 +1,4 @@
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -10,6 +9,9 @@ const providerUsageLoader = createLazyImportLoader(() => import("../infra/provid
 const securityAuditModuleLoader = createLazyImportLoader(
   () => import("../security/audit.runtime.js"),
 );
+const readOnlyChannelPluginsModuleLoader = createLazyImportLoader(
+  () => import("../channels/plugins/read-only.js"),
+);
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
 
 function loadProviderUsage() {
@@ -18,6 +20,10 @@ function loadProviderUsage() {
 
 function loadSecurityAuditModule() {
   return securityAuditModuleLoader.load();
+}
+
+function loadReadOnlyChannelPluginsModule() {
+  return readOnlyChannelPluginsModuleLoader.load();
 }
 
 function loadGatewayCallModule() {
@@ -30,6 +36,7 @@ export async function resolveStatusSecurityAudit(params: {
   timeoutMs?: number;
 }) {
   const { runSecurityAudit } = await loadSecurityAuditModule();
+  const { resolveReadOnlyChannelPluginsForConfig } = await loadReadOnlyChannelPluginsModule();
   const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
     activationSourceConfig: params.sourceConfig,
     includeSetupFallbackPlugins: false,

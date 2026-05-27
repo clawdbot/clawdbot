@@ -172,7 +172,7 @@ function installDockerReadMock(params?: { canonicalPath?: string }) {
     if (script.includes('readlink -f -- "$cursor"')) {
       return dockerExecResult(`${canonicalPath ?? getDockerArg(args, 1)}\n`);
     }
-    if (script.includes('stat -c "%F|%s|%Y"')) {
+    if (script.includes('stat -c "%F|%s|%y"')) {
       return dockerExecResult("regular file|1|2");
     }
     if (script.includes('cat -- "$1"')) {

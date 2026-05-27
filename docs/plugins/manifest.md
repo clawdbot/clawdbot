@@ -649,7 +649,7 @@ Each list is optional:
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                       |
 | `memoryEmbeddingProviders`       | `string[]` | Memory embedding provider ids this plugin owns.                                                     |
 | `mediaUnderstandingProviders`    | `string[]` | Media-understanding provider ids this plugin owns.                                                  |
-| `meetingNotesSourceProviders`    | `string[]` | Meeting-notes source provider ids this plugin owns.                                                 |
+| `transcriptSourceProviders`      | `string[]` | Transcript source provider ids this plugin owns.                                                    |
 | `imageGenerationProviders`       | `string[]` | Image-generation provider ids this plugin owns.                                                     |
 | `videoGenerationProviders`       | `string[]` | Video-generation provider ids this plugin owns.                                                     |
 | `webFetchProviders`              | `string[]` | Web-fetch provider ids this plugin owns.                                                            |

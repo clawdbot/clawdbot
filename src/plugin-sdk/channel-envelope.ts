@@ -1,7 +1,6 @@
-// Narrow inbound envelope helpers for hot channel message-formatting paths.
-
+/** @deprecated Compatibility subpath. Use `openclaw/plugin-sdk/channel-inbound`. */
 export {
   formatInboundEnvelope,
   resolveEnvelopeFormatOptions,
   type EnvelopeFormatOptions,
-} from "../auto-reply/envelope.js";
+} from "./channel-inbound.js";

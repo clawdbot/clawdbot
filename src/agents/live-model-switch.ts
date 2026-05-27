@@ -159,7 +159,7 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+  const entry = loadSessionStore(storePath, { skipCache: true, clone: false })[sessionKey];
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }

@@ -55,6 +55,21 @@ function normalizeBuiltInProviderModelId(provider: string, model: string): strin
   if (provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex") {
     return normalizeGooglePreviewModelId(model);
   }
+  if (provider === "openrouter") {
+    const trimmed = model.trim();
+    return trimmed && !trimmed.includes("/") ? `openrouter/${trimmed}` : model;
+  }
+  if (provider === "xai") {
+    const xaiAliases: Record<string, string> = {
+      "grok-4-fast-reasoning": "grok-4-fast",
+      "grok-4-1-fast-reasoning": "grok-4-1-fast",
+      "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
+      "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
+    };
+    return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+  }
   return model;
 }
 

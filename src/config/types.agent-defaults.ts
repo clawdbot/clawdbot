@@ -88,7 +88,7 @@ export type AgentContextLimitsConfig = {
   memoryGetMaxChars?: number;
   /** Default line window for memory_get when lines is omitted (default: 120). */
   memoryGetDefaultLines?: number;
-  /** Max chars kept for a single live tool result before truncation (default: 16000). */
+  /** Advanced max chars for a single live tool result; unset uses model-context auto cap. */
   toolResultMaxChars?: number;
   /** Max chars retained from post-compaction AGENTS.md context injection (default: 1800). */
   postCompactionMaxChars?: number;

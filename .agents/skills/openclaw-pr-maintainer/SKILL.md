@@ -168,12 +168,21 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 
 - Start every PR review with 1-3 plain sentences explaining what the change does and why it matters. Put this before `Findings`.
 - Then list findings first. If none, say `No blocking findings` or `No findings`.
+- Show size near the top as `LOC: +<additions>/-<deletions> (<changedFiles> files)`, using live PR stats or local diff stats.
 - Always answer: bug/behavior being fixed, PR/issue URL and affected surface, provenance for regressions when traceable, and best-fix verdict.
 - For bug/regression fixes, include a compact `Provenance:` line after cause/root-cause when a bounded history pass can identify it. Use `git log -S/-G`, `git blame`, linked PRs/issues, and tests.
-- Provenance must separate roles when they differ: blamed code author username, blamed PR merger/committer username, current PR author username, PR number, and date. Do not collapse them into one "introduced by" actor.
+- Provenance must separate roles when they differ: blamed code author username, blamed PR author username, blamed PR merger/committer username, automerge trigger when known, current PR author username, PR number, and date. Do not collapse them into one "introduced by" actor.
+- If the blamed PR was merged by `clawsweeper[bot]` or another automation, identify the human trigger when practical. Check live PR timeline/comments first; if rate-limited, use gitcrawl/cache or public PR HTML. Look for maintainer command comments such as `@clawsweeper automerge`, `/landpr`, labels/events that armed automerge, and ClawSweeper status comments. Report `automerge triggered by @login`; if not found, say trigger unknown rather than naming the bot as the human decision-maker.
 - For any confirmed bug, run `git blame` on the implicated line(s) after identifying the root cause. Report who broke it as the blamed PR merger/committer, and also name the blamed code author. Include the PR number. If no PR is traceable, use the blamed commit as the provenance: commit SHA, date, and author username. Do not guess a merger or frame missing PR metadata as a separate finding.
 - Phrase provenance as `introduced by`, `made visible by`, or `carried forward by`, with confidence (`clear`, `likely`, `unknown`). If unclear, say what evidence is missing instead of guessing. For features, docs, and refactors, use `Provenance: N/A` or omit it when no broken behavior is being fixed.
 - Keep summaries compact, but include enough proof that the verdict is auditable without rereading the PR.
+
+LOC proof:
+
+```bash
+gh pr view <number> --json additions,deletions,changedFiles \
+  --jq '"LOC: +\(.additions)/-\(.deletions) (\(.changedFiles) files)"'
+```
 
 ## Read beyond the diff
 
@@ -194,7 +203,7 @@ Output only qualifying candidates, with: ref, surface, proof, cause, fix sketch,
 - Before landing, require:
   1. symptom evidence such as a repro, logs, or a failing test
   2. a verified root cause in code with file/line
-  3. blame-backed provenance for regressions when traceable, including blamed PR merger and date, or commit SHA/date when no PR is traceable
+  3. blame-backed provenance for regressions when traceable, including blamed PR merger and automerge trigger when known, or commit SHA/date when no PR is traceable
   4. a fix that touches the implicated code path
   5. a regression test when feasible, or explicit manual verification plus a reason no test was added
 - If the claim is unsubstantiated or likely wrong, request evidence or changes instead of merging.

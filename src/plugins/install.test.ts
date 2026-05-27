@@ -54,6 +54,8 @@ const dynamicArchiveTemplatePathCache = new Map<string, string>();
 let installPluginFromDirTemplateDir = "";
 let manifestInstallTemplateDir = "";
 const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install");
+let previousNpmGlobalConfig: string | undefined;
+let npmGlobalConfigPath = "";
 const DYNAMIC_ARCHIVE_TEMPLATE_PRESETS = [
   {
     outName: "traversal.tgz",
@@ -561,12 +563,22 @@ async function ensureDynamicArchiveTemplate(params: {
 }
 
 afterAll(() => {
+  if (previousNpmGlobalConfig === undefined) {
+    delete process.env.NPM_CONFIG_GLOBALCONFIG;
+  } else {
+    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
+  }
   resetGlobalHookRunner();
   suiteTempRootTracker.cleanup();
   suiteFixtureRoot = "";
 });
 
 beforeAll(async () => {
+  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  npmGlobalConfigPath = path.join(suiteTempRootTracker.makeTempDir(), "global-npmrc");
+  fs.writeFileSync(npmGlobalConfigPath, "", "utf8");
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
+
   installPluginFromDirTemplateDir = path.join(
     ensureSuiteFixtureRoot(),
     "install-from-dir-template",
@@ -632,6 +644,7 @@ beforeEach(() => {
   run.mockReset();
   mockSuccessfulCommandRun(run);
   vi.unstubAllEnvs();
+  process.env.NPM_CONFIG_GLOBALCONFIG = npmGlobalConfigPath;
   resolveCompatibilityHostVersionMock.mockReturnValue("2026.3.28-beta.1");
 });
 

@@ -19,7 +19,7 @@
 
 .chat-tool-card--expanded {
   max-height: none;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .chat-tool-card:hover {
@@ -63,10 +63,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex: 1 1 auto;
   font-weight: 600;
   font-size: var(--control-ui-text-md);
   line-height: 1.2;
   min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .chat-tool-card__icon {
@@ -95,7 +98,9 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
+  flex-shrink: 0;
   font-size: 11px;
+  white-space: nowrap;
   color: var(--muted);
   opacity: 1;
   transition:
@@ -159,6 +164,98 @@
 .chat-tool-card__status-text {
   font-size: var(--control-ui-text-xs);
   margin-top: 10px;
+}
+
+/* Error state: tool returned an error payload or "Tool not found" */
+.chat-tool-card__status--error,
+.chat-tool-card__action--error,
+.chat-tool-card__status-text--error {
+  color: var(--destructive, var(--danger, #c0392b));
+}
+
+.chat-tool-card__status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
+  color: var(--destructive, var(--danger, #c0392b));
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+.chat-tool-card__status-badge svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-tool-card--error {
+  border-color: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 35%, var(--border));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 8%, transparent),
+      transparent 36%
+    ),
+    color-mix(in srgb, var(--card) 86%, var(--secondary) 14%);
+}
+
+.chat-tool-card--error:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--destructive, var(--danger, #c0392b)) 44%,
+    var(--border-strong)
+  );
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 11%, transparent),
+      transparent 38%
+    ),
+    color-mix(in srgb, var(--card) 78%, var(--bg-hover) 22%);
+}
+
+.chat-tool-card--error .chat-tool-card__icon,
+.chat-tool-msg-summary.chat-tool-msg-summary--error .chat-tool-msg-summary__icon {
+  color: var(--destructive, var(--danger, #c0392b));
+  opacity: 0.9;
+}
+
+.chat-tool-msg-summary__error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  margin-left: auto;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 15%, transparent);
+  color: var(--destructive, var(--danger, #c0392b));
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.chat-tool-msg-summary__error-badge svg {
+  width: 10px;
+  height: 10px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .chat-tool-card__detail {
@@ -363,6 +460,12 @@
   color: var(--text);
   overflow: auto;
   max-height: min(520px, 60vh);
+}
+
+.chat-tool-card__block-content code {
+  white-space: inherit;
+  overflow-wrap: anywhere;
+  word-break: inherit;
 }
 
 .chat-tool-card__inline {
@@ -585,6 +688,17 @@
     color-mix(in srgb, var(--card) 86%, var(--secondary) 14%);
 }
 
+.chat-tool-msg-summary.chat-tool-msg-summary--error {
+  border-color: color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 30%, var(--border));
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 11%, transparent),
+      transparent 36%
+    ),
+    color-mix(in srgb, var(--card) 86%, var(--secondary) 14%);
+}
+
 .chat-tool-msg-summary::-webkit-details-marker {
   display: none;
 }
@@ -616,6 +730,21 @@
     linear-gradient(90deg, color-mix(in srgb, var(--accent) 13%, transparent), transparent 38%),
     color-mix(in srgb, var(--card) 76%, var(--bg-hover) 24%);
   border-color: color-mix(in srgb, var(--border-strong) 70%, transparent);
+}
+
+.chat-tool-msg-summary.chat-tool-msg-summary--error:hover {
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--destructive, var(--danger, #c0392b)) 14%, transparent),
+      transparent 38%
+    ),
+    color-mix(in srgb, var(--card) 78%, var(--bg-hover) 22%);
+  border-color: color-mix(
+    in srgb,
+    var(--destructive, var(--danger, #c0392b)) 38%,
+    var(--border-strong)
+  );
 }
 
 .chat-tool-msg-collapse--manual.is-open > .chat-tool-msg-summary,
@@ -790,6 +919,10 @@
     max-height: 100px;
   }
 
+  .chat-tool-card--expanded {
+    max-height: none;
+  }
+
   .chat-tool-card__title {
     font-size: 12px;
   }
@@ -824,6 +957,10 @@
   .chat-tool-card {
     padding: 6px 8px;
     max-height: 80px;
+  }
+
+  .chat-tool-card--expanded {
+    max-height: none;
   }
 
   .chat-tool-card__preview {

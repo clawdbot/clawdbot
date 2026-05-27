@@ -3,8 +3,11 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 
 type LoadedSessionEntry = ReturnType<typeof import("./session-utils.js").loadSessionEntry>;
 type RecordInboundSessionAndDispatchReplyParams = Parameters<
-  typeof import("../plugin-sdk/channel-message.js").recordChannelMessageReplyDispatch
->[0];
+  typeof import("../channels/turn/kernel.js").dispatchAssembledChannelTurn
+>[0] & {
+  deliver: (payload: { text?: string; replyToId?: string | null }) => Promise<void>;
+  onDispatchError: (err: unknown, info: { kind: string }) => void;
+};
 
 const mocks = vi.hoisted(() => {
   const state = {
@@ -256,10 +259,6 @@ vi.mock("../infra/outbound/delivery-queue.js", () => ({
 
 vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEvent: mocks.enqueueSystemEvent,
-}));
-
-vi.mock("../plugin-sdk/channel-message.js", () => ({
-  recordChannelMessageReplyDispatch: mocks.recordInboundSessionAndDispatchReply,
 }));
 
 vi.mock("../infra/heartbeat-wake.js", async () => {

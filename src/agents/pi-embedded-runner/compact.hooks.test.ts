@@ -2,12 +2,16 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExtraParamsToAgentMock,
+  applyPiCompactionSettingsFromConfigMock,
   buildEmbeddedSystemPromptMock,
   contextEngineCompactMock,
+  createPreparedEmbeddedPiSettingsManagerMock,
   createOpenClawCodingToolsMock,
+  enqueueCommandInLaneMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
+  guardSessionManagerMock,
   hookRunner,
   listRegisteredPluginAgentPromptGuidanceMock,
   loadCompactHooksHarness,
@@ -392,6 +396,15 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expectRecordFields(mockCallArg(createOpenClawCodingToolsMock), {
       modelContextWindowTokens: 64_000,
     });
+    expectRecordFields(mockCallArg(guardSessionManagerMock, 0, 1), {
+      contextWindowTokens: 64_000,
+    });
+    expectRecordFields(mockCallArg(createPreparedEmbeddedPiSettingsManagerMock), {
+      contextTokenBudget: 64_000,
+    });
+    expectRecordFields(mockCallArg(applyPiCompactionSettingsFromConfigMock), {
+      contextTokenBudget: 64_000,
+    });
   });
 
   it("clamps the caller context token budget to the compaction model", async () => {
@@ -471,6 +484,72 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     }
   });
 
+  it("preserves Codex OAuth across same-provider OpenAI compaction fallbacks", async () => {
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "oauth fallback summary",
+        firstKeptEntryId: "entry-fallback",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      authProfileId: "openai-codex:default",
+      trigger: "overflow",
+      modelFallbacksOverride: ["openai/gpt-fallback"],
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-primary",
+              fallbacks: [],
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("oauth fallback summary");
+    findMockCall(resolveAgentHarnessPolicyMock, ([arg]) => {
+      const policyArg = arg as Record<string, unknown>;
+      return policyArg.provider === "openai" && policyArg.modelId === "gpt-primary";
+    });
+    findMockCall(resolveAgentHarnessPolicyMock, ([arg]) => {
+      const policyArg = arg as Record<string, unknown>;
+      return policyArg.provider === "openai" && policyArg.modelId === "gpt-fallback";
+    });
+    findMockCall(
+      resolveModelMock,
+      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-primary",
+    );
+    findMockCall(
+      resolveModelMock,
+      ([provider, modelId]) => provider === "openai-codex" && modelId === "gpt-fallback",
+    );
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
+      authProfileId: "openai-codex:default",
+    });
+  });
+
   it("routes OpenAI compaction through the selected Codex runtime provider before auth", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "codex" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
@@ -539,7 +618,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(mockCallArg(resolveModelMock, 0, 1)).toBe("gpt-5.5");
   });
 
-  it("uses the persisted Codex runtime for compaction context windows", async () => {
+  it("uses Codex auth for runtime model loading while preserving OpenAI context config", async () => {
     resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "pi" });
     resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
       model: { provider, api: "responses", id: modelId, input: [], contextWindow: 1_000_000 },
@@ -555,7 +634,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       workspaceDir: "/tmp/workspace",
       provider: "openai",
       model: "gpt-5.5",
-      agentHarnessId: "codex",
+      authProfileId: "openai-codex:work",
       config: {
         models: {
           providers: {
@@ -575,7 +654,7 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     expect(result.ok).toBe(true);
     expect(mockCallArg(resolveModelMock)).toBe("openai-codex");
     expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
-      provider: "openai-codex",
+      provider: "openai",
       modelId: "gpt-5.5",
     });
   });
@@ -1540,6 +1619,39 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
       authProfileId: "openai:p1",
       currentTokenCount: 333,
     });
+  });
+
+  it("fails deferred budget compaction when background maintenance is not scheduled", async () => {
+    const dispose = vi.fn(async () => {});
+    const maintain = vi.fn(async () => ({
+      changed: false,
+      bytesFreed: 0,
+      rewrittenEntries: 0,
+    }));
+    resolveContextEngineMock.mockResolvedValue({
+      info: { ownsCompaction: true, turnMaintenanceMode: "background" },
+      compact: contextEngineCompactMock,
+      dispose,
+      maintain,
+    } as never);
+    enqueueCommandInLaneMock.mockImplementationOnce(() => {
+      throw new Error("scheduler offline");
+    });
+
+    const result = await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        trigger: "budget",
+        deferOwningContextEngineCompaction: true,
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toBe("failed to schedule background context-engine maintenance");
+    expect(result.failure?.reason).toBe("deferred_compaction_not_scheduled");
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(maintain).not.toHaveBeenCalled();
+    expect(contextEngineCompactMock).not.toHaveBeenCalled();
   });
 
   it("does not fall back to context-engine compaction for Codex native binding failures", async () => {

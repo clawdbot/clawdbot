@@ -180,7 +180,7 @@ export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: s
     return { config: raw, changes: [] };
   }
 
-  return normalizeLegacyWebSearchConfigRecord(raw, owners);
+  return normalizeLegacyWebSearchConfigRecord(structuredClone(raw) as T & JsonRecord, owners);
 }
 
 function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(

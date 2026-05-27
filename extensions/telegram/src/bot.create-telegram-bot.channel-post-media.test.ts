@@ -443,6 +443,54 @@ describe("createTelegramBot channel_post media", () => {
     }
   });
 
+  it("treats targeted bot command captions as mentions before media download", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: { "*": { requireMention: true } },
+        },
+      },
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      throw new Error("MediaFetchError: ECONNRESET");
+    });
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const caption = "/inspect@openclaw_bot";
+
+      await handler({
+        message: {
+          chat: { id: -100456, type: "supergroup", title: "Ops Chat" },
+          message_id: 81184,
+          date: 1736380800,
+          caption,
+          caption_entities: [{ type: "bot_command", offset: 0, length: caption.length }],
+          photo: [{ file_id: "p1" }],
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        -100456,
+        "⚠️ Failed to download media. Please try again.",
+        {
+          reply_parameters: {
+            message_id: 81184,
+            allow_sending_without_reply: true,
+          },
+        },
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("notifies requireMention group replies to the bot when media download fails", async () => {
     loadConfig.mockReturnValue({
       channels: {

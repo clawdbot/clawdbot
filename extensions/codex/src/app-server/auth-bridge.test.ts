@@ -13,6 +13,7 @@ import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerAuthProfileId,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerNativeHomeDir,
 } from "./auth-bridge.js";
@@ -168,6 +169,17 @@ async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
         refresh_token: "cli-refresh-token",
         account_id: "account-cli",
       },
+    })}\n`,
+  );
+}
+
+async function writeCodexCliApiKeyAuthFile(codexHome: string): Promise<void> {
+  await fs.mkdir(codexHome, { recursive: true });
+  await fs.writeFile(
+    path.join(codexHome, "auth.json"),
+    `${JSON.stringify({
+      auth_mode: "apikey",
+      OPENAI_API_KEY: "cli-auth-json-api-key",
     })}\n`,
   );
 }
@@ -1039,6 +1051,92 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses Codex CLI api-key auth.json when no auth profile or env key exists", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const agentDir = path.join(root, "agent");
+    const codexHome = path.join(root, "codex-cli");
+    const request = vi.fn(async (method: string) => {
+      if (method === "account/read") {
+        return { account: null, requiresOpenaiAuth: true };
+      }
+      return { type: "apiKey" };
+    });
+    vi.stubEnv("CODEX_HOME", codexHome);
+    vi.stubEnv("CODEX_API_KEY", "");
+    vi.stubEnv("OPENAI_API_KEY", "");
+    try {
+      await writeCodexCliApiKeyAuthFile(codexHome);
+
+      await applyCodexAppServerAuthProfile({
+        client: { request } as never,
+        agentDir,
+        startOptions: createStartOptions({
+          env: { CODEX_HOME: path.join(root, "isolated-codex-home") },
+        }),
+      });
+
+      expect(request).toHaveBeenNthCalledWith(1, "account/read", { refreshToken: false });
+      expect(request).toHaveBeenNthCalledWith(2, "account/login/start", {
+        type: "apiKey",
+        apiKey: "cli-auth-json-api-key",
+      });
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("includes Codex CLI api-key auth.json in fallback app-server cache keys", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const codexHome = path.join(root, "codex-cli");
+    try {
+      await writeCodexCliApiKeyAuthFile(codexHome);
+
+      const first = resolveCodexAppServerFallbackApiKeyCacheKey({
+        startOptions: createStartOptions(),
+        baseEnv: { CODEX_HOME: codexHome },
+      });
+      await fs.writeFile(
+        path.join(codexHome, "auth.json"),
+        `${JSON.stringify({
+          auth_mode: "apikey",
+          OPENAI_API_KEY: "second-cli-auth-json-api-key",
+        })}\n`,
+      );
+      const second = resolveCodexAppServerFallbackApiKeyCacheKey({
+        startOptions: createStartOptions(),
+        baseEnv: { CODEX_HOME: codexHome },
+      });
+
+      expect(first).toMatch(/^CODEX_AUTH_JSON:sha256:[a-f0-9]{64}$/);
+      expect(second).toMatch(/^CODEX_AUTH_JSON:sha256:[a-f0-9]{64}$/);
+      expect(second).not.toBe(first);
+      expect(first).not.toContain("cli-auth-json-api-key");
+      expect(second).not.toContain("second-cli-auth-json-api-key");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("does not include Codex CLI api-key auth.json in websocket fallback cache keys", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const codexHome = path.join(root, "codex-cli");
+    try {
+      await writeCodexCliApiKeyAuthFile(codexHome);
+
+      expect(
+        resolveCodexAppServerFallbackApiKeyCacheKey({
+          startOptions: createStartOptions({
+            transport: "websocket",
+            url: "ws://127.0.0.1:1455",
+          }),
+          baseEnv: { CODEX_HOME: codexHome },
+        }),
+      ).toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
     }
   });
 

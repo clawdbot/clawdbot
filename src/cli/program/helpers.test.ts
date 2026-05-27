@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectOption,
   parsePositiveIntOrUndefined,
+  parseStrictPositiveIntOption,
   parseStrictPositiveIntOrUndefined,
   resolveActionArgs,
   resolveCommandOptionArgs,
@@ -51,6 +52,13 @@ describe("program helpers", () => {
     { value: true, expected: undefined },
   ])("parseStrictPositiveIntOrUndefined(%j)", ({ value, expected }) => {
     expect(parseStrictPositiveIntOrUndefined(value)).toBe(expected);
+  });
+
+  it("parseStrictPositiveIntOption rejects partial numeric strings", () => {
+    expect(parseStrictPositiveIntOption("10", "--limit")).toBe(10);
+    expect(() => parseStrictPositiveIntOption("10ms", "--limit")).toThrow(
+      "--limit must be a positive integer.",
+    );
   });
 
   it("resolveActionArgs returns args when command has arg array", () => {

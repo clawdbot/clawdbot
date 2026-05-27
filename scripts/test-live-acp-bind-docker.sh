@@ -110,6 +110,23 @@ export npm_config_cache="$NPM_CONFIG_CACHE"
 mkdir -p "$NPM_CONFIG_PREFIX" "$HOME/.local/bin" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
+run_setup_command() {
+  local timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}s"
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  else
+    echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}" >&2
+    return 127
+  fi
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
+  else
+    "$timeout_bin" "$timeout_value" "$@"
+  fi
+}
 if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
   IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
   IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
@@ -138,7 +155,7 @@ agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
   claude)
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
-      npm install -g @anthropic-ai/claude-code
+      run_setup_command npm install -g @anthropic-ai/claude-code
     fi
     real_claude="$NPM_CONFIG_PREFIX/bin/claude-real"
     if [ ! -x "$real_claude" ] && [ -x "$NPM_CONFIG_PREFIX/bin/claude" ]; then
@@ -163,12 +180,12 @@ WRAP
     ;;
   codex)
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/codex" ]; then
-      npm install -g @openai/codex
+      run_setup_command npm install -g @openai/codex
     fi
     ;;
   droid)
     if ! command -v droid >/dev/null 2>&1; then
-      curl -fsSL https://app.factory.ai/cli | sh
+      run_setup_command bash -lc 'curl -fsSL https://app.factory.ai/cli | sh'
       export PATH="$HOME/.local/bin:$PATH"
     fi
     droid --version
@@ -180,7 +197,7 @@ WRAP
   gemini)
     mkdir -p "$HOME/.gemini"
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/gemini" ]; then
-      npm install -g @google/gemini-cli
+      run_setup_command npm install -g @google/gemini-cli
     fi
     if [ -n "${GEMINI_API_KEY:-}" ] || [ -n "${GOOGLE_API_KEY:-}" ]; then
       gemini_auth_type="gemini-api-key"
@@ -211,7 +228,7 @@ NODE
     ;;
   opencode)
     if [ ! -x "$NPM_CONFIG_PREFIX/bin/opencode" ]; then
-      npm install -g opencode-ai
+      run_setup_command npm install -g opencode-ai
     fi
     export OPENCODE_CONFIG_CONTENT="$(
       node -e 'process.stdout.write(JSON.stringify({model: process.env.OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL || "opencode/kimi-k2.6"}))'
@@ -335,7 +352,9 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   echo "==> Profile file: $PROFILE_STATUS"
   echo "==> Auth dirs: ${AUTH_DIRS_CSV:-none}"
   echo "==> Auth files: ${AUTH_FILES_CSV:-none}"
-  DOCKER_RUN_ARGS=(docker run --rm -t \
+  DOCKER_RUN_ARGS=()
+  openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_ACP_BIND_DOCKER_RUN_TIMEOUT:-2700s}"
+  DOCKER_RUN_ARGS+=(--rm -t \
     -u "$DOCKER_USER" \
     --entrypoint bash \
     -e ANTHROPIC_API_KEY \
@@ -362,6 +381,7 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     -e OPENCLAW_LIVE_TEST=1 \
     -e OPENCLAW_LIVE_ACP_BIND=1 \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT="$ACP_AGENT" \
+    -e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:-180}" \
     -e OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL="${OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL:-opencode/kimi-k2.6}" \
     -e OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="$AGENT_COMMAND")
   openclaw_live_append_array DOCKER_RUN_ARGS DOCKER_HOME_MOUNT

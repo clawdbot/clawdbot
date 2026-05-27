@@ -1,11 +1,11 @@
 import {
   createPreviewMessageReceipt,
   type MessageReceipt,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,

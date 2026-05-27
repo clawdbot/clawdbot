@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReplyOperation, testing } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -36,6 +36,74 @@ describe("reply turn admission", () => {
     if (result.status === "owned") {
       expect(result.operation.sessionId).toBe("active-session");
       result.operation.complete();
+    }
+  });
+
+  it("does not apply cleanup settle timeout to visible turn admission", async () => {
+    vi.useFakeTimers();
+    try {
+      const active = createReplyOperation({
+        sessionKey: "agent:main:discord:channel:42",
+        sessionId: "active-session",
+        resetTriggered: false,
+      });
+      active.setPhase("running");
+
+      const admitted = admitReplyTurn({
+        sessionKey: "agent:main:discord:channel:42",
+        sessionId: "waiting-session",
+        kind: "visible",
+        resetTriggered: false,
+      });
+
+      let settled = false;
+      void admitted.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(settled).toBe(false);
+
+      active.complete();
+      const result = await admitted;
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        result.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the cleanup settle timeout for queued follow-up retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const active = createReplyOperation({
+        sessionKey: "agent:main:discord:channel:42",
+        sessionId: "active-session",
+        resetTriggered: false,
+      });
+      active.setPhase("running");
+
+      const admitted = admitReplyTurn({
+        sessionKey: "agent:main:discord:channel:42",
+        sessionId: "queued-session",
+        kind: "queued_followup",
+        resetTriggered: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(admitted).resolves.toMatchObject({
+        status: "skipped",
+        reason: "active-run",
+        activeOperation: active,
+      });
+      active.complete();
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
     }
   });
 

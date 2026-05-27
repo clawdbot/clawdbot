@@ -6,6 +6,10 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgressTotals } from "../../cli/progress.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { toAgentModelListLike } from "../../config/model-input.js";
+import {
+  parseStrictFiniteNumber,
+  parseStrictPositiveInteger,
+} from "../../infra/parse-finite-number.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   stylePromptHint,
@@ -153,6 +157,39 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
+function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed < 0) {
+    throw new Error(`${label} must be >= 0`);
+  }
+  return parsed;
+}
+
+function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = parseStrictFiniteNumber(raw);
+  if (parsed === undefined || parsed <= 0) {
+    throw new Error(`${label} must be > 0`);
+  }
+  return parsed;
+}
+
+function parsePositiveIntegerOption(raw: unknown, label: string, fallback: number): number {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -170,26 +207,14 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = opts.minParams ? Number(opts.minParams) : undefined;
-  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
-    throw new Error("--min-params must be >= 0");
-  }
-  const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
-  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
-    throw new Error("--max-age-days must be >= 0");
-  }
-  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
-  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
-    throw new Error("--max-candidates must be > 0");
-  }
-  const timeout = opts.timeout ? Number(opts.timeout) : undefined;
-  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
-    throw new Error("--timeout must be > 0");
-  }
-  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
-    throw new Error("--concurrency must be > 0");
-  }
+  const minParams = parseOptionalNonNegativeFiniteOption(opts.minParams, "--min-params");
+  const maxAgeDays = parseOptionalNonNegativeFiniteOption(opts.maxAgeDays, "--max-age-days");
+  const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
+  const timeout = parseOptionalPositiveFiniteOption(opts.timeout, "--timeout");
+  const concurrency =
+    opts.concurrency === undefined
+      ? undefined
+      : parsePositiveIntegerOption(opts.concurrency, "--concurrency", 1);
 
   const requestedProbe = opts.probe ?? true;
   if (!requestedProbe && (opts.setDefault || opts.setImage)) {

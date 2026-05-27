@@ -196,6 +196,22 @@ type BeforeToolCallResult = {
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
+    actions?: Array<
+      | {
+          kind: "decision";
+          label: string;
+          style: "primary" | "secondary" | "success" | "danger";
+          decision: "allow-once" | "allow-always" | "deny";
+          commandTemplate: string;
+        }
+      | {
+          kind: "command";
+          label: string;
+          style: "primary" | "secondary" | "success" | "danger";
+          commandTemplate: string;
+        }
+    >;
+    keepPendingWithoutRoute?: boolean;
     pluginId?: string;
     onResolution?: (
       decision: "allow-once" | "allow-always" | "deny" | "timeout" | "cancelled",
@@ -211,6 +227,21 @@ Hook guard behavior for typed lifecycle hooks:
 - `params` rewrites the tool parameters for execution.
 - `requireApproval` pauses the agent run and asks the user through plugin
   approvals. The `/approve` command can approve both exec and plugin approvals.
+- `allowedDecisions` limits the built-in `/approve` decisions. Omit it to offer
+  `allow-once`, `allow-always`, and `deny`.
+- `actions` customizes the commands shown with the approval. OpenClaw replaces
+  `{id}` in each `commandTemplate` with the generated approval id before storing
+  or rendering the request.
+- Use `kind: "decision"` plus `decision` when the action resolves the approval
+  through OpenClaw's approval system. Native clients can render those actions as
+  buttons with canonical OpenClaw approval callbacks. Decision actions must be
+  included in `allowedDecisions` when that field is present. Use
+  `kind: "command"` for plugin-owned commands that collect more context or
+  verify an external workflow before resolving the approval; native clients
+  should leave those as visible command text.
+- `keepPendingWithoutRoute: true` keeps the request pending when no approval
+  client or initiating-channel route can receive it. Use this only when your
+  plugin provides another documented command or UI path to resolve the request.
 - A lower-priority `block: true` can still block after a higher-priority hook
   requested approval.
 - `onResolution` receives the resolved approval decision - `allow-once`,

@@ -1,5 +1,7 @@
 import {
   buildApprovalPresentation,
+  buildApprovalPresentationFromActionDescriptors,
+  type ExecApprovalActionDescriptor,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
 import {
@@ -22,16 +24,29 @@ export function buildApprovalPendingReplyPayload(params: {
   text: string;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  actions?: readonly ExecApprovalActionDescriptor[];
   sessionKey?: string | null;
+  title?: string | null;
+  description?: string | null;
+  severity?: "info" | "warning" | "critical" | null;
+  toolName?: string | null;
+  pluginId?: string | null;
   channelData?: Record<string, unknown>;
 }): ReplyPayload {
   const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
+  const actions = params.actions?.length ? params.actions : undefined;
+  const title = normalizeOptionalString(params.title);
+  const description = normalizeOptionalString(params.description);
+  const toolName = normalizeOptionalString(params.toolName);
+  const pluginId = normalizeOptionalString(params.pluginId);
   return {
     text: params.text,
-    presentation: buildApprovalPresentation({
-      approvalId: params.approvalId,
-      allowedDecisions,
-    }),
+    presentation: actions
+      ? buildApprovalPresentationFromActionDescriptors(actions)
+      : buildApprovalPresentation({
+          approvalId: params.approvalId,
+          allowedDecisions,
+        }),
     channelData: {
       execApproval: {
         approvalId: params.approvalId,
@@ -39,7 +54,13 @@ export function buildApprovalPendingReplyPayload(params: {
         approvalKind: params.approvalKind ?? "exec",
         agentId: normalizeOptionalString(params.agentId),
         allowedDecisions,
+        ...(actions ? { actions } : {}),
         sessionKey: normalizeOptionalString(params.sessionKey),
+        ...(title ? { title } : {}),
+        ...(description ? { description } : {}),
+        ...(params.severity ? { severity: params.severity } : {}),
+        ...(toolName ? { toolName } : {}),
+        ...(pluginId ? { pluginId } : {}),
         state: "pending",
       },
       ...params.channelData,
@@ -83,6 +104,14 @@ export function buildPluginApprovalPendingReplyPayload(params: {
     allowedDecisions:
       params.allowedDecisions ??
       resolvePluginApprovalRequestAllowedDecisions(params.request.request),
+    actions: params.request.request.actions ?? undefined,
+    agentId: params.request.request.agentId,
+    sessionKey: params.request.request.sessionKey,
+    title: params.request.request.title,
+    description: params.request.request.description,
+    severity: params.request.request.severity,
+    toolName: params.request.request.toolName,
+    pluginId: params.request.request.pluginId,
     channelData: params.channelData,
   });
 }

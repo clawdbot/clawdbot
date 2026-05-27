@@ -1054,6 +1054,7 @@ describe("plugins cli install", () => {
     const enabledCfg = createEnabledPluginConfig("discord");
 
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue(createNpmPluginInstallResult("discord"));
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     recordPluginInstall.mockReturnValue(enabledCfg);
@@ -1070,11 +1071,62 @@ describe("plugins cli install", () => {
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
   });
 
+  it("uses bundled OpenClaw package specs instead of pinning stale managed npm overrides", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("discord");
+    const bundledPath = "/app/dist/extensions/discord";
+
+    loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockImplementation((params: unknown) => {
+      const { lookup } = params as {
+        lookup: { kind: "pluginId" | "npmSpec"; value: string };
+      };
+      return lookup.kind === "npmSpec" && lookup.value === "@openclaw/discord"
+        ? {
+            pluginId: "discord",
+            localPath: bundledPath,
+            npmSpec: "@openclaw/discord",
+            version: "2026.5.24-beta.2",
+          }
+        : undefined;
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand([
+      "plugins",
+      "install",
+      "@openclaw/discord@2026.5.20",
+      "--pin",
+      "--force",
+    ]);
+
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+      lookup: { kind: "npmSpec", value: "@openclaw/discord@2026.5.20" },
+    });
+    expect(findBundledPluginSourceMock).toHaveBeenCalledWith({
+      lookup: { kind: "npmSpec", value: "@openclaw/discord" },
+    });
+    const record = persistedInstallRecord("discord");
+    expect(record.source).toBe("path");
+    expect(record.spec).toBe("@openclaw/discord@2026.5.20");
+    expect(record.sourcePath).toBe(bundledPath);
+    expect(record.installPath).toBe(bundledPath);
+    expect(runtimeLogsContain("ships with the current OpenClaw build")).toBe(true);
+    expect(runtimeLogsContain("npm:@openclaw/discord@2026.5.20")).toBe(true);
+  });
+
   it("marks catalog npm package installs with alternate selectors as trusted", async () => {
     const cfg = createEmptyPluginConfig();
     const enabledCfg = createEnabledPluginConfig("wecom-openclaw-plugin");
 
     loadConfig.mockReturnValue(cfg);
+    findBundledPluginSourceMock.mockReturnValue(undefined);
     installPluginFromNpmSpec.mockResolvedValue(
       createNpmPluginInstallResult("wecom-openclaw-plugin"),
     );

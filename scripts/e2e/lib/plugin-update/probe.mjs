@@ -132,9 +132,6 @@ function assertCorruptPluginResult(pluginJsonPath, pluginId) {
 function assertCorruptPluginTolerated(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   if (plugins.status === "ok") {
-    if (isCorruptPluginDisabledAfterUpdate(evidence, pluginId)) {
-      return;
-    }
     assertCorruptPluginCleanOrRepaired(evidence);
     return;
   }
@@ -174,9 +171,10 @@ function assertCorruptPluginCleanOrRepaired(evidence) {
 function assertCorruptPluginDetails(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   const outcome = evidence.outcome;
+  const disabledAfterFailure = isCorruptPluginDisabledAfterUpdate(evidence, pluginId);
   if (
     !outcome ||
-    (outcome.status !== "error" && !isCorruptPluginDisabledAfterUpdate(evidence, pluginId))
+    (outcome.status !== "error" && !disabledAfterFailure)
   ) {
     throw new Error(
       `expected error or disabled-after-failure outcome for ${pluginId}, got ${JSON.stringify({
@@ -187,21 +185,28 @@ function assertCorruptPluginDetails(plugins, pluginId) {
       })}`,
     );
   }
-  if (isCorruptPluginDisabledAfterUpdate(evidence, pluginId)) {
-    return;
-  }
   const warning = evidence.warning;
   if (!warning) {
     throw new Error(
       `expected warning for ${pluginId}, got ${JSON.stringify(plugins.warnings ?? [])}`,
     );
   }
-  const text = JSON.stringify({ outcome, warning });
-  for (const expected of [
-    "package.json is missing",
-    "Run openclaw doctor --fix to attempt automatic repair.",
-    `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
-  ]) {
+  const text = [outcome.message, warning.reason, warning.message, ...(warning.guidance ?? [])]
+    .filter(Boolean)
+    .join(" ");
+  const expectedFragments = disabledAfterFailure
+    ? [
+        `Disabled "${pluginId}" after plugin update failure`,
+        "OpenClaw will continue without it",
+        "Run openclaw doctor --fix to attempt automatic repair.",
+        `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
+      ]
+    : [
+        "package.json is missing",
+        "Run openclaw doctor --fix to attempt automatic repair.",
+        `Run openclaw plugins inspect ${pluginId} --runtime --json for details.`,
+      ];
+  for (const expected of expectedFragments) {
     if (!text.includes(expected)) {
       throw new Error(`expected update output to include ${expected}: ${text}`);
     }

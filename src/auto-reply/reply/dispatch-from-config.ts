@@ -61,6 +61,7 @@ import {
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { matchPluginCommand } from "../../plugins/commands.js";
 import {
   buildPluginBindingDeclinedText,
@@ -131,6 +132,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
+import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
@@ -626,18 +628,24 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   }
 };
 
-function shouldBypassPluginOwnedBindingForCommand(ctx: FinalizedMsgContext): boolean {
+function shouldBypassPluginOwnedBindingForCommand(
+  ctx: FinalizedMsgContext,
+  cfg: OpenClawConfig,
+): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
-  if (!commandTurn.authorized) {
+  if (
+    (commandTurn.kind === "native" || commandTurn.kind === "text-slash") &&
+    !commandTurn.authorized
+  ) {
     return false;
   }
-  if (isNativeCommandTurn(commandTurn)) {
+  if (isNativeCommandTurn(commandTurn) && commandTurn.authorized) {
     return true;
   }
-  if (commandTurn.kind !== "text-slash") {
+  if (!isExplicitSourceReplyCommand(ctx, cfg)) {
     return false;
   }
-  const commandBody = normalizeCommandBody(commandTurn.body ?? "", {
+  const commandBody = normalizeCommandBody(commandTurn.body ?? ctx.CommandBody ?? "", {
     botUsername: ctx.BotUsername,
   });
   if (!commandBody.startsWith("/")) {
@@ -672,6 +680,8 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
   await updateSessionStoreEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
+    skipMaintenance: true,
+    takeCacheOwnership: true,
     update: async (entry) => {
       if (!entry.pendingFinalDelivery && !entry.pendingFinalDeliveryText) {
         return null;
@@ -783,6 +793,102 @@ function createAbortAwareDispatcher(params: {
   return dispatcher;
 }
 
+type ReplyHotPathTimingSpan = {
+  name: string;
+  durationMs: number;
+  elapsedMs: number;
+};
+
+type ReplyHotPathTimingSummary = {
+  totalMs: number;
+  spans: ReplyHotPathTimingSpan[];
+};
+
+const replyHotPathTimingLog = createSubsystemLogger("auto-reply/reply-timing");
+const REPLY_HOT_PATH_TIMING_WARN_TOTAL_MS = 1_000;
+const REPLY_HOT_PATH_TIMING_WARN_STAGE_MS = 500;
+
+function createReplyHotPathTimingTracker(options: { profilerEnabled?: boolean } = {}): {
+  measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
+  logIfSlow: (params: {
+    channel: string;
+    messageId?: number | string;
+    sessionKey?: string;
+    outcome: "completed" | "skipped" | "error";
+    reason?: string;
+  }) => void;
+} {
+  if (!options.profilerEnabled) {
+    // This slow-path splitter was added for latency investigation. Keep it
+    // inert in normal production dispatches so only explicit profiler runs pay
+    // the Date.now/span allocation cost.
+    return {
+      async measure(_name, run) {
+        return await run();
+      },
+      logIfSlow() {},
+    };
+  }
+
+  const startedAt = Date.now();
+  let didLog = false;
+  const spans: ReplyHotPathTimingSpan[] = [];
+  const toMs = (value: number) => Math.max(0, Math.round(value));
+  const snapshot = (): ReplyHotPathTimingSummary => ({
+    totalMs: toMs(Date.now() - startedAt),
+    spans: spans.slice(),
+  });
+  const shouldLog = (summary: ReplyHotPathTimingSummary) =>
+    summary.totalMs >= REPLY_HOT_PATH_TIMING_WARN_TOTAL_MS ||
+    summary.spans.some((span) => span.durationMs >= REPLY_HOT_PATH_TIMING_WARN_STAGE_MS);
+  const formatSpans = (summary: ReplyHotPathTimingSummary) =>
+    summary.spans.length > 0
+      ? summary.spans
+          .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
+          .join(",")
+      : "none";
+  return {
+    async measure(name, run) {
+      const spanStartedAt = Date.now();
+      try {
+        return await run();
+      } finally {
+        spans.push({
+          name,
+          durationMs: toMs(Date.now() - spanStartedAt),
+          elapsedMs: toMs(Date.now() - startedAt),
+        });
+      }
+    },
+    logIfSlow(params) {
+      if (didLog) {
+        return;
+      }
+      const summary = snapshot();
+      if (!shouldLog(summary)) {
+        return;
+      }
+      didLog = true;
+      replyHotPathTimingLog.warn(
+        `reply hot path timings channel=${params.channel} messageId=${
+          params.messageId ?? "unknown"
+        } sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} totalMs=${
+          summary.totalMs
+        } stages=${formatSpans(summary)}${params.reason ? ` reason=${params.reason}` : ""}`,
+        {
+          channel: params.channel,
+          messageId: params.messageId,
+          sessionKey: params.sessionKey,
+          outcome: params.outcome,
+          reason: params.reason,
+          totalMs: summary.totalMs,
+          spans: summary.spans,
+        },
+      );
+    },
+  };
+}
+
 export type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
@@ -822,12 +928,17 @@ export async function dispatchReplyFromConfig(
     hasSessionKey: Boolean(sessionKey),
     hasRunId: typeof params.replyOptions?.runId === "string",
   };
+  const replyHotPathTiming = createReplyHotPathTimingTracker({
+    profilerEnabled: isReplyProfilerEnabled({ config: cfg }),
+  });
   const traceReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
-    measureDiagnosticsTimelineSpan(name, run, {
-      phase: "agent-turn",
-      config: cfg,
-      attributes: traceAttributes,
-    });
+    replyHotPathTiming.measure(name, () =>
+      measureDiagnosticsTimelineSpan(name, run, {
+        phase: "agent-turn",
+        config: cfg,
+        attributes: traceAttributes,
+      }),
+    );
   let agentDispatchStartedAt = 0;
 
   const recordProcessed = (
@@ -837,6 +948,15 @@ export async function dispatchReplyFromConfig(
       error?: string;
     },
   ) => {
+    if (diagnosticsEnabled) {
+      replyHotPathTiming.logIfSlow({
+        channel,
+        messageId,
+        sessionKey,
+        outcome,
+        reason: opts?.reason,
+      });
+    }
     messageLifecycle.markProcessed(outcome, opts);
   };
 
@@ -1236,6 +1356,9 @@ export async function dispatchReplyFromConfig(
     payload: ReplyPayload,
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
+    if (suppressAutomaticSourceDelivery) {
+      return false;
+    }
     const result = await routeReplyToOriginating(payload);
     if (result) {
       if (!result.ok) {
@@ -1320,10 +1443,11 @@ export async function dispatchReplyFromConfig(
   const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
-    ctx.InboundEventKind === "room_event" ||
+    (ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn) ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
-      !isExplicitSourceReplyCommand(ctx) &&
-      effectiveVisibleReplies === "message_tool");
+      !isExplicitSourceReplyCommand(ctx, cfg) &&
+      (configuredVisibleReplies === "message_tool" ||
+        (!isInternalWebchatTurn && effectiveVisibleReplies === "message_tool")));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),
@@ -1381,7 +1505,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
-    strictMessageToolOnly: ctx.InboundEventKind === "room_event",
+    strictMessageToolOnly: ctx.InboundEventKind === "room_event" && !isInternalWebchatTurn,
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
@@ -1432,6 +1556,16 @@ export async function dispatchReplyFromConfig(
       counts: dispatcher.getQueuedCounts(),
     });
   };
+  const finishReplyOperationAbortedDispatch = (): DispatchFromConfigResult => {
+    commitInboundDedupeIfClaimed();
+    recordProcessed("completed", { reason: "reply_operation_aborted" });
+    markIdle("message_completed");
+    completeDispatchReplyOperation();
+    return attachSourceReplyDeliveryMode({
+      queuedFinal: false,
+      counts: dispatcher.getQueuedCounts(),
+    });
+  };
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -1439,15 +1573,20 @@ export async function dispatchReplyFromConfig(
     | undefined;
 
   if (pluginOwnedBinding) {
+    if (isPreDispatchOperationAborted()) {
+      return finishReplyOperationAbortedDispatch();
+    }
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (shouldBypassPluginOwnedBindingForCommand(ctx)) {
+    if (shouldBypassPluginOwnedBindingForCommand(ctx, cfg)) {
       logVerbose(
         `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
       );
-    } else if (suppressDelivery) {
+    } else if (sendPolicyDenied || (suppressDelivery && !suppressAutomaticSourceDelivery)) {
       // Plugin-bound inbound handlers typically emit outbound replies we
-      // cannot rewind. When automatic delivery is suppressed, skip the plugin
-      // claim and fall through to normal suppressed agent processing.
+      // cannot rewind. When automatic delivery is explicitly denied, skip the
+      // plugin claim and fall through to normal suppressed agent processing.
+      // message_tool_only is the normal visible-reply mode for group chats and
+      // must still let the bound plugin own the turn unless sendPolicy denied it.
       logVerbose(
         `plugin-bound inbound skipped under ${deliverySuppressionReason} (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
       );
@@ -1490,6 +1629,19 @@ export async function dispatchReplyFromConfig(
             targetedClaimOutcome.status === "missing_plugin"
               ? "plugin-bound-fallback-missing-plugin"
               : "plugin-bound-fallback-no-handler";
+          if (
+            (chatType === "group" || chatType === "channel") &&
+            ctx.WasMentioned === false &&
+            !isExplicitSourceReplyCommand(ctx, cfg)
+          ) {
+            markIdle("plugin_binding_fallback_unmentioned");
+            recordProcessed("completed", { reason: pluginFallbackReason });
+            commitInboundDedupeIfClaimed();
+            return attachSourceReplyDeliveryMode({
+              queuedFinal: false,
+              counts: dispatcher.getQueuedCounts(),
+            });
+          }
           if (!hasShownPluginBindingFallbackNotice(pluginOwnedBinding.bindingId)) {
             const didSendNotice = await sendBindingNotice(
               { text: buildPluginBindingUnavailableText(pluginOwnedBinding) },
@@ -2012,16 +2164,38 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    const shouldAllowQuietDirectNativeProgressCallbacks = (options?: {
+      requiresToolSummaryVisibility?: boolean;
+    }) =>
+      options?.requiresToolSummaryVisibility === true &&
+      params.replyOptions?.suppressDefaultToolProgressMessages === true &&
+      chatType === "direct";
+    let hasPendingDirectBlockReplyDelivery = false;
+    const waitForPendingDirectBlockReplyDelivery = async (abortSignal?: AbortSignal) => {
+      if (!hasPendingDirectBlockReplyDelivery) {
+        return;
+      }
+      // Direct block replies are queued asynchronously so lightweight replies do
+      // not wait for dispatcher idle. Flush only before later tool/progress
+      // callbacks and final completion where external ordering is visible.
+      hasPendingDirectBlockReplyDelivery = false;
+      await waitForReplyDispatcherIdle(dispatcher, abortSignal);
+    };
     const shouldForwardProgressCallback = (options?: {
       forwardWhenSourceDeliverySuppressed?: boolean;
       requiresToolSummaryVisibility?: boolean;
     }) => {
-      if (options?.requiresToolSummaryVisibility === true && !shouldSendToolSummaries()) {
+      if (
+        options?.requiresToolSummaryVisibility === true &&
+        !shouldSendToolSummaries() &&
+        !shouldAllowQuietDirectNativeProgressCallbacks(options)
+      ) {
         return false;
       }
       return (
         !suppressAutomaticSourceDelivery ||
         (allowSuppressedSourceProgressCallbacks &&
+          !sendPolicyDenied &&
           options?.forwardWhenSourceDeliverySuppressed === true)
       );
     };
@@ -2031,9 +2205,10 @@ export async function dispatchReplyFromConfig(
         forwardWhenSourceDeliverySuppressed?: boolean;
         requiresToolSummaryVisibility?: boolean;
         onForward?: (...args: Args) => void;
+        waitForDirectBlockReplyDelivery?: boolean;
       },
     ): ((...args: Args) => Promise<void>) | undefined => {
-      if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
+      if (!callback) {
         return undefined;
       }
       return async (...args: Args) => {
@@ -2041,6 +2216,12 @@ export async function dispatchReplyFromConfig(
           return;
         }
         markProgress();
+        if (options?.waitForDirectBlockReplyDelivery) {
+          await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+          if (isDispatchOperationAborted()) {
+            return;
+          }
+        }
         if (shouldForwardProgressCallback(options)) {
           options?.onForward?.(...args);
           await callback?.(...args);
@@ -2077,10 +2258,12 @@ export async function dispatchReplyFromConfig(
             onToolStart: wrapProgressCallback(params.replyOptions?.onToolStart, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
             }),
             onItemEvent: wrapProgressCallback(params.replyOptions?.onItemEvent, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
               onForward: (payload) => {
                 if (hasFailedProgressStatus(payload)) {
                   markVisibleToolErrorProgress();
@@ -2090,6 +2273,7 @@ export async function dispatchReplyFromConfig(
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
               onForward: (payload) => {
                 if (hasFailedProgressStatus(payload)) {
                   markVisibleToolErrorProgress();
@@ -2099,14 +2283,20 @@ export async function dispatchReplyFromConfig(
             onCompactionStart: wrapProgressCallback(params.replyOptions?.onCompactionStart, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
             }),
             onCompactionEnd: wrapProgressCallback(params.replyOptions?.onCompactionEnd, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
+              waitForDirectBlockReplyDelivery: true,
             }),
             onToolResult: (payload: ReplyPayload) => {
               markProgress();
               const run = async () => {
+                if (isDispatchOperationAborted()) {
+                  return;
+                }
+                await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
                 if (isDispatchOperationAborted()) {
                   return;
                 }
@@ -2171,6 +2361,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               markProgress();
+              await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+              if (isDispatchOperationAborted()) {
+                return;
+              }
               markInboundDedupeReplayUnsafe();
               if (
                 shouldForwardProgressCallback({
@@ -2193,6 +2387,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               markProgress();
+              await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+              if (isDispatchOperationAborted()) {
+                return;
+              }
               markInboundDedupeReplayUnsafe();
               if (
                 shouldForwardProgressCallback({
@@ -2223,6 +2421,10 @@ export async function dispatchReplyFromConfig(
                 return;
               }
               markProgress();
+              await waitForPendingDirectBlockReplyDelivery(dispatchAbortOperation?.abortSignal);
+              if (isDispatchOperationAborted()) {
+                return;
+              }
               markInboundDedupeReplayUnsafe();
               if (
                 shouldForwardProgressCallback({
@@ -2329,7 +2531,7 @@ export async function dispatchReplyFromConfig(
                   markInboundDedupeReplayUnsafe();
                   const delivered = dispatcher.sendBlockReply(normalizedPayload);
                   if (delivered) {
-                    await waitForReplyDispatcherIdle(dispatcher, context?.abortSignal);
+                    hasPendingDirectBlockReplyDelivery = true;
                   }
                 }
               };
@@ -2461,6 +2663,7 @@ export async function dispatchReplyFromConfig(
         accumulatedBlockTtsText.trim()
       ) {
         try {
+          await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
           throwIfDispatchOperationAborted();
           const ttsSyntheticReply = await maybeApplyTtsToReplyPayload({
             payload: { text: accumulatedBlockTtsText },
@@ -2520,6 +2723,7 @@ export async function dispatchReplyFromConfig(
       }
     }
 
+    await waitForPendingDirectBlockReplyDelivery(getDispatchAbortSignal());
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
     commitInboundDedupeIfClaimed();
@@ -2537,14 +2741,7 @@ export async function dispatchReplyFromConfig(
     });
   } catch (err) {
     if (isDispatchReplyOperationAbortedError(err)) {
-      commitInboundDedupeIfClaimed();
-      recordProcessed("completed", { reason: "reply_operation_aborted" });
-      markIdle("message_completed");
-      completeDispatchReplyOperation();
-      return attachSourceReplyDeliveryMode({
-        queuedFinal: false,
-        counts: dispatcher.getQueuedCounts(),
-      });
+      return finishReplyOperationAbortedDispatch();
     }
     if (inboundDedupeClaim.status === "claimed") {
       if (inboundDedupeReplayUnsafe) {

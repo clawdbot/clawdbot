@@ -20,6 +20,38 @@ function createTestRegistry(runtime: PluginRuntime) {
 }
 
 describe("plugin registry runtime config scope", () => {
+  it("adds plugin context to lazy runtime resolution failures", () => {
+    const runtime = new Proxy({} as PluginRuntime, {
+      get() {
+        throw new Error("Unable to resolve plugin runtime module; loader=/tmp/openclaw-loader.js");
+      },
+    });
+    const pluginRegistry = createTestRegistry(runtime);
+    const record = createPluginRecord({
+      id: "diagnostic-plugin",
+      name: "Diagnostic Plugin",
+      source: "/plugins/diagnostic-plugin/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = pluginRegistry.createApi(record, { config: {} as OpenClawConfig });
+
+    let thrown: unknown;
+    try {
+      void api.runtime.version;
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    const message = (thrown as Error).message;
+    expect(message).toContain("Unable to resolve plugin runtime module");
+    expect(message).toContain("pluginRuntimeContext=pluginId:diagnostic-plugin");
+    expect(message).toContain("property:version");
+    expect(message).toContain("source:/plugins/diagnostic-plugin/index.js");
+  });
+
   it("runs config helpers with the owning plugin scope", async () => {
     let currentScope = getPluginRuntimeGatewayRequestScope();
     let mutateScope = getPluginRuntimeGatewayRequestScope();

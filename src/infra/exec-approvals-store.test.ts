@@ -23,6 +23,7 @@ let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
+let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovals"];
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
@@ -42,6 +43,7 @@ beforeAll(async () => {
     recordAllowlistMatchesUse,
     recordAllowlistUse,
     requestExecApprovalViaSocket,
+    resolveExecApprovals,
     resolveExecApprovalsPath,
     resolveExecApprovalsSocketPath,
     saveExecApprovals,
@@ -187,6 +189,143 @@ describe("exec approvals store helpers", () => {
     expect(readApprovalsFile(dir).socket).toEqual(ensured.socket);
   });
 
+  it("does not create an approvals file when resolving the missing default no-prompt policy", () => {
+    const dir = createHomeDir();
+
+    const resolved = resolveExecApprovals("main", {
+      security: "full",
+      ask: "off",
+    });
+
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+    expect(resolved.socketPath).toBe(resolveExecApprovalsSocketPath());
+    expect(resolved.token).toBe("");
+    expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+  });
+
+  it("does not rewrite an empty approvals file for the default no-prompt policy", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+    fs.writeFileSync(approvalsPath, "", "utf8");
+
+    const resolved = resolveExecApprovals("main", {
+      security: "full",
+      ask: "off",
+    });
+
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+    expect(resolved.token).toBe("");
+    expect(fs.statSync(approvalsPath).size).toBe(0);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "hardens existing token-bearing approvals files before resolving default no-prompt policy",
+    () => {
+      const dir = createHomeDir();
+      const approvalsPath = approvalsFilePath(dir);
+      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+      fs.writeFileSync(
+        approvalsPath,
+        JSON.stringify({
+          version: 1,
+          socket: { path: resolveExecApprovalsSocketPath(), token: "existing-token" },
+          defaults: { security: "full", ask: "off" },
+          agents: {},
+        }),
+        { mode: 0o644 },
+      );
+      fs.chmodSync(approvalsPath, 0o644);
+
+      const resolved = resolveExecApprovals("main", {
+        security: "full",
+        ask: "off",
+      });
+
+      expect(resolved.agent.security).toBe("full");
+      expect(resolved.agent.ask).toBe("off");
+      expect(resolved.token).toBe("existing-token");
+      expect(fs.statSync(approvalsPath).mode & 0o777).toBe(0o600);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked approvals files before resolving the default no-prompt policy",
+    () => {
+      const dir = createHomeDir();
+      const approvalsPath = approvalsFilePath(dir);
+      const linkedPath = path.join(dir, "linked-approvals.json");
+      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
+      fs.writeFileSync(
+        linkedPath,
+        JSON.stringify({
+          version: 1,
+          defaults: { security: "full", ask: "off" },
+          agents: {},
+        }),
+        "utf8",
+      );
+      fs.symlinkSync(linkedPath, approvalsPath);
+
+      expect(() =>
+        resolveExecApprovals("main", {
+          security: "deny",
+          ask: "always",
+        }),
+      ).toThrow("Refusing to write exec approvals via symlink");
+    },
+  );
+
+  it("does not treat approvals path access errors as a missing default policy", () => {
+    const dir = createHomeDir();
+    const approvalsPath = approvalsFilePath(dir);
+    const actualReadFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((target, options) => {
+      if (String(target) === approvalsPath) {
+        throw Object.assign(new Error("approval path blocked"), { code: "EACCES" });
+      }
+      return actualReadFileSync(target, options as never);
+    });
+
+    expect(() =>
+      resolveExecApprovals("main", {
+        security: "full",
+        ask: "off",
+      }),
+    ).toThrow("approval path blocked");
+  });
+
+  it("creates an approvals file when resolving a missing policy that may prompt", () => {
+    const dir = createHomeDir();
+
+    const resolved = resolveExecApprovals("main", {
+      security: "allowlist",
+      ask: "on-miss",
+    });
+
+    expect(resolved.agent.security).toBe("allowlist");
+    expect(resolved.agent.ask).toBe("on-miss");
+    expect(resolved.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(readApprovalsFile(dir).socket).toEqual(resolved.file.socket);
+  });
+
+  it("creates an approvals file for default no-prompt policy when a socket is required", () => {
+    const dir = createHomeDir();
+
+    const resolved = resolveExecApprovals("main", {
+      security: "full",
+      ask: "off",
+      requireSocket: true,
+    });
+
+    expect(resolved.agent.security).toBe("full");
+    expect(resolved.agent.ask).toBe("off");
+    expect(resolved.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
+    expect(readApprovalsFile(dir).socket).toEqual(resolved.file.socket);
+  });
+
   it("atomically replaces existing approvals files instead of mutating linked inodes", () => {
     const dir = createHomeDir();
     const approvalsPath = approvalsFilePath(dir);
@@ -235,6 +374,24 @@ describe("exec approvals store helpers", () => {
     expect(fs.readFileSync(approvalsFilePath(dir), "utf8")).toContain('"security": "full"');
     expect(fs.statSync(approvalsDir).mode & 0o777).toBe(0o700);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "keeps exec approvals strict when directory chmod fails",
+    () => {
+      const dir = createHomeDir();
+      const approvalsDir = path.dirname(approvalsFilePath(dir));
+      const actualChmodSync = fs.chmodSync.bind(fs);
+      vi.spyOn(fs, "chmodSync").mockImplementation((target, mode) => {
+        if (String(target) === approvalsDir) {
+          throw Object.assign(new Error("chmod denied"), { code: "EPERM" });
+        }
+        return actualChmodSync(target, mode);
+      });
+
+      expect(() => ensureExecApprovals()).toThrow("chmod denied");
+      expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+    },
+  );
 
   it("falls back to copying when rename cannot overwrite the approvals file", () => {
     const dir = createHomeDir();

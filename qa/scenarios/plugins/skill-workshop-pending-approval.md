@@ -14,6 +14,9 @@ objective: Verify an explicit pending skill suggestion queues for review, then a
 plugins:
   - skill-workshop
 gatewayConfigPatch:
+  tools:
+    alsoAllow:
+      - skill_workshop
   plugins:
     entries:
       skill-workshop:

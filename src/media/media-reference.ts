@@ -23,6 +23,11 @@ type InboundMediaReference = {
   sourceType: "uri" | "path";
 };
 
+type InboundMediaUri = {
+  id: string;
+  normalizedSource: string;
+};
+
 export function normalizeMediaReferenceSource(source: string): string {
   const trimmed = source.trim();
   if (/^media:\/\//i.test(trimmed)) {
@@ -104,9 +109,8 @@ async function resolvePathForContainment(candidate: string): Promise<string> {
   }
 }
 
-async function resolveInboundMediaUri(
-  normalizedSource: string,
-): Promise<InboundMediaReference | null> {
+export function parseInboundMediaUri(source: string): InboundMediaUri | null {
+  const normalizedSource = normalizeMediaReferenceSource(source);
   if (!/^media:\/\//i.test(normalizedSource)) {
     return null;
   }
@@ -136,15 +140,42 @@ async function resolveInboundMediaUri(
     });
   }
 
-  if (!id || id.includes("/") || id.includes("\\")) {
+  if (!id || id.includes("/") || id.includes("\\") || id.includes("\0")) {
     throw new MediaReferenceError("invalid-path", `Invalid media URI: ${normalizedSource}`);
   }
 
   return {
     id,
     normalizedSource,
-    physicalPath: await resolveInboundMediaPath(id, normalizedSource),
+  };
+}
+
+async function resolveInboundMediaUri(
+  normalizedSource: string,
+): Promise<InboundMediaReference | null> {
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (!uri) {
+    return null;
+  }
+  return {
+    ...uri,
+    physicalPath: await resolveInboundMediaPath(uri.id, uri.normalizedSource),
     sourceType: "uri",
+  };
+}
+
+export function resolveMediaReferenceSandboxPath(
+  source: string,
+  inboundDir = "media/inbound",
+): { resolved: string; rewrittenFrom?: string } {
+  const normalizedSource = normalizeMediaReferenceSource(source);
+  const uri = parseInboundMediaUri(normalizedSource);
+  if (!uri) {
+    return { resolved: normalizedSource };
+  }
+  return {
+    resolved: path.posix.join(inboundDir.replace(/\\/g, "/"), uri.id),
+    rewrittenFrom: uri.normalizedSource,
   };
 }
 

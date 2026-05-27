@@ -360,6 +360,8 @@ export const zh_CN: TranslationMap = {
     pending: "{count} 个待处理",
     allowOnce: "允许一次",
     alwaysAllow: "始终允许",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "拒绝",
     labels: {
       host: "主机",

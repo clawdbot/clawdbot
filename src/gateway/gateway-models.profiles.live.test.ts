@@ -27,6 +27,7 @@ import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
+  getHighSignalLiveModelProviders,
   isHighSignalLiveModelRef,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
@@ -88,6 +89,8 @@ const GATEWAY_LIVE_SETUP_TIMEOUT_MS = Math.max(
 );
 const GATEWAY_LIVE_MODEL_TIMEOUT_MS = resolveGatewayLiveModelTimeoutMs();
 const GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS = resolveGatewayLiveTranscriptTimeoutMs();
+const GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS = resolveGatewayLiveAgentRunTimeoutMs();
+const GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS = resolveGatewayLiveAgentWaitTimeoutMs();
 const GATEWAY_LIVE_HEARTBEAT_MS = Math.max(
   1_000,
   toInt(process.env.OPENCLAW_LIVE_GATEWAY_HEARTBEAT_MS, 30_000),
@@ -167,7 +170,9 @@ function providerScopedModelRegistryProviders(params: {
     return params.providerList;
   }
   if (!params.useExplicit) {
-    return undefined;
+    return getHighSignalLiveModelProviders().filter((provider) =>
+      params.providerFilter ? params.providerFilter.has(provider) : true,
+    );
   }
   return providerListFromExplicitModelFilter({
     modelFilter: params.modelFilter,
@@ -249,6 +254,24 @@ function resolveGatewayLiveTranscriptTimeoutMs(
   modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
 ): number {
   return Math.max(stepTimeoutMs, modelTimeoutMs);
+}
+
+function resolveGatewayLiveAgentRunTimeoutMs(
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  if (!Number.isFinite(modelTimeoutMs) || modelTimeoutMs <= 1_000) {
+    return Math.max(1_000, Math.floor(modelTimeoutMs));
+  }
+  const terminalGraceMs = Math.min(30_000, Math.max(5_000, Math.floor(modelTimeoutMs / 6)));
+  return Math.max(1_000, Math.floor(modelTimeoutMs - terminalGraceMs));
+}
+
+function resolveGatewayLiveAgentWaitTimeoutMs(
+  agentRunTimeoutMs = GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS,
+  modelTimeoutMs = GATEWAY_LIVE_MODEL_TIMEOUT_MS,
+): number {
+  const waitGraceMs = Math.min(10_000, Math.max(1_000, Math.floor(modelTimeoutMs / 12)));
+  return Math.max(1_000, Math.min(modelTimeoutMs, Math.floor(agentRunTimeoutMs + waitGraceMs)));
 }
 
 function isGatewayLiveProbeTimeout(error: string): boolean {
@@ -382,8 +405,10 @@ function enterProductionEnvForLiveRun() {
   const previous = {
     vitest: process.env.VITEST,
     nodeEnv: process.env.NODE_ENV,
+    testFast: process.env.OPENCLAW_TEST_FAST,
   };
   delete process.env.VITEST;
+  delete process.env.OPENCLAW_TEST_FAST;
   process.env.NODE_ENV = "production";
   return previous;
 }
@@ -391,16 +416,30 @@ function enterProductionEnvForLiveRun() {
 function restoreProductionEnvForLiveRun(previous: {
   vitest: string | undefined;
   nodeEnv: string | undefined;
+  testFast: string | undefined;
 }) {
   if (previous.vitest === undefined) {
     delete process.env.VITEST;
   } else {
     process.env.VITEST = previous.vitest;
   }
+  if (previous.testFast === undefined) {
+    delete process.env.OPENCLAW_TEST_FAST;
+  } else {
+    process.env.OPENCLAW_TEST_FAST = previous.testFast;
+  }
   if (previous.nodeEnv === undefined) {
     delete process.env.NODE_ENV;
   } else {
     process.env.NODE_ENV = previous.nodeEnv;
+  }
+}
+
+function restoreOptionalEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key];
+  } else {
+    process.env[key] = value;
   }
 }
 
@@ -680,6 +719,41 @@ describe("resolveGatewayLiveTranscriptTimeoutMs", () => {
   });
 });
 
+describe("resolveGatewayLiveAgentRunTimeoutMs", () => {
+  it("leaves terminal-observation grace inside the model timeout", () => {
+    expect(resolveGatewayLiveAgentRunTimeoutMs(180_000)).toBe(150_000);
+  });
+
+  it("keeps short live probes bounded but positive", () => {
+    expect(resolveGatewayLiveAgentRunTimeoutMs(6_000)).toBe(1_000);
+  });
+});
+
+describe("resolveGatewayLiveAgentWaitTimeoutMs", () => {
+  it("waits past the run timeout but before the model timeout", () => {
+    expect(resolveGatewayLiveAgentWaitTimeoutMs(150_000, 180_000)).toBe(160_000);
+  });
+});
+
+describe("formatGatewayLiveAgentWaitFailure", () => {
+  it("includes terminal attribution fields without requiring transcript text", () => {
+    expect(
+      formatGatewayLiveAgentWaitFailure({
+        context: "anthropic prompt",
+        runId: "run-1",
+        result: {
+          status: "timeout",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          stopReason: "rpc",
+        },
+      }).message,
+    ).toContain(
+      "anthropic prompt: agent.wait timeout for runId=run-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc)",
+    );
+  });
+});
+
 describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
   it("allows all-skip runs when no timeout skip was involved", () => {
     expect(() =>
@@ -877,6 +951,28 @@ describe("resolveExplicitLiveModelCandidates", () => {
 });
 
 describe("providerScopedModelRegistryProviders", () => {
+  it("uses curated high-signal providers for default modern sweeps", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: null,
+      }),
+    ).toEqual(getHighSignalLiveModelProviders());
+  });
+
+  it("intersects default modern sweeps with provider filters", () => {
+    expect(
+      providerScopedModelRegistryProviders({
+        providerList: undefined,
+        useExplicit: false,
+        modelFilter: null,
+        providerFilter: new Set(["openai", "not-high-signal"]),
+      }),
+    ).toEqual(["openai"]);
+  });
+
   it("uses explicit provider-qualified model refs without enumerating the full registry", () => {
     expect(
       providerScopedModelRegistryProviders({
@@ -944,6 +1040,31 @@ describe("buildLiveGatewayConfig", () => {
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
       agentRuntime: { id: "pi" },
     });
+  });
+});
+
+describe("enterProductionEnvForLiveRun", () => {
+  it("clears Vitest fast-reply flags while preserving caller state", () => {
+    const previous = {
+      vitest: process.env.VITEST,
+      nodeEnv: process.env.NODE_ENV,
+      testFast: process.env.OPENCLAW_TEST_FAST,
+    };
+    process.env.VITEST = "1";
+    process.env.NODE_ENV = "test";
+    process.env.OPENCLAW_TEST_FAST = "1";
+
+    const runtimeEnv = enterProductionEnvForLiveRun();
+    try {
+      expect(process.env.VITEST).toBeUndefined();
+      expect(process.env.NODE_ENV).toBe("production");
+      expect(process.env.OPENCLAW_TEST_FAST).toBeUndefined();
+    } finally {
+      restoreProductionEnvForLiveRun(runtimeEnv);
+      restoreOptionalEnv("VITEST", previous.vitest);
+      restoreOptionalEnv("NODE_ENV", previous.nodeEnv);
+      restoreOptionalEnv("OPENCLAW_TEST_FAST", previous.testFast);
+    }
   });
 });
 
@@ -1082,10 +1203,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(3);
+    ).toBe(2);
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
-    ).toBe(4);
+    ).toBe(3);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -1582,6 +1703,64 @@ async function waitForSessionAssistantText(params: {
   throw new Error(`${timeoutLabel} timeout after ${timeoutMs}ms (${params.context})`);
 }
 
+function formatGatewayLiveAgentWaitFailure(params: {
+  context: string;
+  runId: string;
+  result: unknown;
+}): Error {
+  const result = params.result as
+    | {
+        status?: unknown;
+        error?: unknown;
+        stopReason?: unknown;
+        timeoutPhase?: unknown;
+        providerStarted?: unknown;
+      }
+    | null
+    | undefined;
+  const status = typeof result?.status === "string" ? result.status : "unknown";
+  const details = [
+    typeof result?.timeoutPhase === "string" ? `timeoutPhase=${result.timeoutPhase}` : undefined,
+    typeof result?.providerStarted === "boolean"
+      ? `providerStarted=${String(result.providerStarted)}`
+      : undefined,
+    typeof result?.stopReason === "string" ? `stopReason=${result.stopReason}` : undefined,
+    typeof result?.error === "string" ? `error=${result.error}` : undefined,
+  ].filter((value): value is string => Boolean(value));
+  return new Error(
+    `${params.context}: agent.wait ${status} for runId=${params.runId}${
+      details.length > 0 ? ` (${details.join(", ")})` : ""
+    }`,
+  );
+}
+
+async function waitForGatewayAgentRun(params: {
+  client: GatewayClient;
+  runId: string;
+  context: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS;
+  const result = await params.client.request(
+    "agent.wait",
+    {
+      runId: params.runId,
+      timeoutMs,
+    },
+    {
+      timeoutMs: timeoutMs + 5_000,
+    },
+  );
+  if ((result as { status?: unknown } | undefined)?.status === "ok") {
+    return;
+  }
+  throw formatGatewayLiveAgentWaitFailure({
+    context: params.context,
+    runId: params.runId,
+    result,
+  });
+}
+
 async function requestGatewayAgentText(params: {
   client: GatewayClient;
   sessionKey: string;
@@ -1599,13 +1778,15 @@ async function requestGatewayAgentText(params: {
   const baselineAssistantCount = (
     await readSessionAssistantTexts(params.sessionKey, params.modelKey)
   ).length;
+  const runId = params.idempotencyKey;
   const accepted = await withGatewayLiveProbeTimeout(
     params.client.request("agent", {
       sessionKey: params.sessionKey,
-      idempotencyKey: params.idempotencyKey,
+      idempotencyKey: runId,
       message: params.message,
       thinking: params.thinkingLevel,
       deliver: false,
+      timeout: Math.ceil(GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS / 1_000),
       attachments: params.attachments,
     }),
     `${params.context}: agent-accept`,
@@ -1613,13 +1794,39 @@ async function requestGatewayAgentText(params: {
   if (accepted?.status !== "accepted") {
     throw new Error(`agent status=${String(accepted?.status)}`);
   }
-  return await waitForSessionAssistantText({
+  const transcriptPromise = waitForSessionAssistantText({
     sessionKey: params.sessionKey,
     baselineAssistantCount,
     context: `${params.context}: transcript-final`,
     modelKey: params.modelKey,
     timeoutLabel: "model",
     timeoutMs: GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS,
+  }).then((text) => ({ kind: "transcript" as const, text }));
+  const agentWaitPromise = waitForGatewayAgentRun({
+    client: params.client,
+    runId,
+    context: `${params.context}: agent-wait`,
+    timeoutMs: GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS,
+  }).then(
+    () => ({ kind: "agent-ok" as const }),
+    (error: unknown) => ({ kind: "agent-error" as const, error }),
+  );
+  const first = await Promise.race([transcriptPromise, agentWaitPromise]);
+  if (first.kind === "transcript") {
+    void agentWaitPromise.catch(() => undefined);
+    return first.text;
+  }
+  void transcriptPromise.catch(() => undefined);
+  if (first.kind === "agent-error") {
+    throw first.error instanceof Error ? first.error : new Error(String(first.error));
+  }
+  return await waitForSessionAssistantText({
+    sessionKey: params.sessionKey,
+    baselineAssistantCount,
+    context: `${params.context}: transcript-after-agent-wait`,
+    modelKey: params.modelKey,
+    timeoutLabel: "probe",
+    timeoutMs: GATEWAY_LIVE_PROBE_TIMEOUT_MS,
   });
 }
 
@@ -2128,7 +2335,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       `[${params.label}] running ${params.candidates.length} models (thinking=${params.thinkingLevel})`,
     );
     logProgress(
-      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
+      `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s agent-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS / 1_000))}s agent-wait=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
     );
     const anthropicKeys = collectAnthropicApiKeys();
     if (anthropicKeys.length > 0) {

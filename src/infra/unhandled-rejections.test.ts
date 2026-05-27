@@ -60,6 +60,7 @@ describe("isTransientNetworkError", () => {
       "ESOCKETTIMEDOUT",
       "ECONNABORTED",
       "EPIPE",
+      "ENETDOWN",
       "EHOSTUNREACH",
       "ENETUNREACH",
       "EADDRNOTAVAIL",
@@ -375,6 +376,12 @@ describe("isTransientUnhandledRejectionError", () => {
     const epipe = Object.assign(new Error("write EPIPE"), { code: "EPIPE" });
     const sqlite = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
     const network = Object.assign(new Error("connection reset"), { code: "ECONNRESET" });
+    const networkDown = Object.assign(new Error("connect ENETDOWN"), {
+      code: "ENETDOWN",
+    });
+    const rawNetworkDown = new Error(
+      "connect ENETDOWN 149.154.167.220:443 - Local (10.0.10.40:50017)",
+    );
     const hostUnreachable = Object.assign(new Error("connect EHOSTUNREACH"), {
       code: "EHOSTUNREACH",
     });
@@ -398,6 +405,8 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
     expect(isBenignUncaughtExceptionError(sqlite)).toBe(false);
     expect(isBenignUncaughtExceptionError(network)).toBe(false);
+    expect(isBenignUncaughtExceptionError(networkDown)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawNetworkDown)).toBe(true);
     expect(isBenignUncaughtExceptionError(hostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(addressUnavailable)).toBe(true);

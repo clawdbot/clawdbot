@@ -104,12 +104,15 @@ function listNativeSpecsFromCommands(
     .filter((command) => command.scope !== "text" && command.nativeName)
     .flatMap((command) => {
       const spec = toNativeCommandSpec(command, provider);
-      return resolveNativeNames(command, provider).map((name) => {
+      return resolveNativeNames(command, provider).map((name, index) => {
         const nativeSpec: NativeCommandSpec = {
           name,
           description: spec.description,
           acceptsArgs: spec.acceptsArgs,
         };
+        if (index > 0) {
+          nativeSpec.isAlias = true;
+        }
         if (spec.args) {
           nativeSpec.args = spec.args;
         }

@@ -154,4 +154,37 @@ describe("command secret targets module import", () => {
     expect(pluginCall?.[1]?.includePersistedAuthState).toBe(false);
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
   });
+
+  it("can omit channel targets from status targets without plugin discovery", async () => {
+    const listSecretTargetRegistryEntries = vi.fn(() => {
+      throw new Error("registry touched too early");
+    });
+    const listReadOnlyChannelPluginsForConfig = vi.fn(() => {
+      throw new Error("channel plugin metadata touched too early");
+    });
+
+    vi.doMock("../secrets/target-registry.js", () => ({
+      discoverConfigSecretTargetsByIds: vi.fn(() => []),
+      listSecretTargetRegistryEntries,
+    }));
+    vi.doMock("../channels/plugins/read-only.js", () => ({
+      listReadOnlyChannelPluginsForConfig,
+    }));
+
+    const mod = await import("./command-secret-targets.js");
+    const targets = mod.getStatusCommandSecretTargetIds(
+      {
+        channels: {
+          telegram: { botToken: "123456:ABCDEF" },
+        },
+      },
+      process.env,
+      { includeChannelTargets: false },
+    );
+
+    expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(targets.has("channels.telegram.botToken")).toBe(false);
+    expect(listReadOnlyChannelPluginsForConfig).not.toHaveBeenCalled();
+    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
+  });
 });

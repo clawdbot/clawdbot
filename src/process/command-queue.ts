@@ -404,6 +404,10 @@ export function markGatewayDraining(): void {
   getQueueState().gatewayDraining = true;
 }
 
+export function isGatewayDraining(): boolean {
+  return getQueueState().gatewayDraining;
+}
+
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
   const cleaned = normalizeLane(lane);
   const state = getLaneState(cleaned);

@@ -7,14 +7,12 @@ import {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
-  buildExecApprovalPendingReplyPayload,
-  type ExecApprovalPendingReplyParams,
-  type ExecApprovalReplyDecision,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
+  buildApprovalReactionPendingContent,
+  type ApprovalReactionPendingContent,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
   buildApprovalResolvedReplyPayload,
   buildPluginApprovalExpiredMessage,
-  buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedMessage,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -24,8 +22,6 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  addSignalApprovalReactionHintToText,
-  buildSignalApprovalReactionHint,
   hasSignalApprovalReactionApprovers,
   registerSignalApprovalReactionTarget,
   resolveSignalApprovalConversationKey,
@@ -39,10 +35,7 @@ const log = createSubsystemLogger("signal/approvals");
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
-type SignalPendingDelivery = {
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-};
+type SignalPendingDelivery = ApprovalReactionPendingContent;
 type PreparedSignalApprovalTarget = {
   to: string;
   accountId: string;
@@ -59,6 +52,7 @@ type PendingSignalApprovalEntry = {
   baseUrl?: string;
   account?: string;
   targetAuthorKeys: readonly string[];
+  reactionsActive: boolean;
 };
 type SignalFinalPayload = {
   text: string;
@@ -87,70 +81,12 @@ function readSignalApprovalRuntimeContext(context: unknown): SignalApprovalRunti
   };
 }
 
-function appendReactionHint(params: {
-  cfg: Parameters<typeof hasSignalApprovalReactionApprovers>[0]["cfg"];
-  accountId?: string | null;
-  text: string;
-  allowedDecisions: SignalPendingDelivery["allowedDecisions"];
-  targetAuthorKeys: readonly string[];
-}): string {
-  if (
-    params.targetAuthorKeys.length === 0 ||
-    !hasSignalApprovalReactionApprovers({ cfg: params.cfg, accountId: params.accountId })
-  ) {
-    return params.text;
-  }
-  const hint = buildSignalApprovalReactionHint(params.allowedDecisions);
-  return hint
-    ? addSignalApprovalReactionHintToText({
-        text: params.text,
-        allowedDecisions: params.allowedDecisions,
-      })
-    : params.text;
-}
-
-function replaceApprovalIdPlaceholder(text: string | undefined, approvalId: string): string {
-  return (text ?? "").replace(/\/approve\s+<id>/g, `/approve ${approvalId}`);
-}
-
 function buildPendingPayload(params: {
-  cfg: Parameters<typeof hasSignalApprovalReactionApprovers>[0]["cfg"];
-  accountId?: string | null;
   request: ApprovalRequest;
-  approvalKind: "exec" | "plugin";
   nowMs: number;
   view: PendingApprovalView;
 }): SignalPendingDelivery {
-  const allowedDecisions = params.view.actions.map((action) => action.decision);
-  const payload =
-    params.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
-          request: params.request as PluginApprovalRequest,
-          nowMs: params.nowMs,
-          allowedDecisions,
-        })
-      : buildExecApprovalPendingReplyPayload({
-          approvalId: params.request.id,
-          approvalSlug: params.request.id.slice(0, 8),
-          approvalCommandId: params.request.id,
-          warningText:
-            params.view.approvalKind === "exec"
-              ? (params.view.warningText ?? undefined)
-              : undefined,
-          command: params.view.approvalKind === "exec" ? params.view.commandText : "",
-          cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
-          host:
-            params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
-          nodeId:
-            params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions,
-          expiresAtMs: params.request.expiresAtMs,
-          nowMs: params.nowMs,
-        } satisfies ExecApprovalPendingReplyParams);
-  return {
-    text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-    allowedDecisions,
-  };
+  return buildApprovalReactionPendingContent(params);
 }
 
 function buildResolvedText(params: {
@@ -203,8 +139,8 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     shouldHandle: ({ context }) => Boolean(context),
   },
   presentation: {
-    buildPendingPayload: ({ cfg, accountId, request, approvalKind, nowMs, view }) =>
-      buildPendingPayload({ cfg, accountId, request, approvalKind, nowMs, view }),
+    buildPendingPayload: ({ request, nowMs, view }) =>
+      buildPendingPayload({ request, nowMs, view }),
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
       payload: { text: buildResolvedText({ request, resolved, view }) },
@@ -250,14 +186,13 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         ...(preparedTarget.baseUrl ? { baseUrl: preparedTarget.baseUrl } : {}),
         ...(preparedTarget.account ? { account: preparedTarget.account } : {}),
       }).catch(() => {});
-      const text = appendReactionHint({
-        cfg,
-        accountId: preparedTarget.accountId,
-        text: pendingPayload.text,
-        allowedDecisions: pendingPayload.allowedDecisions,
-        targetAuthorKeys: preparedTarget.targetAuthorKeys,
-      });
-      const result = await sendMessageSignal(preparedTarget.to, text, {
+      const reactionsActive =
+        preparedTarget.targetAuthorKeys.length > 0 &&
+        hasSignalApprovalReactionApprovers({ cfg, accountId: preparedTarget.accountId });
+      const payload = reactionsActive
+        ? pendingPayload.reactionPayload
+        : pendingPayload.manualFallbackPayload;
+      const result = await sendMessageSignal(preparedTarget.to, payload.text ?? "", {
         cfg,
         accountId: preparedTarget.accountId,
         ...(preparedTarget.baseUrl ? { baseUrl: preparedTarget.baseUrl } : {}),
@@ -277,6 +212,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         conversationKey,
         messageId: result.messageId,
         targetAuthorKeys: preparedTarget.targetAuthorKeys,
+        reactionsActive,
         ...(preparedTarget.baseUrl ? { baseUrl: preparedTarget.baseUrl } : {}),
         ...(preparedTarget.account ? { account: preparedTarget.account } : {}),
       };
@@ -292,13 +228,16 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
     },
   },
   interactions: {
-    bindPending: ({ entry, request, view, pendingPayload }) =>
-      registerSignalApprovalReactionTarget({
+    bindPending: ({ entry, request, view, pendingPayload }) => {
+      if (!entry.reactionsActive) {
+        return null;
+      }
+      return registerSignalApprovalReactionTarget({
         accountId: entry.accountId,
         conversationKey: entry.conversationKey,
         messageId: entry.messageId,
         approvalId: request.id,
-        allowedDecisions: pendingPayload.allowedDecisions,
+        allowedDecisions: pendingPayload.reactionPayload.allowedDecisions,
         targetAuthorKeys: entry.targetAuthorKeys,
         route: {
           deliveryMode: "session",
@@ -313,7 +252,8 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         ttlMs: Math.max(1, view.expiresAtMs - Date.now()),
       })
         ? true
-        : null,
+        : null;
+    },
     unbindPending: ({ entry }) => {
       unregisterSignalApprovalReactionTarget({
         accountId: entry.accountId,

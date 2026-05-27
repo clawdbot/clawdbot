@@ -133,6 +133,8 @@ export type { ResolvedSessionMaintenanceConfig, SessionMaintenanceWarning };
 type SaveSessionStoreOptions = {
   /** Skip pruning, capping, and rotation (e.g. during one-time migrations). */
   skipMaintenance?: boolean;
+  /** Internal hot paths can hand writer-owned stores to the cache after persistence. */
+  takeCacheOwnership?: boolean;
   /** Active session key for warn-only maintenance. */
   activeSessionKey?: string;
   /**
@@ -198,9 +200,10 @@ function updateSessionStoreWriteCaches(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  takeOwnership?: boolean;
 }): void {
   const fileStat = getFileStatSnapshot(params.storePath);
-  setSerializedSessionStore(params.storePath, params.serialized);
+  setSerializedSessionStore(params.storePath, params.serialized, fileStat?.sizeBytes);
   if (!isSessionStoreCacheEnabled()) {
     dropSessionStoreObjectCache(params.storePath);
     dropSessionStoreSnapshotCache(params.storePath);
@@ -212,6 +215,7 @@ function updateSessionStoreWriteCaches(params: {
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
+    takeOwnership: params.takeOwnership,
   });
   dropSessionStoreSnapshotCache(params.storePath);
 }
@@ -437,7 +441,12 @@ async function saveSessionStoreUnlocked(
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
   if (getSerializedSessionStore(storePath) === json) {
-    updateSessionStoreWriteCaches({ storePath, store, serialized: json });
+    updateSessionStoreWriteCaches({
+      storePath,
+      store,
+      serialized: json,
+      takeOwnership: opts?.takeCacheOwnership,
+    });
     return;
   }
 
@@ -445,7 +454,12 @@ async function saveSessionStoreUnlocked(
   if (process.platform === "win32") {
     for (let i = 0; i < 5; i++) {
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({
+          storePath,
+          store,
+          serialized: json,
+          takeOwnership: opts?.takeCacheOwnership,
+        });
         return;
       } catch (err) {
         const code = getErrorCode(err);
@@ -465,7 +479,12 @@ async function saveSessionStoreUnlocked(
   }
 
   try {
-    await writeSessionStoreAtomic({ storePath, store, serialized: json });
+    await writeSessionStoreAtomic({
+      storePath,
+      store,
+      serialized: json,
+      takeOwnership: opts?.takeCacheOwnership,
+    });
   } catch (err) {
     const code = getErrorCode(err);
 
@@ -473,7 +492,12 @@ async function saveSessionStoreUnlocked(
       // In tests the temp session-store directory may be deleted while writes are in-flight.
       // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
       try {
-        await writeSessionStoreAtomic({ storePath, store, serialized: json });
+        await writeSessionStoreAtomic({
+          storePath,
+          store,
+          serialized: json,
+          takeOwnership: opts?.takeCacheOwnership,
+        });
       } catch (err2) {
         const code2 = getErrorCode(err2);
         if (code2 === "ENOENT") {
@@ -586,6 +610,7 @@ async function writeSessionStoreAtomic(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   serialized: string;
+  takeOwnership?: boolean;
 }): Promise<void> {
   // Stage the temp as `sessions.json.<pid>.<uuid>.tmp` (not the generic
   // `.fs-safe-replace.*`) so a temp orphaned by a crash between write and rename
@@ -599,6 +624,7 @@ async function writeSessionStoreAtomic(params: {
     storePath: params.storePath,
     store: params.store,
     serialized: params.serialized,
+    takeOwnership: params.takeOwnership,
   });
 }
 
@@ -607,6 +633,8 @@ async function persistResolvedSessionEntry(params: {
   store: Record<string, SessionEntry>;
   resolved: ReturnType<typeof resolveSessionStoreEntry>;
   next: SessionEntry;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
 }): Promise<SessionEntry> {
   params.store[params.resolved.normalizedKey] = params.next;
   for (const legacyKey of params.resolved.legacyKeys) {
@@ -614,6 +642,8 @@ async function persistResolvedSessionEntry(params: {
   }
   await saveSessionStoreUnlocked(params.storePath, params.store, {
     activeSessionKey: params.resolved.normalizedKey,
+    skipMaintenance: params.skipMaintenance,
+    takeCacheOwnership: params.takeCacheOwnership,
   });
   return params.next;
 }
@@ -622,6 +652,8 @@ export async function updateSessionStoreEntry(params: {
   storePath: string;
   sessionKey: string;
   update: (entry: SessionEntry) => Promise<Partial<SessionEntry> | null>;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
   return await runExclusiveSessionStoreWrite(storePath, async () => {
@@ -641,6 +673,8 @@ export async function updateSessionStoreEntry(params: {
       store,
       resolved,
       next,
+      skipMaintenance: params.skipMaintenance,
+      takeCacheOwnership: params.takeCacheOwnership,
     });
   });
 }

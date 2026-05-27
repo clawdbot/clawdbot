@@ -7,11 +7,11 @@ describe("gateway startup log", () => {
     vi.useRealTimers();
   });
 
-  it("warns when dangerous config flags are enabled", () => {
+  it("warns when dangerous config flags are enabled", async () => {
     const info = vi.fn();
     const warn = vi.fn();
 
-    logGatewayStartup({
+    await logGatewayStartup({
       cfg: {
         gateway: {
           controlUi: {
@@ -33,11 +33,11 @@ describe("gateway startup log", () => {
     ]);
   });
 
-  it("does not warn when dangerous config flags are disabled", () => {
+  it("does not warn when dangerous config flags are disabled", async () => {
     const info = vi.fn();
     const warn = vi.fn();
 
-    logGatewayStartup({
+    await logGatewayStartup({
       cfg: {},
       bindHost: "127.0.0.1",
       loadedPluginIds: [],
@@ -49,11 +49,11 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("logs configured model thinking and fast mode defaults with the startup model", () => {
+  it("logs configured model thinking and fast mode defaults with the startup model", async () => {
     const info = vi.fn();
     const warn = vi.fn();
 
-    logGatewayStartup({
+    await logGatewayStartup({
       cfg: {
         agents: {
           defaults: {
@@ -170,14 +170,14 @@ describe("gateway startup log", () => {
     ).toBe("thinking=high, fast=on");
   });
 
-  it("logs a compact listening line with loaded plugin ids and duration", () => {
+  it("logs a compact listening line with loaded plugin ids and duration", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));
 
     const info = vi.fn();
     const warn = vi.fn();
 
-    logGatewayStartup({
+    await logGatewayStartup({
       cfg: {},
       bindHost: "127.0.0.1",
       bindHosts: ["127.0.0.1", "::1"],

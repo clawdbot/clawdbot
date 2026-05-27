@@ -14,6 +14,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
 import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
+import { resetContextWindowCacheForTest } from "../context.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
 import { buildActiveVideoGenerationTaskPromptContextForSession } from "../video-generation-task-status.js";
@@ -94,6 +95,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
           "x-openclaw-inbound-event-kind": "${OPENCLAW_MCP_INBOUND_EVENT_KIND}",
+          "x-openclaw-source-reply-delivery-mode": "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",
         },
       },
     },
@@ -203,6 +205,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       ),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
+      prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
+        args: [],
+        cleanup: vi.fn(async () => undefined),
+      })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
     getRuntimeConfigMock.mockReturnValue({});
@@ -218,6 +224,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     mockBuildActiveImageGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    resetContextWindowCacheForTest();
     clearMemoryPluginState();
     vi.unstubAllEnvs();
   });
@@ -1091,7 +1098,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           },
         ],
       });
-
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:test",
@@ -1115,6 +1121,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         messageProvider: undefined,
         accountId: undefined,
         inboundEventKind: undefined,
+        sourceReplyDeliveryMode: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -1181,7 +1188,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           },
         ],
       });
-
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:test",
@@ -1242,7 +1248,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           },
         ],
       });
-
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionKey: "agent:main:telegram:group:chat123",
@@ -1256,11 +1261,13 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         config: createCliBackendConfig(),
         currentInboundEventKind: "room_event",
         messageChannel: "telegram",
+        sourceReplyDeliveryMode: "message_tool_only",
       });
 
       expect(context.preparedBackend.env).toMatchObject({
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
+        OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
       });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1453,6 +1460,270 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("omits Claude CLI prompt skills when the native skills plugin can carry them", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const skillDir = path.join(dir, "skills", "weather");
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skillFilePath = path.join(skillDir, "SKILL.md");
+    fs.writeFileSync(
+      skillFilePath,
+      [
+        "---",
+        "name: weather",
+        "description: Use weather tools for forecasts.",
+        "---",
+        "",
+        "Read forecast data before replying.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      setCliRunnerPrepareTestDeps({
+        prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
+          args: ["--plugin-dir", path.join(dir, "openclaw-skills")],
+          cleanup: vi.fn(async () => undefined),
+          pluginDir: path.join(dir, "openclaw-skills"),
+        })),
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-claude-plugin-skills-prompt",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+        skillsSnapshot: {
+          prompt: [
+            "<available_skills>",
+            "  <skill>",
+            "    <name>weather</name>",
+            "    <description>Use weather tools for forecasts.</description>",
+            `    <location>${skillFilePath}</location>`,
+            "  </skill>",
+            "</available_skills>",
+          ].join("\n"),
+          skills: [{ name: "weather" }],
+          resolvedSkills: [
+            {
+              name: "weather",
+              description: "Use weather tools for forecasts.",
+              filePath: skillFilePath,
+              baseDir: skillDir,
+              source: "test",
+              sourceInfo: {
+                path: skillDir,
+                source: "test",
+                scope: "project",
+                origin: "top-level",
+                baseDir: skillDir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      });
+
+      expect(context.systemPrompt).not.toContain("<available_skills>");
+      expect(context.systemPrompt).not.toContain("<name>weather</name>");
+      expect(context.systemPromptReport.skills.promptChars).toBe(0);
+      expect(context.claudeSkillsPluginArgs).toEqual([
+        "--plugin-dir",
+        path.join(dir, "openclaw-skills"),
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Claude CLI prompt skills when the snapshot has no materialized plugin skills", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const missingSkillDir = path.join(dir, "skills", "missing");
+    const missingSkillFilePath = path.join(missingSkillDir, "SKILL.md");
+
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-claude-plugin-skills-prompt-fallback",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+        skillsSnapshot: {
+          prompt: [
+            "<available_skills>",
+            "  <skill>",
+            "    <name>weather</name>",
+            "    <description>Use weather tools for forecasts.</description>",
+            `    <location>${missingSkillFilePath}</location>`,
+            "  </skill>",
+            "</available_skills>",
+          ].join("\n"),
+          skills: [{ name: "weather" }],
+          resolvedSkills: [
+            {
+              name: "weather",
+              description: "Use weather tools for forecasts.",
+              filePath: missingSkillFilePath,
+              baseDir: missingSkillDir,
+              source: "test",
+              sourceInfo: {
+                path: missingSkillDir,
+                source: "test",
+                scope: "project",
+                origin: "top-level",
+                baseDir: missingSkillDir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      });
+
+      expect(context.systemPrompt).toContain("<available_skills>");
+      expect(context.systemPrompt).toContain("<name>weather</name>");
+      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
+      expect(context.claudeSkillsPluginArgs).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Claude CLI prompt skills when plugin materialization produces no args", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const skillDir = path.join(dir, "skills", "weather");
+    fs.mkdirSync(skillDir, { recursive: true });
+    const skillFilePath = path.join(skillDir, "SKILL.md");
+    fs.writeFileSync(
+      skillFilePath,
+      [
+        "---",
+        "name: weather",
+        "description: Use weather tools for forecasts.",
+        "---",
+        "",
+        "Read forecast data before replying.",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+      setCliRunnerPrepareTestDeps({
+        prepareClaudeCliSkillsPlugin: vi.fn(async () => ({
+          args: [],
+          cleanup: vi.fn(async () => undefined),
+        })),
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "opus",
+        timeoutMs: 1_000,
+        runId: "run-claude-plugin-skills-prompt-materialization-fallback",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+        skillsSnapshot: {
+          prompt: [
+            "<available_skills>",
+            "  <skill>",
+            "    <name>weather</name>",
+            "    <description>Use weather tools for forecasts.</description>",
+            `    <location>${skillFilePath}</location>`,
+            "  </skill>",
+            "</available_skills>",
+          ].join("\n"),
+          skills: [{ name: "weather" }],
+          resolvedSkills: [
+            {
+              name: "weather",
+              description: "Use weather tools for forecasts.",
+              filePath: skillFilePath,
+              baseDir: skillDir,
+              source: "test",
+              sourceInfo: {
+                path: skillDir,
+                source: "test",
+                scope: "project",
+                origin: "top-level",
+                baseDir: skillDir,
+              },
+              disableModelInvocation: false,
+            },
+          ],
+        },
+      });
+
+      expect(context.systemPrompt).toContain("<available_skills>");
+      expect(context.systemPrompt).toContain("<name>weather</name>");
+      expect(context.systemPromptReport.skills.promptChars).toBeGreaterThan(0);
+      expect(context.claudeSkillsPluginArgs).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("does not probe the transcript for non-claude-cli providers", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
@@ -1476,6 +1747,224 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
 
       expect(transcriptCheck).not.toHaveBeenCalled();
       expect(context.reusableCliSession).toEqual({ sessionId: "test-cli-sid" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses a larger automatic reseed history cap for Claude CLI", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const summaryMarker = "RESEED_SUMMARY_MARKER_KEEP";
+      const padding = "x".repeat(40_000);
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          type: "compaction",
+          summary: `${summaryMarker} ${padding}`,
+        })}\n`,
+        "utf-8",
+      );
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "claude-haiku-3-5",
+        timeoutMs: 1_000,
+        runId: "run-auto-claude-reseed-history-chars",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain(summaryMarker);
+      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the automatic Claude CLI cap before mapping canonical models to CLI aliases", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "claude-cli",
+            pluginId: "anthropic",
+            bundleMcp: false,
+            config: {
+              command: "claude",
+              args: ["--print"],
+              output: "jsonl",
+              input: "stdin",
+              sessionMode: "existing",
+              modelAliases: {
+                "claude-opus-4-7": "opus",
+              },
+            },
+          },
+        ],
+      });
+
+      const summaryMarker = "RESEED_ALIAS_SUMMARY_MARKER_KEEP";
+      const padding = "x".repeat(90_000);
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          type: "compaction",
+          summary: `${summaryMarker} ${padding}`,
+        })}\n`,
+        "utf-8",
+      );
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "claude-opus-4-7",
+        timeoutMs: 1_000,
+        runId: "run-auto-claude-alias-reseed-history-chars",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain(summaryMarker);
+      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the default reseed history cap for non-Claude CLI backends", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const summaryMarker = "RESEED_SUMMARY_MARKER_DEFAULT";
+      const padding = "x".repeat(20_000);
+      fs.appendFileSync(
+        sessionFile,
+        `${JSON.stringify({
+          type: "compaction",
+          summary: `${summaryMarker} ${padding}`,
+        })}\n`,
+        "utf-8",
+      );
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-default-reseed-history-chars",
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain("OpenClaw reseed history truncated");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the automatic Claude CLI cap through the raw-tail reseed path", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "anthropic",
+          bundleMcp: false,
+          config: {
+            command: "claude",
+            args: ["--print"],
+            output: "jsonl",
+            input: "stdin",
+            sessionMode: "existing",
+            reseedFromRawTranscriptWhenUncompacted: true,
+          },
+        },
+      ],
+    });
+    setCliRunnerPrepareTestDeps({
+      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
+    });
+    const recentMarker = "RAW_RESEED_RECENT_MARKER_KEEP";
+    const padding = "x".repeat(8_000);
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date(1).toISOString(),
+      message: { role: "user", content: `EARLIEST_USER ${padding}`, timestamp: 1 },
+    });
+    appendTranscriptEntry(sessionFile, {
+      id: "msg-2",
+      parentId: "msg-1",
+      timestamp: new Date(2).toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: `${recentMarker} ${padding}` }],
+        api: "responses",
+        provider: "test-cli",
+        model: "test-model",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    });
+
+    try {
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "claude-cli",
+        model: "claude-haiku-3-5",
+        timeoutMs: 1_000,
+        runId: "run-raw-reseed-cap-override",
+        cliSessionBinding: { sessionId: "cli-session" },
+        config: createCliBackendConfig({ systemPromptOverride: null }),
+      });
+
+      expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });
+      expect(context.openClawHistoryPrompt).toBeDefined();
+      expect(context.openClawHistoryPrompt).toContain(recentMarker);
+      expect(context.openClawHistoryPrompt).toContain("EARLIEST_USER");
+      expect(context.openClawHistoryPrompt).not.toContain("OpenClaw reseed history truncated");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

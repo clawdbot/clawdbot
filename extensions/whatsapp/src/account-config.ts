@@ -8,7 +8,7 @@ import {
 import {
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingChunkMode,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { WhatsAppAccountConfig } from "./account-types.js";
 
 function resolveWhatsAppDefaultAccountSharedConfig(

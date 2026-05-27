@@ -253,14 +253,18 @@ export async function updateSessionStoreAfterAgentRun(params: {
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
-  const persisted = await updateSessionStore(storePath, (store) => {
-    if (preserveUserFacingRunState && !store[sessionKey]) {
-      return undefined;
-    }
-    const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
-    store[sessionKey] = merged;
-    return merged;
-  });
+  const persisted = await updateSessionStore(
+    storePath,
+    (store) => {
+      if (preserveUserFacingRunState && !store[sessionKey]) {
+        return undefined;
+      }
+      const merged = mergeSessionEntry(store[sessionKey], metadataPatch);
+      store[sessionKey] = merged;
+      return merged;
+    },
+    { takeCacheOwnership: true },
+  );
   if (persisted) {
     sessionStore[sessionKey] = persisted;
   }

@@ -45,6 +45,7 @@ describe("buildCliRespawnPlan", () => {
       env: {},
       execArgv: [],
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
     });
 
     const respawnPlan = expectCliRespawnPlan(plan);
@@ -63,6 +64,7 @@ describe("buildCliRespawnPlan", () => {
         env: {},
         execArgv: [],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
       });
 
       const respawnPlan = expectCliRespawnPlan(plan);
@@ -80,6 +82,7 @@ describe("buildCliRespawnPlan", () => {
         env: { [OPENCLAW_NODE_EXTRA_CA_CERTS_READY]: "1" },
         execArgv: [],
         autoNodeExtraCaCerts: undefined,
+        platform: "linux",
       }),
     ).toBeNull();
   });
@@ -90,6 +93,7 @@ describe("buildCliRespawnPlan", () => {
       env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" },
       execArgv: [],
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
     });
 
     const respawnPlan = expectCliRespawnPlan(plan);
@@ -106,20 +110,83 @@ describe("buildCliRespawnPlan", () => {
         },
         execArgv: [EXPERIMENTAL_WARNING_FLAG],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
       }),
     ).toBeNull();
   });
 
-  it("does not respawn on Windows", () => {
+  it("adds a larger V8 stack size on Windows", () => {
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "node",
+        "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+        "dashboard",
+      ],
+      env: {},
+      execArgv: [],
+      autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual([
+      "--stack-size=8192",
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+      "dashboard",
+    ]);
+    expect(respawnPlan.env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+    expect(respawnPlan.env[OPENCLAW_NODE_EXTRA_CA_CERTS_READY]).toBeUndefined();
+    expect(respawnPlan.env[OPENCLAW_NODE_OPTIONS_READY]).toBeUndefined();
+  });
+
+  it("normalizes duplicated Windows node.exe argv before respawning", () => {
+    const scriptPath =
+      "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs";
+    const plan = buildCliRespawnPlan({
+      argv: [
+        "C:\\Program Files\\nodejs\\node.exe",
+        "C:\\Program Files\\nodejs\\node.exe",
+        scriptPath,
+        "node.exe",
+        "dashboard",
+        "--no-open",
+      ],
+      env: {},
+      execArgv: [],
+      execPath: "C:\\Program Files\\nodejs\\node.exe",
+      platform: "win32",
+    });
+
+    const respawnPlan = expectCliRespawnPlan(plan);
+    expect(respawnPlan.argv).toEqual(["--stack-size=8192", scriptPath, "dashboard", "--no-open"]);
+  });
+
+  it("does not respawn on Windows when stack size is already configured", () => {
     expect(
       buildCliRespawnPlan({
         argv: [
           "node",
           "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
-          "onboard",
+          "dashboard",
         ],
         env: {},
-        execArgv: [],
+        execArgv: ["--stack-size=16384"],
+        autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "win32",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not respawn on Windows when underscore stack size spelling is already configured", () => {
+    expect(
+      buildCliRespawnPlan({
+        argv: [
+          "node",
+          "C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\openclaw\\openclaw.mjs",
+          "dashboard",
+        ],
+        env: {},
+        execArgv: ["--stack_size=16384"],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
         platform: "win32",
       }),

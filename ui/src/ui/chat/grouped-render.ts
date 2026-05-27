@@ -27,6 +27,7 @@ import {
   extractToolCards,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
+  isToolCardError,
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
@@ -1534,6 +1535,7 @@ function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
+  const toolMessageHasError = toolCards.some(isToolCardError);
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -1542,21 +1544,28 @@ function renderGroupedMessage(
       })
     : null;
   const singleToolDisplayDetail =
-    singleToolCard && singleToolDisplay
+    !toolMessageHasError && singleToolCard && singleToolDisplay
       ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)
       : undefined;
-  const toolSummaryLabelRaw = singleToolDisplayDetail
-    ? singleToolCard?.outputText?.trim()
-      ? "output"
-      : undefined
-    : toolNames.length <= 3
-      ? toolNames.join(", ")
-      : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
+  const toolSummaryLabelRaw = toolMessageHasError
+    ? singleToolDisplay
+      ? singleToolDisplay.label
+      : toolNames.length <= 3
+        ? toolNames.join(", ")
+        : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`
+    : singleToolDisplayDetail
+      ? singleToolCard?.outputText?.trim()
+        ? "output"
+        : undefined
+      : toolNames.length <= 3
+        ? toolNames.join(", ")
+        : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
   const toolSummaryLabel = formatCollapsedToolSummaryText(toolSummaryLabelRaw);
   const toolPreview =
     markdown && !toolSummaryLabel ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
-  const toolMessageLabelRaw =
-    singleToolDisplayDetail && !markdown && !hasImages
+  const toolMessageLabelRaw = toolMessageHasError
+    ? "Tool error"
+    : singleToolDisplayDetail && !markdown && !hasImages
       ? singleToolDisplayDetail
       : singleToolDisplay && !markdown && !hasImages
         ? singleToolDisplay.label
@@ -1584,7 +1593,9 @@ function renderGroupedMessage(
                 : ""}"
             >
               <button
-                class="chat-tool-msg-summary"
+                class="chat-tool-msg-summary ${toolMessageHasError
+                  ? "chat-tool-msg-summary--error"
+                  : ""}"
                 type="button"
                 aria-expanded=${String(toolMessageExpanded)}
                 @click=${() => opts.onToggleToolMessageExpanded?.(toolMessageDisclosureId)}
@@ -1596,6 +1607,13 @@ function renderGroupedMessage(
                   : toolPreview
                     ? html`<span class="chat-tool-msg-summary__preview">${toolPreview}</span>`
                     : nothing}
+                ${toolMessageHasError
+                  ? html`<span
+                      class="chat-tool-msg-summary__error-badge"
+                      aria-label="Tool returned an error"
+                      >${icons.x}<span>Error</span></span
+                    >`
+                  : nothing}
               </button>
               ${toolMessageExpanded
                 ? html`

@@ -4,6 +4,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOutboundMediaFromUrlMock = vi.fn();
+const ZALO_OUTBOUND_MEDIA_DIR_NAME = "openclaw-zalo-outbound-media";
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: (...args: unknown[]) => loadOutboundMediaFromUrlMock(...args),
@@ -15,6 +16,11 @@ import {
   resolveHostedZaloMediaRoutePrefix,
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
+
+function resolveHostedZaloMediaDirName(): string {
+  const workerId = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
+  return workerId ? `${ZALO_OUTBOUND_MEDIA_DIR_NAME}-${workerId}` : ZALO_OUTBOUND_MEDIA_DIR_NAME;
+}
 
 function createMockResponse() {
   const headers = new Map<string, string>();
@@ -90,7 +96,7 @@ describe("zalo outbound hosted media", () => {
     expect(id).toHaveLength(24);
     expect(/^[0-9a-f]+$/.test(id)).toBe(true);
 
-    const storageDir = join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-outbound-media");
+    const storageDir = join(resolvePreferredOpenClawTmpDir(), resolveHostedZaloMediaDirName());
     const [dirStats, metadataStats, bufferStats] = await Promise.all([
       stat(storageDir),
       stat(join(storageDir, `${id}.json`)),

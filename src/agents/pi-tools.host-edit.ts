@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { getToolParamsRecord } from "./pi-tools.params.js";
@@ -7,6 +8,30 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 type EditToolRecoveryOptions = {
   root: string;
   readFile: (absolutePath: string) => Promise<string>;
+};
+
+type WriteToolRecoveryOptions = {
+  root: string;
+  readFile: (absolutePath: string) => Promise<string>;
+  statFile?: (absolutePath: string) => Promise<WriteToolFileStat | null>;
+};
+
+type WriteToolParams = {
+  pathParam?: string;
+  content?: string;
+};
+
+type WriteToolFileStat = {
+  type: "file" | "directory" | "other";
+  size: number;
+  mtimeMs?: number;
+};
+
+type WriteToolOriginalState = "different" | "same" | "unknown";
+
+type WriteToolPrecheck = {
+  state: WriteToolOriginalState;
+  beforeStat?: WriteToolFileStat | null;
 };
 
 type EditToolParams = {
@@ -21,10 +46,28 @@ type EditReplacement = {
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
+const WRITE_PRECHECK_READ_LIMIT_BYTES = 1024 * 1024;
+const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
-function resolveEditPath(root: string, pathParam: string): string {
+function normalizeMutationPathLikeUpstreamWrite(pathParam: string): string {
+  let normalized = pathParam.replace(UNICODE_SPACES, " ");
+  if (normalized.startsWith("@")) {
+    normalized = normalized.slice(1);
+  }
   const home = resolveOsHomeDir();
-  const expanded = home ? expandHomePrefix(pathParam, { home }) : pathParam;
+  const expanded = home ? expandHomePrefix(normalized, { home }) : normalized;
+  if (expanded.startsWith("file://")) {
+    try {
+      return fileURLToPath(expanded);
+    } catch {
+      return expanded;
+    }
+  }
+  return expanded;
+}
+
+function resolveFileMutationPath(root: string, pathParam: string): string {
+  const expanded = normalizeMutationPathLikeUpstreamWrite(pathParam);
   return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(root, expanded);
 }
 
@@ -55,6 +98,14 @@ function readEditReplacements(record: Record<string, unknown> | undefined): Edit
     }
     return [{ oldText: replacement.oldText, newText: replacement.newText }];
   });
+}
+
+function readWriteToolParams(params: unknown): WriteToolParams {
+  const record = getToolParamsRecord(params);
+  return {
+    pathParam: readStringParam(record, "path", "file_path", "filePath", "filepath", "file"),
+    content: typeof record?.content === "string" ? record.content : undefined,
+  };
 }
 
 function readEditToolParams(params: unknown): EditToolParams {
@@ -128,6 +179,19 @@ function buildEditSuccessResult(pathParam: string, editCount: number): AgentTool
   } as AgentToolResult<unknown>;
 }
 
+function buildWriteSuccessResult(pathParam: string, content: string): AgentToolResult<unknown> {
+  return {
+    isError: false,
+    content: [
+      {
+        type: "text",
+        text: `Successfully wrote ${content.length} bytes to ${pathParam}`,
+      },
+    ],
+    details: undefined,
+  } as AgentToolResult<unknown>;
+}
+
 function shouldAddMismatchHint(error: unknown) {
   return error instanceof Error && error.message.includes(EDIT_MISMATCH_MESSAGE);
 }
@@ -140,6 +204,88 @@ function appendMismatchHint(error: Error, currentContent: string): Error {
   const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`);
   enhanced.stack = error.stack;
   return enhanced;
+}
+
+function isWriteRecoveryCandidate(error: unknown, signal: AbortSignal | undefined): boolean {
+  if (signal?.aborted) {
+    return true;
+  }
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  return (
+    error.name === "AbortError" ||
+    error.name === "TimeoutError" ||
+    message.includes("timed out") ||
+    message.includes("timeout")
+  );
+}
+
+function isMissingFileError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  if ("code" in error && (error as { code?: unknown }).code === "ENOENT") {
+    return true;
+  }
+  return error instanceof Error && error.message.includes("No such file or directory");
+}
+
+async function readOriginalWriteState(
+  absolutePath: string,
+  content: string,
+  options: WriteToolRecoveryOptions,
+): Promise<WriteToolPrecheck> {
+  if (!options.statFile) {
+    return { state: "unknown" };
+  }
+  const contentBytes = Buffer.byteLength(content, "utf8");
+  let stat: WriteToolFileStat | null;
+  try {
+    stat = await options.statFile(absolutePath);
+  } catch (err) {
+    return { state: isMissingFileError(err) ? "different" : "unknown" };
+  }
+  if (!stat) {
+    return { state: "different", beforeStat: stat };
+  }
+  if (stat.type !== "file") {
+    return { state: "unknown", beforeStat: stat };
+  }
+  if (stat.size !== contentBytes) {
+    return { state: "different", beforeStat: stat };
+  }
+  if (stat.size > WRITE_PRECHECK_READ_LIMIT_BYTES) {
+    return { state: "unknown", beforeStat: stat };
+  }
+
+  try {
+    const originalContent = await options.readFile(absolutePath);
+    return { state: originalContent === content ? "same" : "different", beforeStat: stat };
+  } catch {
+    return { state: "unknown", beforeStat: stat };
+  }
+}
+
+async function didWriteMetadataChange(
+  absolutePath: string,
+  beforeStat: WriteToolFileStat | null | undefined,
+  options: WriteToolRecoveryOptions,
+): Promise<boolean> {
+  if (!beforeStat || !options.statFile) {
+    return false;
+  }
+  let afterStat: WriteToolFileStat | null;
+  try {
+    afterStat = await options.statFile(absolutePath);
+  } catch {
+    return false;
+  }
+  if (!afterStat || afterStat.type !== "file") {
+    return false;
+  }
+  return afterStat.size !== beforeStat.size || afterStat.mtimeMs !== beforeStat.mtimeMs;
 }
 
 /**
@@ -161,7 +307,9 @@ export function wrapEditToolWithRecovery(
     ) => {
       const { pathParam, edits } = readEditToolParams(params);
       const absolutePath =
-        typeof pathParam === "string" ? resolveEditPath(options.root, pathParam) : undefined;
+        typeof pathParam === "string"
+          ? resolveFileMutationPath(options.root, pathParam)
+          : undefined;
       let originalContent: string | undefined;
 
       if (absolutePath && edits.length > 0) {
@@ -206,6 +354,62 @@ export function wrapEditToolWithRecovery(
           throw appendMismatchHint(err, currentContent);
         }
 
+        throw err;
+      }
+    },
+  };
+}
+
+/**
+ * Recover write calls that complete the disk write but abort before returning.
+ * Readback is the source of truth; argument-derived paths never prove success.
+ */
+export function wrapWriteToolWithRecovery(
+  base: AnyAgentTool,
+  options: WriteToolRecoveryOptions,
+): AnyAgentTool {
+  return {
+    ...base,
+    execute: async (
+      toolCallId: string,
+      params: unknown,
+      signal: AbortSignal | undefined,
+      onUpdate?: AgentToolUpdateCallback<unknown>,
+    ) => {
+      const { pathParam, content } = readWriteToolParams(params);
+      const absolutePath =
+        typeof pathParam === "string" && typeof content === "string"
+          ? resolveFileMutationPath(options.root, pathParam)
+          : undefined;
+      const precheck: WriteToolPrecheck =
+        absolutePath && typeof content === "string"
+          ? await readOriginalWriteState(absolutePath, content, options)
+          : { state: "unknown" };
+
+      try {
+        return await base.execute(toolCallId, params, signal, onUpdate);
+      } catch (err) {
+        if (
+          !isWriteRecoveryCandidate(err, signal) ||
+          typeof absolutePath !== "string" ||
+          typeof pathParam !== "string" ||
+          typeof content !== "string"
+        ) {
+          throw err;
+        }
+        let currentContent: string | undefined;
+        try {
+          currentContent = await options.readFile(absolutePath);
+        } catch {
+          // Fall through to the original abort if readback fails.
+        }
+        const changed =
+          precheck.state === "different" ||
+          (precheck.state === "unknown" &&
+            (await didWriteMetadataChange(absolutePath, precheck.beforeStat, options)));
+        if (currentContent === content && changed) {
+          return buildWriteSuccessResult(pathParam, content);
+        }
         throw err;
       }
     },

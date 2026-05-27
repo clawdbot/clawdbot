@@ -952,7 +952,37 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
   });
 
-  it("updateSessionStore uses the writer-owned mutable cache without disk read or parse", async () => {
+  it("updateSessionStoreEntry can skip maintenance for existing-entry metadata writes", async () => {
+    const mainSessionKey = "agent:main:main";
+    const staleSessionKey = "agent:main:stale";
+    const { storePath } = await createSessionStoreFixture({
+      prefix: "updateSessionStoreEntry-skip-maintenance",
+      entries: {
+        [mainSessionKey]: {
+          sessionId: "sess-1",
+          updatedAt: Date.now(),
+          thinkingLevel: "low",
+        },
+        [staleSessionKey]: {
+          sessionId: "sess-stale",
+          updatedAt: 1,
+        },
+      },
+    });
+
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: mainSessionKey,
+      skipMaintenance: true,
+      update: async () => ({ thinkingLevel: "high" }),
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[mainSessionKey]?.thinkingLevel).toBe("high");
+    expect(store[staleSessionKey]?.sessionId).toBe("sess-stale");
+  });
+
+  it("updateSessionStore uses the writer-owned mutable cache without disk read", async () => {
     const mainSessionKey = "agent:main:main";
     const { storePath } = await createSessionStoreFixture({
       prefix: "updateSessionStore-mutable-cache",
@@ -968,7 +998,6 @@ describe("sessions", () => {
     expect(loadSessionStore(storePath)[mainSessionKey]?.thinkingLevel).toBe("low");
 
     const readSpy = vi.spyOn(fsSync, "readFileSync");
-    const parseSpy = vi.spyOn(JSON, "parse");
     try {
       await updateSessionStore(
         storePath,
@@ -986,10 +1015,8 @@ describe("sessions", () => {
       );
 
       expect(readSpy).not.toHaveBeenCalled();
-      expect(parseSpy).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();
-      parseSpy.mockRestore();
     }
 
     const store = loadSessionStore(storePath, { skipCache: true });

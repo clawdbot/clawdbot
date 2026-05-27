@@ -15,6 +15,12 @@ describe("Z.ai vendor error codes (#48988)", () => {
       expect(isBillingErrorMessage(raw)).toBe(true);
     });
 
+    it("classifies prose-only subscription plan access denials as billing", () => {
+      const raw =
+        "FailoverError: Your current subscription plan does not yet include access to GLM-5V-Turbo";
+      expect(isBillingErrorMessage(raw)).toBe(true);
+    });
+
     it("classifies Z.ai 1311 with spaces as billing", () => {
       const raw = '{"code": 1311, "message": "model not on plan"}';
       expect(isBillingErrorMessage(raw)).toBe(true);

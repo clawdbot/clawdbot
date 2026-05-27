@@ -152,6 +152,11 @@ describe("normalizeReplyPayload", () => {
   it("records skip reasons for silent/empty payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
+      {
+        name: "repeated silent",
+        payload: { text: `${SILENT_REPLY_TOKEN}\n\n${SILENT_REPLY_TOKEN}` },
+        reason: "silent",
+      },
       { name: "empty", payload: { text: "   " }, reason: "empty" },
     ] as const;
     for (const testCase of cases) {

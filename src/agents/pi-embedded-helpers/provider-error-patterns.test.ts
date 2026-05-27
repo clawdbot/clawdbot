@@ -149,6 +149,15 @@ describe("classifyFailoverReason with provider patterns", () => {
       "model_not_found",
     );
   });
+
+  it("classifies xAI 429 credit exhaustion as billing before resource-exhausted rate limits", () => {
+    expect(
+      classifyFailoverReason(
+        '429 {"code":"Some resource has been exhausted","error":"Your team team-redacted has either used all available credits or reached its monthly spending limit. To continue making API requests, please purchase more credits or raise your spending limit."}',
+        { provider: "xai" },
+      ),
+    ).toBe("billing");
+  });
 });
 
 describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
@@ -211,9 +220,7 @@ describe("Cloudflare / CDN HTML error page classification (#67517)", () => {
   });
 
   it("classifies 403 HTML runtime failures as auth_html", () => {
-    expect(classifyProviderRuntimeFailureKind({ status: 403, message: html403 })).toBe(
-      "auth_html",
-    );
+    expect(classifyProviderRuntimeFailureKind({ status: 403, message: html403 })).toBe("auth_html");
   });
 
   it("classifies 407 HTML runtime failures as proxy", () => {

@@ -2,9 +2,12 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
-import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
-import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
+import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
+import type {
+  ChatCommandDefinition,
+  CommandArgsParsing,
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -708,6 +711,50 @@ describe("Discord model picker interactions", () => {
     expectDispatchedModelSelection({ dispatchSpy, model: "openai/gpt-4o" });
   });
 
+  it("does not decode compact recents runtime against another provider", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createModelsProviderData({
+      openai: ["gpt-4o"],
+      anthropic: ["claude-sonnet-4-5"],
+    });
+    pickerData.runtimeChoicesByProvider = new Map([
+      ["openai", [{ id: "codex", label: "Codex", description: "Use Codex." }]],
+      [
+        "anthropic",
+        [
+          { id: "codex", label: "Codex", description: "Use Codex." },
+          { id: "claude-cli", label: "Claude CLI", description: "Use Claude CLI." },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    await runSubmitButton({
+      context,
+      data: {
+        cmd: "model",
+        act: "submit",
+        view: "recents",
+        u: "owner",
+        p: "openai",
+        ri: "1",
+        pg: "1",
+        rs: "1",
+      },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "anthropic/claude-sonnet-4-5",
+    });
+  });
+
   it("verifies model state against the bound thread session", async () => {
     const context = createModelPickerContext();
     context.threadBindings = createBoundThreadBindingManager({
@@ -926,5 +973,35 @@ describe("Discord model picker interactions", () => {
     expect(payload).toContain("openai-codex");
     expect(payload).toContain("gpt-5.5-codex");
     expect(payload).not.toContain("Provider not found");
+  });
+
+  it("opens the current provider bucket on initial large-provider renders", async () => {
+    const context = createModelPickerContext();
+    const entries = Object.fromEntries(
+      Array.from({ length: 30 }, (_, i) => [
+        `provider-${String(i + 1).padStart(2, "0")}`,
+        ["model"],
+      ]),
+    );
+    const pickerData = createModelsProviderData(entries);
+    pickerData.resolvedDefault = { provider: "provider-30", model: "model" };
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    const interaction = createInteraction({ userId: "owner" });
+
+    await replyWithDiscordModelPickerProviders({
+      interaction: interaction as never,
+      cfg: context.cfg,
+      command: "model",
+      userId: "owner",
+      accountId: context.accountId,
+      threadBindings: context.threadBindings,
+      preferFollowUp: false,
+      safeInteractionCall: async (_label, fn) => await fn(),
+    });
+
+    const payload = JSON.stringify(firstMockArg(interaction.reply, "interaction.reply"));
+    expect(payload).toContain("provider-30");
+    expect(payload).toContain(";a=back;v=providers;");
+    expect(payload).toContain(";pb=");
   });
 });

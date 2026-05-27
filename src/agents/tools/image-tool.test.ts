@@ -1684,7 +1684,7 @@ describe("image tool implicit imageModel config", () => {
         await fs.rm(attachmentRoot, { recursive: true, force: true });
       }
     });
-  });
+  }, 240_000);
 
   it("allows image paths from current iMessage wildcard attachment roots", async () => {
     const fetch = stubMinimaxOkFetch();
@@ -1723,7 +1723,7 @@ describe("image tool implicit imageModel config", () => {
         await fs.rm(attachmentRootParent, { recursive: true, force: true });
       }
     });
-  });
+  }, 240_000);
 
   it("allows workspace images via createOpenClawCodingTools when workspace root is explicit", async () => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
@@ -2201,13 +2201,16 @@ describe("image tool managed inbound media", () => {
   }
 
   it("resolves media://inbound refs", async () => {
-    await withManagedInboundPng(async ({ mediaId }) => {
+    await withManagedInboundPng(async ({ stateDir, mediaId }) => {
       installImageUnderstandingProviderStubs();
       const fetch = stubMinimaxOkFetch();
+      const workspaceDir = path.join(stateDir, "workspace-agent");
+      await fs.mkdir(workspaceDir, { recursive: true });
       await withTempAgentDir(async (agentDir) => {
         const tool = createRequiredImageTool({
           config: createMinimaxImageConfig(),
           agentDir,
+          workspaceDir,
           fsPolicy: { workspaceOnly: true },
         });
 

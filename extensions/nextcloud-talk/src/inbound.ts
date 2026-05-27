@@ -350,7 +350,7 @@ export async function handleNextcloudTalkInbound(params: {
     CommandAuthorized: commandAuthorized,
   });
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,

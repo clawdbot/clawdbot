@@ -13,7 +13,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
-import { formatTimestamp, isValidTimeZone } from "../logging/timestamps.js";
+import { formatTimestamp } from "../logging/timestamps.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -72,6 +72,7 @@ type LogsCliOptions = {
   plain?: boolean;
   color?: boolean;
   localTime?: boolean;
+  utc?: boolean;
   url?: string;
   token?: string;
   timeout?: string;
@@ -352,7 +353,7 @@ function isTransientFollowError(error: unknown): boolean {
 export function formatLogTimestamp(
   value?: string,
   mode: "pretty" | "plain" = "plain",
-  localTime = false,
+  localTime = true,
 ) {
   if (!value) {
     return "";
@@ -489,7 +490,8 @@ export function registerLogsCli(program: Command) {
     .option("--json", "Emit JSON log lines", false)
     .option("--plain", "Plain text output (no ANSI styling)", false)
     .option("--no-color", "Disable ANSI colors")
-    .option("--local-time", "Display timestamps in local timezone", false)
+    .option("--local-time", "Display timestamps in local timezone (default)", false)
+    .option("--utc", "Display timestamps in UTC", false)
     .addHelpText(
       "after",
       () =>
@@ -509,8 +511,7 @@ export function registerLogsCli(program: Command) {
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
     const rich = isRich() && opts.color !== false;
-    const localTime =
-      Boolean(opts.localTime) || (!!process.env.TZ && isValidTimeZone(process.env.TZ));
+    const localTime = !opts.utc;
 
     let followRetryAttempt = 0;
     while (true) {

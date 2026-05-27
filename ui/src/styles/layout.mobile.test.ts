@@ -87,6 +87,21 @@ describe("chat header responsive mobile styles", () => {
       }
     }
   });
+
+  it("restores single-page logs scrolling on mobile", () => {
+    const mobileCss = readMobileCss();
+
+    expect(mobileCss).toContain(".content.content--logs {");
+    expect(mobileCss).toMatch(
+      /\.content\.content--logs \{[\s\S]*display: block;[\s\S]*overflow-y: auto;/,
+    );
+    expect(mobileCss).toMatch(
+      /\.content\.content--logs \.settings-workspace \{[\s\S]*display: block;/,
+    );
+    expect(mobileCss).toMatch(
+      /\.card--fill-height\.card--fill-height \.log-stream \{[\s\S]*max-height: 380px;/,
+    );
+  });
 });
 
 describe("sidebar menu trigger styles", () => {

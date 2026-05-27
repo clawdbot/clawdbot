@@ -12,9 +12,14 @@ const mocks = vi.hoisted(() => ({
   registerBundledHealthChecks: vi.fn(),
   runDoctorHealthRepairs: vi.fn(),
   listHealthChecks: vi.fn(),
+  getHealthCheck: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
   resolveDefaultAgentId: vi.fn(() => "default"),
   note: vi.fn(),
+  loadModelCatalog: vi.fn(async () => []),
+  getModelRefStatus: vi.fn(() => ({ allowed: true, inCatalog: true, key: "openai/gpt-5.5" })),
+  resolveConfiguredModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
+  resolveHooksGmailModel: vi.fn(() => ({ provider: "openai", model: "gpt-5.5" })),
   replaceConfigFile: vi.fn().mockResolvedValue(undefined),
   readConfigFileSnapshot: vi.fn().mockResolvedValue({
     exists: true,
@@ -46,6 +51,7 @@ vi.mock("./doctor-repair-flow.js", () => ({
 
 vi.mock("./health-check-registry.js", () => ({
   listHealthChecks: mocks.listHealthChecks,
+  getHealthCheck: mocks.getHealthCheck,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -55,6 +61,16 @@ vi.mock("../agents/agent-scope.js", () => ({
 
 vi.mock("../terminal/note.js", () => ({
   note: mocks.note,
+}));
+
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: mocks.loadModelCatalog,
+}));
+
+vi.mock("../agents/model-selection.js", () => ({
+  getModelRefStatus: mocks.getModelRefStatus,
+  resolveConfiguredModelRef: mocks.resolveConfiguredModelRef,
+  resolveHooksGmailModel: mocks.resolveHooksGmailModel,
 }));
 
 vi.mock("../version.js", () => ({
@@ -133,11 +149,25 @@ describe("doctor health contributions", () => {
       { id: "core/doctor/shell-completion" },
       { id: "core/doctor/unrelated" },
     ]);
+    mocks.getHealthCheck.mockReset();
+    mocks.getHealthCheck.mockReturnValue(undefined);
     mocks.resolveAgentWorkspaceDir.mockReset();
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw-workspace");
     mocks.resolveDefaultAgentId.mockReset();
     mocks.resolveDefaultAgentId.mockReturnValue("default");
     mocks.note.mockReset();
+    mocks.loadModelCatalog.mockReset();
+    mocks.loadModelCatalog.mockResolvedValue([]);
+    mocks.getModelRefStatus.mockReset();
+    mocks.getModelRefStatus.mockReturnValue({
+      allowed: true,
+      inCatalog: true,
+      key: "openai/gpt-5.5",
+    });
+    mocks.resolveConfiguredModelRef.mockReset();
+    mocks.resolveConfiguredModelRef.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
+    mocks.resolveHooksGmailModel.mockReset();
+    mocks.resolveHooksGmailModel.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     mocks.readConfigFileSnapshot.mockReset();
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
@@ -249,6 +279,25 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
 
+  it("uses the read-only model catalog for hooks.gmail.model warnings", async () => {
+    const contribution = requireDoctorContribution("doctor:hooks-model");
+    const cfg = {
+      hooks: {
+        gmail: {
+          model: "openai/gpt-5.5",
+        },
+      },
+    };
+    const ctx = {
+      cfg,
+      options: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+  });
+
   it("runs structured repairs before legacy skill repairs and config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
@@ -280,6 +329,49 @@ describe("doctor health contributions", () => {
     expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(expect.any(Object), {
       checks: [{ id: "core/doctor/unrelated" }],
     });
+  });
+
+  it("reports runtime tool schema blockers during normal doctor runs", async () => {
+    const contribution = requireDoctorContribution("doctor:runtime-tool-schemas");
+    mocks.getHealthCheck.mockReturnValue({
+      id: "core/doctor/runtime-tool-schemas",
+      detect: vi.fn(async () => [
+        {
+          checkId: "core/doctor/runtime-tool-schemas",
+          severity: "error",
+          message:
+            "Tool dofbot_move_angles from plugin dofbot has an unsupported input schema for runtime projection.",
+          path: "plugins.entries.dofbot",
+          target: "dofbot_move_angles",
+          requirement: 'dofbot_move_angles.parameters.type must be "object"',
+          fixHint:
+            "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
+        },
+      ]),
+    });
+    const ctx = {
+      cfg: {},
+      configResult: { cfg: {} },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(false),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      cfgForPersistence: {},
+      configPath: "/tmp/fake-openclaw.json",
+      env: {},
+    } as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.healthOk).toBe(false);
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Tool dofbot_move_angles from plugin dofbot"),
+      "Doctor warnings",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining('issue: dofbot_move_angles.parameters.type must be "object"'),
+      "Doctor warnings",
+    );
   });
 
   it("skips doctor config writes under legacy update parents", () => {

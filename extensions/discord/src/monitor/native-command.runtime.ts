@@ -1,6 +1,7 @@
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import * as pluginRuntime from "openclaw/plugin-sdk/plugin-runtime";
 import { dispatchReplyWithDispatcher } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 
 export const nativeCommandRuntime = {
@@ -9,6 +10,7 @@ export const nativeCommandRuntime = {
   dispatchReplyWithDispatcher,
   resolveDirectStatusReplyForSession,
   resolveDiscordNativeInteractionRouteState,
+  getSessionEntry,
 };
 
 export const testing = {
@@ -45,6 +47,11 @@ export const testing = {
   ): typeof resolveDiscordNativeInteractionRouteState {
     const previous = nativeCommandRuntime.resolveDiscordNativeInteractionRouteState;
     nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = next;
+    return previous;
+  },
+  setGetSessionEntry(next: typeof getSessionEntry): typeof getSessionEntry {
+    const previous = nativeCommandRuntime.getSessionEntry;
+    nativeCommandRuntime.getSessionEntry = next;
     return previous;
   },
 };

@@ -594,6 +594,16 @@ describe("cron cli", () => {
     expect(stdoutText()).toContain('"id": "job-1"');
   });
 
+  it("rejects partial cron runs limit", async () => {
+    await expectCronCommandExit(["cron", "runs", "--id", "job-1", "--limit", "10x"]);
+    expectRuntimeErrorContaining("Invalid --limit");
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+      "cron.runs",
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it("paginates cron show lookups", async () => {
     resetGatewayMock();
     callGatewayFromCli.mockImplementation(
@@ -1350,6 +1360,16 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.cooldownMs).toBe(3_600_000);
     expect(patch?.patch?.failureAlert?.channel).toBe("telegram");
     expect(patch?.patch?.failureAlert?.to).toBe("19098680");
+  });
+
+  it("rejects partial failure alert threshold on cron edit", async () => {
+    await expectCronCommandExit(["cron", "edit", "job-1", "--failure-alert-after", "3x"]);
+    expectRuntimeErrorContaining("Invalid --failure-alert-after");
+    expect(callGatewayFromCli).not.toHaveBeenCalledWith(
+      "cron.update",
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it("supports --no-failure-alert on cron edit", async () => {

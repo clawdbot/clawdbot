@@ -106,4 +106,118 @@ describe("model-selection plugin runtime normalization", () => {
       model: "custom-modern-model",
     });
   });
+
+  it("keeps model visibility policy construction off plugin runtime hooks by default", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+
+    const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
+
+    const policy = createModelVisibilityPolicy({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "custom-provider/custom-legacy-model": {},
+            },
+          },
+        },
+      },
+      catalog: [],
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+    });
+
+    expect(policy.allowedKeys.has("custom-provider/custom-legacy-model")).toBe(true);
+    expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(false);
+    expect(normalizeProviderModelIdWithPluginMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates explicit plugin runtime normalization opt-in through model visibility policy", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+
+    const { createModelVisibilityPolicy } = await import("./model-visibility-policy.js");
+
+    const policy = createModelVisibilityPolicy({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "custom-provider/custom-legacy-model": {},
+            },
+          },
+        },
+      },
+      catalog: [],
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+      allowPluginNormalization: true,
+    });
+
+    expect(policy.allowedKeys.has("custom-provider/custom-modern-model")).toBe(true);
+    expect(normalizeProviderModelIdWithPluginMock).toHaveBeenCalled();
+  });
+
+  it("keeps plugin-normalized stored overrides allowed in auto-reply runtime selection", async () => {
+    normalizeProviderModelIdWithPluginMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+
+    const { createModelSelectionState } = await import("../auto-reply/reply/model-selection.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "custom-provider/custom-legacy-model": {},
+          },
+        },
+      },
+    };
+    const sessionKey = "agent:main:discord:channel:c1";
+    const sessionEntry = {
+      sessionId: sessionKey,
+      updatedAt: 1,
+      providerOverride: "custom-provider",
+      modelOverride: "custom-legacy-model",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "custom-provider",
+      defaultModel: "custom-legacy-model",
+      provider: "custom-provider",
+      model: "custom-legacy-model",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("custom-provider");
+    expect(state.model).toBe("custom-modern-model");
+    expect(state.resetModelOverride).toBe(false);
+  });
 });

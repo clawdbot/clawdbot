@@ -671,7 +671,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("· pi");
   });
 
-  it("hides fast mode when disabled", () => {
+  it("shows fast mode when disabled", () => {
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-6",
@@ -685,7 +685,7 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(normalizeTestText(text)).not.toContain("Fast");
+    expect(normalizeTestText(text)).toContain("Fast: off");
   });
 
   it("shows configured text verbosity for the active model", () => {

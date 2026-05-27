@@ -69,10 +69,14 @@ start_gateway() {
 }
 
 echo "Installing published baseline $BASELINE_SPEC..."
-npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1; then
+  cat /tmp/openclaw-release-upgrade-baseline-install.log >&2 || true
+  exit 1
+fi
 command -v openclaw >/dev/null
 baseline_root="$(openclaw_e2e_package_root)"
 baseline_entry="$(openclaw_e2e_package_entrypoint "$baseline_root")"
+openclaw_e2e_enable_openclaw_cli_timeout
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-upgrade-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
@@ -90,7 +94,7 @@ for _ in $(seq 1 100); do
 done
 openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200
 
-node "$baseline_entry" onboard \
+openclaw_e2e_run_command node "$baseline_entry" onboard \
   --non-interactive \
   --accept-risk \
   --flow quickstart \
@@ -122,6 +126,7 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "h
 openclaw_e2e_install_package /tmp/openclaw-release-upgrade-candidate-install.log "candidate OpenClaw package"
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
+openclaw_e2e_enable_openclaw_cli_timeout
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-package-version "$package_root" "$candidate_version" candidate
 
 openclaw agent --local \

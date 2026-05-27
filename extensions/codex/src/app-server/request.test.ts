@@ -5,7 +5,11 @@ const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
 }));
 
-vi.mock("./shared-client.js", () => sharedClientMocks);
+vi.mock("./shared-client.js", () => ({
+  ...sharedClientMocks,
+  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
 
 const { requestCodexAppServerJson } = await import("./request.js");
 

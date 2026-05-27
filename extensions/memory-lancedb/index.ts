@@ -782,6 +782,21 @@ export default definePluginEntry({
             category?: MemoryEntry["category"];
           };
 
+          if (looksLikePromptInjection(text)) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Memory was not stored because it looks like prompt instructions rather than a durable user fact, preference, or decision.",
+                },
+              ],
+              details: {
+                action: "rejected",
+                reason: "prompt_injection_detected",
+              },
+            };
+          }
+
           const vector = await embeddings.embed(text);
 
           // Check for duplicates

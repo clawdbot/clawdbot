@@ -387,6 +387,7 @@ async function evaluateSystemRunPolicyPhase(
   const approvals = resolveExecApprovals(parsed.agentId, {
     security: configuredSecurity,
     ask: configuredAsk,
+    requireSocket: opts.preferMacAppExecHost,
   });
   const security = approvals.agent.security;
   const ask = approvals.agent.ask;

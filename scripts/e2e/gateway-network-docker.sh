@@ -46,7 +46,7 @@ if ! docker_e2e_wait_container_bash "$GW_NAME" 180 0.5 "source scripts/lib/openc
 fi
 
 echo "Running client container (connect + health)..."
-run_logged gateway-network-client timeout "$CLIENT_TIMEOUT" docker run --rm \
+DOCKER_COMMAND_TIMEOUT="$CLIENT_TIMEOUT" run_logged gateway-network-client docker_e2e_docker_run_cmd run --rm \
   "${DOCKER_E2E_HARNESS_ARGS[@]}" \
   --network "$NET_NAME" \
   -e "GW_URL=ws://$GW_NAME:$PORT" \

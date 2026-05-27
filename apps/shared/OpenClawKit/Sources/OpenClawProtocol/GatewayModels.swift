@@ -5508,6 +5508,7 @@ public struct CronRunLogEntry: Codable, Sendable {
     public let action: String
     public let status: AnyCodable?
     public let error: String?
+    public let errorreason: AnyCodable?
     public let summary: String?
     public let diagnostics: [String: AnyCodable]?
     public let delivered: Bool?
@@ -5531,6 +5532,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         action: String,
         status: AnyCodable?,
         error: String?,
+        errorreason: AnyCodable? = nil,
         summary: String?,
         diagnostics: [String: AnyCodable]?,
         delivered: Bool?,
@@ -5553,6 +5555,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         self.action = action
         self.status = status
         self.error = error
+        self.errorreason = errorreason
         self.summary = summary
         self.diagnostics = diagnostics
         self.delivered = delivered
@@ -5577,6 +5580,7 @@ public struct CronRunLogEntry: Codable, Sendable {
         case action
         case status
         case error
+        case errorreason = "errorReason"
         case summary
         case diagnostics
         case delivered
@@ -5868,6 +5872,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let toolname: String?
     public let toolcallid: String?
     public let alloweddecisions: [String]?
+    public let actions: [[String: AnyCodable]]?
     public let agentid: String?
     public let sessionkey: String?
     public let turnsourcechannel: String?
@@ -5876,6 +5881,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
     public let turnsourcethreadid: AnyCodable?
     public let timeoutms: Int?
     public let twophase: Bool?
+    public let keeppendingwithoutroute: Bool?
 
     public init(
         pluginid: String?,
@@ -5885,6 +5891,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         toolname: String?,
         toolcallid: String?,
         alloweddecisions: [String]?,
+        actions: [[String: AnyCodable]]?,
         agentid: String?,
         sessionkey: String?,
         turnsourcechannel: String?,
@@ -5892,7 +5899,8 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         turnsourceaccountid: String?,
         turnsourcethreadid: AnyCodable?,
         timeoutms: Int?,
-        twophase: Bool?)
+        twophase: Bool?,
+        keeppendingwithoutroute: Bool?)
     {
         self.pluginid = pluginid
         self.title = title
@@ -5901,6 +5909,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.toolname = toolname
         self.toolcallid = toolcallid
         self.alloweddecisions = alloweddecisions
+        self.actions = actions
         self.agentid = agentid
         self.sessionkey = sessionkey
         self.turnsourcechannel = turnsourcechannel
@@ -5909,6 +5918,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         self.turnsourcethreadid = turnsourcethreadid
         self.timeoutms = timeoutms
         self.twophase = twophase
+        self.keeppendingwithoutroute = keeppendingwithoutroute
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -5919,6 +5929,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case toolname = "toolName"
         case toolcallid = "toolCallId"
         case alloweddecisions = "allowedDecisions"
+        case actions
         case agentid = "agentId"
         case sessionkey = "sessionKey"
         case turnsourcechannel = "turnSourceChannel"
@@ -5927,6 +5938,7 @@ public struct PluginApprovalRequestParams: Codable, Sendable {
         case turnsourcethreadid = "turnSourceThreadId"
         case timeoutms = "timeoutMs"
         case twophase = "twoPhase"
+        case keeppendingwithoutroute = "keepPendingWithoutRoute"
     }
 }
 

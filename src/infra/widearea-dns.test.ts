@@ -55,6 +55,15 @@ describe("wide-area DNS discovery domain helpers", () => {
     expect(normalizeWideAreaDomain(value)).toBe(expected);
   });
 
+  it.each(["../../x", "foo/bar", "foo\\bar", "evil\nrecords", "openclaw..internal"])(
+    "rejects invalid domains for %j",
+    (value) => {
+      expect(() => normalizeWideAreaDomain(value)).toThrow(
+        "wide-area discovery domain must be a valid DNS name",
+      );
+    },
+  );
+
   it.each([
     {
       name: "prefers config domain over env",
@@ -79,14 +88,31 @@ describe("wide-area DNS discovery domain helpers", () => {
       },
       expected: null,
     },
+    {
+      name: "returns null for invalid config domains",
+      params: {
+        env: { OPENCLAW_WIDE_AREA_DOMAIN: "env.internal" } as NodeJS.ProcessEnv,
+        configDomain: "foo/bar",
+      },
+      expected: null,
+    },
+    {
+      name: "returns null for invalid env domains",
+      params: {
+        env: { OPENCLAW_WIDE_AREA_DOMAIN: "foo/bar" } as NodeJS.ProcessEnv,
+      },
+      expected: null,
+    },
   ])("$name", ({ params, expected }) => {
     expect(resolveWideAreaDiscoveryDomain(params)).toBe(expected);
   });
 
-  it("builds the default zone path from the normalized domain", () => {
-    expect(getWideAreaZonePath("openclaw.internal.")).toBe(
-      path.join(utils.CONFIG_DIR, "dns", "openclaw.internal.db"),
-    );
+  it("builds valid zone paths under the DNS config directory", () => {
+    const dnsDir = path.resolve(utils.CONFIG_DIR, "dns");
+    const zonePath = getWideAreaZonePath("openclaw.internal.");
+
+    expect(zonePath).toBe(path.join(dnsDir, "openclaw.internal.db"));
+    expect(path.relative(dnsDir, zonePath)).toBe("openclaw.internal.db");
   });
 });
 
@@ -153,6 +179,21 @@ describe("wide-area DNS zone writes", () => {
       "wide-area discovery domain is required",
     );
   });
+
+  it.each(["../../x", "foo/bar", "foo\\bar", "evil\nrecords", "openclaw..internal"])(
+    "rejects invalid domain %j before writing",
+    async (domain) => {
+      const ensureDirSpy = vi.spyOn(utils, "ensureDir").mockResolvedValue(undefined);
+      const writeSpy = vi.spyOn(fs, "writeFileSync").mockImplementation(() => undefined);
+
+      await expect(writeWideAreaGatewayZone(makeZoneOpts({ domain }))).rejects.toThrow(
+        "wide-area discovery domain must be a valid DNS name",
+      );
+
+      expect(ensureDirSpy).not.toHaveBeenCalled();
+      expect(writeSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("skips rewriting unchanged content", async () => {
     vi.spyOn(utils, "ensureDir").mockResolvedValue(undefined);

@@ -1,5 +1,4 @@
 import { parseArgs } from "node:util";
-import { runQaDockerUpCommand } from "../extensions/qa-lab/src/cli.runtime.ts";
 
 const { values } = parseArgs({
   options: {
@@ -43,6 +42,8 @@ const parsePort = (value: string | undefined) => {
   }
   return parsed;
 };
+
+const { runQaDockerUpCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
 
 await runQaDockerUpCommand({
   outputDir: values["output-dir"],

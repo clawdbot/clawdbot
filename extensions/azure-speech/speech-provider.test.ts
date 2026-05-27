@@ -1,4 +1,4 @@
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { azureSpeechTTSMock, listAzureSpeechVoicesMock } = vi.hoisted(() => ({
   azureSpeechTTSMock: vi.fn(async () => Buffer.from("audio-bytes")),
@@ -25,6 +25,12 @@ describe("buildAzureSpeechProvider", () => {
     SPEECH_KEY: process.env.SPEECH_KEY,
     SPEECH_REGION: process.env.SPEECH_REGION,
   };
+
+  beforeEach(() => {
+    for (const key of Object.keys(originalEnv)) {
+      delete process.env[key];
+    }
+  });
 
   afterEach(() => {
     for (const [key, value] of Object.entries(originalEnv)) {

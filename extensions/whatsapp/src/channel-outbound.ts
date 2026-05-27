@@ -2,7 +2,7 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";
 import { normalizeWhatsAppPayloadTextPreservingIndentation } from "./outbound-media-contract.js";

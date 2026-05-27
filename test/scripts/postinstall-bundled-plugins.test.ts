@@ -595,6 +595,34 @@ describe("bundled plugin postinstall", () => {
     await expectPathMissing(staleFile);
   });
 
+  it("omits unpacked plugin-sdk test helpers from the package dist inventory", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-packaged-inventory-");
+    const runtimeFile = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
+    const testHelperFile = path.join(packageRoot, "dist", "plugin-sdk", "testing.js");
+    const nestedTestHelperFile = path.join(
+      packageRoot,
+      "dist",
+      "plugin-sdk",
+      "src",
+      "plugin-sdk",
+      "test-helpers",
+      "provider-contract.d.ts",
+    );
+    await fs.mkdir(path.dirname(nestedTestHelperFile), { recursive: true });
+    await fs.mkdir(path.dirname(runtimeFile), { recursive: true });
+    await fs.writeFile(runtimeFile, "export {};\n");
+    await fs.writeFile(testHelperFile, "export {};\n");
+    await fs.writeFile(nestedTestHelperFile, "export {};\n");
+
+    const inventory = await writePackageDistInventory(packageRoot);
+
+    expect(inventory).toContain("dist/plugin-sdk/runtime.js");
+    expect(inventory).not.toContain("dist/plugin-sdk/testing.js");
+    expect(inventory).not.toContain(
+      "dist/plugin-sdk/src/plugin-sdk/test-helpers/provider-contract.d.ts",
+    );
+  });
+
   it("prunes legacy plugin runtime deps state during packaged postinstall", async () => {
     const prefix = await createTempDirAsync("openclaw-packaged-prefix-");
     const packageRoot = path.join(prefix, "lib", "node_modules", "openclaw");

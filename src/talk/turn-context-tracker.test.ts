@@ -125,6 +125,16 @@ describe("realtime voice turn context tracker", () => {
     expect(tracker.consumeIgnoredContext()).toBeUndefined();
   });
 
+  it("retains valid falsy ignored contexts", () => {
+    const numbers = createRealtimeVoiceTurnContextTracker<number>();
+    numbers.rememberIgnoredContext(0);
+    expect(numbers.consumeIgnoredContext()).toBe(0);
+
+    const text = createRealtimeVoiceTurnContextTracker<string>();
+    text.rememberIgnoredContext("");
+    expect(text.consumeIgnoredContext()).toBe("");
+  });
+
   it("expires ignored contexts after the ttl", () => {
     let now = 1_000;
     const tracker = createRealtimeVoiceTurnContextTracker<{ id: string }>({

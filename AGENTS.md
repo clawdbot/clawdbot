@@ -60,9 +60,13 @@ Skills own workflows; root owns hard policy and routing.
 - Fix shape: default to clean bounded refactor, not smallest patch. Move ownership to right boundary; delete stale abstractions, duplicate policy, dead branches, wrappers, fallback stacks.
 - Fix observed local failures with generic product rules; do not hardcode names, ids, log phrases, or user examples in prod code unless they are an explicit contract.
 - Tests may use observed examples, but prod literals need a short contract reason.
+- Compatibility is opt-in. "Shipped" means reachable from a release Git tag; main/GitHub/PR/unreleased code is not shipped.
+- Refactor default: one canonical path. Delete the old path unless user explicitly wants compat or the shipped public contract is obvious and cited.
+- Keep old behavior only for an explicit public API/config/plugin SDK/data contract, tagged upgrade path, security/migration boundary, dependency contract, or observed prod state.
+- If unsure, ask before preserving compat. Do not keep aliases, shims, fallback stacks, stale names, or obsolete tests just in case.
+- Tests alone do not make internals contracts. If compat stays, name the contract and migration/removal plan in code, test, or PR.
 - Lean code is a goal. No internal shims, aliases, legacy names, broad fallbacks, or defensive branches just to reduce diff or handle unrealistic edge cases.
-- Handle real production states, shipped upgrade paths, security boundaries, and dependency contracts. Public/hostile/observed malformed input gets care; hypothetical malformed input does not.
-- Unshipped code: clean rewrite/delete. No compat, aliases, shims, deprecations, or fallback scaffolding.
+- Handle real production states, tagged upgrade paths, security boundaries, and dependency contracts. Public/hostile/observed malformed input gets care; hypothetical malformed input does not.
 - Deprecate shipped public contracts only.
 - Plugin SDK exception: shipped external API gets new API first plus named compat/deprecation, small tests/docs if useful, removal plan.
 - Migrate internal/bundled callers to modern API in the same change. Do not let internal compat become permanent architecture.
@@ -72,7 +76,8 @@ Skills own workflows; root owns hard policy and routing.
 - Gateway/plugin metadata is process-stable: installs, manifests, catalogs, generated paths, bundled metadata. Changes require restart or explicit owner reload/install/doctor flow.
 - Runtime hot paths: no freshness polling (`stat`/`realpath`/JSON reread/hash). Reuse current snapshots, install records, discovery, lookup tables, root scopes, resolved paths.
 - Process-local metadata caches ok when lifecycle-owned and bounded/single-slot. Freshness exceptions need named owner + tests.
-- Inline comments: add them where they preserve reviewer context: cross-path invariants, lifecycle ordering, ownership boundaries, session/id adoption, queue-depth symmetry, or intentional caller differences. No obvious-mechanics comments.
+- Inline comments: preserve reviewer context at the code site. Use for cross-path/state invariants, platform/dependency caps, deterministic ordering, compact encoded state, lifecycle ordering, ownership boundaries, session/id adoption, queue-depth symmetry, fallbacks, or intentional caller differences.
+- Comment shape: 1-3 short lines; state why the branch/helper exists, what contract it protects, and the bad outcome if removed. Cite nearby constants/helpers when useful. No syntax narration, PR/user-specific lore, or obvious mechanics.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
 - Protocol version bumps: explicit owner confirmation only; never automatic/generated.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor only.
@@ -141,6 +146,7 @@ Skills own workflows; root owns hard policy and routing.
 - No `@ts-nocheck`. Lint suppressions only intentional + explained.
 - External boundaries: prefer `zod` or existing schema helpers.
 - Runtime branching: discriminated unions/closed codes over freeform strings. Avoid semantic sentinels (`?? 0`, empty object/string).
+- Cross-function state: when valid combos matter, return a closed mode/result shape. Avoid parallel nullable fields or derived booleans that callers must keep in sync; make impossible states unrepresentable.
 - Formatter-friendly shape: when oxfmt explodes an expression vertically, extract named booleans, payloads, or small helpers. Do not change width or use format-ignore for local compactness.
 - Calls should be boring: complex decisions happen above; call args/object fields are names, literals, or simple property reads.
 - Prefer early returns over nested condition pyramids. Split code into gather -> normalize -> decide -> act.

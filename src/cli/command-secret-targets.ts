@@ -949,10 +949,14 @@ export function getCapabilityWebSearchCommandSecretTargets(
 export function getStatusCommandSecretTargetIds(
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  options?: { includeChannelTargets?: boolean },
 ): Set<string> {
-  const channelTargetIds = config
-    ? getConfiguredChannelSecretTargetIds(config, env)
-    : getChannelSecretTargetIds();
+  const channelTargetIds =
+    options?.includeChannelTargets === false
+      ? []
+      : config
+        ? getConfiguredChannelSecretTargetIds(config, env)
+        : getChannelSecretTargetIds();
   return toTargetIdSet([...STATIC_STATUS_TARGET_IDS, ...channelTargetIds]);
 }
 

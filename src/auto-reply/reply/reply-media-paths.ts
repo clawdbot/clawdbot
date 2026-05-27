@@ -144,6 +144,17 @@ export function createReplyMediaPathNormalizer(params: {
     return resolvePathFromInput(relativeWorkspacePath, params.workspaceDir);
   };
 
+  const resolveAbsoluteWorkspaceMedia = (media: string): string | undefined => {
+    if (FILE_URL_RE.test(media) || (!path.isAbsolute(media) && !WINDOWS_DRIVE_RE.test(media))) {
+      return undefined;
+    }
+    try {
+      return resolveWorkspaceRelativeMedia(media);
+    } catch {
+      return undefined;
+    }
+  };
+
   const normalizeMediaSource = async (raw: string): Promise<string> => {
     const media = raw.trim();
     if (!media) {
@@ -152,6 +163,10 @@ export function createReplyMediaPathNormalizer(params: {
     assertMediaNotDataUrl(media);
     if (isPassThroughRemoteMediaSource(media)) {
       return media;
+    }
+    const absoluteWorkspaceMedia = resolveAbsoluteWorkspaceMedia(media);
+    if (absoluteWorkspaceMedia) {
+      return await persistLocalReplyMedia(absoluteWorkspaceMedia);
     }
     const isRelativeLocalMedia =
       isLikelyLocalMediaSource(media) &&

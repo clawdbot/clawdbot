@@ -886,8 +886,12 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.ReplyToBody).toBe("Quoted body");
-    expect(ctx.ReplyToSender).toBe("Alice");
+    expect(ctx.SupplementalContext).toMatchObject({
+      quote: {
+        body: "Quoted body",
+        sender: "Alice",
+      },
+    });
   });
 
   it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
@@ -900,8 +904,7 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.ReplyToBody).toBeUndefined();
-    expect(ctx.ReplyToSender).toBeUndefined();
+    expect(ctx.SupplementalContext).toEqual({});
     expect(ctx.BodyForAgent).toBe("Current message");
   });
 });

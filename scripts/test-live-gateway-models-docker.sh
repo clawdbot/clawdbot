@@ -172,7 +172,9 @@ echo "==> Target: src/gateway/gateway-models.profiles.live.test.ts"
 echo "==> Profile file: $PROFILE_STATUS"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
-DOCKER_RUN_ARGS=(docker run --rm -t \
+DOCKER_RUN_ARGS=()
+openclaw_live_init_docker_run_args DOCKER_RUN_ARGS "${OPENCLAW_LIVE_GATEWAY_DOCKER_RUN_TIMEOUT:-2100s}"
+DOCKER_RUN_ARGS+=(--rm -t \
   -u "$DOCKER_USER" \
   --entrypoint bash \
   -e OPENAI_API_KEY \

@@ -13,6 +13,8 @@ import type {
 } from "./suite-runtime-types.js";
 
 const requireFromHere = createRequire(import.meta.url);
+const MCP_STDERR_TAIL_LIMIT = 8_192;
+const MCP_REQUEST_TIMEOUT_MS = 180_000;
 
 function findSkill(skills: QaSkillStatusEntry[], name: string) {
   return skills.find((skill) => skill.name === name);
@@ -52,10 +54,17 @@ async function callPluginToolsMcp(params: {
     cwd: params.env.gateway.tempRoot,
     env: transportEnv,
   });
+  let stderrTail = "";
+  const stderr = transport.stderr;
+  if (stderr && typeof stderr.on === "function") {
+    stderr.on("data", (chunk: unknown) => {
+      stderrTail = `${stderrTail}${String(chunk)}`.slice(-MCP_STDERR_TAIL_LIMIT);
+    });
+  }
   const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
   try {
-    await client.connect(transport);
-    const listed = await client.listTools();
+    await client.connect(transport, { timeout: MCP_REQUEST_TIMEOUT_MS });
+    const listed = await client.listTools({}, { timeout: MCP_REQUEST_TIMEOUT_MS });
     const tool = listed.tools.find((entry) => entry.name === params.toolName);
     if (!tool) {
       const availableTools = listed.tools
@@ -66,10 +75,22 @@ async function callPluginToolsMcp(params: {
         `MCP tool missing: ${params.toolName}; available tools: ${availableTools.join(", ") || "<none>"}`,
       );
     }
-    return await client.callTool({
-      name: params.toolName,
-      arguments: params.args,
-    });
+    try {
+      return await client.callTool(
+        {
+          name: params.toolName,
+          arguments: params.args,
+        },
+        undefined,
+        { timeout: MCP_REQUEST_TIMEOUT_MS },
+      );
+    } catch (error) {
+      const tail = stderrTail.trim();
+      if (!tail || !(error instanceof Error)) {
+        throw error;
+      }
+      throw new Error(`${error.message}\nMCP stderr tail:\n${tail}`, { cause: error });
+    }
   } finally {
     await client.close().catch(() => {});
   }

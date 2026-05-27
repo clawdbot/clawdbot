@@ -2547,8 +2547,12 @@ export function getRuntimeConfig(options?: { skipPluginValidation?: boolean }): 
   return loadConfig(options);
 }
 
-export async function readBestEffortConfig(): Promise<OpenClawConfig> {
-  return await createConfigIO().readBestEffortConfig();
+export async function readBestEffortConfig(options?: {
+  skipPluginValidation?: boolean;
+}): Promise<OpenClawConfig> {
+  return await createConfigIO(
+    options?.skipPluginValidation ? { pluginValidation: "skip" } : {},
+  ).readBestEffortConfig();
 }
 
 export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {

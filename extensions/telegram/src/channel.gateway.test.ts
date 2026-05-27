@@ -406,7 +406,46 @@ describe("telegramPlugin gateway startup", () => {
     ).resolves.toMatchObject({ botInfo: startupBotInfo });
   });
 
-  it("uses cached startup botInfo without calling getMe", async () => {
+  it("refreshes cached startup botInfo before monitor startup", async () => {
+    await useTempStateDir();
+    installTelegramRuntime();
+    const refreshedBotInfo = {
+      ...startupBotInfo,
+      username: "fresh_openclaw_bot",
+      has_topics_enabled: true,
+    };
+    await writeCachedTelegramBotInfo({
+      accountId: "ops",
+      botToken: "123456:bad-token",
+      botInfo: startupBotInfo,
+    });
+    probeTelegram.mockResolvedValue({
+      ok: true,
+      status: null,
+      error: null,
+      elapsedMs: 12,
+      bot: {
+        id: refreshedBotInfo.id,
+        username: refreshedBotInfo.username,
+      },
+      botInfo: refreshedBotInfo,
+    });
+    monitorTelegramProvider.mockResolvedValue(undefined);
+
+    const { task } = startTelegramAccount("ops");
+
+    await expect(task).resolves.toBeUndefined();
+    expect(probeTelegram).toHaveBeenCalledOnce();
+    expect(latestMonitorOptions().botInfo).toEqual(refreshedBotInfo);
+    await expect(
+      readCachedTelegramBotInfo({
+        accountId: "ops",
+        botToken: "123456:bad-token",
+      }),
+    ).resolves.toMatchObject({ botInfo: refreshedBotInfo });
+  });
+
+  it("falls back to cached startup botInfo when refresh fails without auth failure", async () => {
     await useTempStateDir();
     installTelegramRuntime();
     await writeCachedTelegramBotInfo({
@@ -414,12 +453,18 @@ describe("telegramPlugin gateway startup", () => {
       botToken: "123456:bad-token",
       botInfo: startupBotInfo,
     });
+    probeTelegram.mockResolvedValue({
+      ok: false,
+      status: 500,
+      error: "Bad Gateway",
+      elapsedMs: 12,
+    });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
     const { task } = startTelegramAccount("ops");
 
     await expect(task).resolves.toBeUndefined();
-    expect(probeTelegram).not.toHaveBeenCalled();
+    expect(probeTelegram).toHaveBeenCalledOnce();
     expect(latestMonitorOptions().botInfo).toEqual(startupBotInfo);
   });
 

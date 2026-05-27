@@ -133,6 +133,24 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("refreshes automatic health snapshots without live channel probes", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    deps.refreshGatewayHealthSnapshot = vi.fn(async () => ({ ok: true }) as HealthSummary);
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledWith({ probe: false });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenCalledTimes(2);
+    expect(deps.refreshGatewayHealthSnapshot).toHaveBeenLastCalledWith({ probe: false });
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("skips overlapping media cleanup runs", async () => {
     vi.useFakeTimers();
     let resolveCleanup = () => {};

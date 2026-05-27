@@ -26,6 +26,7 @@ const modelProviderAuthMocks = vi.hoisted(() => {
   );
   return state;
 });
+const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
@@ -45,6 +46,11 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
   getCurrentProviderAuthState: () => null,
   clearCurrentProviderAuthState: () => undefined,
   warmCurrentProviderAuthState: async () => undefined,
+}));
+
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: (params: unknown) =>
+    normalizeProviderModelIdWithRuntimeMock(params),
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {
@@ -121,6 +127,7 @@ beforeEach(() => {
   ]);
   modelAuthLabelMocks.resolveModelAuthLabel.mockReset();
   modelAuthLabelMocks.resolveModelAuthLabel.mockReturnValue(undefined);
+  normalizeProviderModelIdWithRuntimeMock.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
   setActivePluginRegistry(
@@ -255,6 +262,37 @@ describe("handleModelsCommand", () => {
     expect(allListResult?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1");
     expect(allListResult?.reply?.text).toContain("- openai/gpt-4.1-mini");
+  });
+
+  it("shows plugin-normalized allowlist models in browse data", async () => {
+    normalizeProviderModelIdWithRuntimeMock.mockImplementation(({ provider, context }) => {
+      if (
+        provider === "custom-provider" &&
+        (context as { modelId?: string }).modelId === "custom-legacy-model"
+      ) {
+        return "custom-modern-model";
+      }
+      return undefined;
+    });
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "custom-provider", id: "custom-modern-model", name: "Custom Modern" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["custom-provider"]);
+
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "custom-provider/custom-modern-model" },
+          models: {
+            "custom-provider/custom-legacy-model": {},
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.byProvider.get("custom-provider")).toEqual(new Set(["custom-modern-model"]));
+    expect(data.modelNames.get("custom-provider/custom-modern-model")).toBe("Custom Modern");
+    expect(normalizeProviderModelIdWithRuntimeMock).toHaveBeenCalled();
   });
 
   it("does not re-add the default provider when provider visibility is restricted", async () => {

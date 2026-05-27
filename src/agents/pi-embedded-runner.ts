@@ -20,6 +20,7 @@ export {
   queueEmbeddedPiMessage,
   queueEmbeddedPiMessage as queueEmbeddedAgentMessage,
   queueEmbeddedPiMessageWithOutcome,
+  resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionId as resolveActiveEmbeddedAgentRunSessionId,
   waitForEmbeddedPiRunEnd,

@@ -69,6 +69,7 @@ function createOptions(
     context: {
       broadcast: vi.fn(),
       disconnectClientsForDevice: vi.fn(),
+      invalidateClientsForDevice: vi.fn(),
       logGateway: {
         debug: vi.fn(),
         error: vi.fn(),
@@ -138,6 +139,28 @@ describe("deviceHandlers", () => {
       { deviceId: "device-1", removedAtMs: 123 },
       undefined,
     );
+  });
+
+  it("invalidates affected clients synchronously before responding to device.pair.remove", async () => {
+    removePairedDeviceMock.mockResolvedValue({ deviceId: "device-1", removedAtMs: 123 });
+    const opts = createOptions("device.pair.remove", { deviceId: "device-1" });
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+
+    respond.mockImplementation(() => {
+      // At the moment the response is emitted, the client flag must already
+      // be set so any RPCs pipelined in the WS buffer are rejected.
+      expect(invalidate).toHaveBeenCalledWith("device-1", { reason: "device-pair-removed" });
+      // The hard close is deferred to the microtask to let the response flush.
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await deviceHandlers["device.pair.remove"](opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledWith("device-1");
   });
 
   it("does not disconnect clients when device removal fails", async () => {
@@ -348,6 +371,62 @@ describe("deviceHandlers", () => {
       },
       undefined,
     );
+  });
+
+  it("invalidates affected clients synchronously before responding to device.token.rotate", async () => {
+    mockPairedOperatorDevice();
+    mockRotateOperatorTokenSuccess();
+    const opts = createOptions(
+      "device.token.rotate",
+      { deviceId: "device-1", role: "operator", scopes: ["operator.pairing"] },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+
+    respond.mockImplementation(() => {
+      expect(invalidate).toHaveBeenCalledWith("device-1", {
+        role: "operator",
+        reason: "device-token-rotated",
+      });
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await deviceHandlers["device.token.rotate"](opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledWith("device-1", { role: "operator" });
+  });
+
+  it("invalidates affected clients synchronously before responding to device.token.revoke", async () => {
+    revokeDeviceTokenMock.mockResolvedValue({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: 456 },
+    });
+    const opts = createOptions(
+      "device.token.revoke",
+      { deviceId: "device-1", role: "operator" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+    const respond = vi.mocked(opts.respond);
+    const invalidate = vi.mocked(opts.context.invalidateClientsForDevice!);
+    const disconnect = vi.mocked(opts.context.disconnectClientsForDevice!);
+
+    respond.mockImplementation(() => {
+      expect(invalidate).toHaveBeenCalledWith("device-1", {
+        role: "operator",
+        reason: "device-token-revoked",
+      });
+      expect(disconnect).not.toHaveBeenCalled();
+    });
+
+    await deviceHandlers["device.token.revoke"](opts);
+    await Promise.resolve();
+
+    expect(respond).toHaveBeenCalled();
+    expect(disconnect).toHaveBeenCalledWith("device-1", { role: "operator" });
   });
 
   it("treats normalized device ids as self-owned for token rotation", async () => {

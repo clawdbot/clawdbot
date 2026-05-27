@@ -15,6 +15,7 @@ type BundledPluginSource = {
   manifest: {
     id: string;
     channels?: unknown;
+    channelEnvVars?: unknown;
     name?: string;
     description?: string;
   } & Record<string, unknown>;
@@ -61,6 +62,10 @@ const { writeGeneratedOutput } = (await import(
 type BundledChannelConfigMetadata = {
   pluginId: string;
   channelId: string;
+  aliases?: readonly string[];
+  order?: number;
+  configurable?: boolean;
+  channelEnvVars?: readonly string[];
   label?: string;
   description?: string;
   schema: Record<string, unknown>;
@@ -134,6 +139,56 @@ function resolveRootDescription(
   return undefined;
 }
 
+function resolveRootAliases(source: BundledPluginSource, channelId: string): string[] {
+  const channelMeta = resolvePackageChannelMeta(source);
+  if (channelMeta?.id !== channelId || !Array.isArray(channelMeta.aliases)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      channelMeta.aliases
+        .map((alias) => (typeof alias === "string" ? alias.trim().toLowerCase() : ""))
+        .filter((alias) => alias.length > 0),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
+function resolveRootOrder(source: BundledPluginSource, channelId: string): number | undefined {
+  const channelMeta = resolvePackageChannelMeta(source);
+  const order = channelMeta?.id === channelId ? channelMeta.order : undefined;
+  return typeof order === "number" && Number.isFinite(order) ? order : undefined;
+}
+
+function resolveRootConfigurable(source: BundledPluginSource, channelId: string): boolean {
+  const channelMeta = resolvePackageChannelMeta(source);
+  const exposure =
+    channelMeta?.id === channelId &&
+    channelMeta.exposure &&
+    typeof channelMeta.exposure === "object" &&
+    !Array.isArray(channelMeta.exposure)
+      ? (channelMeta.exposure as Record<string, unknown>)
+      : null;
+  return exposure?.configured !== false;
+}
+
+function resolveRootChannelEnvVars(source: BundledPluginSource, channelId: string): string[] {
+  const raw = source.manifest.channelEnvVars;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return [];
+  }
+  const value = (raw as Record<string, unknown>)[channelId];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [
+    ...new Set(
+      value
+        .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+        .filter((entry) => entry.length > 0),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
+}
+
 function formatTypeScriptModule(source: string, outputPath: string, repoRoot: string): string {
   return formatGeneratedModule(source, {
     repoRoot,
@@ -202,6 +257,10 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
       continue;
     }
     for (const channelId of channelIds) {
+      const aliases = resolveRootAliases(source, channelId);
+      const order = resolveRootOrder(source, channelId);
+      const configurable = resolveRootConfigurable(source, channelId);
+      const channelEnvVars = resolveRootChannelEnvVars(source, channelId);
       const label = resolveRootLabel(source, channelId);
       const description = resolveRootDescription(source, channelId);
       const unsupportedSecretRefSurfacePatterns = resolveChannelUnsupportedSecretRefSurfacePatterns(
@@ -211,6 +270,10 @@ export async function collectBundledChannelConfigMetadata(params?: { repoRoot?: 
       entries.push({
         pluginId: source.manifest.id,
         channelId,
+        ...(aliases.length > 0 ? { aliases } : {}),
+        ...(order === undefined ? {} : { order }),
+        ...(configurable ? {} : { configurable }),
+        ...(channelEnvVars.length > 0 ? { channelEnvVars } : {}),
         ...(label ? { label } : {}),
         ...(description ? { description } : {}),
         schema: surface.schema,
@@ -240,6 +303,10 @@ export async function writeBundledChannelConfigMetadataModule(params?: {
 type BundledChannelConfigMetadata = {
   pluginId: string;
   channelId: string;
+  aliases?: readonly string[];
+  order?: number;
+  configurable?: boolean;
+  channelEnvVars?: readonly string[];
   label?: string;
   description?: string;
   schema: Record<string, unknown>;

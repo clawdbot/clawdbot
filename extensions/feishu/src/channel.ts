@@ -12,9 +12,10 @@ import type {
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
+  createRuntimeOutboundDelegates,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -27,7 +28,6 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -65,6 +65,7 @@ import {
   parseFeishuTargetId,
 } from "./conversation-id.js";
 import { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
+import { feishuDoctor } from "./doctor.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { buildFeishuPresentationCard } from "./presentation-card.js";
@@ -684,6 +685,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         stripPatterns: () => ['<at user_id="[^"]*">[^<]*</at>'],
       },
       reload: { configPrefixes: ["channels.feishu"] },
+      doctor: feishuDoctor,
       configSchema: buildChannelConfigSchema(FeishuConfigSchema),
       config: {
         ...feishuConfigAdapter,

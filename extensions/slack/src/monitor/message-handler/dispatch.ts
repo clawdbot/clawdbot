@@ -8,11 +8,20 @@ import {
   type StatusReactionAdapter,
 } from "openclaw/plugin-sdk/channel-feedback";
 import {
+  dispatchChannelInboundReply,
+  type InboundReplyRecordOptions,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
+  type ChannelBotLoopProtectionFacts,
+  hasVisibleInboundReplyDispatch,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
   createChannelMessageReplyPipeline,
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
   resolveChannelMessageSourceReplyDeliveryMode,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
+import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
@@ -29,15 +38,8 @@ import {
   resolveChannelStreamingPreviewToolProgress,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   type ChannelProgressDraftLine,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  type ChannelBotLoopProtectionFacts,
-  type ChannelTurnRecordOptions,
-  hasVisibleInboundReplyDispatch,
-  runPreparedInboundReplyTurn,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import {
   buildTtsSupplementMediaPayload,
@@ -82,11 +84,7 @@ import {
   resolveDeliveredSlackReplyThreadTs,
   resolveSlackThreadTs,
 } from "../replies.js";
-import {
-  createReplyDispatcherWithTyping,
-  dispatchInboundMessage,
-  settleReplyDispatcher,
-} from "../reply.runtime.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../reply.runtime.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -896,190 +894,187 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   };
 
   let draftPreviewCommitted = false;
-  const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
-    ...replyPipeline,
-    humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
-    deliver: async (payload, info) => {
-      if (payload.isReasoning === true) {
-        return;
-      }
-      if (useStreaming) {
-        await deliverWithStreaming({ payload, kind: info.kind });
-        return;
-      }
+  const deliverSlackPayload = async (
+    payload: ReplyPayload,
+    info: { kind: ReplyDispatchKind },
+  ): Promise<{ visibleReplySent: false } | void> => {
+    if (payload.isReasoning === true) {
+      return { visibleReplySent: false };
+    }
+    if (useStreaming) {
+      await deliverWithStreaming({ payload, kind: info.kind });
+      return;
+    }
 
-      const reply = resolveSendableOutboundReplyParts(payload);
-      const slackBlocks = readSlackReplyBlocks(payload);
-      const ttsSupplement = getReplyPayloadTtsSupplement(payload);
-      const trimmedFinalText = (payload.text ?? ttsSupplement?.spokenText ?? "").trim();
-      const shouldRestoreTtsSupplementTextForPreviewFallback =
-        Boolean(ttsSupplement) &&
-        ttsSupplement?.visibleTextAlreadyDelivered !== true &&
-        Boolean(draftStream) &&
-        !draftPreviewCommitted &&
-        previewStreamingEnabled &&
-        !payload.text?.trim();
+    const reply = resolveSendableOutboundReplyParts(payload);
+    const slackBlocks = readSlackReplyBlocks(payload);
+    const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+    const trimmedFinalText = (payload.text ?? ttsSupplement?.spokenText ?? "").trim();
+    const shouldRestoreTtsSupplementTextForPreviewFallback =
+      Boolean(ttsSupplement) &&
+      ttsSupplement?.visibleTextAlreadyDelivered !== true &&
+      Boolean(draftStream) &&
+      !draftPreviewCommitted &&
+      previewStreamingEnabled &&
+      !payload.text?.trim();
 
-      if (
-        info.kind === "final" &&
-        ttsSupplement &&
-        draftStream &&
-        !draftPreviewCommitted &&
-        previewStreamingEnabled &&
-        !payload.isError &&
-        trimmedFinalText.length > 0
-      ) {
-        const channelId = draftStream.channelId();
-        const messageId = draftStream.messageId();
-        if (channelId && messageId) {
-          const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
-          await draftStream.flush();
-          await draftStream.seal();
-          try {
-            await finalizeSlackPreviewEdit({
-              client: ctx.app.client,
-              token: ctx.botToken,
-              accountId: account.accountId,
-              channelId,
-              messageId,
-              text: normalizeSlackOutboundText(trimmedFinalText),
-              ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-              threadTs: finalThreadTs,
-            });
-          } catch (err) {
-            logVerbose(
-              `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
-            );
-            await draftStream.discardPending();
-            let delivered = false;
-            try {
-              await deliverNormally({
-                payload: payload.text?.trim()
-                  ? payload
-                  : {
-                      ...payload,
-                      text: trimmedFinalText,
-                    },
-                kind: info.kind,
-                forcedThreadTs: finalThreadTs,
-              });
-              delivered = true;
-            } finally {
-              if (delivered) {
-                await draftStream.clear();
-              }
-            }
-            return;
-          }
-          draftPreviewCommitted = true;
-          observedReplyDelivery = true;
-          replyPlan.markSent();
-          await deliverNormally({
-            payload: buildTtsSupplementMediaPayload(payload),
-            kind: info.kind,
-            forcedThreadTs: finalThreadTs,
+    if (
+      info.kind === "final" &&
+      ttsSupplement &&
+      draftStream &&
+      !draftPreviewCommitted &&
+      previewStreamingEnabled &&
+      !payload.isError &&
+      trimmedFinalText.length > 0
+    ) {
+      const channelId = draftStream.channelId();
+      const messageId = draftStream.messageId();
+      if (channelId && messageId) {
+        const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
+        await draftStream.flush();
+        await draftStream.seal();
+        try {
+          await finalizeSlackPreviewEdit({
+            client: ctx.app.client,
+            token: ctx.botToken,
+            accountId: account.accountId,
+            channelId,
+            messageId,
+            text: normalizeSlackOutboundText(trimmedFinalText),
+            ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+            threadTs: finalThreadTs,
           });
-          deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
+        } catch (err) {
+          logVerbose(
+            `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
+          );
+          await draftStream.discardPending();
+          let delivered = false;
+          try {
+            await deliverNormally({
+              payload: payload.text?.trim()
+                ? payload
+                : {
+                    ...payload,
+                    text: trimmedFinalText,
+                  },
+              kind: info.kind,
+              forcedThreadTs: finalThreadTs,
+            });
+            delivered = true;
+          } finally {
+            if (delivered) {
+              await draftStream.clear();
+            }
+          }
           return;
         }
+        draftPreviewCommitted = true;
+        observedReplyDelivery = true;
+        replyPlan.markSent();
+        await deliverNormally({
+          payload: buildTtsSupplementMediaPayload(payload),
+          kind: info.kind,
+          forcedThreadTs: finalThreadTs,
+        });
+        deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
+        return;
       }
+    }
 
-      const result = await deliverWithFinalizableLivePreviewAdapter({
-        kind: info.kind,
-        payload,
-        adapter: defineFinalizableLivePreviewAdapter({
-          draft:
-            draftStream && !draftPreviewCommitted
-              ? {
-                  flush: draftStream.flush,
-                  clear: draftStream.clear,
-                  discardPending: draftStream.discardPending,
-                  seal: draftStream.seal,
-                  id: () => {
-                    const channelId = draftStream.channelId();
-                    const messageId = draftStream.messageId();
-                    return channelId && messageId ? { channelId, messageId } : undefined;
-                  },
-                }
-              : undefined,
-          buildFinalEdit: () => {
-            if (
-              !previewStreamingEnabled ||
-              (reply.hasMedia && !ttsSupplement) ||
-              payload.isError ||
-              (trimmedFinalText.length === 0 && !slackBlocks?.length)
-            ) {
-              return undefined;
-            }
-            return {
-              text: normalizeSlackOutboundText(trimmedFinalText),
-              blocks: slackBlocks,
-              threadTs: usedReplyThreadTs ?? statusThreadTs,
-            };
-          },
-          editFinal: async (preview, edit) => {
-            if (
-              deliveryTracker.hasDelivered({ kind: info.kind, payload, threadTs: edit.threadTs })
-            ) {
-              return;
-            }
-            await finalizeSlackPreviewEdit({
-              client: ctx.app.client,
-              token: ctx.botToken,
-              accountId: account.accountId,
-              channelId: preview.channelId,
-              messageId: preview.messageId,
-              text: edit.text,
-              ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
-              threadTs: edit.threadTs,
-            });
-            draftPreviewCommitted = true;
-          },
-          onPreviewFinalized: (_preview) => {
-            // The preview edit promotes the draft message into the final answer.
-            // Later same-turn payloads must not let fallback cleanup clear it.
-            draftPreviewCommitted = true;
-            const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
-            observedReplyDelivery = true;
-            replyPlan.markSent();
-            deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
-          },
-          buildSupplementalPayload: () =>
-            ttsSupplement ? buildTtsSupplementMediaPayload(payload) : undefined,
-          deliverSupplemental: async (supplementalPayload) => {
-            await deliverNormally({
-              payload: supplementalPayload,
-              kind: info.kind,
-            });
-          },
-          logPreviewEditFailure: (err) => {
-            logVerbose(
-              `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
-            );
-          },
-        }),
-        deliverNormally: async () => {
+    const result = await deliverWithFinalizableLivePreviewAdapter({
+      kind: info.kind,
+      payload,
+      adapter: defineFinalizableLivePreviewAdapter({
+        draft:
+          draftStream && !draftPreviewCommitted
+            ? {
+                flush: draftStream.flush,
+                clear: draftStream.clear,
+                discardPending: draftStream.discardPending,
+                seal: draftStream.seal,
+                id: () => {
+                  const channelId = draftStream.channelId();
+                  const messageId = draftStream.messageId();
+                  return channelId && messageId ? { channelId, messageId } : undefined;
+                },
+              }
+            : undefined,
+        buildFinalEdit: () => {
+          if (
+            !previewStreamingEnabled ||
+            (reply.hasMedia && !ttsSupplement) ||
+            payload.isError ||
+            (trimmedFinalText.length === 0 && !slackBlocks?.length)
+          ) {
+            return undefined;
+          }
+          return {
+            text: normalizeSlackOutboundText(trimmedFinalText),
+            blocks: slackBlocks,
+            threadTs: usedReplyThreadTs ?? statusThreadTs,
+          };
+        },
+        editFinal: async (preview, edit) => {
+          if (deliveryTracker.hasDelivered({ kind: info.kind, payload, threadTs: edit.threadTs })) {
+            return;
+          }
+          await finalizeSlackPreviewEdit({
+            client: ctx.app.client,
+            token: ctx.botToken,
+            accountId: account.accountId,
+            channelId: preview.channelId,
+            messageId: preview.messageId,
+            text: edit.text,
+            ...(edit.blocks?.length ? { blocks: edit.blocks } : {}),
+            threadTs: edit.threadTs,
+          });
+          draftPreviewCommitted = true;
+        },
+        onPreviewFinalized: (_preview) => {
+          // The preview edit promotes the draft message into the final answer.
+          // Later same-turn payloads must not let fallback cleanup clear it.
+          draftPreviewCommitted = true;
+          const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
+          observedReplyDelivery = true;
+          replyPlan.markSent();
+          deliveryTracker.markDelivered({ kind: info.kind, payload, threadTs: finalThreadTs });
+        },
+        buildSupplementalPayload: () =>
+          ttsSupplement ? buildTtsSupplementMediaPayload(payload) : undefined,
+        deliverSupplemental: async (supplementalPayload) => {
           await deliverNormally({
-            payload: shouldRestoreTtsSupplementTextForPreviewFallback
-              ? {
-                  ...payload,
-                  text: ttsSupplement?.spokenText,
-                }
-              : payload,
+            payload: supplementalPayload,
             kind: info.kind,
           });
         },
-      });
+        logPreviewEditFailure: (err) => {
+          logVerbose(
+            `slack: preview final edit failed; falling back to standard send (${formatSlackError(err)})`,
+          );
+        },
+      }),
+      deliverNormally: async () => {
+        await deliverNormally({
+          payload: shouldRestoreTtsSupplementTextForPreviewFallback
+            ? {
+                ...payload,
+                text: ttsSupplement?.spokenText,
+              }
+            : payload,
+          kind: info.kind,
+        });
+      },
+    });
 
-      if (result.kind === "preview-finalized") {
-        return;
-      }
-    },
-    onError: (err, info) => {
-      runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
-      replyPipeline.typingCallbacks?.onIdle?.();
-    },
-  });
+    if (result.kind === "preview-finalized") {
+      return;
+    }
+  };
+  const onSlackDeliveryError = (err: unknown, info: { kind: string }) => {
+    runtime.error?.(danger(`slack ${info.kind} reply failed: ${formatSlackError(err)}`));
+    replyPipeline.typingCallbacks?.onIdle?.();
+  };
 
   const draftStream = shouldUseDraftStream
     ? createSlackDraftStream({
@@ -1268,151 +1263,145 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let dispatchError: unknown;
   let queuedFinal = false;
   let counts: { final?: number; block?: number } = {};
-  let dispatchSettledBeforeStart = false;
   try {
-    const turnResult = await runPreparedInboundReplyTurn({
+    const turnResult = await dispatchChannelInboundReply({
+      cfg,
       channel: "slack",
       accountId: route.accountId,
+      agentId: route.agentId,
       routeSessionKey: route.sessionKey,
       storePath: prepared.turn.storePath,
       ctxPayload: prepared.ctxPayload,
       recordInboundSession,
-      record: prepared.turn.record as ChannelTurnRecordOptions,
+      dispatchReplyWithBufferedBlockDispatcher,
+      dispatcherOptions: {
+        ...replyPipeline,
+        humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+      },
+      delivery: {
+        deliver: deliverSlackPayload,
+        onError: onSlackDeliveryError,
+      },
+      record: prepared.turn.record as InboundReplyRecordOptions,
       history: prepared.turn.history,
       botLoopProtection: resolveSlackBotLoopProtection(prepared),
-      onPreDispatchFailure: async () => {
-        dispatchSettledBeforeStart = true;
-        await settleReplyDispatcher({
-          dispatcher,
-          onSettled: () => markDispatchIdle(),
-        });
+      replyOptions: {
+        skillFilter: prepared.channelConfig?.skills,
+        sourceReplyDeliveryMode,
+        hasRepliedRef,
+        disableBlockStreaming,
+        onModelSelected,
+        suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages ? true : undefined,
+        onPartialReply: useStreaming
+          ? undefined
+          : !previewStreamingEnabled
+            ? undefined
+            : async (payload) => {
+                updateDraftFromPartial(payload.text);
+              },
+        onAssistantMessageStart: onDraftBoundary,
+        onReasoningEnd: onDraftBoundary,
+        onReasoningStream: statusReactionsEnabled
+          ? async () => {
+              await statusReactions.setThinking();
+            }
+          : undefined,
+        onToolStart: async (payload) => {
+          if (statusReactionsEnabled) {
+            await statusReactions.setTool(payload.name);
+          }
+          await pushPreviewToolProgress(
+            buildChannelProgressDraftLineForEntry(
+              account.config,
+              {
+                event: "tool",
+                name: payload.name,
+                phase: payload.phase,
+                args: payload.args,
+              },
+              payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+            ),
+            { toolName: payload.name },
+          );
+        },
+        onItemEvent: async (payload) => {
+          await pushPreviewToolProgress(
+            buildChannelProgressDraftLineForEntry(account.config, {
+              event: "item",
+              itemId: payload.itemId,
+              itemKind: payload.kind,
+              title: payload.title,
+              name: payload.name,
+              phase: payload.phase,
+              status: payload.status,
+              summary: payload.summary,
+              progressText: payload.progressText,
+              meta: payload.meta,
+            }),
+          );
+        },
+        onPlanUpdate: async (payload) => {
+          if (payload.phase !== "update") {
+            return;
+          }
+          await pushPreviewToolProgress(
+            buildChannelProgressDraftLine({
+              event: "plan",
+              phase: payload.phase,
+              title: payload.title,
+              explanation: payload.explanation,
+              steps: payload.steps,
+            }),
+          );
+        },
+        onApprovalEvent: async (payload) => {
+          if (payload.phase !== "requested") {
+            return;
+          }
+          await pushPreviewToolProgress(
+            buildChannelProgressDraftLine({
+              event: "approval",
+              phase: payload.phase,
+              title: payload.title,
+              command: payload.command,
+              reason: payload.reason,
+              message: payload.message,
+            }),
+          );
+        },
+        onCommandOutput: async (payload) => {
+          if (payload.phase !== "end") {
+            return;
+          }
+          await pushPreviewToolProgress(
+            buildChannelProgressDraftLine({
+              event: "command-output",
+              phase: payload.phase,
+              title: payload.title,
+              name: payload.name,
+              status: payload.status,
+              exitCode: payload.exitCode,
+            }),
+          );
+        },
+        onPatchSummary: async (payload) => {
+          if (payload.phase !== "end") {
+            return;
+          }
+          await pushPreviewToolProgress(
+            buildChannelProgressDraftLine({
+              event: "patch",
+              phase: payload.phase,
+              title: payload.title,
+              name: payload.name,
+              added: payload.added,
+              modified: payload.modified,
+              deleted: payload.deleted,
+              summary: payload.summary,
+            }),
+          );
+        },
       },
-      runDispatch: () =>
-        dispatchInboundMessage({
-          ctx: prepared.ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions: {
-            ...replyOptions,
-            skillFilter: prepared.channelConfig?.skills,
-            sourceReplyDeliveryMode,
-            hasRepliedRef,
-            disableBlockStreaming,
-            onModelSelected,
-            suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages
-              ? true
-              : undefined,
-            onPartialReply: useStreaming
-              ? undefined
-              : !previewStreamingEnabled
-                ? undefined
-                : async (payload) => {
-                    updateDraftFromPartial(payload.text);
-                  },
-            onAssistantMessageStart: onDraftBoundary,
-            onReasoningEnd: onDraftBoundary,
-            onReasoningStream: statusReactionsEnabled
-              ? async () => {
-                  await statusReactions.setThinking();
-                }
-              : undefined,
-            onToolStart: async (payload) => {
-              if (statusReactionsEnabled) {
-                await statusReactions.setTool(payload.name);
-              }
-              await pushPreviewToolProgress(
-                buildChannelProgressDraftLineForEntry(
-                  account.config,
-                  {
-                    event: "tool",
-                    name: payload.name,
-                    phase: payload.phase,
-                    args: payload.args,
-                  },
-                  payload.detailMode ? { detailMode: payload.detailMode } : undefined,
-                ),
-                { toolName: payload.name },
-              );
-            },
-            onItemEvent: async (payload) => {
-              await pushPreviewToolProgress(
-                buildChannelProgressDraftLineForEntry(account.config, {
-                  event: "item",
-                  itemId: payload.itemId,
-                  itemKind: payload.kind,
-                  title: payload.title,
-                  name: payload.name,
-                  phase: payload.phase,
-                  status: payload.status,
-                  summary: payload.summary,
-                  progressText: payload.progressText,
-                  meta: payload.meta,
-                }),
-              );
-            },
-            onPlanUpdate: async (payload) => {
-              if (payload.phase !== "update") {
-                return;
-              }
-              await pushPreviewToolProgress(
-                buildChannelProgressDraftLine({
-                  event: "plan",
-                  phase: payload.phase,
-                  title: payload.title,
-                  explanation: payload.explanation,
-                  steps: payload.steps,
-                }),
-              );
-            },
-            onApprovalEvent: async (payload) => {
-              if (payload.phase !== "requested") {
-                return;
-              }
-              await pushPreviewToolProgress(
-                buildChannelProgressDraftLine({
-                  event: "approval",
-                  phase: payload.phase,
-                  title: payload.title,
-                  command: payload.command,
-                  reason: payload.reason,
-                  message: payload.message,
-                }),
-              );
-            },
-            onCommandOutput: async (payload) => {
-              if (payload.phase !== "end") {
-                return;
-              }
-              await pushPreviewToolProgress(
-                buildChannelProgressDraftLine({
-                  event: "command-output",
-                  phase: payload.phase,
-                  title: payload.title,
-                  name: payload.name,
-                  status: payload.status,
-                  exitCode: payload.exitCode,
-                }),
-              );
-            },
-            onPatchSummary: async (payload) => {
-              if (payload.phase !== "end") {
-                return;
-              }
-              await pushPreviewToolProgress(
-                buildChannelProgressDraftLine({
-                  event: "patch",
-                  phase: payload.phase,
-                  title: payload.title,
-                  name: payload.name,
-                  added: payload.added,
-                  modified: payload.modified,
-                  deleted: payload.deleted,
-                  summary: payload.summary,
-                }),
-              );
-            },
-          },
-        }),
     });
     if (turnResult.dispatched) {
       const result = turnResult.dispatchResult;
@@ -1424,9 +1413,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   } finally {
     progressDraftGate.cancel();
     await draftStream?.discardPending();
-    if (!dispatchSettledBeforeStart) {
-      markDispatchIdle();
-    }
   }
 
   // -----------------------------------------------------------------------

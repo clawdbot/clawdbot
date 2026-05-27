@@ -206,6 +206,39 @@ openclaw_live_append_array() {
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
+openclaw_live_timeout_bin() {
+  if command -v timeout >/dev/null 2>&1; then
+    printf '%s\n' timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    printf '%s\n' gtimeout
+  else
+    return 1
+  fi
+}
+
+openclaw_live_timeout_supports_kill_after() {
+  local timeout_bin="${1:?timeout binary required}"
+  "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1
+}
+
+openclaw_live_init_docker_run_args() {
+  local target_array="${1:?target array required}"
+  local timeout_value="${2:-${OPENCLAW_LIVE_DOCKER_RUN_TIMEOUT:-2700s}}"
+  local timeout_bin
+  local quoted_timeout
+
+  if ! timeout_bin="$(openclaw_live_timeout_bin)"; then
+    echo "timeout command not found; cannot bound live Docker run after ${timeout_value}" >&2
+    return 127
+  fi
+  quoted_timeout="$(printf '%q' "$timeout_value")"
+  if openclaw_live_timeout_supports_kill_after "$timeout_bin"; then
+    eval "${target_array}=(${timeout_bin} --kill-after=30s ${quoted_timeout} docker run)"
+  else
+    eval "${target_array}=(${timeout_bin} ${quoted_timeout} docker run)"
+  fi
+}
+
 openclaw_live_stage_auth_into_home() {
   local dest_home="${1:?destination home directory required}"
   shift

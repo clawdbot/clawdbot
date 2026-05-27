@@ -23,6 +23,10 @@ if [[ ! -e "$ARTIFACT" ]]; then
   echo "Error: artifact not found: $ARTIFACT" >&2
   exit 1
 fi
+if [[ -n "$STAPLE_APP_PATH" && ! -d "$STAPLE_APP_PATH" ]]; then
+  echo "Error: STAPLE_APP_PATH not found: $STAPLE_APP_PATH" >&2
+  exit 1
+fi
 
 if ! command -v xcrun >/dev/null 2>&1; then
   echo "Error: xcrun not found; install Xcode command line tools." >&2
@@ -53,13 +57,9 @@ case "$ARTIFACT" in
 esac
 
 if [[ -n "$STAPLE_APP_PATH" ]]; then
-  if [[ -d "$STAPLE_APP_PATH" ]]; then
-    echo "📌 Stapling app: $STAPLE_APP_PATH"
-    xcrun stapler staple "$STAPLE_APP_PATH"
-    xcrun stapler validate "$STAPLE_APP_PATH"
-  else
-    echo "Warn: STAPLE_APP_PATH not found: $STAPLE_APP_PATH" >&2
-  fi
+  echo "📌 Stapling app: $STAPLE_APP_PATH"
+  xcrun stapler staple "$STAPLE_APP_PATH"
+  xcrun stapler validate "$STAPLE_APP_PATH"
 fi
 
 echo "✅ Notarization complete"

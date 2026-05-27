@@ -107,4 +107,21 @@ describe("completion-runtime", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("rejects install when the completion cache is missing", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-home-"));
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-completion-state-"));
+
+    process.env.HOME = homeDir;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+
+    try {
+      await expect(installCompletion("zsh", true, "openclaw")).rejects.toThrow(
+        "Completion cache not found",
+      );
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync } from "node:fs";
+import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
 const PNPM_EXECUTABLE_RE = /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/;
@@ -30,6 +30,18 @@ function hasScriptShebang(value) {
     if (fd !== undefined) {
       closeSync(fd);
     }
+  }
+}
+
+function isExecutableFile(value) {
+  try {
+    if (!statSync(value).isFile()) {
+      return false;
+    }
+    accessSync(value, constants.X_OK);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -85,11 +97,13 @@ function resolveConfiguredPnpmExec(params) {
     };
   }
 
+  const { extension } = inspectExecutablePath(npmExecPath);
   if ((params.platform ?? process.platform) !== "win32") {
-    return undefined;
+    return extension.length === 0 && isExecutableFile(npmExecPath)
+      ? { args: params.pnpmArgs ?? [], command: npmExecPath, shell: false }
+      : undefined;
   }
 
-  const { extension } = inspectExecutablePath(npmExecPath);
   if (extension === ".exe") {
     return { args: params.pnpmArgs ?? [], command: npmExecPath, shell: false };
   }

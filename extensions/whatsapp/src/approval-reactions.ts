@@ -1,59 +1,29 @@
 import type { WAMessage } from "baileys";
+import {
+  buildApprovalReactionHint,
+  createApprovalReactionTargetStore,
+  listApprovalReactionBindings,
+  resolveApprovalReactionTarget,
+  type ApprovalReactionDecisionBinding,
+  type ApprovalReactionTargetRecord,
+} from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getWhatsAppApprovalApprovers, whatsappApprovalAuth } from "./approval-auth.js";
 import { getOptionalWhatsAppRuntime } from "./runtime.js";
 
-const WHATSAPP_APPROVAL_REACTION_META = {
-  "allow-once": {
-    emoji: "👍",
-    label: "Allow Once",
-  },
-  deny: {
-    emoji: "👎",
-    label: "Deny",
-  },
-} satisfies Partial<Record<ExecApprovalReplyDecision, { emoji: string; label: string }>>;
-
-const WHATSAPP_APPROVAL_REACTION_ORDER = [
-  "allow-once",
-  "deny",
-] as const satisfies readonly ExecApprovalReplyDecision[];
-
 const PERSISTENT_NAMESPACE = "whatsapp.approval-reactions";
 const PERSISTENT_MAX_ENTRIES = 1000;
 const DEFAULT_REACTION_TARGET_TTL_MS = 24 * 60 * 60 * 1000;
 
-export type WhatsAppApprovalReactionBinding = {
-  decision: ExecApprovalReplyDecision;
-  emoji: string;
-  label: string;
-};
+export type WhatsAppApprovalReactionBinding = ApprovalReactionDecisionBinding;
 
 type WhatsAppApprovalReactionResolution = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
 };
 
-type WhatsAppApprovalReactionTarget = {
-  approvalId: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-};
-
-type PersistedWhatsAppApprovalReactionTarget = {
-  version: 1;
-  target: WhatsAppApprovalReactionTarget;
-};
-
-type WhatsAppApprovalReactionStore = {
-  register(
-    key: string,
-    value: PersistedWhatsAppApprovalReactionTarget,
-    opts?: { ttlMs?: number },
-  ): Promise<void>;
-  lookup(key: string): Promise<PersistedWhatsAppApprovalReactionTarget | undefined>;
-  delete(key: string): Promise<boolean>;
-};
+type WhatsAppApprovalReactionTarget = ApprovalReactionTargetRecord;
 
 type WhatsAppApprovalReactionEvent = {
   remoteJid: string;
@@ -62,10 +32,17 @@ type WhatsAppApprovalReactionEvent = {
   reactionKey: string;
 };
 
-const whatsappApprovalReactionTargets = new Map<string, WhatsAppApprovalReactionTarget>();
-let persistentStore: WhatsAppApprovalReactionStore | undefined;
-let persistentStoreDisabled = false;
 let resolverRuntimePromise: Promise<typeof import("./approval-resolver.js")> | undefined;
+
+const whatsappApprovalReactionTargets =
+  createApprovalReactionTargetStore<WhatsAppApprovalReactionTarget>({
+    namespace: PERSISTENT_NAMESPACE,
+    maxEntries: PERSISTENT_MAX_ENTRIES,
+    defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
+    openStore: (storeParams) => getOptionalWhatsAppRuntime()?.state.openKeyedStore(storeParams),
+    logPersistentError: reportPersistentApprovalReactionError,
+    readPersistedTarget,
+  });
 
 function loadApprovalResolver(): Promise<typeof import("./approval-resolver.js")> {
   resolverRuntimePromise ??= import("./approval-resolver.js");
@@ -96,172 +73,30 @@ function reportPersistentApprovalReactionError(error: unknown): void {
   }
 }
 
-function disablePersistentApprovalReactionStore(error: unknown): void {
-  persistentStoreDisabled = true;
-  persistentStore = undefined;
-  reportPersistentApprovalReactionError(error);
-}
-
-function getPersistentApprovalReactionStore(): WhatsAppApprovalReactionStore | undefined {
-  if (persistentStoreDisabled) {
-    return undefined;
-  }
-  if (persistentStore) {
-    return persistentStore;
-  }
-  const runtime = getOptionalWhatsAppRuntime();
-  if (!runtime) {
-    return undefined;
-  }
-  try {
-    persistentStore = runtime.state.openKeyedStore<PersistedWhatsAppApprovalReactionTarget>({
-      namespace: PERSISTENT_NAMESPACE,
-      maxEntries: PERSISTENT_MAX_ENTRIES,
-      defaultTtlMs: DEFAULT_REACTION_TARGET_TTL_MS,
-    });
-    return persistentStore;
-  } catch (error) {
-    disablePersistentApprovalReactionStore(error);
-    return undefined;
-  }
-}
-
-function readPersistedTarget(value: unknown): WhatsAppApprovalReactionTarget | null {
-  const persisted = value as PersistedWhatsAppApprovalReactionTarget | undefined;
-  if (
-    persisted?.version !== 1 ||
-    !persisted.target ||
-    typeof persisted.target.approvalId !== "string" ||
-    !Array.isArray(persisted.target.allowedDecisions)
-  ) {
+function readPersistedTarget(target: unknown): WhatsAppApprovalReactionTarget | null {
+  const value = target as Partial<WhatsAppApprovalReactionTarget> | null | undefined;
+  if (!value || typeof value.approvalId !== "string" || !Array.isArray(value.allowedDecisions)) {
     return null;
   }
-  return persisted.target;
-}
-
-function rememberPersistentApprovalReactionTarget(params: {
-  key: string;
-  target: WhatsAppApprovalReactionTarget;
-  ttlMs?: number;
-}): void {
-  const ttlMs = params.ttlMs == null ? DEFAULT_REACTION_TARGET_TTL_MS : Math.max(1, params.ttlMs);
-  const store = getPersistentApprovalReactionStore();
-  if (!store) {
-    return;
-  }
-  void store
-    .register(params.key, { version: 1, target: params.target }, { ttlMs })
-    .catch(disablePersistentApprovalReactionStore);
-}
-
-function forgetPersistentApprovalReactionTarget(key: string): void {
-  const store = getPersistentApprovalReactionStore();
-  if (!store) {
-    return;
-  }
-  void store.delete(key).catch(disablePersistentApprovalReactionStore);
-}
-
-async function lookupPersistentApprovalReactionTarget(
-  key: string,
-): Promise<WhatsAppApprovalReactionTarget | null> {
-  const store = getPersistentApprovalReactionStore();
-  if (!store) {
-    return null;
-  }
-  try {
-    return readPersistedTarget(await store.lookup(key));
-  } catch (error) {
-    disablePersistentApprovalReactionStore(error);
-    return null;
-  }
+  return {
+    approvalId: value.approvalId,
+    ...(value.approvalKind === "exec" || value.approvalKind === "plugin"
+      ? { approvalKind: value.approvalKind }
+      : {}),
+    allowedDecisions: value.allowedDecisions,
+  };
 }
 
 export function listWhatsAppApprovalReactionBindings(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): WhatsAppApprovalReactionBinding[] {
-  const allowed = new Set(allowedDecisions);
-  return WHATSAPP_APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision)).map(
-    (decision) => ({
-      decision,
-      emoji: WHATSAPP_APPROVAL_REACTION_META[decision].emoji,
-      label: WHATSAPP_APPROVAL_REACTION_META[decision].label,
-    }),
-  );
+  return listApprovalReactionBindings({ allowedDecisions });
 }
 
 export function buildWhatsAppApprovalReactionHint(
   allowedDecisions: readonly ExecApprovalReplyDecision[],
 ): string | null {
-  const bindings = listWhatsAppApprovalReactionBindings(allowedDecisions);
-  if (bindings.length === 0) {
-    return null;
-  }
-  return `React with:\n\n${bindings.map((binding) => `${binding.emoji} ${binding.label}`).join("\n")}`;
-}
-
-function insertWhatsAppApprovalReactionHintNearHeader(params: {
-  text: string;
-  hint: string;
-}): string {
-  const lines = params.text.split(/\r?\n/);
-  const idLineIndex = lines.findIndex((line) => /^ID:\s*\S+/.test(line.trim()));
-  if (idLineIndex >= 0) {
-    const before = lines.slice(0, idLineIndex + 1).join("\n");
-    const after = lines
-      .slice(idLineIndex + 1)
-      .join("\n")
-      .replace(/^\n+/, "");
-    return after ? `${before}\n\n${params.hint}\n\n${after}` : `${before}\n\n${params.hint}`;
-  }
-  return `${params.hint}\n\n${params.text}`;
-}
-
-export function addWhatsAppApprovalReactionHintToText(params: {
-  text: string;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-}): string {
-  if (/(^|\n)React with:\s*(\n|$)/i.test(params.text)) {
-    return params.text;
-  }
-  const hint = buildWhatsAppApprovalReactionHint(params.allowedDecisions);
-  return hint
-    ? insertWhatsAppApprovalReactionHintNearHeader({ text: params.text, hint })
-    : params.text;
-}
-
-export function appendWhatsAppApprovalReactionHintForOutboundMessage(text: string): string {
-  if (/(^|\n)React with:\s*(\n|$)/i.test(text)) {
-    return text;
-  }
-  const binding = extractWhatsAppApprovalPromptBinding(text);
-  if (!binding) {
-    return text;
-  }
-  return addWhatsAppApprovalReactionHintToText({
-    text,
-    allowedDecisions: binding.allowedDecisions,
-  });
-}
-
-function resolveWhatsAppApprovalReactionDecision(
-  reactionKey: string,
-  allowedDecisions: readonly ExecApprovalReplyDecision[],
-): ExecApprovalReplyDecision | null {
-  const normalizedReaction = reactionKey.trim();
-  if (!normalizedReaction) {
-    return null;
-  }
-  const allowed = new Set(allowedDecisions);
-  for (const decision of WHATSAPP_APPROVAL_REACTION_ORDER) {
-    if (!allowed.has(decision)) {
-      continue;
-    }
-    if (WHATSAPP_APPROVAL_REACTION_META[decision].emoji === normalizedReaction) {
-      return decision;
-    }
-  }
-  return null;
+  return buildApprovalReactionHint({ allowedDecisions });
 }
 
 function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | null {
@@ -275,30 +110,36 @@ function normalizeApprovalDecision(value: string): ExecApprovalReplyDecision | n
   return null;
 }
 
+const APPROVAL_ID_LINE_RE = /^\s*ID:\s*([A-Za-z0-9][A-Za-z0-9._:-]*)\s*$/i;
+const APPROVE_COMMAND_LINE_RE = /\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i;
+
 export function extractWhatsAppApprovalPromptBinding(text: string): {
   approvalId: string;
   allowedDecisions: ExecApprovalReplyDecision[];
 } | null {
+  const lines = text.split(/\r?\n/);
+  const idHeaderMatch = lines
+    .map((line) => line.match(APPROVAL_ID_LINE_RE))
+    .find((match): match is RegExpMatchArray => Boolean(match));
+  if (!idHeaderMatch) {
+    return null;
+  }
+
+  const approvalId = idHeaderMatch[1];
   const allowedDecisions: ExecApprovalReplyDecision[] = [];
-  let approvalId = "";
-  for (const line of text.split(/\r?\n/)) {
-    const match = line.match(/\/approve(?:@[^\s]+)?\s+([A-Za-z0-9][A-Za-z0-9._:-]*)\s+(.+)$/i);
-    if (!match) {
+  for (const line of lines) {
+    const match = line.match(APPROVE_COMMAND_LINE_RE);
+    if (!match || match[1] !== approvalId) {
       continue;
     }
-    if (approvalId && match[1] !== approvalId) {
-      continue;
-    }
-    approvalId ||= match[1];
-    const decisions = match[2].split(/[\s|,]+/);
-    for (const decisionText of decisions) {
+    for (const decisionText of match[2].split(/[\s|,]+/)) {
       const decision = normalizeApprovalDecision(decisionText);
       if (decision && !allowedDecisions.includes(decision)) {
         allowedDecisions.push(decision);
       }
     }
   }
-  return approvalId && allowedDecisions.length > 0 ? { approvalId, allowedDecisions } : null;
+  return allowedDecisions.length > 0 ? { approvalId, allowedDecisions } : null;
 }
 
 export function registerWhatsAppApprovalReactionTarget(params: {
@@ -317,9 +158,12 @@ export function registerWhatsAppApprovalReactionTarget(params: {
   if (!key || !approvalId || allowedDecisions.length === 0) {
     return null;
   }
-  const target = { approvalId, allowedDecisions };
-  whatsappApprovalReactionTargets.set(key, target);
-  rememberPersistentApprovalReactionTarget({ key, target, ttlMs: params.ttlMs });
+  const target: WhatsAppApprovalReactionTarget = {
+    approvalId,
+    approvalKind: approvalId.startsWith("plugin:") ? "plugin" : "exec",
+    allowedDecisions,
+  };
+  whatsappApprovalReactionTargets.register(key, target, { ttlMs: params.ttlMs });
   return target;
 }
 
@@ -356,22 +200,22 @@ export function unregisterWhatsAppApprovalReactionTarget(params: {
     return;
   }
   whatsappApprovalReactionTargets.delete(key);
-  forgetPersistentApprovalReactionTarget(key);
 }
 
 function resolveTarget(params: {
   target: WhatsAppApprovalReactionTarget | null | undefined;
   reactionKey: string;
 }): WhatsAppApprovalReactionResolution | null {
-  const target = params.target;
-  if (!target) {
-    return null;
-  }
-  const decision = resolveWhatsAppApprovalReactionDecision(
-    params.reactionKey,
-    target.allowedDecisions,
-  );
-  return decision ? { approvalId: target.approvalId, decision } : null;
+  const resolved = resolveApprovalReactionTarget({
+    target: params.target,
+    reactionKey: params.reactionKey,
+  });
+  return resolved
+    ? {
+        approvalId: resolved.approvalId,
+        decision: resolved.decision,
+      }
+    : null;
 }
 
 export async function resolveWhatsAppApprovalReactionTargetWithPersistence(params: {
@@ -384,15 +228,8 @@ export async function resolveWhatsAppApprovalReactionTargetWithPersistence(param
   if (!key) {
     return null;
   }
-  const inMemory = resolveTarget({
-    target: whatsappApprovalReactionTargets.get(key),
-    reactionKey: params.reactionKey,
-  });
-  if (inMemory) {
-    return inMemory;
-  }
   return resolveTarget({
-    target: await lookupPersistentApprovalReactionTarget(key),
+    target: await whatsappApprovalReactionTargets.lookup(key),
     reactionKey: params.reactionKey,
   });
 }
@@ -514,8 +351,6 @@ export async function maybeResolveWhatsAppApprovalReaction(params: {
 }
 
 export function clearWhatsAppApprovalReactionTargetsForTest(): void {
-  whatsappApprovalReactionTargets.clear();
-  persistentStore = undefined;
-  persistentStoreDisabled = false;
+  whatsappApprovalReactionTargets.clearForTest();
   resolverRuntimePromise = undefined;
 }

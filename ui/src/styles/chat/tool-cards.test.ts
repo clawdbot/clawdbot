@@ -20,4 +20,14 @@ describe("chat tool card styles", () => {
     expect(css).toContain("white-space: normal;");
     expect(css).not.toContain("max-width: 42%;");
   });
+
+  it("keeps expanded tool cards and actions usable on narrow screens", () => {
+    const css = readToolCardsCss();
+
+    expect(css).toContain(".chat-tool-card--expanded {");
+    expect(css).toContain("max-height: none;");
+    expect(css).toContain("overflow: hidden;");
+    expect(css).toContain("white-space: nowrap;");
+    expect(css).toContain(".chat-tool-card__block-content code");
+  });
 });

@@ -136,42 +136,56 @@ vi.mock("./model-auth-env-vars.js", () => {
     voyage: ["VOYAGE_API_KEY"],
     zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
   } as const;
+  const aliasMap = {
+    modelstudio: "qwen",
+    qwencloud: "qwen",
+    "z.ai": "zai",
+    "z-ai": "zai",
+    "opencode-go-auth": "opencode-go",
+    bedrock: "amazon-bedrock",
+    "aws-bedrock": "amazon-bedrock",
+  };
+  const resolveProviderEnvAuthEvidence = (params?: { config?: OpenClawConfig }) => {
+    const evidence = {
+      "google-vertex": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
+          fallbackPaths: [
+            "${HOME}/.config/gcloud/application_default_credentials.json",
+            "${APPDATA}/gcloud/application_default_credentials.json",
+          ],
+          requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+          requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
+          credentialMarker: "gcp-vertex-credentials",
+          source: "gcloud adc",
+        },
+      ],
+    } satisfies Record<string, readonly unknown[]>;
+    if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
+      return evidence;
+    }
+    return {
+      ...evidence,
+      "workspace-cloud": [
+        {
+          type: "local-file-with-env",
+          fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
+          credentialMarker: "workspace-cloud-local-credentials",
+          source: "workspace cloud credentials",
+        },
+      ],
+    };
+  };
   return {
-    PROVIDER_ENV_API_KEY_CANDIDATES: candidates,
     listKnownProviderEnvApiKeyNames: () => [...new Set(Object.values(candidates).flat())],
     resolveProviderEnvApiKeyCandidates: () => candidates,
-    resolveProviderEnvAuthEvidence: (params?: { config?: OpenClawConfig }) => {
-      const evidence = {
-        "google-vertex": [
-          {
-            type: "local-file-with-env",
-            fileEnvVar: "GOOGLE_APPLICATION_CREDENTIALS",
-            fallbackPaths: [
-              "${HOME}/.config/gcloud/application_default_credentials.json",
-              "${APPDATA}/gcloud/application_default_credentials.json",
-            ],
-            requiresAnyEnv: ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
-            requiresAllEnv: ["GOOGLE_CLOUD_LOCATION"],
-            credentialMarker: "gcp-vertex-credentials",
-            source: "gcloud adc",
-          },
-        ],
-      } satisfies Record<string, readonly unknown[]>;
-      if (!hasAllowedPlugin(params?.config, "workspace-cloud")) {
-        return evidence;
-      }
-      return {
-        ...evidence,
-        "workspace-cloud": [
-          {
-            type: "local-file-with-env",
-            fileEnvVar: "WORKSPACE_CLOUD_CREDENTIALS",
-            credentialMarker: "workspace-cloud-local-credentials",
-            source: "workspace cloud credentials",
-          },
-        ],
-      };
-    },
+    resolveProviderEnvAuthEvidence,
+    resolveProviderEnvAuthLookupMaps: (params?: { config?: OpenClawConfig }) => ({
+      aliasMap,
+      envCandidateMap: candidates,
+      authEvidenceMap: resolveProviderEnvAuthEvidence(params),
+    }),
   };
 });
 

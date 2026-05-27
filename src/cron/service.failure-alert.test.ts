@@ -414,6 +414,138 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("surfaces classified causes before raw errors in failure alerts", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "cron: job execution timed out",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "timeout cause alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "ping" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    const alertText = alertCallArg(sendCronFailureAlert).text;
+    expect(alertText).toBe(
+      'Cron job "timeout cause alert" failed 1 times\n' +
+        "Cause: timeout\n" +
+        "Last error: cron: job execution timed out",
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("uses provider context when surfacing failure alert causes", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "403 Key limit exceeded (monthly limit)",
+      provider: "openrouter",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "provider limit alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "ping" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    const alertText = alertCallArg(sendCronFailureAlert).text;
+    expect(alertText).toBe(
+      'Cron job "provider limit alert" failed 1 times\n' +
+        "Cause: billing\n" +
+        "Last error: 403 Key limit exceeded (monthly limit)",
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("keeps skipped alert text unchanged when the skip reason looks classifiable", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "skipped" as const,
+      error: "cron: job execution timed out",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+          includeSkipped: true,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "skipped timeout",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "ping" },
+      delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    const alertText = alertCallArg(sendCronFailureAlert).text;
+    expect(alertText).toBe(
+      'Cron job "skipped timeout" skipped 1 times\nSkip reason: cron: job execution timed out',
+    );
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("tracks skipped runs without alerting or affecting error backoff when includeSkipped is off", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);

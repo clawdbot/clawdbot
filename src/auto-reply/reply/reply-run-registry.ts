@@ -110,6 +110,8 @@ const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STATE_KEY,
   waitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
 }));
 
+export const REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS = 15_000;
+
 export class ReplyRunAlreadyActiveError extends Error {
   constructor(sessionKey: string) {
     super(`Reply run already active for ${sessionKey}`);
@@ -440,7 +442,6 @@ export const replyRunRegistry: ReplyRunRegistry = {
     return true;
   },
   waitForIdle(sessionKey, timeoutMs, opts) {
-    const effectiveTimeoutMs = timeoutMs ?? 15_000;
     const normalizedSessionKey = normalizeOptionalString(sessionKey);
     if (!normalizedSessionKey || !replyRunState.activeRunsByKey.has(normalizedSessionKey)) {
       return Promise.resolve(true);
@@ -471,8 +472,8 @@ export const replyRunRegistry: ReplyRunRegistry = {
           resolve(ended);
         },
       };
-      if (Number.isFinite(effectiveTimeoutMs)) {
-        waiter.timer = setTimeout(() => waiter.finish(false), Math.max(100, effectiveTimeoutMs));
+      if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+        waiter.timer = setTimeout(() => waiter.finish(false), Math.max(100, timeoutMs));
       }
       if (opts?.signal) {
         abortHandler = () => waiter.finish(false);
@@ -543,7 +544,7 @@ export function forceClearReplyRunBySessionId(sessionId: string, cause?: unknown
 
 export function waitForReplyRunEndBySessionId(
   sessionId: string,
-  timeoutMs = 15_000,
+  timeoutMs: number,
 ): Promise<boolean> {
   const waitKey = resolveReplyRunWaitKey(sessionId);
   if (!waitKey) {

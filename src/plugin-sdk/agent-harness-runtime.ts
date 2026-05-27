@@ -145,6 +145,13 @@ export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
+export {
+  inspectRuntimeToolInputSchemas,
+  projectRuntimeToolInputSchema,
+  type RuntimeToolInputSchemaJson,
+  type RuntimeToolInputSchemaProjection,
+  type RuntimeToolSchemaDiagnostic,
+} from "../agents/tool-schema-projection.js";
 export type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,

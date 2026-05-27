@@ -217,7 +217,7 @@ export async function handleQaInbound(params: {
     ...mediaPayload,
   });
 
-  await runtime.channel.turn.runAssembled({
+  await runtime.channel.inbound.dispatchReply({
     cfg: params.config as OpenClawConfig,
     channel: params.channelId,
     accountId: params.account.accountId,

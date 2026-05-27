@@ -5,22 +5,6 @@ import { describe, expect, it } from "vitest";
 import { normalizeBrowserScreenshot } from "./screenshot.js";
 
 describe("browser screenshot normalization", () => {
-  const unavailableImageBackend = process.platform === "win32" ? "sips" : "windows-native";
-
-  async function withUnavailableImageBackend<T>(fn: () => Promise<T>): Promise<T> {
-    const previousBackend = process.env.OPENCLAW_IMAGE_BACKEND;
-    process.env.OPENCLAW_IMAGE_BACKEND = unavailableImageBackend;
-    try {
-      return await fn();
-    } finally {
-      if (previousBackend === undefined) {
-        delete process.env.OPENCLAW_IMAGE_BACKEND;
-      } else {
-        process.env.OPENCLAW_IMAGE_BACKEND = previousBackend;
-      }
-    }
-  }
-
   it("shrinks oversized images to <=2000x2000 and <=5MB", async () => {
     const bigPng = createSolidPngBuffer(2100, 2100, { r: 12, g: 34, b: 56 });
 
@@ -46,19 +30,5 @@ describe("browser screenshot normalization", () => {
     });
 
     expect(normalized.buffer.equals(jpeg)).toBe(true);
-  });
-
-  it("rejects screenshots above max side when no image processor is available", async () => {
-    const png = createSolidPngBuffer(420, 120, { r: 12, g: 34, b: 56 });
-    expect(png.byteLength).toBeLessThan(5 * 1024 * 1024);
-
-    await withUnavailableImageBackend(async () => {
-      await expect(
-        normalizeBrowserScreenshot(png, {
-          maxSide: 120,
-          maxBytes: 5 * 1024 * 1024,
-        }),
-      ).rejects.toThrow(/image processor unavailable/i);
-    });
   });
 });

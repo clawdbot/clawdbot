@@ -754,6 +754,33 @@
     max-height: 380px;
   }
 
+  /* Reset the desktop fill-height chain on mobile — single page scroll is
+     more usable on small viewports than a tiny pinned log panel.
+     Selectors are intentionally double-classed so they outrank the
+     desktop rules in components.css / config-quick.css, which are
+     imported AFTER this file (see ui/src/styles.css). */
+  .card--fill-height.card--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .content.content--logs {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .content.content--logs .settings-workspace {
+    display: block;
+    height: auto;
+    flex: initial;
+  }
+
+  .content.content--logs .settings-workspace__body {
+    display: block;
+    flex: initial;
+  }
+
   .log-row {
     grid-template-columns: 1fr;
     gap: 4px;

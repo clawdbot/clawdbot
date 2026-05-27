@@ -17,6 +17,9 @@ import {
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
 export const MAX_CLI_SESSION_RESEED_HISTORY_CHARS = 12 * 1024;
+export const MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS = 256 * 1024;
+const CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE = 0.08;
+const CHARS_PER_TOKEN_ESTIMATE = 4;
 
 type HistoryMessage = {
   role?: unknown;
@@ -52,6 +55,19 @@ const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>
   "mcp",
   "session-expired",
 ]);
+
+export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
+  if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
+    return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
+  }
+  const contextShareChars = Math.floor(
+    contextWindowTokens * CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE * CHARS_PER_TOKEN_ESTIMATE,
+  );
+  return Math.max(
+    MAX_CLI_SESSION_RESEED_HISTORY_CHARS,
+    Math.min(MAX_AUTO_CLI_SESSION_RESEED_HISTORY_CHARS, contextShareChars),
+  );
+}
 
 function coerceHistoryText(content: unknown): string {
   if (typeof content === "string") {

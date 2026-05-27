@@ -195,6 +195,10 @@ import {
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import {
+  filterRuntimeCompatibleTools,
+  type RuntimeToolSchemaDiagnostic,
+} from "../../tool-schema-projection.js";
+import {
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -249,6 +253,7 @@ import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
   setActiveEmbeddedRun,
+  updateActiveEmbeddedRunSessionFile,
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
 import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
@@ -339,7 +344,9 @@ import {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 import {
+  acquireEmbeddedAttemptSessionFileOwner,
   EmbeddedAttemptSessionTakeoverError,
+  type EmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   installPromptSubmissionLockRelease,
   installSessionExternalHookWriteLock,
@@ -478,6 +485,40 @@ function collectTrustedLocalMediaToolNames(params: {
     ),
     ...params.trustedPluginToolNames,
   ]);
+}
+
+function logRuntimeToolSchemaQuarantine(params: {
+  diagnostics: readonly RuntimeToolSchemaDiagnostic[];
+  tools: readonly Parameters<typeof getPluginToolMeta>[0][];
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+}): void {
+  if (params.diagnostics.length === 0) {
+    return;
+  }
+  const summary = params.diagnostics
+    .map((diagnostic) => {
+      const tool = params.tools[diagnostic.toolIndex];
+      const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
+      const owner = pluginId ? ` plugin=${pluginId}` : "";
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.blocked",
+        runId: params.runId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+        toolName: diagnostic.toolName,
+        toolSource: pluginId ? "plugin" : "core",
+        ...(pluginId ? { toolOwner: pluginId } : {}),
+        deniedReason: "unsupported_tool_schema",
+        reason: diagnostic.violations.join(", "),
+      });
+      return `${diagnostic.toolName}${owner}: ${diagnostic.violations.join(", ")}`;
+    })
+    .join("; ");
+  log.warn(
+    `[tools] quarantined ${params.diagnostics.length} unsupported tool schema${params.diagnostics.length === 1 ? "" : "s"} before model runtime projection: ${summary}. Run openclaw doctor for details.`,
+  );
 }
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
@@ -1344,6 +1385,7 @@ export async function runEmbeddedAttempt(
   let beforeAgentRunBlockedBy: string | undefined;
   // Releases the eager session lock if post-prompt code exits before cleanup.
   let releaseRetainedSessionLock: (() => Promise<void>) | undefined;
+  let retainedSessionFileOwner: EmbeddedAttemptSessionFileOwner | undefined;
   let bundleMcpRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let bundleLspRuntime: Awaited<ReturnType<typeof createBundleLspToolRuntime>> | undefined;
   let toolSearchCatalogRef: ToolSearchCatalogRef | undefined;
@@ -1917,11 +1959,22 @@ export async function runEmbeddedAttempt(
             model: params.model,
           })
         : filteredBundledTools;
-    const uncompactedEffectiveTools = filterLocalModelLeanTools({
+    const projectedUncompactedEffectiveTools = filterLocalModelLeanTools({
       tools: [...tools, ...normalizedBundledTools],
       config: params.config,
       agentId: sessionAgentId,
     });
+    const uncompactedToolSchemaProjection = filterRuntimeCompatibleTools(
+      projectedUncompactedEffectiveTools,
+    );
+    logRuntimeToolSchemaQuarantine({
+      diagnostics: uncompactedToolSchemaProjection.diagnostics,
+      tools: projectedUncompactedEffectiveTools,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+    const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
     let effectiveTools = uncompactedEffectiveTools;
     const catalogToolHookContext = {
       agentId: sessionAgentId,
@@ -1978,11 +2031,20 @@ export async function runEmbeddedAttempt(
           toolHookContext: catalogToolHookContext,
         });
     toolSearchCatalogApplied = true;
-    effectiveTools = filterLocalModelLeanTools({
+    const projectedToolSearchTools = filterLocalModelLeanTools({
       tools: toolSearch.tools,
       config: params.config,
       agentId: sessionAgentId,
     });
+    const toolSearchSchemaProjection = filterRuntimeCompatibleTools(projectedToolSearchTools);
+    logRuntimeToolSchemaQuarantine({
+      diagnostics: toolSearchSchemaProjection.diagnostics,
+      tools: projectedToolSearchTools,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    });
+    effectiveTools = [...toolSearchSchemaProjection.tools];
     if (toolSearch.compacted) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
@@ -2279,6 +2341,11 @@ export async function runEmbeddedAttempt(
       compactionTimeoutMs,
     });
     await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+    retainedSessionFileOwner = await acquireEmbeddedAttemptSessionFileOwner({
+      sessionFile: params.sessionFile,
+      timeoutMs: sessionWriteLockOptions.maxHoldMs,
+      signal: params.abortSignal,
+    });
     const sessionLockController = await createEmbeddedAttemptSessionLockController({
       acquireSessionWriteLock,
       lockOptions: {
@@ -2321,12 +2388,15 @@ export async function runEmbeddedAttempt(
 
       await prewarmSessionFile(params.sessionFile);
       await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
+      const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
+      await throwIfAttemptAbortSignalFiredAfterPrepCleanup();
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         config: params.config,
         contextWindowTokens: params.contextTokenBudget,
         inputProvenance: params.inputProvenance,
+        preparedUserTurnMessage,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
         missingToolResultText:
           params.model.api === "openai-responses" ||
@@ -3490,7 +3560,12 @@ export async function runEmbeddedAttempt(
           onBeforeLifecycleTerminal: () => {
             // Clear embedded-run activity before emitting terminal lifecycle events so
             // post-completion cleanup does not observe a logically finished run as active.
-            clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+            clearActiveEmbeddedRun(
+              params.sessionId,
+              queueHandle,
+              params.sessionKey,
+              params.sessionFile,
+            );
           },
           enforceFinalTag: params.enforceFinalTag,
           silentExpected: params.silentExpected,
@@ -3606,7 +3681,7 @@ export async function runEmbeddedAttempt(
       if (params.replyOperation) {
         params.replyOperation.attachBackend(queueHandle);
       }
-      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+      setActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey, params.sessionFile);
 
       let abortWarnTimer: NodeJS.Timeout | undefined;
       const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
@@ -4425,6 +4500,7 @@ export async function runEmbeddedAttempt(
               runId: params.runId,
               sessionId: params.sessionId,
             });
+            await sessionLockController.releaseHeldLockForAbort();
             await sessionLockController.waitForSessionEvents(activeSession);
             await sessionLockController.withSessionWriteLock(async () => {
               stripSessionsYieldArtifacts(activeSession);
@@ -4728,6 +4804,7 @@ export async function runEmbeddedAttempt(
               if (rotation.rotated) {
                 sessionIdUsed = rotation.sessionId ?? sessionIdUsed;
                 sessionFileUsed = rotation.sessionFile ?? sessionFileUsed;
+                updateActiveEmbeddedRunSessionFile(params.sessionId, sessionFileUsed);
                 log.info(
                   `[compaction] rotated active transcript after automatic compaction ` +
                     `(sessionKey=${params.sessionKey ?? params.sessionId})`,
@@ -4801,7 +4878,12 @@ export async function runEmbeddedAttempt(
         if (params.replyOperation) {
           params.replyOperation.detachBackend(queueHandle);
         }
-        clearActiveEmbeddedRun(params.sessionId, queueHandle, params.sessionKey);
+        clearActiveEmbeddedRun(
+          params.sessionId,
+          queueHandle,
+          params.sessionKey,
+          params.sessionFile,
+        );
       }
 
       const toolMetasNormalized = toolMetas
@@ -5256,6 +5338,8 @@ export async function runEmbeddedAttempt(
         `failed to release retained session lock on attempt teardown: runId=${params.runId} ${String(releaseErr)}`,
       );
     }
+    retainedSessionFileOwner?.release();
+    retainedSessionFileOwner = undefined;
     emitDiagnosticRunCompleted?.(
       aborted ? "aborted" : "error",
       promptError ?? new Error("run exited before diagnostic completion"),

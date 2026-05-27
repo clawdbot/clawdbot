@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -41,7 +42,10 @@ export function registerTuiCli(program: Command) {
             `warning: invalid --timeout-ms "${String(opts.timeoutMs)}"; ignoring`,
           );
         }
-        const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
+        const historyLimit = parseStrictPositiveInteger(opts.historyLimit ?? "200");
+        if (historyLimit === undefined) {
+          throw new Error("--history-limit must be a positive integer.");
+        }
         const { runTui } = await import("../tui/tui.js");
         await runTui({
           local: isLocal,
@@ -53,7 +57,7 @@ export function registerTuiCli(program: Command) {
           thinking: opts.thinking as string | undefined,
           message: opts.message as string | undefined,
           timeoutMs,
-          historyLimit: Number.isNaN(historyLimit) ? undefined : historyLimit,
+          historyLimit,
           forceProcessExitOnReturn: true,
         });
       } catch (err) {

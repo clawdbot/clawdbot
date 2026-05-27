@@ -20,6 +20,9 @@ export interface NpmUpdateScriptInput {
 }
 
 const windowsStalePostSwapImportRegex = String.raw`node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\.js`;
+const macosGuestPath =
+  "/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/usr/local/bin:/usr/local/sbin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin";
+const macosOpenClawCommand = '"$OPENCLAW_BIN"';
 
 function posixModelProviderConfigCommands(
   command: string,
@@ -140,7 +143,14 @@ if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
 
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
   return String.raw`set -euo pipefail
-export PATH=/opt/homebrew/bin:/opt/homebrew/opt/node/bin:/opt/homebrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin
+export PATH=${macosGuestPath}
+resolve_required_command() {
+  command -v "$1" || {
+    echo "required command not found on PATH: $1" >&2
+    exit 127
+  }
+}
+OPENCLAW_BIN="$(resolve_required_command openclaw)"
 scrub_future_plugin_entries() {
   python3 - <<'PY'
 import json
@@ -167,7 +177,7 @@ path.write_text(json.dumps(config, indent=2) + "\n")
 PY
 }
 stop_openclaw_gateway_processes() {
-  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw gateway stop || true
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop || true
   pkill -f 'openclaw.*gateway' >/dev/null 2>&1 || true
   if command -v lsof >/dev/null 2>&1; then
     pids="$(lsof -tiTCP:18789 -sTCP:LISTEN 2>/dev/null || true)"
@@ -184,13 +194,13 @@ start_openclaw_gateway() {
   trap '' HUP
   /usr/bin/env OPENCLAW_HOME="$HOME" OPENCLAW_STATE_DIR="$HOME/.openclaw" OPENCLAW_CONFIG_PATH="$HOME/.openclaw/openclaw.json" ${input.auth.apiKeyEnv}=${shellQuote(
     input.auth.apiKeyValue,
-  )} /opt/homebrew/bin/openclaw gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
+  )} "$OPENCLAW_BIN" gateway run --bind loopback --port 18789 --force >/tmp/openclaw-parallels-macos-gateway.log 2>&1 </dev/null &
   sleep 1
 }
 wait_for_gateway() {
   deadline=$((SECONDS + 240))
   while [ "$SECONDS" -lt "$deadline" ]; do
-    if /opt/homebrew/bin/openclaw gateway status --deep --require-rpc --timeout 15000; then
+    if "$OPENCLAW_BIN" gateway status --deep --require-rpc --timeout 15000; then
       return
     fi
     sleep 2
@@ -201,16 +211,16 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
-${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
+OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+${posixVersionCheck(macosOpenClawCommand, input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
-/opt/homebrew/bin/openclaw models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderConfigCommands("/opt/homebrew/bin/openclaw", input.auth.modelId, "macos")}
-/opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
-/opt/homebrew/bin/openclaw config set tools.profile minimal
+"$OPENCLAW_BIN" models set ${shellQuote(input.auth.modelId)}
+${posixModelProviderConfigCommands(macosOpenClawCommand, input.auth.modelId, "macos")}
+"$OPENCLAW_BIN" config set agents.defaults.skipBootstrap true --strict-json
+"$OPENCLAW_BIN" config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${posixAssertAgentOkScript("/opt/homebrew/bin/openclaw", input, "parallels-npm-update-macos")}`;
+${posixAssertAgentOkScript(macosOpenClawCommand, input, "parallels-npm-update-macos")}`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {

@@ -270,6 +270,13 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.resumeArgs).toContain("{sessionId}");
   });
 
+  it("passes system prompt on every turn (issue #80374 — systemPromptWhen must be 'always')", () => {
+    // Before fix this was hardcoded to "first", which silently dropped
+    // systemPromptOverride on every resumed / compacted claude-cli session.
+    const backend = buildAnthropicCliBackend();
+    expect(backend.config.systemPromptWhen).toBe("always");
+  });
+
   it("leaves claude cli subscription-managed, restricts setting sources, and clears inherited env overrides", () => {
     const backend = buildAnthropicCliBackend();
 

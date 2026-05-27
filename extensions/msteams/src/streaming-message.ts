@@ -9,7 +9,7 @@
  * Uses the shared draft-stream-loop for throttling (avoids rate limits).
  */
 
-import { createDraftStreamLoop, type DraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createDraftStreamLoop, type DraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 /** Default throttle interval between stream updates (ms).

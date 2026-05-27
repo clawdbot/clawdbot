@@ -13,6 +13,8 @@ import {
   isHelpOrVersionInvocation,
   isRootHelpInvocation,
   isRootVersionInvocation,
+  normalizeGeneratedHelpCommandArgv,
+  normalizeRootHelpTargetArgv,
   shouldMigrateState,
   shouldMigrateStateFromPath,
 } from "./argv.js";
@@ -66,6 +68,106 @@ describe("argv helpers", () => {
     },
   ])("detects help/version flags: $name", ({ argv, expected }) => {
     expect(hasHelpOrVersion(argv)).toBe(expected);
+  });
+
+  it.each([
+    {
+      name: "known command group help command help flag",
+      argv: ["node", "openclaw", "backup", "help", "--help"],
+      expected: ["node", "openclaw", "backup", "help"],
+    },
+    {
+      name: "known command group help command short help flag",
+      argv: ["node", "openclaw", "--profile", "work", "backup", "help", "-h"],
+      expected: ["node", "openclaw", "--profile", "work", "backup", "help"],
+    },
+    {
+      name: "leaf positional help remains untouched",
+      argv: ["node", "openclaw", "docs", "help", "--help"],
+      expected: ["node", "openclaw", "docs", "help", "--help"],
+    },
+    {
+      name: "known command group help target",
+      argv: ["node", "openclaw", "plugins", "help", "list"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
+      name: "known command group help target help flag",
+      argv: ["node", "openclaw", "plugins", "help", "list", "--help"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
+      name: "unknown plugin command group help target",
+      argv: ["node", "openclaw", "external-plugin", "help", "inspect"],
+      expected: ["node", "openclaw", "external-plugin", "inspect", "--help"],
+    },
+    {
+      name: "unknown plugin command group help target help flag",
+      argv: ["node", "openclaw", "external-plugin", "help", "inspect", "--help"],
+      expected: ["node", "openclaw", "external-plugin", "inspect", "--help"],
+    },
+    {
+      name: "generated help target with trailing root option",
+      argv: ["node", "openclaw", "memory", "help", "status", "--no-color"],
+      expected: ["node", "openclaw", "--no-color", "memory", "status", "--help"],
+    },
+    {
+      name: "extra help positionals remain untouched",
+      argv: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
+      expected: ["node", "openclaw", "backup", "help", "missing", "extra", "--help"],
+    },
+    {
+      name: "terminator help flag remains untouched",
+      argv: ["node", "openclaw", "backup", "help", "--", "--help"],
+      expected: ["node", "openclaw", "backup", "help", "--", "--help"],
+    },
+  ])("normalizes generated help commands: $name", ({ argv, expected }) => {
+    expect(normalizeGeneratedHelpCommandArgv(argv)).toEqual(expected);
+  });
+
+  it.each([
+    {
+      name: "root help target",
+      argv: ["node", "openclaw", "help", "plugins"],
+      expected: ["node", "openclaw", "plugins", "--help"],
+    },
+    {
+      name: "root help target with help flag",
+      argv: ["node", "openclaw", "help", "plugins", "--help"],
+      expected: ["node", "openclaw", "plugins", "--help"],
+    },
+    {
+      name: "root option before help target",
+      argv: ["node", "openclaw", "--profile", "work", "help", "memory"],
+      expected: ["node", "openclaw", "--profile", "work", "memory", "--help"],
+    },
+    {
+      name: "bare root help remains untouched",
+      argv: ["node", "openclaw", "help"],
+      expected: ["node", "openclaw", "help"],
+    },
+    {
+      name: "root help self-help remains untouched",
+      argv: ["node", "openclaw", "help", "--help"],
+      expected: ["node", "openclaw", "help", "--help"],
+    },
+    {
+      name: "nested root help target",
+      argv: ["node", "openclaw", "help", "plugins", "list"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
+      name: "nested root help target with help flag",
+      argv: ["node", "openclaw", "help", "plugins", "list", "--help"],
+      expected: ["node", "openclaw", "plugins", "list", "--help"],
+    },
+    {
+      name: "nested root help target with trailing root option",
+      argv: ["node", "openclaw", "help", "memory", "status", "--no-color"],
+      expected: ["node", "openclaw", "--no-color", "memory", "status", "--help"],
+    },
+  ])("normalizes root help targets: $name", ({ argv, expected }) => {
+    expect(normalizeRootHelpTargetArgv(argv)).toEqual(expected);
   });
 
   it.each([
@@ -468,6 +570,8 @@ describe("argv helpers", () => {
     { argv: ["node", "openclaw", "status"], expected: false },
     { argv: ["node", "openclaw", "health"], expected: false },
     { argv: ["node", "openclaw", "sessions"], expected: false },
+    { argv: ["node", "openclaw", "--profile", "work", "status"], expected: false },
+    { argv: ["node", "openclaw", "--log-level=debug", "models", "list"], expected: false },
     { argv: ["node", "openclaw", "config", "get", "update"], expected: false },
     { argv: ["node", "openclaw", "config", "unset", "update"], expected: false },
     { argv: ["node", "openclaw", "models", "list"], expected: false },

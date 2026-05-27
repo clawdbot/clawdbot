@@ -23,7 +23,7 @@ import {
   FallbackSummaryError,
   testing,
   runWithImageModelFallback,
-  runWithModelFallback,
+  runWithModelFallback as runWithModelFallbackBase,
 } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner/types.js";
@@ -166,6 +166,10 @@ vi.mock("./model-fallback-auth.runtime.js", () => authRuntimeMock.runtime);
 const makeCfg = makeModelFallbackCfg;
 let authTempRoot = "";
 let authTempCounter = 0;
+const emptyManifestPlugins = [] as const;
+
+const runWithModelFallback: typeof runWithModelFallbackBase = (params) =>
+  runWithModelFallbackBase({ manifestPlugins: emptyManifestPlugins, ...params });
 
 beforeAll(() => {
   setDefaultPluginMetadataSnapshot();
@@ -2244,6 +2248,63 @@ describe("runWithModelFallback", () => {
     ).rejects.toThrow("aborted");
 
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when the caller abort signal timed out", async () => {
+    const cfg = makeCfg();
+    const timeoutReason = new Error("chat run timed out");
+    timeoutReason.name = "TimeoutError";
+    const controller = new AbortController();
+    controller.abort(timeoutReason);
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("This operation was aborted"), { name: "AbortError" }),
+      )
+      .mockResolvedValueOnce("fallback should not run");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        abortSignal: controller.signal,
+        run,
+      }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fall back when a timed-out caller abort is classified from the result", async () => {
+    const cfg = makeProviderFallbackCfg("openai-codex");
+    const timeoutReason = new Error("chat run timed out");
+    timeoutReason.name = "TimeoutError";
+    const controller = new AbortController();
+    controller.abort(timeoutReason);
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ payloads: [] })
+      .mockResolvedValueOnce({ payloads: [{ text: "fallback should not run" }] });
+    const classifyResult = vi.fn(() => ({
+      message: "This operation was aborted",
+      reason: "timeout" as const,
+      code: "terminal_abort",
+    }));
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai-codex",
+        model: "m1",
+        abortSignal: controller.signal,
+        run,
+        classifyResult,
+      }),
+    ).rejects.toThrow("This operation was aborted");
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(classifyResult).toHaveBeenCalledTimes(1);
   });
 
   it("appends the configured primary as a last fallback", async () => {

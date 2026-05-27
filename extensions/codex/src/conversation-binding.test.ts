@@ -18,7 +18,11 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),
 }));
 
-vi.mock("./app-server/shared-client.js", () => sharedClientMocks);
+vi.mock("./app-server/shared-client.js", () => ({
+  ...sharedClientMocks,
+  getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,
+  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+}));
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
 
 import {

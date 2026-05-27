@@ -14,8 +14,33 @@ type ResampleKernel = {
   phaseCount: number;
 };
 
+const HOST_IS_LITTLE_ENDIAN = new Uint16Array(new Uint8Array([1, 0]).buffer)[0] === 1;
+
 function clamp16(value: number): number {
   return Math.max(-32768, Math.min(32767, value));
+}
+
+function canUseInt16View(buffer: Buffer): boolean {
+  return HOST_IS_LITTLE_ENDIAN && buffer.byteOffset % Int16Array.BYTES_PER_ELEMENT === 0;
+}
+
+function int16View(buffer: Buffer): Int16Array {
+  return new Int16Array(
+    buffer.buffer,
+    buffer.byteOffset,
+    Math.floor(buffer.byteLength / Int16Array.BYTES_PER_ELEMENT),
+  );
+}
+
+function readInt16Samples(buffer: Buffer): Int16Array {
+  if (canUseInt16View(buffer)) {
+    return int16View(buffer);
+  }
+  const samples = new Int16Array(Math.floor(buffer.byteLength / Int16Array.BYTES_PER_ELEMENT));
+  for (let i = 0; i < samples.length; i += 1) {
+    samples[i] = buffer.readInt16LE(i * Int16Array.BYTES_PER_ELEMENT);
+  }
+  return samples;
 }
 
 function sinc(x: number): number {
@@ -65,8 +90,7 @@ function buildResampleKernel(
 }
 
 function sampleBandlimitedWithCoefficients(
-  input: Buffer,
-  inputSamples: number,
+  input: Int16Array,
   center: number,
   coefficients: Float64Array,
 ): number {
@@ -75,25 +99,24 @@ function sampleBandlimitedWithCoefficients(
 
   for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
     const sampleIndex = center + tap;
-    if (sampleIndex < 0 || sampleIndex >= inputSamples) {
+    if (sampleIndex < 0 || sampleIndex >= input.length) {
       continue;
     }
     const coeff = coefficients[tap + RESAMPLE_HALF_TAPS] ?? 0;
-    weighted += input.readInt16LE(sampleIndex * 2) * coeff;
+    weighted += (input[sampleIndex] ?? 0) * coeff;
     weightSum += coeff;
   }
 
   if (weightSum === 0) {
-    const nearest = Math.max(0, Math.min(inputSamples - 1, center));
-    return input.readInt16LE(nearest * 2);
+    const nearest = Math.max(0, Math.min(input.length - 1, center));
+    return input[nearest] ?? 0;
   }
 
   return weighted / weightSum;
 }
 
 function sampleBandlimited(
-  input: Buffer,
-  inputSamples: number,
+  input: Int16Array,
   srcPos: number,
   cutoffCyclesPerSample: number,
 ): number {
@@ -103,20 +126,20 @@ function sampleBandlimited(
 
   for (let tap = -RESAMPLE_HALF_TAPS; tap <= RESAMPLE_HALF_TAPS; tap += 1) {
     const sampleIndex = center + tap;
-    if (sampleIndex < 0 || sampleIndex >= inputSamples) {
+    if (sampleIndex < 0 || sampleIndex >= input.length) {
       continue;
     }
 
     const distance = sampleIndex - srcPos;
     const lowPass = 2 * cutoffCyclesPerSample * sinc(2 * cutoffCyclesPerSample * distance);
     const coeff = lowPass * (RESAMPLE_WINDOW[tap + RESAMPLE_HALF_TAPS] ?? 0);
-    weighted += input.readInt16LE(sampleIndex * 2) * coeff;
+    weighted += (input[sampleIndex] ?? 0) * coeff;
     weightSum += coeff;
   }
 
   if (weightSum === 0) {
-    const nearest = Math.max(0, Math.min(inputSamples - 1, Math.round(srcPos)));
-    return input.readInt16LE(nearest * 2);
+    const nearest = Math.max(0, Math.min(input.length - 1, Math.round(srcPos)));
+    return input[nearest] ?? 0;
   }
 
   return weighted / weightSum;
@@ -143,19 +166,25 @@ export function resamplePcm(
   const cutoffCyclesPerSample = Math.max(0.01, downsampleCutoff * RESAMPLE_CUTOFF_GUARD);
   const kernel = buildResampleKernel(inputSampleRate, outputSampleRate, cutoffCyclesPerSample);
 
+  const inputView = readInt16Samples(input);
+  const outputView = canUseInt16View(output) ? int16View(output) : undefined;
+
   for (let i = 0; i < outputSamples; i += 1) {
     const sample = Math.round(
       kernel
         ? sampleBandlimitedWithCoefficients(
-            input,
-            inputSamples,
+            inputView,
             Math.floor((i * inputSampleRate) / outputSampleRate),
             kernel.coefficients[(i * kernel.inputStep) % kernel.phaseCount] ??
               kernel.coefficients[0],
           )
-        : sampleBandlimited(input, inputSamples, i * ratio, cutoffCyclesPerSample),
+        : sampleBandlimited(inputView, i * ratio, cutoffCyclesPerSample),
     );
-    output.writeInt16LE(clamp16(sample), i * 2);
+    if (outputView) {
+      outputView[i] = clamp16(sample);
+    } else {
+      output.writeInt16LE(clamp16(sample), i * 2);
+    }
   }
 
   return output;
@@ -166,12 +195,11 @@ export function resamplePcmTo8k(input: Buffer, inputSampleRate: number): Buffer 
 }
 
 export function pcmToMulaw(pcm: Buffer): Buffer {
-  const samples = Math.floor(pcm.length / 2);
-  const mulaw = Buffer.alloc(samples);
+  const pcmView = readInt16Samples(pcm);
+  const mulaw = Buffer.alloc(pcmView.length);
 
-  for (let i = 0; i < samples; i += 1) {
-    const sample = pcm.readInt16LE(i * 2);
-    mulaw[i] = linearToMulaw(sample);
+  for (let i = 0; i < pcmView.length; i += 1) {
+    mulaw[i] = linearToMulaw(pcmView[i] ?? 0);
   }
 
   return mulaw;
@@ -179,6 +207,14 @@ export function pcmToMulaw(pcm: Buffer): Buffer {
 
 export function mulawToPcm(mulaw: Buffer): Buffer {
   const pcm = Buffer.alloc(mulaw.length * 2);
+  const pcmView = canUseInt16View(pcm) ? int16View(pcm) : undefined;
+  if (pcmView) {
+    for (let i = 0; i < mulaw.length; i += 1) {
+      pcmView[i] = clamp16(mulawToLinear(mulaw[i] ?? 0));
+    }
+    return pcm;
+  }
+
   for (let i = 0; i < mulaw.length; i += 1) {
     pcm.writeInt16LE(clamp16(mulawToLinear(mulaw[i] ?? 0)), i * 2);
   }

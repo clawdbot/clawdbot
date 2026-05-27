@@ -190,6 +190,33 @@ describe("handleCompactCommand", () => {
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
   });
 
+  it("treats already-under-target manual compaction as skipped", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "already under target",
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+        } as OpenClawConfig),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(result?.reply?.text).toBe(
+      "⚙️ Compaction skipped: context is already under the compaction target • Context 12.1k",
+    );
+    expect(vi.mocked(incrementCompactionCount)).not.toHaveBeenCalled();
+  });
+
   it("uses the canonical session agent when resolving the compaction session file", async () => {
     vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
       ok: true,

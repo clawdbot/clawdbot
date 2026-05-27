@@ -1,3 +1,9 @@
+/**
+ * @deprecated Use `openclaw/plugin-sdk/channel-inbound` for inbound runners and
+ * dispatch predicates. Use `openclaw/plugin-sdk/channel-outbound` for message
+ * delivery helpers.
+ */
+
 import { withReplyDispatcher } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import {
@@ -11,11 +17,12 @@ import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   deliverInboundReplyWithMessageSendContext,
+  dispatchChannelInboundReply as dispatchChannelInboundReplyCore,
   isDurableInboundReplyDeliveryHandled,
   resolveChannelTurnDispatchCounts,
-  recordDroppedChannelTurnHistory,
-  runChannelTurn,
-  runPreparedChannelTurn,
+  recordDroppedChannelInboundHistory,
+  runChannelInboundEvent as runChannelInboundEventCore,
+  runPreparedInboundReply as runPreparedInboundReplyCore,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "../channels/turn/kernel.js";
 import type {
@@ -23,16 +30,21 @@ import type {
   DispatchedChannelTurnResult,
   DurableInboundReplyDeliveryOptions,
 } from "../channels/turn/kernel.js";
-import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
+import type {
+  AssembledChannelTurn,
+  PreparedChannelTurn,
+  RunChannelTurnParams,
+} from "../channels/turn/types.js";
 export type {
   ChannelTurnDroppedHistoryOptions,
+  ChannelTurnDroppedHistoryOptions as ChannelInboundDroppedHistoryOptions,
   ChannelTurnRecordOptions,
+  ChannelTurnRecordOptions as InboundReplyRecordOptions,
 } from "../channels/turn/types.js";
 export type { DurableInboundReplyDeliveryParams } from "../channels/turn/kernel.js";
 export type { ChannelBotLoopProtectionFacts } from "../channels/turn/kernel.js";
 export { recordChannelBotPairLoopAndCheckSuppression } from "../channels/turn/kernel.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createChannelReplyPipeline } from "./channel-reply-core.js";
 import {
   normalizeOutboundReplyPayload,
   type OutboundReplyPayload,
@@ -46,8 +58,15 @@ type ReplyOptionsWithoutModelSelected = Omit<
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 
 type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onBlockReply">;
+export type ChannelInboundEventRunnerParams<
+  TRaw,
+  TDispatchResult = DispatchFromConfigResult,
+> = RunChannelTurnParams<TRaw, TDispatchResult>;
+export type PreparedInboundReply<TDispatchResult> = PreparedChannelTurn<TDispatchResult>;
+export type AssembledInboundReply = AssembledChannelTurn;
+export type InboundReplyDispatchResult<TDispatchResult> = ChannelTurnResult<TDispatchResult>;
 
-/** Run an already assembled channel turn through shared session-record + dispatch ordering. */
+/** Run an already prepared inbound reply through shared session-record + dispatch ordering. */
 type PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult> =
   PreparedChannelTurn<TDispatchResult> & {
     botLoopProtection: NonNullable<PreparedChannelTurn<TDispatchResult>["botLoopProtection"]>;
@@ -60,6 +79,22 @@ type PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult> = Omit<
   botLoopProtection?: undefined;
 };
 
+export function runPreparedInboundReply<TDispatchResult>(
+  params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export function runPreparedInboundReply<TDispatchResult>(
+  params: PreparedInboundReplyTurnWithoutBotLoopProtection<TDispatchResult>,
+): Promise<DispatchedChannelTurnResult<TDispatchResult>>;
+export function runPreparedInboundReply<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>>;
+export async function runPreparedInboundReply<TDispatchResult>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<ChannelTurnResult<TDispatchResult>> {
+  return await runPreparedInboundReplyCore(params);
+}
+
+/** @deprecated Use `runPreparedInboundReply`. */
 export function runPreparedInboundReplyTurn<TDispatchResult>(
   params: PreparedInboundReplyTurnWithBotLoopProtection<TDispatchResult>,
 ): Promise<ChannelTurnResult<TDispatchResult>>;
@@ -72,14 +107,24 @@ export function runPreparedInboundReplyTurn<TDispatchResult>(
 export async function runPreparedInboundReplyTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ): Promise<ChannelTurnResult<TDispatchResult>> {
-  return await runPreparedChannelTurn(params);
+  return await runPreparedInboundReply(params);
 }
 
-/** Run a channel turn through shared ingest, record, dispatch, and finalize ordering. */
-export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
-  params: RunChannelTurnParams<TRaw, TDispatchResult>,
+export async function runChannelInboundEvent<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
 ) {
-  return await runChannelTurn(params);
+  return await runChannelInboundEventCore(params);
+}
+
+/** @deprecated Use `runChannelInboundEvent`. */
+export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: ChannelInboundEventRunnerParams<TRaw, TDispatchResult>,
+) {
+  return await runChannelInboundEvent(params);
+}
+
+export async function dispatchChannelInboundReply(params: AssembledInboundReply) {
+  return await dispatchChannelInboundReplyCore(params);
 }
 
 export {
@@ -87,7 +132,8 @@ export {
   hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
   deliverInboundReplyWithMessageSendContext as deliverDurableInboundReplyPayload,
   deliverInboundReplyWithMessageSendContext,
-  recordDroppedChannelTurnHistory,
+  recordDroppedChannelInboundHistory as recordDroppedChannelTurnHistory,
+  recordDroppedChannelInboundHistory,
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 
@@ -219,60 +265,47 @@ export async function dispatchInboundReplyWithBase(
 export async function recordChannelMessageReplyDispatch(
   params: RecordChannelMessageReplyDispatchParams,
 ): Promise<void> {
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
+  await dispatchChannelInboundReplyCore({
     cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
     agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-  });
-  const deliver = async (payload: unknown, info: { kind: "tool" | "block" | "final" }) => {
-    const normalized =
-      payload && typeof payload === "object"
-        ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
-        : {};
-    if (params.durable) {
-      const durable = await deliverInboundReplyWithMessageSendContext({
-        cfg: params.cfg,
-        channel: params.channel,
-        accountId: params.accountId,
-        agentId: params.agentId,
-        ctxPayload: params.ctxPayload,
-        payload: normalized as ReplyPayload,
-        info,
-        ...params.durable,
-      });
-      throwIfDurableInboundReplyDeliveryFailed(durable);
-      if (isDurableInboundReplyDeliveryHandled(durable)) {
-        return durable.delivery;
-      }
-    }
-    return await params.deliver(normalized);
-  };
-
-  await runPreparedChannelTurn({
-    channel: params.channel,
-    accountId: params.accountId,
     routeSessionKey: params.routeSessionKey,
     storePath: params.storePath,
     ctxPayload: params.ctxPayload,
     recordInboundSession: params.recordInboundSession,
+    dispatchReplyWithBufferedBlockDispatcher: params.dispatchReplyWithBufferedBlockDispatcher,
+    delivery: {
+      preparePayload: (payload) =>
+        (payload && typeof payload === "object"
+          ? normalizeOutboundReplyPayload(payload as Record<string, unknown>)
+          : {}) as ReplyPayload,
+      deliver: async (payload, info) => {
+        if (params.durable) {
+          const durable = await deliverInboundReplyWithMessageSendContext({
+            cfg: params.cfg,
+            channel: params.channel,
+            accountId: params.accountId,
+            agentId: params.agentId,
+            ctxPayload: params.ctxPayload,
+            payload,
+            info,
+            ...params.durable,
+          });
+          throwIfDurableInboundReplyDeliveryFailed(durable);
+          if (isDurableInboundReplyDeliveryHandled(durable)) {
+            return durable.delivery;
+          }
+        }
+        return await params.deliver(payload as OutboundReplyPayload);
+      },
+      onError: params.onDispatchError,
+    },
+    replyPipeline: {},
+    replyOptions: params.replyOptions,
     record: {
       onRecordError: params.onRecordError,
     },
-    runDispatch: async () =>
-      await params.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: params.ctxPayload,
-        cfg: params.cfg,
-        dispatcherOptions: {
-          ...replyPipeline,
-          deliver,
-          onError: params.onDispatchError,
-        },
-        replyOptions: {
-          ...params.replyOptions,
-          onModelSelected,
-        },
-      }),
   });
 }
 

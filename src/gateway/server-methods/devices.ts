@@ -385,6 +385,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     context.logGateway.info(`device pairing removed device=${removed.deviceId}`);
+    // Mark affected clients invalid *before* responding so any RPCs already
+    // pipelined into their WS socket buffer are rejected at the per-request
+    // dispatch check, closing the race between queueMicrotask-scheduled
+    // disconnect and inflight frames.
+    context.invalidateClientsForDevice?.(removed.deviceId, {
+      reason: "device-pair-removed",
+    });
     respond(true, removed, undefined);
     queueMicrotask(() => {
       context.disconnectClientsForDevice?.(removed.deviceId);
@@ -463,6 +470,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
     context.logGateway.info(
       `device token rotated device=${deviceId} role=${entry.role} scopes=${entry.scopes.join(",")}`,
     );
+    // Mark affected clients invalid *before* responding so any RPCs already
+    // pipelined into their WS socket buffer are rejected at the per-request
+    // dispatch check, closing the race between queueMicrotask-scheduled
+    // disconnect and inflight frames.
+    context.invalidateClientsForDevice?.(deviceId.trim(), {
+      role: entry.role,
+      reason: "device-token-rotated",
+    });
     respond(
       true,
       {
@@ -538,6 +553,14 @@ export const deviceHandlers: GatewayRequestHandlers = {
     const entry = revoked.entry;
     const normalizedDeviceId = deviceId.trim();
     context.logGateway.info(`device token revoked device=${normalizedDeviceId} role=${entry.role}`);
+    // Mark affected clients invalid *before* responding so any RPCs already
+    // pipelined into their WS socket buffer are rejected at the per-request
+    // dispatch check, closing the race between queueMicrotask-scheduled
+    // disconnect and inflight frames.
+    context.invalidateClientsForDevice?.(normalizedDeviceId, {
+      role: entry.role,
+      reason: "device-token-revoked",
+    });
     respond(
       true,
       {

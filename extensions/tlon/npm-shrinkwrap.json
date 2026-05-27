@@ -472,9 +472,9 @@
       }
     },
     "node_modules/@aws-sdk/token-providers": {
-      "version": "3.1052.0",
-      "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1052.0.tgz",
-      "integrity": "sha512-QqZNB3so7UIDxZtroc85TQaLVxdZRFm0eWM1CSR2N+b06as9TOrilvrlTZuj3guYlxMs6yLOgGxnklJ5qMYtTw==",
+      "version": "3.1053.0",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1053.0.tgz",
+      "integrity": "sha512-laSwHLYMMrXQRl2mFDXszF43m/F4pKWyGr7hCLfJmV8rn8c6CnI/hp/bf/Gn7gLcjz0SY4evd7SBpqtnIhzA/A==",
       "license": "Apache-2.0",
       "dependencies": {
         "@aws-sdk/core": "^3.974.13",

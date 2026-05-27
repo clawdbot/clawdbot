@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramRouteTestSessionRuntime } from "./bot-message-context.route-test-support.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import type { TelegramConversationBindingMode } from "./conversation-route.js";
 
 const recordInboundSessionMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const resolveTelegramConversationRouteMock = vi.hoisted(() => vi.fn());
@@ -28,10 +29,17 @@ const threadBindingSessionRuntime = {
   recordInboundSession: recordInboundSessionForThreadBindingTest,
 } satisfies TelegramTestSessionRuntime;
 
-function createBoundRoute(params: { accountId: string; sessionKey: string; agentId: string }) {
+function createBoundRoute(params: {
+  accountId: string;
+  sessionKey: string;
+  agentId: string;
+  bindingMode?: TelegramConversationBindingMode;
+}) {
   return {
-    configuredBinding: null,
-    configuredBindingSessionKey: "",
+    bindingMode: params.bindingMode ?? {
+      kind: "runtime-bound",
+      sessionKey: params.sessionKey,
+    },
     route: {
       accountId: params.accountId,
       agentId: params.agentId,
@@ -98,6 +106,53 @@ describe("buildTelegramMessageContext thread binding override", () => {
     expect(routeArgs.senderId).toBe("42");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
     expect(ctx?.turn.record.updateLastRoute).toBeUndefined();
+  });
+
+  it("bypasses mention gating for bound forum topic messages", async () => {
+    resolveTelegramConversationRouteMock.mockReturnValue(
+      createBoundRoute({
+        accountId: "default",
+        sessionKey: "plugin-binding:openclaw-codex-app-server:session-1",
+        agentId: "main",
+        bindingMode: { kind: "plugin-owned-runtime" },
+      }),
+    );
+
+    const ctx = await buildTelegramMessageContextForTest({
+      sessionRuntime: threadBindingSessionRuntime,
+      message: createForumTopicMessage(),
+      resolveGroupActivation: () => undefined,
+      resolveGroupRequireMention: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: true },
+        topicConfig: { requireMention: true },
+      }),
+    });
+
+    expect(ctx?.ctxPayload?.SessionKey).toBe("plugin-binding:openclaw-codex-app-server:session-1");
+  });
+
+  it("keeps mention gating for normal channel binding routes", async () => {
+    resolveTelegramConversationRouteMock.mockReturnValue(
+      createBoundRoute({
+        accountId: "default",
+        sessionKey: "agent:main:telegram:group:-100200300:topic:77",
+        agentId: "main",
+      }),
+    );
+
+    const ctx = await buildTelegramMessageContextForTest({
+      sessionRuntime: threadBindingSessionRuntime,
+      message: createForumTopicMessage(),
+      resolveGroupActivation: () => undefined,
+      resolveGroupRequireMention: () => true,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: true },
+        topicConfig: { requireMention: true },
+      }),
+    });
+
+    expect(ctx).toBeNull();
   });
 
   it("treats named-account bound conversations as explicit route matches", async () => {

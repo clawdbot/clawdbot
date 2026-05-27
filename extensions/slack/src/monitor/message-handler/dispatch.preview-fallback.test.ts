@@ -294,8 +294,8 @@ vi.mock("../conversation.runtime.js", () => ({
   recordInboundSession: recordInboundSessionMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-message")>();
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
   return {
     ...actual,
     createChannelMessageReplyPipeline: (params: {
@@ -341,190 +341,185 @@ vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
       }
       return "automatic";
     },
+    resolveAgentOutboundIdentity: () => undefined,
+    buildChannelProgressDraftLine: (params: {
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    }) => {
+      const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+      return text
+        ? {
+            kind: "item",
+            text,
+            label: params.title ?? params.name ?? "Update",
+          }
+        : undefined;
+    },
+    buildChannelProgressDraftLineForEntry: (
+      entry: {
+        streaming?: {
+          progress?: { commandText?: "raw" | "status" };
+          preview?: { commandText?: "raw" | "status" };
+        };
+      },
+      params: {
+        itemKind?: string;
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+      },
+    ) => {
+      if (
+        (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
+          "status" &&
+        (params.itemKind === "command" || params.name === "exec")
+      ) {
+        return {
+          kind: "item",
+          text: "🛠️ Exec",
+          label: "Exec",
+        };
+      }
+      const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+      return text
+        ? {
+            kind: "item",
+            text,
+            label: params.title ?? params.name ?? "Update",
+          }
+        : undefined;
+    },
+    createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
+      let started = false;
+      let workEvents = 0;
+      return {
+        get hasStarted() {
+          return started;
+        },
+        async noteWork() {
+          workEvents += 1;
+          if (!started && workEvents > 1) {
+            started = true;
+            await params.onStart();
+          }
+          return started;
+        },
+        async startNow() {
+          if (!started) {
+            started = true;
+            await params.onStart();
+          }
+        },
+        cancel() {},
+      };
+    },
+    formatChannelProgressDraftText: (params: {
+      entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
+      lines: Array<
+        string | { text: string; icon?: string; detail?: string; status?: string; label: string }
+      >;
+      formatLine?: (line: string) => string;
+    }) => {
+      const label = params.entry?.streaming?.progress?.label;
+      const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
+      const formatLine = params.formatLine ?? ((line: string) => line);
+      const lines = [
+        label === false ? undefined : (label ?? "Thinking"),
+        ...params.lines.map((line) => {
+          const text =
+            typeof line === "string"
+              ? line
+              : line.detail
+                ? `${line.icon ?? ""} ${line.detail}`.trim()
+                : line.status
+                  ? `${line.icon ?? ""} ${line.status}`.trim()
+                  : line.text;
+          const formatted = formatLine(text);
+          return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
+        }),
+      ]
+        .filter((line): line is string => Boolean(line))
+        .slice(-maxLines);
+      return lines.join("\n");
+    },
+    formatChannelProgressDraftLine: (params: {
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    }) => params.progressText ?? params.summary ?? params.title ?? params.name,
+    formatChannelProgressDraftLineForEntry: (
+      _entry: unknown,
+      params: {
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+      },
+    ) => params.progressText ?? params.summary ?? params.title ?? params.name,
+    resolveChannelProgressDraftMaxLines: (entry?: {
+      streaming?: { progress?: { maxLines?: number } };
+    }) => entry?.streaming?.progress?.maxLines ?? 8,
+    mergeChannelProgressDraftLine: <TLine extends string | { id?: string; text: string }>(
+      lines: TLine[],
+      line: TLine,
+      params: { maxLines: number },
+    ) => {
+      const normalized = typeof line === "string" ? line.trim() : line.text.trim();
+      const lineId = typeof line === "object" ? line.id : undefined;
+      if (lineId) {
+        const index = lines.findIndex((entry) => typeof entry === "object" && entry.id === lineId);
+        if (index >= 0) {
+          const next = [...lines];
+          next[index] = line;
+          return next.slice(-params.maxLines);
+        }
+      }
+      const previous = lines.at(-1);
+      const previousText = typeof previous === "string" ? previous.trim() : previous?.text.trim();
+      return previousText === normalized ? lines : [...lines, line].slice(-params.maxLines);
+    },
+    resolveChannelProgressDraftRender: (entry?: {
+      streaming?: { progress?: { render?: "text" | "rich" } };
+    }) => entry?.streaming?.progress?.render ?? "text",
+    resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
+    resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
+    resolveChannelStreamingPreviewToolProgress: (entry?: {
+      streaming?: { progress?: { toolProgress?: boolean }; preview?: { toolProgress?: boolean } };
+    }) =>
+      entry?.streaming?.progress?.toolProgress ?? entry?.streaming?.preview?.toolProgress ?? true,
+    resolveChannelStreamingSuppressDefaultToolProgressMessages: (
+      entry?: {
+        streaming?: {
+          mode?: string;
+          progress?: { toolProgress?: boolean };
+          preview?: { toolProgress?: boolean };
+        };
+      },
+      options?: {
+        draftStreamActive?: boolean;
+        previewStreamingEnabled?: boolean;
+        previewToolProgressEnabled?: boolean;
+      },
+    ) => {
+      if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
+        return false;
+      }
+      if (entry?.streaming?.mode === "progress") {
+        return true;
+      }
+      if (options?.draftStreamActive === true) {
+        return true;
+      }
+      return options?.previewToolProgressEnabled ?? true;
+    },
+    isChannelProgressDraftWorkToolName: (name?: string) =>
+      Boolean(name && !["message", "react", "reaction"].includes(name.toLowerCase())),
   };
 });
-
-vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
-  buildChannelProgressDraftLine: (params: {
-    progressText?: string;
-    summary?: string;
-    title?: string;
-    name?: string;
-  }) => {
-    const text = params.progressText ?? params.summary ?? params.title ?? params.name;
-    return text
-      ? {
-          kind: "item",
-          text,
-          label: params.title ?? params.name ?? "Update",
-        }
-      : undefined;
-  },
-  buildChannelProgressDraftLineForEntry: (
-    entry: {
-      streaming?: {
-        progress?: { commandText?: "raw" | "status" };
-        preview?: { commandText?: "raw" | "status" };
-      };
-    },
-    params: {
-      itemKind?: string;
-      progressText?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-    },
-  ) => {
-    if (
-      (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
-        "status" &&
-      (params.itemKind === "command" || params.name === "exec")
-    ) {
-      return {
-        kind: "item",
-        text: "🛠️ Exec",
-        label: "Exec",
-      };
-    }
-    const text = params.progressText ?? params.summary ?? params.title ?? params.name;
-    return text
-      ? {
-          kind: "item",
-          text,
-          label: params.title ?? params.name ?? "Update",
-        }
-      : undefined;
-  },
-  createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
-    let started = false;
-    let workEvents = 0;
-    return {
-      get hasStarted() {
-        return started;
-      },
-      async noteWork() {
-        workEvents += 1;
-        if (!started && workEvents > 1) {
-          started = true;
-          await params.onStart();
-        }
-        return started;
-      },
-      async startNow() {
-        if (!started) {
-          started = true;
-          await params.onStart();
-        }
-      },
-      cancel() {},
-    };
-  },
-  formatChannelProgressDraftText: (params: {
-    entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
-    lines: Array<
-      string | { text: string; icon?: string; detail?: string; status?: string; label: string }
-    >;
-    formatLine?: (line: string) => string;
-  }) => {
-    const label = params.entry?.streaming?.progress?.label;
-    const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
-    const formatLine = params.formatLine ?? ((line: string) => line);
-    const lines = [
-      label === false ? undefined : (label ?? "Thinking"),
-      ...params.lines.map((line) => {
-        const text =
-          typeof line === "string"
-            ? line
-            : line.detail
-              ? `${line.icon ?? ""} ${line.detail}`.trim()
-              : line.status
-                ? `${line.icon ?? ""} ${line.status}`.trim()
-                : line.text;
-        const formatted = formatLine(text);
-        return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
-      }),
-    ]
-      .filter((line): line is string => Boolean(line))
-      .slice(-maxLines);
-    return lines.join("\n");
-  },
-  formatChannelProgressDraftLine: (params: {
-    progressText?: string;
-    summary?: string;
-    title?: string;
-    name?: string;
-  }) => params.progressText ?? params.summary ?? params.title ?? params.name,
-  formatChannelProgressDraftLineForEntry: (
-    _entry: unknown,
-    params: {
-      progressText?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-    },
-  ) => params.progressText ?? params.summary ?? params.title ?? params.name,
-  resolveChannelProgressDraftMaxLines: (entry?: {
-    streaming?: { progress?: { maxLines?: number } };
-  }) => entry?.streaming?.progress?.maxLines ?? 8,
-  mergeChannelProgressDraftLine: <TLine extends string | { id?: string; text: string }>(
-    lines: TLine[],
-    line: TLine,
-    params: { maxLines: number },
-  ) => {
-    const normalized = typeof line === "string" ? line.trim() : line.text.trim();
-    const lineId = typeof line === "object" ? line.id : undefined;
-    if (lineId) {
-      const index = lines.findIndex((entry) => typeof entry === "object" && entry.id === lineId);
-      if (index >= 0) {
-        const next = [...lines];
-        next[index] = line;
-        return next.slice(-params.maxLines);
-      }
-    }
-    const previous = lines.at(-1);
-    const previousText = typeof previous === "string" ? previous.trim() : previous?.text.trim();
-    return previousText === normalized ? lines : [...lines, line].slice(-params.maxLines);
-  },
-  resolveChannelProgressDraftRender: (entry?: {
-    streaming?: { progress?: { render?: "text" | "rich" } };
-  }) => entry?.streaming?.progress?.render ?? "text",
-  resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
-  resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
-  resolveChannelStreamingPreviewToolProgress: (entry?: {
-    streaming?: { progress?: { toolProgress?: boolean }; preview?: { toolProgress?: boolean } };
-  }) => entry?.streaming?.progress?.toolProgress ?? entry?.streaming?.preview?.toolProgress ?? true,
-  resolveChannelStreamingSuppressDefaultToolProgressMessages: (
-    entry?: {
-      streaming?: {
-        mode?: string;
-        progress?: { toolProgress?: boolean };
-        preview?: { toolProgress?: boolean };
-      };
-    },
-    options?: {
-      draftStreamActive?: boolean;
-      previewStreamingEnabled?: boolean;
-      previewToolProgressEnabled?: boolean;
-    },
-  ) => {
-    if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
-      return false;
-    }
-    if (entry?.streaming?.mode === "progress") {
-      return true;
-    }
-    if (options?.draftStreamActive === true) {
-      return true;
-    }
-    return options?.previewToolProgressEnabled ?? true;
-  },
-  isChannelProgressDraftWorkToolName: (name?: string) =>
-    Boolean(name && !["message", "react", "reaction"].includes(name.toLowerCase())),
-}));
-
-vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
-  resolveAgentOutboundIdentity: () => undefined,
-}));
 
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   clearHistoryEntriesIfEnabled: () => {},
@@ -589,7 +584,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
-  isRecord: (value: unknown) =>
+  isRecord: (value: unknown): value is Record<string, unknown> =>
     typeof value === "object" && value !== null && !Array.isArray(value),
   normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
   normalizeOptionalString: (value?: string) => value,
@@ -713,6 +708,75 @@ vi.mock("../reply.runtime.js", () => ({
     replyOptions: {},
     markDispatchIdle: () => {},
   }),
+  dispatchReplyWithBufferedBlockDispatcher: async (params: {
+    dispatcherOptions: {
+      transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
+      beforeDeliver?: (
+        payload: TestReplyPayload,
+        info: { kind: TestReplyDispatchKind },
+      ) => Promise<TestReplyPayload | null> | TestReplyPayload | null;
+      deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
+    };
+    replyOptions?: {
+      disableBlockStreaming?: boolean;
+      suppressDefaultToolProgressMessages?: boolean;
+      onItemEvent?: (payload: {
+        kind?: string;
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+        phase?: string;
+        status?: string;
+        meta?: string;
+      }) => Promise<void> | void;
+      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+    };
+  }) => {
+    capturedReplyOptions = params.replyOptions;
+    if (mockedReplyOptionEvents.length > 0) {
+      for (const entry of mockedReplyOptionEvents) {
+        if (entry.kind === "item") {
+          await params.replyOptions?.onItemEvent?.({
+            kind: entry.itemKind,
+            progressText: entry.progressText,
+            summary: entry.summary,
+            title: entry.title,
+            name: entry.name,
+            phase: entry.phase,
+            status: entry.status,
+            meta: entry.meta,
+          });
+        } else {
+          await params.replyOptions?.onPartialReply?.({ text: entry.text });
+        }
+      }
+    } else {
+      for (const progressText of mockedProgressEvents) {
+        await params.replyOptions?.onItemEvent?.({ progressText });
+      }
+    }
+    for (const entry of mockedDispatchSequence) {
+      const transformed = params.dispatcherOptions.transformReplyPayload
+        ? params.dispatcherOptions.transformReplyPayload(entry.payload)
+        : entry.payload;
+      if (!transformed) {
+        continue;
+      }
+      const deliverPayload = params.dispatcherOptions.beforeDeliver
+        ? await params.dispatcherOptions.beforeDeliver(transformed, { kind: entry.kind })
+        : transformed;
+      if (!deliverPayload) {
+        continue;
+      }
+      mockedQueuedDispatchCounts[entry.kind] += 1;
+      await params.dispatcherOptions.deliver(deliverPayload, { kind: entry.kind });
+    }
+    return {
+      queuedFinal: false,
+      counts: { ...mockedQueuedDispatchCounts },
+    };
+  },
   dispatchInboundMessage: async (params: {
     replyOptions?: {
       disableBlockStreaming?: boolean;

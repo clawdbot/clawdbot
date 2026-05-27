@@ -143,6 +143,23 @@ describe("command-execution-startup", () => {
     expect(emitCliBannerMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not import the banner module for JSON output", async () => {
+    await mod.applyCliExecutionStartupPresentation({
+      startupPolicy: {
+        suppressDoctorStdout: true,
+        hideBanner: false,
+        skipConfigGuard: false,
+        loadPlugins: false,
+        pluginRegistry: { scope: "channels" },
+      },
+      version: "1.2.3",
+      argv: ["node", "openclaw", "status", "--json"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+  });
+
   it("forwards startup policy into bootstrap defaults and overrides", async () => {
     const statusRuntime = {} as never;
     await mod.ensureCliExecutionBootstrap({

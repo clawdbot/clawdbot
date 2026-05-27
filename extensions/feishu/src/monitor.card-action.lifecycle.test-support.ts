@@ -305,6 +305,7 @@ describe("Feishu card-action lifecycle", () => {
         SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
         MessageSid: "card-action-tok-card-v2-nested-operator",
       }),
+      undefined,
     );
   });
 

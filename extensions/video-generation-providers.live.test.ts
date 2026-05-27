@@ -224,11 +224,11 @@ function buildLiveCapabilityOverrides(params: {
 }): Pick<VideoGenerationRequest, "size" | "aspectRatio" | "resolution" | "audio" | "watermark"> {
   const { caps, liveResolution, liveSize } = params;
   return {
-    ...(caps?.supportsSize && liveSize ? { size: liveSize } : {}),
-    ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : {}),
-    ...(caps?.supportsResolution ? { resolution: liveResolution } : {}),
-    ...(caps?.supportsAudio ? { audio: false } : {}),
-    ...(caps?.supportsWatermark ? { watermark: false } : {}),
+    ...(caps?.supportsSize && liveSize ? { size: liveSize } : undefined),
+    ...(caps?.supportsAspectRatio ? { aspectRatio: "16:9" } : undefined),
+    ...(caps?.supportsResolution ? { resolution: liveResolution } : undefined),
+    ...(caps?.supportsAudio ? { audio: false } : undefined),
+    ...(caps?.supportsWatermark ? { watermark: false } : undefined),
   };
 }
 

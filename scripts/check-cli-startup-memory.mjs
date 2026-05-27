@@ -1,23 +1,26 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-const isLinux = process.platform === "linux";
-const isMac = process.platform === "darwin";
-
-if (!isLinux && !isMac) {
-  console.log(`[startup-memory] Skipping on unsupported platform: ${process.platform}`);
-  process.exit(0);
-}
+import { pathToFileURL } from "node:url";
 
 const repoRoot = process.cwd();
-const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
-const rssHookPath = path.join(tmpHome, "measure-rss.mjs");
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
+const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
+const COMMAND_TIMEOUT_MS = readPositiveIntEnv(
+  "OPENCLAW_STARTUP_MEMORY_TIMEOUT_MS",
+  DEFAULT_COMMAND_TIMEOUT_MS,
+);
+let tmpHome = null;
+let rssHookPath = null;
+
+function readPositiveIntEnv(name, fallback) {
+  const value = Number(process.env[name] ?? "");
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
 
 function parseArgs(argv) {
   const options = {
@@ -59,23 +62,18 @@ function parseArgs(argv) {
   return options;
 }
 
-writeFileSync(
-  rssHookPath,
-  [
-    "process.on('exit', () => {",
-    "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-    `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
-    "});",
-    "",
-  ].join("\n"),
-  "utf8",
-);
+function resolveDefaultLimitsMb(platform = process.platform) {
+  return {
+    // Linux CI is the tight startup regression signal. macOS consistently reports
+    // higher RSS for the same launcher path, so keep it supported without hiding
+    // Linux help-path regressions.
+    help: platform === "darwin" ? 300 : 100,
+    statusJson: 400,
+    gatewayStatus: 500,
+  };
+}
 
-const DEFAULT_LIMITS_MB = {
-  help: 100,
-  statusJson: 400,
-  gatewayStatus: 500,
-};
+const DEFAULT_LIMITS_MB = resolveDefaultLimitsMb();
 
 const cases = [
   {
@@ -146,6 +144,9 @@ function formatCaseCommand(testCase) {
 }
 
 function buildBenchEnv() {
+  if (!tmpHome) {
+    throw new Error("temporary home is not initialized");
+  }
   const env = {
     HOME: tmpHome,
     USERPROFILE: tmpHome,
@@ -180,13 +181,20 @@ function buildBenchEnv() {
   return env;
 }
 
-function runCase(testCase) {
+function runCase(testCase, params = {}) {
+  if (!rssHookPath) {
+    throw new Error("RSS hook path is not initialized");
+  }
   const env = buildBenchEnv();
-  const result = spawnSync(process.execPath, ["--import", rssHookPath, ...testCase.args], {
+  const spawn = params.spawnSync ?? defaultSpawnSync;
+  const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
+  const result = spawn(process.execPath, ["--import", rssHookPath, ...testCase.args], {
     cwd: repoRoot,
     env,
     encoding: "utf8",
     maxBuffer: 20 * 1024 * 1024,
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
   });
   const stderr = result.stderr ?? "";
   const maxRssMb = parseMaxRssMb(stderr);
@@ -199,12 +207,24 @@ function runCase(testCase) {
     maxRssMb,
     status: "pass",
     exitCode: result.status,
+    signal: result.signal ?? null,
     error: null,
   };
 
+  if (result.error) {
+    const timedOut = result.error.code === "ETIMEDOUT";
+    report.status = "fail";
+    report.error = timedOut
+      ? `${testCase.label} timed out after ${timeoutMs}ms`
+      : `${testCase.label} failed to start: ${result.error.message}`;
+    return Object.assign(report, {
+      failureMessage: formatFailure(testCase, report.error, stderr.trim() || result.stdout || ""),
+    });
+  }
   if (result.status !== 0) {
     report.status = "fail";
-    report.error = `${testCase.label} exited with ${String(result.status)}`;
+    const exitDetail = result.status ?? result.signal ?? "unknown";
+    report.error = `${testCase.label} exited with ${String(exitDetail)}`;
     return Object.assign(report, {
       failureMessage: formatFailure(testCase, report.error, stderr.trim() || result.stdout || ""),
     });
@@ -277,18 +297,60 @@ function writeReport(options, results) {
   writeFileSync(options.summaryPath, `${lines.join("\n")}\n`, "utf8");
 }
 
-const options = parseArgs(process.argv.slice(2));
-const results = [];
-try {
-  for (const testCase of cases) {
-    results.push(runCase(testCase));
+function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
+  const platform = params.platform ?? process.platform;
+  if (platform !== "linux" && platform !== "darwin") {
+    console.log(`[startup-memory] Skipping on unsupported platform: ${platform}`);
+    return { skipped: true, results: [] };
   }
-} finally {
-  writeReport(options, results);
-  rmSync(tmpHome, { recursive: true, force: true });
+  const options = parseArgs(argv);
+  tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-startup-memory-"));
+  rssHookPath = path.join(tmpHome, "measure-rss.mjs");
+  writeFileSync(
+    rssHookPath,
+    [
+      "process.on('exit', () => {",
+      "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
+      `  if (usage && typeof usage.maxRSS === 'number') console.error('${MAX_RSS_MARKER}' + String(usage.maxRSS));`,
+      "});",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+  const results = [];
+  try {
+    for (const testCase of cases) {
+      results.push(runCase(testCase, params));
+    }
+  } finally {
+    writeReport(options, results);
+    if (tmpHome) {
+      rmSync(tmpHome, { recursive: true, force: true });
+      tmpHome = null;
+      rssHookPath = null;
+    }
+  }
+
+  const failure = results.find((result) => result.status !== "pass");
+  if (failure?.failureMessage) {
+    throw new Error(failure.failureMessage);
+  }
+  return { skipped: false, results };
 }
 
-const failure = results.find((result) => result.status !== "pass");
-if (failure?.failureMessage) {
-  throw new Error(failure.failureMessage);
+export const testing = {
+  cases,
+  parseArgs,
+  resolveDefaultLimitsMb,
+  runCase,
+  runStartupMemoryCheck,
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    runStartupMemoryCheck();
+  } catch (error) {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exitCode = 1;
+  }
 }

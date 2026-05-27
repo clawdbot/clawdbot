@@ -198,6 +198,47 @@ describe("createGatewayCloseHandler", () => {
     expect(stopChannel).toHaveBeenCalledWith("discord");
   });
 
+  it("awaits post-ready sidecars before plugin services and channels", async () => {
+    const events: string[] = [];
+    let releaseSidecar!: () => void;
+    const sidecarReleased = new Promise<void>((resolve) => {
+      releaseSidecar = resolve;
+    });
+    const postReadySidecar = {
+      stop: vi.fn(async () => {
+        events.push("sidecar:start");
+        await sidecarReleased;
+        events.push("sidecar:end");
+      }),
+    };
+    const pluginServices = {
+      stop: vi.fn(async () => {
+        events.push("plugin-services");
+      }),
+    };
+    const stopChannel = vi.fn(async (channelId: string) => {
+      events.push(`channel:${channelId}`);
+    });
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["discord"],
+        postReadySidecars: [postReadySidecar],
+        pluginServices: pluginServices as never,
+        stopChannel,
+      }),
+    );
+
+    const closePromise = close({ reason: "test" });
+    await vi.waitFor(() => {
+      expect(events).toEqual(["sidecar:start"]);
+    });
+    releaseSidecar();
+    await closePromise;
+
+    expect(events).toEqual(["sidecar:start", "sidecar:end", "plugin-services", "channel:discord"]);
+    expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
+  });
+
   it("emits gateway shutdown and pre-restart hooks", async () => {
     const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
 

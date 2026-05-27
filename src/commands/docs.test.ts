@@ -1,16 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
-const runCommandWithTimeout = vi.fn();
-const hasBinary = vi.fn();
-
-vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout,
-}));
-
-vi.mock("../agents/skills.js", () => ({
-  hasBinary,
-}));
+const fetchMock = vi.fn<typeof fetch>();
 
 vi.mock("../terminal/theme.js", () => ({
   isRich: () => false,
@@ -46,49 +37,54 @@ function makeRuntime() {
 
 describe("docsSearchCommand", () => {
   beforeEach(() => {
-    runCommandWithTimeout.mockReset();
-    hasBinary.mockReset();
-    hasBinary.mockReturnValue(true);
+    fetchMock.mockReset();
+    vi.stubGlobal("fetch", fetchMock);
   });
 
-  it("invokes the correct lowercase docs MCP tool id", async () => {
-    runCommandWithTimeout.mockResolvedValueOnce({
-      code: 0,
-      stdout: "",
-      stderr: "",
-    });
+  it("calls the Cloudflare docs search API", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ results: [] }), {
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
     const runtime = makeRuntime();
 
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
-    expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const argv = runCommandWithTimeout.mock.calls[0][0] as string[];
-    const toolUrl = argv.find((arg) => arg.includes("docs.openclaw.ai/mcp."));
-    expect(toolUrl).toBe("https://docs.openclaw.ai/mcp.search_open_claw");
-    expect(toolUrl).not.toMatch(/SearchOpenClaw/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    if (!(url instanceof URL)) {
+      throw new Error("expected docs search to call fetch with a URL");
+    }
+    expect(url.href).toBe("https://docs.openclaw.ai/api/search?q=plugin+allowlist");
+    expect(init).toMatchObject({ headers: { Accept: "application/json" } });
   });
 
-  it("fails loudly when mcporter returns a JSON-RPC MCP error on stdout with exit 0", async () => {
-    runCommandWithTimeout.mockResolvedValueOnce({
-      code: 0,
-      stdout: "MCP error -32602: Tool SearchOpenClaw not found",
-      stderr: "",
-    });
+  it("fails loudly when the Cloudflare docs search API fails", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("nope", { status: 503 }));
     const runtime = makeRuntime();
 
     await docsSearchCommand(["browser", "existing-session"], runtime);
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("MCP error -32602"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("renders successful results when no MCP error is present", async () => {
-    runCommandWithTimeout.mockResolvedValueOnce({
-      code: 0,
-      stdout:
-        "Title: Plugin allowlist\nLink: https://docs.openclaw.ai/plugins/allowlist\nContent: How to configure the allowlist.",
-      stderr: "",
-    });
+  it("renders successful results from the Cloudflare docs search API", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [
+            {
+              title: "Plugin allowlist",
+              link: "https://docs.openclaw.ai/plugins/allowlist",
+              snippet: "How to configure the allowlist.",
+            },
+          ],
+        }),
+        { headers: { "Content-Type": "application/json" } },
+      ),
+    );
     const runtime = makeRuntime();
 
     await docsSearchCommand(["plugin", "allowlist"], runtime);

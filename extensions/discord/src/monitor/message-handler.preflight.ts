@@ -6,13 +6,13 @@ import {
   logInboundDrop,
   resolveInboundMentionDecision,
   resolveUnmentionedGroupInboundPolicy,
+  recordDroppedChannelInboundHistory,
   toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { shouldHandleTextCommands } from "openclaw/plugin-sdk/command-surface";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { recordDroppedChannelTurnHistory } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { logDebug } from "openclaw/plugin-sdk/logging-core";
 import { mimeTypeFromFilePath } from "openclaw/plugin-sdk/media-mime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
@@ -168,7 +168,7 @@ async function recordDiscordPendingHistoryEntry(params: {
   if (params.preflight.historyLimit <= 0) {
     return;
   }
-  await recordDroppedChannelTurnHistory({
+  await recordDroppedChannelInboundHistory({
     input: {
       id: params.message.id,
       timestamp: params.entry?.timestamp,

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => {
   const authBridge = {
     applyAuthProfile: vi.fn(async () => undefined),
     authProfileId: vi.fn((params?: { authProfileId?: string }) => params?.authProfileId),
+    fallbackApiKeyCacheKey: vi.fn(() => undefined),
     startOptions: vi.fn(async ({ startOptions }) => startOptions),
   };
   const managedBinary = {
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
+  resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
 }));
 
@@ -50,6 +52,8 @@ describe("listCodexAppServerModels", () => {
     mocks.authBridge.authProfileId.mockImplementation(
       (params?: { authProfileId?: string }) => params?.authProfileId,
     );
+    mocks.authBridge.fallbackApiKeyCacheKey.mockClear();
+    mocks.authBridge.fallbackApiKeyCacheKey.mockReturnValue(undefined);
     mocks.authBridge.startOptions.mockClear();
     mocks.managedBinary.startOptions.mockClear();
     mocks.managedBinary.startOptions.mockImplementation(async (startOptions) => startOptions);

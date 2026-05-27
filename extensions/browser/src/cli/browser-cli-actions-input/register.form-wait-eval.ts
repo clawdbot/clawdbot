@@ -10,6 +10,21 @@ import {
 } from "./shared.js";
 
 const DEFAULT_WAIT_CONDITION_TIMEOUT_MS = 20000;
+type BrowserWaitLoadState = "load" | "domcontentloaded" | "networkidle";
+
+function parseBrowserWaitLoadState(value: unknown): BrowserWaitLoadState | undefined {
+  const load = normalizeOptionalString(value);
+  switch (load) {
+    case undefined:
+      return undefined;
+    case "load":
+    case "domcontentloaded":
+    case "networkidle":
+      return load;
+    default:
+      throw new Error(`Invalid --load value: ${load}`);
+  }
+}
 
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
@@ -64,10 +79,7 @@ export function registerBrowserFormWaitEvalCommands(
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
       try {
         const sel = normalizeOptionalString(selector);
-        const load =
-          opts.load === "load" || opts.load === "domcontentloaded" || opts.load === "networkidle"
-            ? (opts.load as "load" | "domcontentloaded" | "networkidle")
-            : undefined;
+        const load = parseBrowserWaitLoadState(opts.load);
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const timeMs = Number.isFinite(opts.time) ? opts.time : undefined;
         const text = normalizeOptionalString(opts.text);

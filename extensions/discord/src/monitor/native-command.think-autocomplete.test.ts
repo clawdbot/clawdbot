@@ -125,8 +125,8 @@ const STORE_PATH = path.join(
   `openclaw-discord-think-autocomplete-${process.pid}.json`,
 );
 const SESSION_KEY = "agent:main:main";
-let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth").findCommandByNativeName;
-let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth").resolveCommandArgChoices;
+let findCommandByNativeName: typeof import("openclaw/plugin-sdk/command-auth-native").findCommandByNativeName;
+let resolveCommandArgChoices: typeof import("openclaw/plugin-sdk/command-auth-native").resolveCommandArgChoices;
 let resolveDiscordNativeChoiceContext: typeof import("./native-command-model-picker-ui.js").resolveDiscordNativeChoiceContext;
 
 function installProviderThinkingRegistryForTest(): void {
@@ -166,7 +166,7 @@ function installProviderThinkingRegistryForTest(): void {
 
 async function loadDiscordThinkAutocompleteModulesForTest() {
   installProviderThinkingRegistryForTest();
-  const commandAuth = await import("openclaw/plugin-sdk/command-auth");
+  const commandAuth = await import("openclaw/plugin-sdk/command-auth-native");
   const nativeCommandUi = await import("./native-command-model-picker-ui.js");
   return {
     findCommandByNativeName: commandAuth.findCommandByNativeName,

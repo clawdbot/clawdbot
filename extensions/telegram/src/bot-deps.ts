@@ -3,7 +3,7 @@ import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inb
 import {
   createChannelMessageReplyPipeline,
   deliverInboundReplyWithMessageSendContext,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   recordInboundSession,

@@ -16,6 +16,22 @@ export function isLiveProfileKeyModeEnabled(env: NodeJS.ProcessEnv = process.env
   return isTruthyEnvValue(env.OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS);
 }
 
+export function requiresLiveProfileCredential(
+  provider: string,
+  requireProfileKeys: boolean,
+): boolean {
+  return requireProfileKeys || provider === "openai-codex";
+}
+
+export function resolveLiveCredentialPrecedence(
+  provider: string,
+  requireProfileKeys: boolean,
+): "profile-first" | "env-first" {
+  return requiresLiveProfileCredential(provider, requireProfileKeys)
+    ? "profile-first"
+    : "env-first";
+}
+
 export function createSingleUserPromptMessage(content = LIVE_OK_PROMPT) {
   return [
     {

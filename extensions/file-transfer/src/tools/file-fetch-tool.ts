@@ -7,6 +7,7 @@ import {
   type NodeListNode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
 import { throwFromNodePayload } from "../shared/errors.js";
 import {
@@ -121,6 +122,7 @@ export function createFileFetchTool(): AnyAgentTool {
         FILE_FETCH_HARD_MAX_BYTES,
       );
       const localPath = saved.path;
+      const shortHash = sha256.slice(0, 12);
 
       const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType);
       const isInlineText = TEXT_INLINE_MIME_SET.has(mimeType) && size <= TEXT_INLINE_MAX_BYTES;
@@ -132,15 +134,22 @@ export function createFileFetchTool(): AnyAgentTool {
         content.push({ type: "image", data: base64, mimeType });
       } else if (isInlineText) {
         const text = buffer.toString("utf-8");
+        const wrappedText = wrapExternalContent(
+          `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\n\n--- contents ---\n${text}`,
+          { source: "unknown" },
+        );
         content.push({
           type: "text",
-          text: `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${sha256.slice(0, 12)}) saved at ${localPath}\n\n--- contents ---\n${text}`,
+          text: wrappedText,
         });
       } else {
-        const shortHash = sha256.slice(0, 12);
+        const wrappedText = wrapExternalContent(
+          `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}`,
+          { source: "unknown" },
+        );
         content.push({
           type: "text",
-          text: `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}`,
+          text: wrappedText,
         });
       }
 

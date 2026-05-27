@@ -85,4 +85,16 @@ describe("ensure-cli-startup-build", () => {
       }),
     ).toThrow("cliStartup build profile failed with exit code 1");
   });
+
+  it("fails when spawning the cliStartup build profile fails", () => {
+    const root = makeTempRoot();
+
+    expect(() =>
+      ensureCliStartupBuild({
+        rootDir: root,
+        spawnSync: () => ({ error: new Error("spawn denied") }),
+        stdio: "pipe",
+      }),
+    ).toThrow("spawn denied");
+  });
 });

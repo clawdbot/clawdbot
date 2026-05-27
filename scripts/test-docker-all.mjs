@@ -515,12 +515,12 @@ function printLaneManifest(label, poolLanes, timingStore) {
   }
 }
 
-function dockerPreflightContainerNames(raw) {
+export function dockerPreflightContainerNames(raw) {
   return raw
     .split(/\r?\n/)
     .map((line) => line.trim().split(/\s+/, 1)[0])
     .filter((name) =>
-      /^(?:openclaw-(?:gateway-e2e|openwebui|openwebui-gateway|config-reload-e2e)-)/.test(name),
+      /^(?:openclaw-[a-z0-9-]+-e2e-\d+|openclaw-openwebui(?:-gateway)?-\d+)$/u.test(name),
     );
 }
 

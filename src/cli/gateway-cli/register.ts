@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { HealthSummary } from "../../commands/health.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type {
   DiagnosticStabilityBundle,
@@ -403,6 +404,17 @@ function resolveSupportExportRpcOptions(
   };
 }
 
+function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
+  if (raw === undefined || raw === null || raw === "") {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 async function writeSupportExportFromCli(opts: {
   json?: boolean;
   output?: string;
@@ -415,8 +427,8 @@ async function writeSupportExportFromCli(opts: {
   const rpc = resolveSupportExportRpcOptions(opts.rpc);
   const result = await writeDiagnosticSupportExport({
     outputPath: opts.output,
-    logLimit: opts.logLines ? Number(opts.logLines) : undefined,
-    logMaxBytes: opts.logBytes ? Number(opts.logBytes) : undefined,
+    logLimit: parseOptionalPositiveIntegerOption(opts.logLines, "--log-lines"),
+    logMaxBytes: parseOptionalPositiveIntegerOption(opts.logBytes, "--log-bytes"),
     stabilityBundle: opts.stabilityBundle,
     readStatusSnapshot: async () => {
       const { gatherDaemonStatus } = await loadDaemonStatusGatherModule();

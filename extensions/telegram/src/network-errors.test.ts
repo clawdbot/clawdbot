@@ -83,6 +83,7 @@ describe("isRecoverableTelegramNetworkError", () => {
 
   it.each([
     ["ETIMEDOUT", "timeout"],
+    ["ENETDOWN", "network down"],
     ["ECONNABORTED", "aborted"],
     ["ERR_NETWORK", "network"],
   ])("detects recoverable error code %s", (code, message) => {
@@ -218,6 +219,7 @@ describe("isSafeToRetrySendError", () => {
     ["ECONNREFUSED", "connect ECONNREFUSED", true],
     ["ENOTFOUND", "getaddrinfo ENOTFOUND", true],
     ["EAI_AGAIN", "getaddrinfo EAI_AGAIN", true],
+    ["ENETDOWN", "connect ENETDOWN", true],
     ["ENETUNREACH", "connect ENETUNREACH", true],
     ["EHOSTUNREACH", "connect EHOSTUNREACH", true],
     ["ECONNRESET", "read ECONNRESET", false],

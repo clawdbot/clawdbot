@@ -1,5 +1,6 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { mergeScopedSearchConfig } from "../agents/tools/web-search-provider-config.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
 describe("web search Codex native config validation", () => {
@@ -52,6 +53,23 @@ describe("web search Codex native config validation", () => {
         mode: "strict",
       });
     }
+  });
+
+  it("accepts runtime-only legacy provider entries injected by web search merge", () => {
+    const search = mergeScopedSearchConfig({ enabled: true, provider: "gemini" }, "perplexity", {
+      apiKey: "perplexity-test-key",
+    });
+    const result = validateConfigObjectRaw({
+      tools: {
+        web: {
+          search,
+        },
+      },
+    });
+
+    expect(search?.perplexity).toEqual({ apiKey: "perplexity-test-key" });
+    expect(Object.keys(search ?? {})).toEqual(["enabled", "provider"]);
+    expect(result.ok).toBe(true);
   });
 
   it.each(["__proto__", "prototype", "constructor"])(

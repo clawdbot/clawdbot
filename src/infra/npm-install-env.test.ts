@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -15,31 +14,6 @@ const EXPECTED_FRESHNESS_ENV = {
   "npm_config_min-release-age": "",
   npm_config_min_release_age: "0",
 };
-
-function readNpmConfigList(env: NodeJS.ProcessEnv): Record<string, unknown> {
-  const raw = execFileSync("npm", ["config", "list", "--json"], {
-    encoding: "utf-8",
-    env: {
-      ...process.env,
-      ...env,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 5_000,
-  });
-  return JSON.parse(raw) as Record<string, unknown>;
-}
-
-function expectUnsetNpmJsonConfig(value: unknown): void {
-  expect(value == null).toBe(true);
-}
-
-function expectZeroNpmJsonConfig(value: unknown): void {
-  expect(value === 0 || value === "0").toBe(true);
-}
-
-function expectUnsetOrZeroNpmJsonConfig(value: unknown): void {
-  expect(value == null || value === false || value === 0 || value === "0").toBe(true);
-}
 
 function createIsolatedNpmConfigEnv(dir: string): NodeJS.ProcessEnv {
   const home = path.join(dir, "home");
@@ -344,6 +318,36 @@ describe("npm project install env", () => {
     }
   });
 
+  it("prefers scoped npm prefix policy over parent npm prefix policy", () => {
+    const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-prefix-npmrc-"));
+    try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
+      const scopedPrefix = path.join(dir, "scoped-prefix");
+      const parentPrefix = path.join(dir, "parent-prefix");
+      fsSync.mkdirSync(path.join(scopedPrefix, "etc"), { recursive: true });
+      fsSync.mkdirSync(path.join(parentPrefix, "etc"), { recursive: true });
+      fsSync.writeFileSync(
+        path.join(scopedPrefix, "etc", "npmrc"),
+        "before=2026-01-01T00:00:00.000Z\n",
+        "utf-8",
+      );
+      fsSync.writeFileSync(path.join(parentPrefix, "etc", "npmrc"), "min-release-age=7\n", "utf-8");
+
+      expect(
+        createNpmFreshnessBypassArgs(
+          {
+            ...baseEnv,
+            NPM_CONFIG_PREFIX: parentPrefix,
+          },
+          FROZEN_NOW,
+          { npmConfigPrefix: scopedPrefix },
+        ),
+      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
+    } finally {
+      fsSync.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("overrides stale npmrc before config without emitting release-age config", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npmrc-"));
     try {
@@ -359,9 +363,9 @@ describe("npm project install env", () => {
         FROZEN_NOW,
       );
 
-      const npmConfig = readNpmConfigList(env);
-      expect(npmConfig.before).toBe(FROZEN_NOW.toISOString());
-      expectUnsetNpmJsonConfig(npmConfig["min-release-age"]);
+      expect(env.npm_config_before).toBe(FROZEN_NOW.toISOString());
+      expect(env.npm_config_min_release_age).toBe("");
+      expect(env["npm_config_min-release-age"]).toBe("");
     } finally {
       fsSync.rmSync(dir, { recursive: true, force: true });
     }
@@ -370,12 +374,14 @@ describe("npm project install env", () => {
   it("uses release-age args for npmrc release-age policies", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       const npmrc = path.join(dir, "npmrc");
       fsSync.writeFileSync(npmrc, "min-release-age=7\n", "utf-8");
 
       expect(
         createNpmFreshnessBypassArgs(
           {
+            ...baseEnv,
             NPM_CONFIG_USERCONFIG: npmrc,
           },
           FROZEN_NOW,
@@ -389,10 +395,12 @@ describe("npm project install env", () => {
   it("overrides npmrc release-age config without emitting before config", () => {
     const dir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-npmrc-"));
     try {
+      const baseEnv = createIsolatedNpmConfigEnv(dir);
       const npmrc = path.join(dir, "npmrc");
       fsSync.writeFileSync(npmrc, "min-release-age=7\n", "utf-8");
       const env = createNpmProjectInstallEnv(
         {
+          ...baseEnv,
           NPM_CONFIG_USERCONFIG: npmrc,
         },
         {},
@@ -401,13 +409,8 @@ describe("npm project install env", () => {
 
       expect(env.npm_config_before).toBe("");
       expect(env.npm_config_min_release_age).toBe("0");
-      const npmConfig = readNpmConfigList(env);
-      expect(
-        npmConfig.before == null ||
-          npmConfig.before === false ||
-          typeof npmConfig.before === "string",
-      ).toBe(true);
-      expectUnsetOrZeroNpmJsonConfig(npmConfig["min-release-age"]);
+      expect(env.NPM_CONFIG_BEFORE).toBe("");
+      expect(env["npm_config_min-release-age"]).toBe("");
     } finally {
       fsSync.rmSync(dir, { recursive: true, force: true });
     }

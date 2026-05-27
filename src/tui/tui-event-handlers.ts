@@ -1,4 +1,4 @@
-import { isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
+import { classifyFailoverReason, isAuthErrorMessage } from "../agents/pi-embedded-helpers.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -187,10 +187,17 @@ export function createEventHandlers(context: EventHandlerContext) {
   };
 
   const resolveAuthErrorHint = (errorMessage: string): string | undefined => {
-    if (!localMode || !isAuthErrorMessage(errorMessage)) {
+    if (!localMode) {
       return undefined;
     }
     const provider = state.sessionInfo.modelProvider?.trim();
+    const failoverReason = classifyFailoverReason(errorMessage, { provider });
+    if (failoverReason === "billing" || failoverReason === "rate_limit") {
+      return undefined;
+    }
+    if (!isAuthErrorMessage(errorMessage)) {
+      return undefined;
+    }
     return provider
       ? `auth or provider access failed for ${provider}. Run /auth ${provider} to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.`
       : "auth or provider access failed for the current provider. Run /auth to refresh credentials; if you already re-authed, switch models/providers because this account may still be blocked for inference.";

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createSdkAccessAdapter } from "../../bridge/sdk-adapter.js";
 import { registerPlatformAdapter, type PlatformAdapter } from "../adapter/index.js";
 import type { InteractionEvent } from "../types.js";
 import { createInteractionHandler } from "./interaction-handler.js";
@@ -17,13 +18,17 @@ vi.mock("../messaging/sender.js", () => ({
 
 const resolveApprovalMock = vi.fn(async () => true);
 
-const account: GatewayAccount = {
-  accountId: "default",
-  appId: "app",
-  clientSecret: "secret",
-  markdownSupport: false,
-  config: {},
-};
+function makeAccount(config: GatewayAccount["config"] = {}): GatewayAccount {
+  return {
+    accountId: "default",
+    appId: "app",
+    clientSecret: "secret",
+    markdownSupport: false,
+    config,
+  };
+}
+
+const account = makeAccount();
 
 const runtime = {} as GatewayPluginRuntime;
 
@@ -42,12 +47,13 @@ function makeRestrictedCfg(approvers: string[]): OpenClawConfig {
   } as OpenClawConfig;
 }
 
-function makeUnrestrictedCfg(): OpenClawConfig {
+function makeCommandAuthorizedFallbackCfg(): OpenClawConfig {
   return {
     channels: {
       qqbot: {
         appId: "app",
         clientSecret: "secret",
+        allowFrom: ["ATTACKER_OPENID"],
       },
     },
   } as OpenClawConfig;
@@ -172,9 +178,9 @@ describe("createInteractionHandler approval buttons", () => {
     );
   });
 
-  it("allows approval button clicks when exec approvals are not configured", async () => {
+  it("resolves fallback approval buttons from explicit command-authorized senders", async () => {
     const handler = createInteractionHandler(account, runtime, undefined, {
-      getActiveCfg: () => makeUnrestrictedCfg(),
+      getActiveCfg: () => makeCommandAuthorizedFallbackCfg(),
     });
 
     handler(makeApprovalEvent());
@@ -182,6 +188,152 @@ describe("createInteractionHandler approval buttons", () => {
     await vi.waitFor(() =>
       expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
     );
+  });
+
+  it("delegates fallback approval button auth to the gateway command resolver", async () => {
+    const access = createSdkAccessAdapter();
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          accessGroups: {
+            operators: {
+              type: "message.senders",
+              members: {
+                qqbot: ["ATTACKER_OPENID"],
+              },
+            },
+          },
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              allowFrom: ["accessGroup:operators"],
+            },
+          },
+        }) as OpenClawConfig,
+      resolveCommandAuthorized: (params) => access.resolveSlashCommandAuthorization(params),
+    });
+
+    handler(makeApprovalEvent());
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    );
+  });
+
+  it("uses merged account config for fallback button command auth", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              accounts: {
+                default: {
+                  allowFrom: ["ATTACKER_OPENID"],
+                },
+              },
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(makeApprovalEvent());
+
+    await vi.waitFor(() =>
+      expect(resolveApprovalMock).toHaveBeenCalledWith("exec:abc12345", "allow-once"),
+    );
+  });
+
+  it("rejects fallback approval buttons from senders without explicit command auth", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () =>
+        ({
+          channels: {
+            qqbot: {
+              appId: "app",
+              clientSecret: "secret",
+              allowFrom: ["OWNER_OPENID"],
+            },
+          },
+        }) as OpenClawConfig,
+    });
+
+    handler(makeApprovalEvent());
+
+    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: "You are not authorized to approve this request." },
+    );
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "no allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+          },
+        },
+      },
+    ],
+    [
+      "wildcard allowlist",
+      {
+        channels: {
+          qqbot: {
+            appId: "app",
+            clientSecret: "secret",
+            allowFrom: ["*"],
+          },
+        },
+      },
+    ],
+  ] satisfies Array<[string, OpenClawConfig]>)(
+    "rejects fallback approval buttons when %s does not grant command auth",
+    async (_name, cfg) => {
+      const handler = createInteractionHandler(account, runtime, undefined, {
+        getActiveCfg: () => cfg,
+      });
+
+      handler(makeApprovalEvent());
+
+      await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        { content: "You are not authorized to approve this request." },
+      );
+      expect(resolveApprovalMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects fallback approval buttons without a trusted actor id", async () => {
+    const handler = createInteractionHandler(account, runtime, undefined, {
+      getActiveCfg: () => makeCommandAuthorizedFallbackCfg(),
+    });
+
+    handler(makeApprovalEvent({ group_member_openid: undefined, user_openid: undefined }));
+
+    await vi.waitFor(() => expect(acknowledgeInteractionMock).toHaveBeenCalled());
+
+    expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+      { appId: "app", clientSecret: "secret" },
+      "interaction-1",
+      0,
+      { content: "You are not authorized to approve this request." },
+    );
+    expect(resolveApprovalMock).not.toHaveBeenCalled();
   });
 
   it("rejects approval button clicks when active config cannot be loaded", async () => {

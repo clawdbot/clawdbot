@@ -69,6 +69,7 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
   sessionKey?: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
+  cloneOnWrite?: boolean;
 }): SessionKeyResolution | undefined {
   if (opts.defaultAgentId === DEFAULT_AGENT_ID || !opts.sessionKey) {
     return undefined;
@@ -92,24 +93,29 @@ function resolveLegacyMainStoreSessionForDefaultAgent(opts: {
     for (const legacyKey of legacyKeys) {
       const legacyEntry = opts.sessionStore[legacyKey];
       if (legacyEntry) {
-        opts.sessionStore[opts.sessionKey] = { ...legacyEntry };
+        const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
+        sessionStore[opts.sessionKey] = { ...legacyEntry };
         return {
           sessionKey: opts.sessionKey,
-          sessionStore: opts.sessionStore,
+          sessionStore,
           storePath: opts.storePath,
         };
       }
     }
     return undefined;
   }
-  const legacyStore = loadSessionStore(legacyStorePath);
+  const legacyStore = loadSessionStore(
+    legacyStorePath,
+    opts.cloneOnWrite ? { clone: false } : undefined,
+  );
   for (const legacyKey of legacyKeys) {
     const legacyEntry = legacyStore[legacyKey];
     if (legacyEntry) {
-      opts.sessionStore[opts.sessionKey] = { ...legacyEntry };
+      const sessionStore = opts.cloneOnWrite ? { ...opts.sessionStore } : opts.sessionStore;
+      sessionStore[opts.sessionKey] = { ...legacyEntry };
       return {
         sessionKey: opts.sessionKey,
-        sessionStore: opts.sessionStore,
+        sessionStore,
         storePath: opts.storePath,
       };
     }
@@ -124,6 +130,7 @@ function collectSessionIdMatchesForRequest(opts: {
   storeAgentId?: string;
   sessionId: string;
   searchOtherAgentStores: boolean;
+  clone?: boolean;
 }): SessionIdMatchSet {
   const matches: Array<[string, SessionEntry]> = [];
   const primaryStoreMatches: Array<[string, SessionEntry]> = [];
@@ -160,7 +167,10 @@ function collectSessionIdMatchesForRequest(opts: {
       continue;
     }
     const candidateStorePath = resolveStorePath(opts.cfg.session?.store, { agentId });
-    addMatches(loadSessionStore(candidateStorePath), candidateStorePath);
+    addMatches(
+      loadSessionStore(candidateStorePath, opts.clone === false ? { clone: false } : undefined),
+      candidateStorePath,
+    );
   }
 
   return { matches, primaryStoreMatches, storeByKey };
@@ -203,6 +213,7 @@ export function resolveSessionKeyForRequest(opts: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  clone?: boolean;
 }): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -226,7 +237,8 @@ export function resolveSessionKeyForRequest(opts: {
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,
   });
-  const sessionStore = loadSessionStore(storePath);
+  const loadOptions = opts.clone === false ? { clone: false as const } : undefined;
+  const sessionStore = loadSessionStore(storePath, loadOptions);
 
   const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
   let sessionKey: string | undefined =
@@ -240,6 +252,7 @@ export function resolveSessionKeyForRequest(opts: {
       sessionKey,
       sessionStore,
       storePath,
+      cloneOnWrite: opts.clone === false,
     });
     if (legacyMainSession) {
       return legacyMainSession;
@@ -262,6 +275,7 @@ export function resolveSessionKeyForRequest(opts: {
       storeAgentId,
       sessionId: requestedSessionId,
       searchOtherAgentStores: requestedAgentId === undefined,
+      ...(opts.clone === false ? { clone: false } : {}),
     });
     const preferredSelection = resolveSessionIdMatchSelection(matches, requestedSessionId);
     const currentStoreSelection =
@@ -293,6 +307,7 @@ export function resolveSession(opts: {
   sessionId?: string;
   sessionKey?: string;
   agentId?: string;
+  clone?: boolean;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const { sessionKey, sessionStore, storePath } = resolveSessionKeyForRequest({
@@ -301,6 +316,7 @@ export function resolveSession(opts: {
     sessionId: opts.sessionId,
     sessionKey: opts.sessionKey,
     agentId: opts.agentId,
+    ...(opts.clone === false ? { clone: false } : {}),
   });
   const now = Date.now();
 

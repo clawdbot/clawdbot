@@ -937,6 +937,70 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
+  it("reconciles disabled->enabled config changes without waiting for another agent turn", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const harness = createCronHarness();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                  frequency: "0 2 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => harness.cron,
+      });
+
+      expect(harness.addCalls).toHaveLength(0);
+
+      api.config = {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "30 6 * * *",
+                  timezone: "America/New_York",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await vi.advanceTimersByTimeAsync(constants.RUNTIME_CRON_RECONCILE_INTERVAL_MS);
+
+      expect(harness.addCalls).toHaveLength(1);
+      expectCronSchedule(requireAddCall(harness, 0).schedule, "30 6 * * *", "America/New_York");
+    } finally {
+      await triggerGatewayStop(onMock).catch(() => undefined);
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
   it("reconciles cadence/timezone updates against the active cron service after startup", async () => {
     clearInternalHooks();
     const logger = createLogger();
@@ -2267,11 +2331,15 @@ describe("short-term dreaming trigger", () => {
       ],
     });
 
+    const narrativeMessages = [{ role: "assistant", content: "A diary entry." }];
     const subagent = {
       run: vi.fn(async (_params: { model?: string }) => ({ runId: "narrative-run-1" })),
-      waitForRun: vi.fn(async () => ({ status: "ok" })),
+      waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({
-        messages: [{ role: "assistant", content: "A diary entry." }],
+        messages: narrativeMessages,
+      })),
+      getSession: vi.fn(async () => ({
+        messages: narrativeMessages,
       })),
       deleteSession: vi.fn(async () => {}),
     };

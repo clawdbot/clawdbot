@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseFfprobeCodecAndSampleRate,
   parseFfprobeCsvFields,
+  resolveFfmpegBin,
   runFfprobe,
 } from "./ffmpeg-exec.js";
 
@@ -129,5 +130,14 @@ describe("runFfprobe", () => {
     execCallback()(childError, "", "");
 
     await expect(promise).rejects.toBe(childError);
+  });
+});
+
+describe("resolveFfmpegBin", () => {
+  it("resolves ffmpeg from trusted system paths", () => {
+    resolveSystemBinMock.mockReturnValue("/usr/bin/ffmpeg");
+
+    expect(resolveFfmpegBin()).toBe("/usr/bin/ffmpeg");
+    expect(resolveSystemBinMock).toHaveBeenCalledWith("ffmpeg", { trust: "standard" });
   });
 });

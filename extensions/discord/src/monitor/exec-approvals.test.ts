@@ -144,7 +144,7 @@ describe("discord exec approval monitor helpers", () => {
     });
   });
 
-  it("keeps already-resolved approval clicks quiet", async () => {
+  it("shows a follow-up for already-resolved approval clicks", async () => {
     const interaction = createInteraction();
     const button = new ExecApprovalButton({
       getApprovers: () => ["123"],
@@ -154,7 +154,11 @@ describe("discord exec approval monitor helpers", () => {
     await button.run(interaction, { id: "abc", action: "allow-once" });
 
     expect(interaction.acknowledge).toHaveBeenCalled();
-    expect(interaction.followUp).not.toHaveBeenCalled();
+    expect(interaction.followUp).toHaveBeenCalledWith({
+      content:
+        "That approval request is no longer pending. It may have expired or already been resolved.",
+      ephemeral: true,
+    });
   });
 
   it("builds button context from config and routes resolution over gateway", async () => {

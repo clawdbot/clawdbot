@@ -20,9 +20,9 @@
 	<string>$(OPENCLAW_MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(OPENCLAW_BUILD_VERSION)</string>
-	<key>WKApplication</key>
-	<true/>
 	<key>WKCompanionAppBundleIdentifier</key>
 	<string>$(OPENCLAW_APP_BUNDLE_ID)</string>
+	<key>WKWatchKitApp</key>
+	<true/>
 </dict>
 </plist>

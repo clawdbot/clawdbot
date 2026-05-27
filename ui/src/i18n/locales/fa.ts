@@ -363,6 +363,8 @@ export const fa: TranslationMap = {
     pending: "{count} در انتظار",
     allowOnce: "یک‌بار مجاز کن",
     alwaysAllow: "همیشه مجاز کن",
+    allowAlwaysUnavailable:
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     deny: "رد کردن",
     labels: {
       host: "میزبان",

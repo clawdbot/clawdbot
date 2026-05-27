@@ -392,7 +392,11 @@ export function isMessageReceivedEvent(
   if (!context) {
     return false;
   }
-  return hasStringContextField(context, "from") && hasStringContextField(context, "channelId");
+  return (
+    hasStringContextField(context, "from") &&
+    hasStringContextField(context, "content") &&
+    hasStringContextField(context, "channelId")
+  );
 }
 
 export function isMessageSentEvent(event: InternalHookEvent): event is MessageSentHookEvent {
@@ -405,6 +409,7 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
   }
   return (
     hasStringContextField(context, "to") &&
+    hasStringContextField(context, "content") &&
     hasStringContextField(context, "channelId") &&
     hasBooleanContextField(context, "success")
   );

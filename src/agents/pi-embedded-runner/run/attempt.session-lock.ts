@@ -1,12 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { statSync } from "node:fs";
 import fs from "node:fs/promises";
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { isSessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
+import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
@@ -403,7 +404,164 @@ const trustedSessionFileStates = new Map<string, TrustedSessionFileState>();
 let ownedSessionFileWriteGeneration = 0;
 
 function resolveSessionFileFenceKey(sessionFile: string): string {
-  return path.resolve(sessionFile);
+  return resolveEmbeddedSessionFileKey(sessionFile);
+}
+
+type SessionFileOwnerWaiter = {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+  timer?: NodeJS.Timeout;
+  abortListener?: () => void;
+  signal?: AbortSignal;
+};
+
+type SessionFileOwnerEntry = {
+  ownerId: symbol;
+  waiters: Set<SessionFileOwnerWaiter>;
+};
+
+type SessionFileOwnerState = {
+  owners: Map<string, SessionFileOwnerEntry>;
+};
+
+const EMBEDDED_ATTEMPT_SESSION_FILE_OWNER_STATE_KEY = Symbol.for(
+  "openclaw.embeddedAttemptSessionFileOwnerState",
+);
+
+const sessionFileOwnerState = resolveGlobalSingleton(
+  EMBEDDED_ATTEMPT_SESSION_FILE_OWNER_STATE_KEY,
+  (): SessionFileOwnerState => ({
+    owners: new Map<string, SessionFileOwnerEntry>(),
+  }),
+);
+
+export type EmbeddedAttemptSessionFileOwner = {
+  sessionFileKey: string;
+  release(): void;
+};
+
+export class EmbeddedAttemptSessionFileOwnerTimeoutError extends Error {
+  constructor(sessionFile: string, timeoutMs: number) {
+    super(`timed out waiting for embedded session file owner after ${timeoutMs}ms: ${sessionFile}`);
+    this.name = "EmbeddedAttemptSessionFileOwnerTimeoutError";
+  }
+}
+
+function abortReason(signal: AbortSignal): unknown {
+  return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
+}
+
+function abortOwnerWaitReason(signal: AbortSignal): unknown {
+  return abortReason(signal) ?? new Error("operation aborted", { cause: signal });
+}
+
+function waitForSessionFileOwnerRelease(params: {
+  sessionFile: string;
+  entry: SessionFileOwnerEntry;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<void> {
+  if (params.signal?.aborted) {
+    return Promise.reject(abortOwnerWaitReason(params.signal));
+  }
+  return new Promise<void>((resolve, reject) => {
+    const waiter: SessionFileOwnerWaiter = {
+      resolve,
+      reject,
+      signal: params.signal,
+    };
+    const cleanup = () => {
+      params.entry.waiters.delete(waiter);
+      if (waiter.timer) {
+        clearTimeout(waiter.timer);
+      }
+      if (waiter.signal && waiter.abortListener) {
+        waiter.signal.removeEventListener("abort", waiter.abortListener);
+      }
+    };
+    waiter.resolve = () => {
+      cleanup();
+      resolve();
+    };
+    waiter.reject = (error) => {
+      cleanup();
+      reject(error);
+    };
+    if (params.timeoutMs !== undefined && Number.isFinite(params.timeoutMs)) {
+      waiter.timer = setTimeout(
+        () => {
+          waiter.reject(
+            new EmbeddedAttemptSessionFileOwnerTimeoutError(
+              params.sessionFile,
+              params.timeoutMs ?? 0,
+            ),
+          );
+        },
+        Math.max(1, Math.floor(params.timeoutMs)),
+      );
+      waiter.timer.unref?.();
+    }
+    if (params.signal) {
+      waiter.abortListener = () => {
+        waiter.reject(abortOwnerWaitReason(params.signal!));
+      };
+      params.signal.addEventListener("abort", waiter.abortListener, { once: true });
+    }
+    params.entry.waiters.add(waiter);
+  });
+}
+
+export async function acquireEmbeddedAttemptSessionFileOwner(params: {
+  sessionFile: string;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<EmbeddedAttemptSessionFileOwner> {
+  const sessionFileKey = resolveEmbeddedSessionFileKey(params.sessionFile);
+  const ownerId = Symbol(sessionFileKey);
+  while (true) {
+    if (params.signal?.aborted) {
+      throw abortOwnerWaitReason(params.signal);
+    }
+    const entry = sessionFileOwnerState.owners.get(sessionFileKey);
+    if (!entry) {
+      sessionFileOwnerState.owners.set(sessionFileKey, {
+        ownerId,
+        waiters: new Set(),
+      });
+      return {
+        sessionFileKey,
+        release() {
+          const current = sessionFileOwnerState.owners.get(sessionFileKey);
+          if (!current || current.ownerId !== ownerId) {
+            return;
+          }
+          sessionFileOwnerState.owners.delete(sessionFileKey);
+          for (const waiter of current.waiters) {
+            waiter.resolve();
+          }
+        },
+      };
+    }
+    await waitForSessionFileOwnerRelease({
+      sessionFile: params.sessionFile,
+      entry,
+      timeoutMs: params.timeoutMs,
+      signal: params.signal,
+    });
+  }
+}
+
+export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
+  for (const entry of sessionFileOwnerState.owners.values()) {
+    for (const waiter of entry.waiters) {
+      waiter.reject(
+        new Error("embedded attempt session file owners reset", {
+          cause: "resetEmbeddedAttemptSessionFileOwnersForTest",
+        }),
+      );
+    }
+  }
+  sessionFileOwnerState.owners.clear();
 }
 
 function recordOwnedSessionFileWrite(
@@ -616,6 +774,7 @@ export function installSessionExternalHookWriteLock(params: {
 
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
+  releaseHeldLockForAbort(): Promise<void>;
   refreshAfterOwnedSessionWrite(): void;
   reacquireAfterPrompt(): Promise<void>;
   waitForSessionEvents(session: unknown): Promise<void>;
@@ -748,24 +907,31 @@ export async function createEmbeddedAttemptSessionLockController(params: {
 
   const noopLock: SessionLock = { release: async () => {} };
 
+  async function releaseHeldLockWithFence(): Promise<void> {
+    if (!heldLock) {
+      return;
+    }
+    const lock = heldLock;
+    heldLock = undefined;
+    const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+    const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+    const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+    fenceFingerprint = fingerprint;
+    fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+    fenceGeneration =
+      ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+        ? ownedWrite.generation
+        : (trustedGeneration ?? fenceGeneration);
+    fenceActive = true;
+    await lock.release();
+  }
+
   return {
     async releaseForPrompt(): Promise<void> {
-      if (!heldLock) {
-        return;
-      }
-      const lock = heldLock;
-      heldLock = undefined;
-      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-      fenceFingerprint = fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceGeneration =
-        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-          ? ownedWrite.generation
-          : (trustedGeneration ?? fenceGeneration);
-      fenceActive = true;
-      await lock.release();
+      await releaseHeldLockWithFence();
+    },
+    async releaseHeldLockForAbort(): Promise<void> {
+      await releaseHeldLockWithFence();
     },
     refreshAfterOwnedSessionWrite(): void {
       if (fenceActive && !takeoverDetected) {
@@ -916,6 +1082,7 @@ export function installPromptSubmissionLockRelease(params: {
       }
       return await originalStreamFn(...args);
     } finally {
+      await params.waitForSessionEvents(params.session);
       await params.reacquireAfterPrompt();
     }
   };

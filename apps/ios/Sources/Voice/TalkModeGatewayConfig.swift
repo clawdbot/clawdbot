@@ -3,7 +3,105 @@ import OpenClawKit
 
 enum TalkModeExecutionMode {
     case native
+    case realtimeClient
     case realtimeRelay
+}
+
+struct TalkVoiceModeDescriptor: Equatable {
+    let title: String
+    let subtitle: String?
+    let providerId: String?
+    let modelId: String?
+    let voiceId: String?
+    let transport: String?
+    let isRealtime: Bool
+
+    var accessibilityValue: String {
+        if let subtitle, !subtitle.isEmpty {
+            return "\(self.title), \(subtitle)"
+        }
+        return self.title
+    }
+}
+
+enum TalkVoiceModeDescriptorBuilder {
+    static func build(
+        providerId: String,
+        providerLabel: String,
+        modelId: String?,
+        voiceId: String?,
+        transport: String?,
+        isRealtime: Bool) -> TalkVoiceModeDescriptor
+    {
+        let normalizedProvider = providerId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedModel = Self.trimmed(modelId)
+        let trimmedVoice = Self.trimmed(voiceId)
+        let trimmedTransport = Self.trimmed(transport)
+        let title = if isRealtime, normalizedProvider == "openai", trimmedModel == "gpt-realtime-2" {
+            "GPT Realtime 2.0"
+        } else if isRealtime, normalizedProvider == "openai" {
+            "OpenAI Realtime"
+        } else if isRealtime {
+            providerLabel.isEmpty ? "Realtime Voice" : providerLabel
+        } else if normalizedProvider == "system" {
+            "iOS System Voice"
+        } else {
+            providerLabel.isEmpty ? "Talk Voice" : providerLabel
+        }
+
+        var details: [String] = []
+        if isRealtime, normalizedProvider != "openai", !providerLabel.isEmpty, providerLabel != title {
+            details.append(providerLabel)
+        }
+        if let trimmedTransport {
+            details.append(Self.transportLabel(trimmedTransport))
+        }
+        if let trimmedModel, title != "GPT Realtime 2.0" || trimmedModel != "gpt-realtime-2" {
+            details.append(trimmedModel)
+        }
+        if let trimmedVoice {
+            details.append(Self.voiceLabel(trimmedVoice))
+        }
+
+        return TalkVoiceModeDescriptor(
+            title: title,
+            subtitle: details.isEmpty ? nil : details.joined(separator: " • "),
+            providerId: normalizedProvider.isEmpty ? nil : normalizedProvider,
+            modelId: trimmedModel,
+            voiceId: trimmedVoice,
+            transport: trimmedTransport,
+            isRealtime: isRealtime)
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func voiceLabel(_ voice: String) -> String {
+        TalkModeRealtimeVoiceSelection.voices.contains(voice)
+            ? TalkModeRealtimeVoiceSelection.label(for: voice)
+            : voice
+    }
+
+    private static func transportLabel(_ transport: String) -> String {
+        switch transport.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "webrtc":
+            "Native WebRTC"
+        case "gateway-relay":
+            "Gateway Relay"
+        case "provider-websocket":
+            "Provider WebSocket"
+        case "managed-room":
+            "Managed Room"
+        case "native":
+            "Native"
+        case let value where !value.isEmpty:
+            value
+        default:
+            "Native"
+        }
+    }
 }
 
 enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
@@ -112,8 +210,9 @@ enum TalkModeGatewayConfigParser {
         let defaultVoiceId = Self.firstString(activeConfig, keys: ["voiceId", "voice"])
         let defaultOutputFormat = Self.firstString(activeConfig, keys: ["outputFormat"])
         let realtime = talk?["realtime"]?.dictionaryValue
-        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
         let realtimeProviders = realtime?["providers"]?.dictionaryValue
+        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
+            ?? Self.singleRealtimeProviderId(realtimeProviders)
         let realtimeProviderConfig = Self.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: realtimeProvider)
@@ -164,10 +263,22 @@ enum TalkModeGatewayConfigParser {
         let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
         let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
         let brain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
-        if mode == "realtime", transport == "gateway-relay", brain == nil || brain == "agent-consult" {
+        guard mode == "realtime", brain == nil || brain == "agent-consult" else {
+            return .native
+        }
+        if transport == "gateway-relay" {
             return .realtimeRelay
         }
+        if transport == nil || transport == "webrtc" {
+            return .realtimeClient
+        }
         return .native
+    }
+
+    private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {
+        guard let providers, providers.count == 1 else { return nil }
+        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider?.isEmpty == false ? provider : nil
     }
 
     private static func realtimeProviderConfig(

@@ -212,6 +212,40 @@ describe("memory cli", () => {
     await program.parseAsync(["memory", ...args], { from: "user" });
   }
 
+  it("rejects invalid memory search numeric options before running the command", async () => {
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerMemoryCli(program);
+
+    await expect(
+      program.parseAsync(["memory", "search", "hello", "--max-results", "nope"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--max-results must be a finite number.");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid memory promote numeric options before running the command", async () => {
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerMemoryCli(program);
+
+    await expect(
+      program.parseAsync(["memory", "promote", "--limit", "Infinity"], { from: "user" }),
+    ).rejects.toThrow("--limit must be a finite number.");
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   function captureHelpOutput(command: Command | undefined) {
     let output = "";
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(((

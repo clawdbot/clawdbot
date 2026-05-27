@@ -1,4 +1,8 @@
 import { createArgReader, createGatewayWsClient, resolveGatewayUrl } from "./gateway-ws-client.ts";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../src/gateway/protocol/version.ts";
 
 function writeStdoutLine(message = ""): void {
   process.stdout.write(`${message}\n`);
@@ -97,8 +101,8 @@ async function main() {
   await waitOpen();
 
   const connectRes = await request("connect", {
-    minProtocol: 3,
-    maxProtocol: 3,
+    minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
     client: {
       id: "cli",
       displayName: "openclaw ios node e2e",

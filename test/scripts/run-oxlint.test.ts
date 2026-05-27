@@ -1,14 +1,17 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
+  createOxlintShards,
+  filterOxlintShards,
+  parseShardRunnerArgs,
+  createWindowsExtensionShards,
+  resolveWindowsExtensionChunkSize,
+  shouldRunOxlintShardsSerial,
+} from "../../scripts/run-oxlint-shards.mjs";
+import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
-import {
-  createOxlintShards,
-  createWindowsExtensionShards,
-  resolveWindowsExtensionChunkSize,
-} from "../../scripts/run-oxlint-shards.mjs";
 
 describe("run-oxlint", () => {
   it("prepares extension package boundary artifacts for normal lint runs", () => {
@@ -32,6 +35,9 @@ describe("run-oxlint", () => {
 
     expect(packageJson.scripts.check).toBe("node scripts/check.mjs");
     expect(packageJson.scripts.lint).toBe("node scripts/run-oxlint-shards.mjs");
+    expect(packageJson.scripts["lint:core"]).toBe(
+      "node scripts/run-oxlint-shards.mjs --only=core --split-core",
+    );
     expect(packageJson.scripts.check).not.toContain(
       "node scripts/prepare-extension-package-boundary-artifacts.mjs",
     );
@@ -57,8 +63,63 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
-    expect(shardedLintRunner).toContain('process.platform === "win32"');
+    expect(shardedLintRunner).toContain('platform === "win32"');
     expect(shardedLintRunner).toContain("runShardsSerial");
+  });
+
+  it("serializes broad oxlint shards on constrained local hosts", () => {
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: {},
+        platform: "linux",
+        hostResources: { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 },
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps oxlint shards parallel for CI and explicit full-speed runs", () => {
+    const constrainedHost = { totalMemoryBytes: 8 * 1024 ** 3, logicalCpuCount: 4 };
+
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true" },
+        platform: "linux",
+        hostResources: constrainedHost,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { CI: "true", OPENCLAW_LOCAL_CHECK_MODE: "throttled" },
+        platform: "linux",
+        hostResources: constrainedHost,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { OPENCLAW_LOCAL_CHECK_MODE: "full" },
+        platform: "linux",
+        hostResources: constrainedHost,
+      }),
+    ).toBe(false);
+  });
+
+  it("honors explicit oxlint shard serial overrides", () => {
+    const roomyHost = { totalMemoryBytes: 64 * 1024 ** 3, logicalCpuCount: 16 };
+
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "1", CI: "true" },
+        platform: "linux",
+        hostResources: roomyHost,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRunOxlintShardsSerial({
+        env: { OPENCLAW_OXLINT_SHARDS_SERIAL: "0" },
+        platform: "linux",
+        hostResources: roomyHost,
+      }),
+    ).toBe(false);
   });
 
   it("chunks extension oxlint shards on Windows", () => {
@@ -112,6 +173,68 @@ describe("run-oxlint", () => {
     ]);
   });
 
+  it("splits core oxlint shards when requested", () => {
+    const shards = createOxlintShards({
+      cwd: "/repo",
+      splitCore: true,
+      readDir: (target: string) => {
+        if (target.endsWith("/src")) {
+          return [
+            { name: "zeta.ts", isDirectory: () => false, isFile: () => true },
+            { name: "omega.ts", isDirectory: () => false, isFile: () => true },
+            { name: "notes.md", isDirectory: () => false, isFile: () => true },
+            { name: "alpha", isDirectory: () => true, isFile: () => false },
+          ] as never;
+        }
+        return [];
+      },
+    });
+
+    expect(shards.slice(0, 4)).toEqual([
+      {
+        name: "core:src:alpha",
+        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/alpha"],
+      },
+      {
+        name: "core:src:root",
+        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src/omega.ts", "src/zeta.ts"],
+      },
+      {
+        name: "core:ui",
+        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "ui"],
+      },
+      {
+        name: "core:packages",
+        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "packages"],
+      },
+    ]);
+  });
+
+  it("parses shard runner flags without forwarding them to oxlint", () => {
+    const parsed = parseShardRunnerArgs(["--only=core", "--split-core", "--max-warnings", "0"]);
+
+    expect([...parsed.only]).toEqual(["core"]);
+    expect(parsed.splitCore).toBe(true);
+    expect(parsed.oxlintArgs).toEqual(["--max-warnings", "0"]);
+  });
+
+  it("filters split core shards by shard family", () => {
+    const shards = filterOxlintShards(
+      createOxlintShards({
+        cwd: "/repo",
+        splitCore: true,
+        readDir: () => [{ name: "alpha", isDirectory: () => true, isFile: () => false }] as never,
+      }),
+      new Set(["core"]),
+    );
+
+    expect(shards.map((shard) => shard.name)).toEqual([
+      "core:src:alpha",
+      "core:ui",
+      "core:packages",
+    ]);
+  });
+
   it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {
     const shards = createWindowsExtensionShards({
       cwd: "/repo",
@@ -130,10 +253,12 @@ describe("run-oxlint", () => {
 
   it("keeps the default Windows oxlint extension chunk size for invalid overrides", () => {
     expect(resolveWindowsExtensionChunkSize({})).toBe(8);
-    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }))
-      .toBe(8);
-    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }))
-      .toBe(8);
+    expect(
+      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }),
+    ).toBe(8);
+    expect(
+      resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }),
+    ).toBe(8);
   });
 
   it("filters tracked targets missing from sparse checkouts", () => {

@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path, { win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { fetchJsonWithTimeout, runCommand } from "../../scripts/e2e/telegram-user-credential-io.ts";
 import {
   expandHome,
   resolvePrivateJsonDirectory,
@@ -57,5 +58,58 @@ describe("telegram user credential path handling", () => {
     await expect(readFile(path.join(dir, "payload.json"), "utf8")).resolves.toBe(
       '{\n  "status": "ok"\n}\n',
     );
+  });
+});
+
+describe("telegram user credential IO", () => {
+  it("fails hung child processes instead of waiting for the outer proof timeout", async () => {
+    await expect(
+      runCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], undefined, {
+        timeoutMs: 25,
+      }),
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: expect.stringContaining("timed out after 25ms"),
+    });
+  });
+
+  it("aborts broker fetches that never return", async () => {
+    let signal: AbortSignal | undefined;
+    await expect(
+      fetchJsonWithTimeout({
+        url: "https://qa.example.invalid/qa-credentials/v1/acquire",
+        label: "credential broker acquire",
+        timeoutMs: 25,
+        init: { method: "POST" },
+        fetchImpl: async (_url, init) => {
+          signal = init.signal as AbortSignal | undefined;
+          return new Promise<Response>(() => {});
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "credential broker acquire timed out after 25ms",
+    });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("times out while waiting for broker JSON bodies", async () => {
+    await expect(
+      fetchJsonWithTimeout({
+        url: "https://qa.example.invalid/qa-credentials/v1/payload-chunk",
+        label: "credential broker payload-chunk",
+        timeoutMs: 25,
+        init: { method: "POST" },
+        fetchImpl: async () =>
+          ({
+            ok: true,
+            status: 200,
+            json: () => new Promise<unknown>(() => {}),
+          }) as Response,
+      }),
+    ).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+      message: "credential broker payload-chunk timed out after 25ms",
+    });
   });
 });

@@ -3,7 +3,7 @@ import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feed
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   type ChannelBotLoopProtectionFacts,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -97,6 +97,7 @@ vi.mock("./reply-delivery.js", () => ({
 }));
 
 type DispatchInboundParams = {
+  ctx?: unknown;
   dispatcher: {
     sendBlockReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
@@ -216,6 +217,51 @@ let formatDiscordReplySkip: typeof import("./message-handler.process.js").format
 let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  dispatchReplyWithBufferedBlockDispatcher: async (params: {
+    dispatcherOptions: {
+      beforeDeliver?: (
+        payload: ReplyPayload,
+        info: { kind: "block" | "final" },
+      ) => Promise<ReplyPayload | null> | ReplyPayload | null;
+      deliver: (payload: unknown, info: { kind: "block" | "final" }) => Promise<void> | void;
+      transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+    };
+    ctx?: unknown;
+    replyOptions?: DispatchInboundParams["replyOptions"];
+  }) => {
+    const pendingDeliveries: Promise<void>[] = [];
+    const deliver = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+      const transformed = params.dispatcherOptions.transformReplyPayload
+        ? params.dispatcherOptions.transformReplyPayload(payload)
+        : payload;
+      if (!transformed) {
+        return;
+      }
+      const deliverPayload = params.dispatcherOptions.beforeDeliver
+        ? await params.dispatcherOptions.beforeDeliver(transformed, info)
+        : transformed;
+      if (!deliverPayload) {
+        return;
+      }
+      await params.dispatcherOptions.deliver(deliverPayload, info);
+    };
+    const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+      const delivery = Promise.resolve(deliver(payload, info)).catch(() => undefined);
+      pendingDeliveries.push(delivery);
+      return true;
+    };
+    return await dispatchInboundMessage({
+      ctx: params.ctx,
+      replyOptions: params.replyOptions,
+      dispatcher: {
+        sendBlockReply: vi.fn((payload: ReplyPayload) => queueDelivery(payload, { kind: "block" })),
+        sendFinalReply: vi.fn((payload: ReplyPayload) => queueDelivery(payload, { kind: "final" })),
+        waitForIdle: vi.fn(async () => {
+          await Promise.all(pendingDeliveries);
+        }),
+      },
+    });
+  },
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
   settleReplyDispatcher: async (params: {
     dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
@@ -1710,6 +1756,9 @@ describe("processDiscordMessage session routing", () => {
       })),
     };
     const ctx = await createBaseContext({
+      cfg: {
+        channels: { discord: { contextVisibility: "allowlist" } },
+      },
       baseSessionKey: threadSessionKey,
       route: BASE_CHANNEL_ROUTE,
       messageChannelId: "thread-1",
@@ -1734,6 +1783,7 @@ describe("processDiscordMessage session routing", () => {
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: threadSessionKey,
       MessageThreadId: "thread-1",
+      ThreadLabel: "Discord thread #parent",
     });
     expect(getLastDispatchCtx()?.ThreadStarterBody).toBeUndefined();
   });

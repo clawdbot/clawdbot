@@ -468,6 +468,7 @@ describe("sessions view", () => {
               kind: "direct",
               updatedAt: 20,
               hasActiveRun: false,
+              status: "running",
             },
             {
               key: "agent:main:failed",

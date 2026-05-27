@@ -19,6 +19,7 @@ vi.mock("../../agents/pi-embedded.runtime.js", () => ({
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
+  resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
 }));
@@ -336,6 +337,39 @@ describe("runPreparedReply media-only handling", () => {
 
     call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.allowEmptyAssistantReplyAsSilent).toBe(true);
+  });
+
+  it("hydrates runtime thinking metadata before trusting static provider support", async () => {
+    const resolveThinkingCatalog = vi.fn(async () => [
+      {
+        provider: "openai",
+        id: "chat-latest",
+        reasoning: false,
+      },
+    ]);
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "chat-latest",
+        resolvedThinkLevel: "high",
+        modelState: {
+          resolveDefaultThinkingLevel: async () => "high",
+          resolveThinkingCatalog,
+          allowedModelCatalog: [
+            {
+              provider: "openai",
+              id: "chat-latest",
+              name: "Chat Latest",
+            },
+          ],
+        } as never,
+      }),
+    );
+
+    expect(resolveThinkingCatalog).toHaveBeenCalledOnce();
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.run.thinkLevel).toBe("off");
   });
 
   it("keeps empty-assistant silence disabled for direct runs by default", async () => {
@@ -926,8 +960,50 @@ describe("runPreparedReply media-only handling", () => {
         mimeType: "image/png",
       },
     ]);
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "describe this",
+      MediaPath: imagePath,
+      MediaPaths: [imagePath],
+      MediaType: "image/png",
+      MediaTypes: ["image/png"],
+    });
     expect(call.followupRun.images?.[0]?.data).toHaveLength(92);
     expect(call.followupRun.imageOrder).toEqual(["inline"]);
+  });
+
+  it("does not copy prior session media onto text-only followups", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "follow up without media",
+          RawBody: "follow up without media",
+          CommandBody: "follow up without media",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "follow up without media",
+          BodyStripped: "follow up without media",
+          Provider: "telegram",
+          OriginatingChannel: "telegram",
+          OriginatingTo: "42",
+          ChatType: "direct",
+          MediaPath: "/tmp/previous-image.png",
+          MediaPaths: ["/tmp/previous-image.png"],
+          MediaTypes: ["image/png"],
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      role: "user",
+      content: "follow up without media",
+    });
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPath");
+    expect(call.followupRun.userTurnTranscriptRecorder?.message).not.toHaveProperty("MediaPaths");
   });
 
   it("does not rehydrate current MediaPaths after image understanding enriched the prompt", async () => {
@@ -1942,6 +2018,107 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.currentInboundContext?.text).toContain(
       "visible_reply_contract: message_tool_only",
     );
+  });
+
+  it("keeps webchat room events on automatic source delivery", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: { sourceReplyDeliveryMode: "automatic" },
+        ctx: {
+          Body: "webchat prompt",
+          RawBody: "webchat prompt",
+          CommandBody: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "webchat prompt",
+          BodyStripped: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+          InboundEventKind: "room_event",
+          MessageSid: "webchat-room-event",
+          SenderName: "Operator",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("automatic");
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
+      "visible_reply_contract: message_tool_only",
+    );
+  });
+
+  it("keeps routed external room events tool-only when provider is webchat", async () => {
+    vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
+
+    await runPreparedReply(
+      baseParams({
+        opts: { sourceReplyDeliveryMode: "automatic" },
+        ctx: {
+          Body: "ambient",
+          RawBody: "ambient",
+          CommandBody: "ambient",
+          Provider: "webchat",
+          Surface: "telegram",
+          ChatType: "group",
+        },
+        sessionCtx: {
+          Body: "ambient",
+          BodyStripped: "ambient",
+          Provider: "webchat",
+          Surface: "telegram",
+          ChatType: "group",
+          InboundEventKind: "room_event",
+          MessageSid: "routed-room-event",
+          SenderName: "Alice",
+        },
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
+      "visible_reply_contract: message_tool_only",
+    );
+  });
+
+  it("keeps webchat direct replies automatic when message-tool mode is requested", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: { sourceReplyDeliveryMode: "message_tool_only" },
+        ctx: {
+          Body: "webchat prompt",
+          RawBody: "webchat prompt",
+          CommandBody: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+        },
+        sessionCtx: {
+          Body: "webchat prompt",
+          BodyStripped: "webchat prompt",
+          Provider: "webchat",
+          Surface: "webchat",
+          ChatType: "direct",
+          MessageSid: "webchat-direct",
+          SenderName: "Operator",
+        },
+      }),
+    );
+
+    const directContextParams = requireMockCallArg(
+      vi.mocked(buildDirectChatContext),
+      "direct chat context",
+    ) as { sourceReplyDeliveryMode?: string };
+    const inboundPrefixCall = vi.mocked(buildInboundUserContextPrefix).mock.calls.at(-1);
+    const call = requireLastRunReplyAgentCall();
+    expect(directContextParams?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(inboundPrefixCall?.[2]).toEqual({ sourceReplyDeliveryMode: "message_tool_only" });
+    expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
   });
 
   it("keeps heartbeat prompts out of visible transcript prompt", async () => {

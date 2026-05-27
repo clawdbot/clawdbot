@@ -621,7 +621,7 @@ async function processMessage(
     cliMsgId: message.cliMsgId,
   });
 
-  const ctxPayload = core.channel.turn.buildContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channel: "zalouser",
     accountId: route.accountId,
     messageId: messageSid,
@@ -636,10 +636,6 @@ async function processMessage(
       kind: isGroup ? "group" : "direct",
       id: chatId,
       label: fromLabel,
-      routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: chatId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -657,7 +653,6 @@ async function processMessage(
       rawBody,
       commandBody,
       inboundHistory,
-      envelopeFrom: fromLabel,
     },
     extra: {
       BodyForCommands: commandBody,
@@ -686,7 +681,7 @@ async function processMessage(
     },
   };
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     channel: "zalouser",
     accountId: account.accountId,
     cfg: config,

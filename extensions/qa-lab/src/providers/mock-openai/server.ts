@@ -555,6 +555,31 @@ function countImageInputs(value: unknown): number {
   return count;
 }
 
+function extractLatestImageUserTurn(input: ResponsesInputItem[]) {
+  const latestUserIndex = findLastUserIndex(input);
+  if (latestUserIndex < 0) {
+    return { text: "", imageInputCount: 0 };
+  }
+
+  const latestUserItem = input[latestUserIndex];
+  if (!latestUserItem) {
+    return { text: "", imageInputCount: 0 };
+  }
+
+  const imageTurnItems = [latestUserItem];
+  const imageInputCount = countImageInputs(imageTurnItems.map((item) => item.content));
+  if (imageInputCount === 0) {
+    return { text: "", imageInputCount: 0 };
+  }
+  return {
+    text: imageTurnItems
+      .map((item) => extractInputText(item.content as unknown[]))
+      .filter(Boolean)
+      .join("\n"),
+    imageInputCount,
+  };
+}
+
 function parseToolOutputJson(toolOutput: string): Record<string, unknown> | null {
   if (!toolOutput.trim()) {
     return null;
@@ -1009,7 +1034,7 @@ function buildAssistantText(
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
   const finishExactlyDirective =
     extractFinishExactlyDirective(prompt) ?? extractFinishExactlyDirective(allInputText);
-  const imageInputCount = countImageInputs(input);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const activeMemorySummary = extractActiveMemorySummary(allInputText);
   const snackPreference = extractSnackPreference(activeMemorySummary ?? memorySnippet);
   const sessionsSpawnError = extractToolErrorForNamedCall({
@@ -1035,6 +1060,18 @@ function buildAssistantText(
   }
   if (isHeartbeatPrompt(prompt)) {
     return "HEARTBEAT_OK";
+  }
+  if (
+    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
+  }
+  if (
+    /image understanding check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
   if (/\bmarker\b/i.test(allInputText) && exactReplyDirective) {
     return exactReplyDirective;
@@ -1117,12 +1154,6 @@ function buildAssistantText(
       "- Keep a local copy before using the asset.",
       "- Re-open the copied file for final verification.",
     ].join("\n");
-  }
-  if (/roundtrip image inspection check/i.test(prompt) && imageInputCount > 0) {
-    return "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.";
-  }
-  if (/image understanding check/i.test(prompt) && imageInputCount > 0) {
-    return "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.";
   }
   if (
     /interrupted by a gateway reload/i.test(prompt) &&
@@ -1513,6 +1544,20 @@ function buildReasoningAndAssistantEvents(params: {
       },
     },
     {
+      type: "response.output_text.delta",
+      item_id: answerItem.id,
+      output_index: 1,
+      content_index: 0,
+      delta: params.answerText,
+    },
+    {
+      type: "response.output_text.done",
+      item_id: answerItem.id,
+      output_index: 1,
+      content_index: 0,
+      text: params.answerText,
+    },
+    {
       type: "response.output_item.done",
       item: answerItem,
     },
@@ -1551,6 +1596,7 @@ async function buildResponsesPayload(
     extractExactReplyDirective(prompt) ?? extractExactReplyDirective(allInputText);
   const exactMarkerDirective =
     extractExactMarkerDirective(prompt) ?? extractExactMarkerDirective(allInputText);
+  const latestImageUserTurn = extractLatestImageUserTurn(input);
   const firstExactMarkerDirective = extractLabeledMarkerDirective(
     allInputText,
     "first exact marker",
@@ -1636,6 +1682,22 @@ async function buildResponsesPayload(
   }
   if (/fanout worker beta/i.test(prompt)) {
     return buildAssistantEvents("BETA-OK");
+  }
+  if (
+    /roundtrip image inspection check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return buildAssistantEvents(
+      "Protocol note: the generated attachment shows the same QA lighthouse scene from the previous step.",
+    );
+  }
+  if (
+    /image understanding check/i.test(latestImageUserTurn.text) &&
+    latestImageUserTurn.imageInputCount > 0
+  ) {
+    return buildAssistantEvents(
+      "Protocol note: the attached image is split horizontally, with red on top and blue on the bottom.",
+    );
   }
   if (QA_REASONING_ONLY_RECOVERY_PROMPT_RE.test(allInputText)) {
     if (!scenarioToolOutput) {

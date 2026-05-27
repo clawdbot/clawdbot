@@ -386,6 +386,20 @@ describe("matrix CLI verification commands", () => {
     expect(consoleLogMock).toHaveBeenCalledWith("Backup: active and trusted on this device");
   });
 
+  it("rejects malformed Matrix self-verification timeout values", async () => {
+    const program = buildProgram();
+
+    await program.parseAsync(["matrix", "verify", "self", "--timeout-ms", "5000ms"], {
+      from: "user",
+    });
+
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorMock).toHaveBeenCalledWith(
+      "Self-verification failed: --timeout-ms must be an integer",
+    );
+    expect(runMatrixSelfVerificationMock).not.toHaveBeenCalled();
+  });
+
   it("requests Matrix self-verification and prints the follow-up SAS commands", async () => {
     requestMatrixVerificationMock.mockResolvedValue(
       mockMatrixVerificationSummary({

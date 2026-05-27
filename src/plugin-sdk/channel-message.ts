@@ -1,254 +1,38 @@
-import type {
-  ChannelMessageAdapter,
-  ChannelMessageAdapterShape,
-} from "../channels/message/index.js";
-import type { ChannelMessageReceiveAdapterShape } from "../channels/message/index.js";
-import type {
-  DurableMessageBatchSendParams,
-  DurableMessageBatchSendResult,
-  DurableMessageSendContext,
-  DurableMessageSendContextParams,
-} from "../channels/message/runtime.js";
-import {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
-} from "../channels/turn/dispatch-result.js";
-import {
-  createChannelReplyPipeline,
-  type CreateChannelReplyPipelineParams,
-} from "./channel-reply-core.js";
-export type {
-  DurableInboundReplyDeliveryOptions,
-  DurableInboundReplyDeliveryParams,
-  DurableInboundReplyDeliveryResult,
-} from "../channels/turn/kernel.js";
-export type {
-  DurableMessageBatchSendParams,
-  DurableMessageBatchSendResult,
-  DurableMessageSendContext,
-  DurableMessageSendContextParams,
-} from "../channels/message/runtime.js";
-export {
-  createChannelReplyPipeline as createChannelMessageReplyPipeline,
-  createReplyPrefixContext,
-  createReplyPrefixOptions,
-  createTypingCallbacks,
-  resolveChannelSourceReplyDeliveryMode as resolveChannelMessageSourceReplyDeliveryMode,
-} from "./channel-reply-core.js";
+/**
+ * @deprecated Use `openclaw/plugin-sdk/channel-outbound` for outbound/message
+ * lifecycle helpers and `openclaw/plugin-sdk/channel-inbound` for inbound
+ * reply dispatch helpers.
+ */
 
-export {
-  classifyDurableSendRecoveryState,
-  createChannelMessageAdapterFromOutbound,
-  createDurableInboundReceiveJournal,
-  createMessageReceiptFromOutboundResults,
-  listMessageReceiptPlatformIds,
-  createMessageReceiveContext,
-  createPreviewMessageReceipt,
-  defineFinalizableLivePreviewAdapter,
-  deriveDurableFinalDeliveryRequirements,
-  deliverFinalizableLivePreview,
-  deliverWithFinalizableLivePreviewAdapter,
-  listDeclaredChannelMessageLiveCapabilities,
-  listDeclaredDurableFinalCapabilities,
-  listDeclaredLivePreviewFinalizerCapabilities,
-  listDeclaredReceiveAckPolicies,
-  createLiveMessageState,
-  createDurableMessageStateRecord,
-  markLiveMessageCancelled,
-  markLiveMessageFinalized,
-  markLiveMessagePreviewUpdated,
-  resolveMessageReceiptPrimaryId,
-  shouldAckMessageAfterStage,
-  verifyChannelMessageAdapterCapabilityProofs,
-  verifyChannelMessageLiveCapabilityAdapterProofs,
-  verifyChannelMessageLiveCapabilityProofs,
-  verifyChannelMessageLiveFinalizerProofs,
-  verifyChannelMessageReceiveAckPolicyAdapterProofs,
-  verifyChannelMessageReceiveAckPolicyProofs,
-  verifyDurableFinalCapabilityProofs,
-  verifyLivePreviewFinalizerCapabilityProofs,
-} from "../channels/message/index.js";
-export type {
-  ChannelMessageAdapter,
-  ChannelMessageAdapterShape,
-  ChannelMessageDurableFinalAdapter,
-  ChannelMessageLiveFinalizerAdapterShape,
-  ChannelMessageLiveAdapterShape,
-  ChannelMessageLiveCapability,
-  ChannelMessageOutboundBridgeAdapter,
-  ChannelMessageOutboundBridgeResult,
-  ChannelMessageReceiveAckPolicy,
-  ChannelMessageReceiveAdapterShape,
-  ChannelMessageSendAdapter,
-  ChannelMessageSendAttemptContext,
-  ChannelMessageSendAttemptKind,
-  ChannelMessageSendCommitContext,
-  ChannelMessageSendFailureContext,
-  ChannelMessageSendLifecycleAdapter,
-  ChannelMessageSendMediaContext,
-  ChannelMessageSendPayloadContext,
-  ChannelMessageSendPollContext,
-  ChannelMessageSendResult,
-  ChannelMessageSendSuccessContext,
-  ChannelMessageSendTextContext,
-  ChannelMessageUnknownSendContext,
-  ChannelMessageUnknownSendReconciliationResult,
-  CreateChannelReplyPipelineParams,
-  CreateChannelMessageAdapterFromOutboundParams,
-  DeriveDurableFinalDeliveryRequirementsParams,
-  ChannelMessageLiveCapabilityProof,
-  ChannelMessageLiveCapabilityProofMap,
-  ChannelMessageLiveCapabilityProofResult,
-  ChannelMessageReceiveAckPolicyProof,
-  ChannelMessageReceiveAckPolicyProofMap,
-  ChannelMessageReceiveAckPolicyProofResult,
-  DurableFinalCapabilityProof,
-  DurableFinalCapabilityProofMap,
-  DurableFinalCapabilityProofResult,
-  DurableFinalDeliveryCapability,
-  DurableFinalDeliveryPayloadShape,
-  DurableFinalDeliveryRequirementMap,
-  DurableFinalRequirementExtras,
-  DurableInboundReceiveAcceptOptions,
-  DurableInboundReceiveAcceptResult,
-  DurableInboundReceiveCompletedRecord,
-  DurableInboundReceiveCompleteOptions,
-  DurableInboundReceiveJournal,
-  DurableInboundReceiveJournalOptions,
-  DurableInboundReceivePendingRecord,
-  DurableInboundReceiveReleaseOptions,
-  DurableMessageSendIntent,
-  DurableMessageSendState,
-  DurableMessageStateRecord,
-  FinalizableLivePreviewAdapter,
-  LiveMessagePhase,
-  LiveMessageState,
-  LivePreviewFinalizerCapability,
-  LivePreviewFinalizerCapabilityMap,
-  LivePreviewFinalizerDraft,
-  LivePreviewFinalizerCapabilityProof,
-  LivePreviewFinalizerCapabilityProofMap,
-  LivePreviewFinalizerCapabilityProofResult,
-  LivePreviewFinalizerResult,
-  LivePreviewFinalizerResultKind,
-  MessageAckPolicy,
-  MessageAckStage,
-  MessageAckState,
-  MessageReceiveContext,
-  MessageSendContext,
-  MessageDurabilityPolicy,
-  MessageReceipt,
-  MessageReceiptPart,
-  MessageReceiptPartKind,
-  MessageReceiptSourceResult,
-  RenderedMessageBatch,
-  RenderedMessageBatchPlan,
-  RenderedMessageBatchPlanItem,
-  RenderedMessageBatchPlanKind,
-} from "../channels/message/index.js";
+import type { CreateChannelReplyPipelineParams } from "./channel-outbound.js";
+import { createChannelMessageReplyPipeline } from "./channel-outbound.js";
+import { deliverInboundReplyWithMessageSendContext } from "./channel-outbound.js";
 
-export {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
-};
+export * from "./channel-outbound.js";
+/** @deprecated Use `hasFinalInboundReplyDispatch(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { hasFinalChannelTurnDispatch } from "../channels/turn/dispatch-result.js";
+/** @deprecated Use `hasVisibleInboundReplyDispatch(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { hasVisibleChannelTurnDispatch } from "../channels/turn/dispatch-result.js";
+/** @deprecated Use `resolveInboundReplyDispatchCounts(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { resolveChannelTurnDispatchCounts } from "../channels/turn/dispatch-result.js";
 
-type ChannelTurnKernelModule = typeof import("../channels/turn/kernel.js");
-type InboundReplyDispatchModule = typeof import("./inbound-reply-dispatch.js");
-
-/** @deprecated Use `createChannelMessageReplyPipeline(...)` for compatibility dispatchers. */
+/** @deprecated Use `createChannelMessageReplyPipeline(...)` from `openclaw/plugin-sdk/channel-outbound`. */
 export function createChannelTurnReplyPipeline(params: CreateChannelReplyPipelineParams) {
-  return createChannelReplyPipeline(params);
+  return createChannelMessageReplyPipeline(params);
 }
 
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasFinalChannelMessageReplyDispatch = hasFinalChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const hasVisibleChannelMessageReplyDispatch = hasVisibleChannelTurnDispatch;
-/** @deprecated Compatibility helper for legacy reply dispatch results. */
-export const resolveChannelMessageReplyDispatchCounts = resolveChannelTurnDispatchCounts;
+/** @deprecated Use `buildInboundReplyDispatchBase(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { buildChannelMessageReplyDispatchBase } from "./inbound-reply-dispatch.js";
+/** @deprecated Use `dispatchChannelInboundReply(...)` or `runPreparedInboundReply(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { dispatchChannelMessageReplyWithBase } from "./inbound-reply-dispatch.js";
+/** @deprecated Use `recordChannelMessageReplyDispatch(...)` only from legacy compatibility paths. */
+export { recordChannelMessageReplyDispatch } from "./inbound-reply-dispatch.js";
+/** @deprecated Use `hasFinalInboundReplyDispatch(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { hasFinalChannelMessageReplyDispatch } from "./inbound-reply-dispatch.js";
+/** @deprecated Use `hasVisibleInboundReplyDispatch(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { hasVisibleChannelMessageReplyDispatch } from "./inbound-reply-dispatch.js";
+/** @deprecated Use `resolveInboundReplyDispatchCounts(...)` from `openclaw/plugin-sdk/channel-inbound`. */
+export { resolveChannelMessageReplyDispatchCounts } from "./inbound-reply-dispatch.js";
 
-/** @deprecated Compatibility helper for legacy reply dispatch bridges. */
-export const buildChannelMessageReplyDispatchBase: InboundReplyDispatchModule["buildChannelMessageReplyDispatchBase"] =
-  ((params) => ({
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    agentId: params.route.agentId,
-    routeSessionKey: params.route.sessionKey,
-    storePath: params.storePath,
-    ctxPayload: params.ctxPayload,
-    recordInboundSession: params.core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      params.core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-  })) as InboundReplyDispatchModule["buildChannelMessageReplyDispatchBase"];
-
-/**
- * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
- * expose a `message` adapter and route sends through
- * `deliverInboundReplyWithMessageSendContext(...)` or
- * `sendDurableMessageBatch(...)`.
- */
-export const dispatchChannelMessageReplyWithBase: InboundReplyDispatchModule["dispatchChannelMessageReplyWithBase"] =
-  async (...args) => {
-    const mod = await import("./inbound-reply-dispatch.js");
-    return await mod.dispatchChannelMessageReplyWithBase(...args);
-  };
-
-/**
- * @deprecated Compatibility reply-dispatch bridge. New channel plugins should
- * expose a `message` adapter and route sends through
- * `deliverInboundReplyWithMessageSendContext(...)` or
- * `sendDurableMessageBatch(...)`.
- */
-export const recordChannelMessageReplyDispatch: InboundReplyDispatchModule["recordChannelMessageReplyDispatch"] =
-  async (...args) => {
-    const mod = await import("./inbound-reply-dispatch.js");
-    return await mod.recordChannelMessageReplyDispatch(...args);
-  };
-
-export const deliverInboundReplyWithMessageSendContext: ChannelTurnKernelModule["deliverInboundReplyWithMessageSendContext"] =
-  async (...args) => {
-    const mod = await import("../channels/turn/kernel.js");
-    return await mod.deliverInboundReplyWithMessageSendContext(...args);
-  };
-
-/** @deprecated Use `deliverInboundReplyWithMessageSendContext`. */
+/** @deprecated Use `deliverInboundReplyWithMessageSendContext(...)` from `openclaw/plugin-sdk/channel-outbound`. */
 export const deliverDurableInboundReplyPayload = deliverInboundReplyWithMessageSendContext;
-
-export async function sendDurableMessageBatch(
-  params: DurableMessageBatchSendParams,
-): Promise<DurableMessageBatchSendResult> {
-  const mod = await import("../channels/message/runtime.js");
-  return await mod.sendDurableMessageBatch(params);
-}
-
-export async function withDurableMessageSendContext<T>(
-  params: DurableMessageSendContextParams,
-  run: (ctx: DurableMessageSendContext) => Promise<T>,
-): Promise<T> {
-  const mod = await import("../channels/message/runtime.js");
-  return await mod.withDurableMessageSendContext(params, run);
-}
-
-const defaultManualReceiveAdapter = {
-  defaultAckPolicy: "manual",
-  supportedAckPolicies: ["manual"],
-} as const satisfies ChannelMessageReceiveAdapterShape;
-
-type ChannelMessageAdapterWithDefaultReceive<TAdapter extends ChannelMessageAdapterShape> =
-  TAdapter & {
-    receive: TAdapter["receive"] extends undefined
-      ? typeof defaultManualReceiveAdapter
-      : NonNullable<TAdapter["receive"]>;
-  };
-
-export function defineChannelMessageAdapter<const TAdapter extends ChannelMessageAdapterShape>(
-  adapter: TAdapter,
-): ChannelMessageAdapter<ChannelMessageAdapterWithDefaultReceive<TAdapter>> {
-  return {
-    ...adapter,
-    receive: adapter.receive ?? defaultManualReceiveAdapter,
-  } as ChannelMessageAdapter<ChannelMessageAdapterWithDefaultReceive<TAdapter>>;
-}

@@ -1,8 +1,7 @@
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import {
   listProviderEnvAuthLookupKeys,
-  resolveProviderEnvAuthEvidence,
-  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthLookupMaps,
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth-env.js";
 import { resolveAwsSdkEnvVarName } from "../../agents/model-auth-runtime-shared.js";
@@ -14,7 +13,6 @@ import {
   OPENAI_CODEX_PROVIDER_ID,
   openAIProviderUsesCodexRuntimeByDefault,
 } from "../../agents/openai-codex-routing.js";
-import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -76,9 +74,8 @@ export function createModelListAuthIndex(
     env,
     metadataSnapshot: params.metadataSnapshot,
   };
-  const aliasMap = resolveProviderAuthAliasMap(lookupParams);
-  const envCandidateMap = resolveProviderEnvApiKeyCandidates(lookupParams);
-  const authEvidenceMap = resolveProviderEnvAuthEvidence(lookupParams);
+  const { aliasMap, envCandidateMap, authEvidenceMap } =
+    resolveProviderEnvAuthLookupMaps(lookupParams);
   const skipSetupProviderFallback = params.metadataSnapshot !== undefined;
   const authenticatedProviders = new Set<string>();
   const syntheticAuthProviders = new Set<string>();

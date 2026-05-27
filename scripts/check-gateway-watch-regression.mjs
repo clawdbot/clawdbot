@@ -20,6 +20,7 @@ const DEFAULTS = {
   readyTimeoutMs: 20_000,
   readySettleMs: 500,
   sigkillGraceMs: 10_000,
+  sigkillExitGraceMs: 2_000,
   cpuWarnMs: 1_000,
   cpuFailMs: 8_000,
   distRuntimeFileGrowthMax: 200,
@@ -68,6 +69,9 @@ function parseArgs(argv) {
         break;
       case "--sigkill-grace-ms":
         options.sigkillGraceMs = Number(readValue());
+        break;
+      case "--sigkill-exit-grace-ms":
+        options.sigkillExitGraceMs = Number(readValue());
         break;
       case "--cpu-warn-ms":
         options.cpuWarnMs = Number(readValue());
@@ -467,10 +471,6 @@ async function runTimedWatch(options, outputDir) {
     stderr += String(chunk);
   });
 
-  const exitPromise = new Promise((resolve) => {
-    child.on("exit", (code, signal) => resolve({ code, signal }));
-  });
-
   let watchPid = null;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     if (fs.existsSync(pidFilePath)) {
@@ -491,30 +491,7 @@ async function runTimedWatch(options, outputDir) {
   await sleep(options.windowMs);
   const idleCpuEndMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
 
-  if (watchPid) {
-    try {
-      process.kill(watchPid, "SIGTERM");
-    } catch {
-      // ignore
-    }
-  }
-
-  const gracefulExit = await Promise.race([
-    exitPromise,
-    sleep(options.sigkillGraceMs).then(() => null),
-  ]);
-
-  if (gracefulExit === null) {
-    if (watchPid) {
-      try {
-        process.kill(watchPid, "SIGKILL");
-      } catch {
-        // ignore
-      }
-    }
-  }
-
-  const exit = (await exitPromise) ?? { code: null, signal: null };
+  const exit = await stopTimedWatchChild(child, watchPid, options);
   fs.writeFileSync(stdoutPath, stdout, "utf8");
   fs.writeFileSync(stderrPath, stderr, "utf8");
   const timing = fs.existsSync(timeFilePath)
@@ -533,6 +510,56 @@ async function runTimedWatch(options, outputDir) {
     stderrPath,
     timeFilePath,
   };
+}
+
+export async function stopTimedWatchChild(child, watchPid, options, deps = {}) {
+  const killProcess = deps.killProcess ?? ((pid, signal) => process.kill(pid, signal));
+  const currentExit = () =>
+    child.exitCode !== null || child.signalCode !== null
+      ? { code: child.exitCode, signal: child.signalCode }
+      : null;
+  const exited = new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const waitForExit = async (ms) =>
+    currentExit() ?? (await Promise.race([exited, sleep(ms).then(() => null)]));
+  const signalWatchProcess = (signal) => {
+    if (!watchPid) {
+      return;
+    }
+    try {
+      killProcess(watchPid, signal);
+    } catch {
+      // ignore
+    }
+  };
+
+  const existingExit = currentExit();
+  if (existingExit) {
+    return existingExit;
+  }
+
+  signalWatchProcess("SIGTERM");
+  const gracefulExit = await waitForExit(options.sigkillGraceMs);
+  if (gracefulExit) {
+    return gracefulExit;
+  }
+
+  signalWatchProcess("SIGKILL");
+  const killedExit = await waitForExit(options.sigkillExitGraceMs ?? DEFAULTS.sigkillExitGraceMs);
+  if (killedExit) {
+    return killedExit;
+  }
+
+  releaseUnsettledWatchChild(child);
+  return { code: null, signal: "SIGKILL" };
+}
+
+function releaseUnsettledWatchChild(child) {
+  child.stdin?.destroy?.();
+  child.stdout?.destroy?.();
+  child.stderr?.destroy?.();
+  child.unref?.();
 }
 
 function parsePathFile(filePath) {

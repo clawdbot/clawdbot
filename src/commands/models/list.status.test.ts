@@ -92,6 +92,19 @@ const mocks = vi.hoisted(() => {
       fal: ["FAL_KEY"],
     }),
     resolveProviderEnvAuthEvidence: vi.fn().mockReturnValue({}),
+    resolveProviderEnvAuthLookupMaps: vi.fn().mockReturnValue({
+      aliasMap: { "codex-cli": "openai-codex" },
+      envCandidateMap: {
+        anthropic: ["ANTHROPIC_API_KEY"],
+        google: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+        minimax: ["MINIMAX_API_KEY"],
+        "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+        openai: ["OPENAI_API_KEY"],
+        "openai-codex": ["OPENAI_OAUTH_TOKEN"],
+        fal: ["FAL_KEY"],
+      },
+      authEvidenceMap: {},
+    }),
     listProviderEnvAuthLookupKeys: vi
       .fn()
       .mockImplementation(() => [
@@ -206,6 +219,7 @@ vi.mock("../../agents/model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: mocks.listProviderEnvAuthLookupKeys,
   resolveProviderEnvApiKeyCandidates: mocks.resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence: mocks.resolveProviderEnvAuthEvidence,
+  resolveProviderEnvAuthLookupMaps: mocks.resolveProviderEnvAuthLookupMaps,
   listKnownProviderEnvApiKeyNames: mocks.listKnownProviderEnvApiKeyNames,
 }));
 vi.mock("../../agents/provider-auth-aliases.js", () => ({
@@ -361,6 +375,16 @@ async function withAgentScopeOverrides<T>(
 }
 
 describe("modelsStatusCommand auth overview", () => {
+  it.each([
+    [{ probeTimeout: "5000ms" }, "--probe-timeout"],
+    [{ probeConcurrency: "2.5" }, "--probe-concurrency"],
+    [{ probeMaxTokens: "64x" }, "--probe-max-tokens"],
+  ])("rejects partial probe numeric option %s", async (opts, label) => {
+    await expect(
+      modelsStatusCommand({ json: true, ...opts }, createRuntime() as never),
+    ).rejects.toThrow(label);
+  });
+
   it("includes masked auth sources in JSON output", async () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = parseFirstJsonLog(runtime);

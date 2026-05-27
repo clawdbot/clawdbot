@@ -186,16 +186,6 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("keeps source-only external plugins out of bundled dist entries", () => {
-    const entries = listBundledPluginBuildEntries();
-    const artifacts = listBundledPluginPackArtifacts();
-
-    for (const pluginId of ["meeting-notes"]) {
-      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
-      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
-    }
-  });
-
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
     const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();

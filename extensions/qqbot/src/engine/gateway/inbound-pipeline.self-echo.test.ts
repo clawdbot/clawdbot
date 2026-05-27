@@ -91,7 +91,7 @@ function makeRuntime(): GatewayPluginRuntime {
         resolveStorePath: vi.fn(() => "/tmp/openclaw/qqbot-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      turn: {
+      inbound: {
         run: vi.fn(async (rawParams: unknown) => {
           const params = rawParams as {
             raw: unknown;

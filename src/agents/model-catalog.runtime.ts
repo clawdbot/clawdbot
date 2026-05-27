@@ -1,1 +1,1 @@
-export { loadModelCatalog } from "./model-catalog.js";
+export { loadManifestModelCatalog, loadModelCatalog } from "./model-catalog.js";

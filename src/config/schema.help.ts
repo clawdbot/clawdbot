@@ -256,7 +256,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.contextLimits.memoryGetDefaultLines":
     "Default memory_get line window used when requests omit lines. This controls how many source lines are selected before the max-char cap is applied.",
   "agents.defaults.contextLimits.toolResultMaxChars":
-    "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
+    "Advanced ceiling for a single live tool result before truncation. Leave unset to use the model-context auto cap; explicit values affect both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
   "agents.list":
@@ -272,7 +272,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.list[].contextLimits.memoryGetDefaultLines":
     "Per-agent override for the default memory_get line window when lines is omitted.",
   "agents.list[].contextLimits.toolResultMaxChars":
-    "Per-agent override for the live tool-result max character budget.",
+    "Per-agent advanced ceiling for the live tool-result max character budget. Omit to inherit defaults or the model-context auto cap.",
   "agents.list[].contextLimits.postCompactionMaxChars":
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.list[].thinkingDefault":
@@ -1706,6 +1706,28 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  transcripts:
+    "Core transcript capture settings for recording-capable agent tools and configured live meeting auto-start sources. Keep disabled unless operators explicitly want agents to capture or import meeting transcripts.",
+  "transcripts.enabled":
+    "Enables the recording-capable transcripts agent tool and configured auto-start sources. Default: false. Enable only on hosts where operators have reviewed meeting capture policy and provider permissions.",
+  "transcripts.maxUtterances":
+    "Maximum utterances retained in a transcript summary operation before truncation. Use lower values to limit prompt/storage footprint, or raise carefully for long meetings where summary completeness matters.",
+  "transcripts.autoStart":
+    "Live transcript sources started automatically when the gateway starts. Each entry is enabled by being present; remove an entry to disable that source.",
+  "transcripts.autoStart[].providerId":
+    "Transcript source provider id, such as a Discord voice or future Slack huddle provider. Use the exact id exposed by the provider plugin.",
+  "transcripts.autoStart[].sessionId":
+    "Optional fixed transcript session id for this auto-start source. Leave unset for generated ids unless you need a stable daily selector and can avoid same-day collisions.",
+  "transcripts.autoStart[].title":
+    "Optional human-readable title stored with the transcript session and shown in transcript listings. Use concise meeting names that help operators identify the captured source.",
+  "transcripts.autoStart[].accountId":
+    "Optional provider account or workspace identifier for transcript sources that need account disambiguation. Use the provider's documented account id format.",
+  "transcripts.autoStart[].guildId":
+    "Optional Discord guild id for Discord voice transcript sources. Configure this with the matching channelId when the provider needs guild-scoped voice channel lookup.",
+  "transcripts.autoStart[].channelId":
+    "Provider channel id for the live transcript source, such as a Discord voice channel or Slack huddle channel. Verify provider-specific id semantics before enabling auto-start.",
+  "transcripts.autoStart[].meetingUrl":
+    "Optional meeting URL for providers that join by URL instead of channel id. Use only trusted meeting links because auto-start may join and capture that meeting.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":
@@ -1721,7 +1743,7 @@ export const FIELD_HELP: Record<string, string> = {
   "hooks.allowedSessionKeyPrefixes":
     "Allowlist of accepted session-key prefixes for inbound hook requests when caller-provided keys are enabled. Use narrow prefixes to prevent arbitrary session-key injection.",
   "hooks.allowedAgentIds":
-    "Allowlist of agent IDs that hook mappings are allowed to target when selecting execution agents. Use this to constrain automation events to dedicated service agents and reduce blast radius if a hook token is exposed.",
+    "Allowlist of effective agent IDs that hook requests and mappings are allowed to target, including default-agent routing when agentId is omitted. Use this to constrain automation events to dedicated service agents and reduce blast radius if a hook token is exposed.",
   "hooks.maxBodyBytes":
     "Maximum accepted webhook payload size in bytes before the request is rejected. Keep this bounded to reduce abuse risk and protect memory usage under bursty integrations.",
   "hooks.presets":

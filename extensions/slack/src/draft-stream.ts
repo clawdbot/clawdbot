@@ -1,6 +1,6 @@
 import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { formatSlackError } from "./errors.js";

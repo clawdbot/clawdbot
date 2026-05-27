@@ -117,7 +117,7 @@ describe("acquireFileLock", () => {
     await expect(fs.readFile(lockPath, "utf8")).resolves.toBe("{");
   });
 
-  it("keeps a reported stale lock when its owner pid is alive", async () => {
+  it("keeps an expired lock when its live owner has no starttime proof", async () => {
     const filePath = path.join(tempDir, "live-owner");
     const lockPath = `${filePath}.lock`;
     const options = {

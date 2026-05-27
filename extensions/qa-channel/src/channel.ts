@@ -6,7 +6,7 @@ import {
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { getChatChannelMeta } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
   DEFAULT_ACCOUNT_ID,

@@ -195,7 +195,7 @@ describe("irc inbound behavior", () => {
     });
 
     const assembledRequest = (
-      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
+      coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } }
     ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
@@ -236,11 +236,12 @@ describe("irc inbound behavior", () => {
       }
     ).mock.calls[0]?.[0] as Record<string, unknown> | undefined;
     expect(
-      (coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }).mock
-        .calls.length,
+      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length,
     ).toBe(1);
     expect(runtime.log).not.toHaveBeenCalled();
     expect(ctx?.From).toBe("channel:#ops");
+    expect(ctx?.To).toBe("channel:#ops");
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
 });

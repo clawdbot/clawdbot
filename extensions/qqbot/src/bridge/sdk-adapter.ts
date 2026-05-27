@@ -1,3 +1,4 @@
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   createChannelIngressResolver,
   defineStableChannelIngressIdentity,
@@ -133,7 +134,7 @@ async function resolveQQBotSlashCommandAuthorized(params: {
     (params.isGroup && params.groupAllowFrom && params.groupAllowFrom.length > 0
       ? params.groupAllowFrom
       : params.allowFrom);
-  const explicitAllowFrom = normalizeQQBotAllowFrom(rawAllowFrom).filter((entry) => entry !== "*");
+  const explicitAllowFrom = normalizeQQBotCommandAllowFrom(rawAllowFrom);
   if (explicitAllowFrom.length === 0) {
     return false;
   }
@@ -161,4 +162,25 @@ async function resolveQQBotSlashCommandAuthorized(params: {
     },
   });
   return resolved.commandAccess.authorized;
+}
+
+function normalizeQQBotCommandAllowFrom(
+  rawAllowFrom: Array<string | number> | null | undefined,
+): string[] {
+  const entries: string[] = [];
+  for (const rawEntry of rawAllowFrom ?? []) {
+    const entry = String(rawEntry).trim();
+    if (!entry) {
+      continue;
+    }
+    if (parseAccessGroupAllowFromEntry(entry)) {
+      entries.push(entry);
+      continue;
+    }
+    const normalized = normalizeQQBotSenderId(entry);
+    if (normalized && normalized !== "*") {
+      entries.push(normalized);
+    }
+  }
+  return entries;
 }

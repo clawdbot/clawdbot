@@ -130,6 +130,7 @@ trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 openclaw_e2e_install_package /tmp/openclaw-install.log
 
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 package_root="$(openclaw_e2e_package_root)"
 if [ -d "$package_root/dist/extensions/$CHANNEL" ]; then
   CHANNEL_PACKAGE_MODE="bundled"

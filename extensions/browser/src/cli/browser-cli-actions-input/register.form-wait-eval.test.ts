@@ -64,6 +64,18 @@ describe("browser action input wait command", () => {
       | undefined;
     expect(options?.timeoutMs).toBeGreaterThan(21000);
   });
+
+  it("rejects unsupported load states before sending the wait request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "wait", "--load", "complete"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const capture = getBrowserCliRuntimeCapture();
+    expect(capture.runtimeErrors.join("\n")).toContain("Invalid --load value: complete");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser action input evaluate command", () => {

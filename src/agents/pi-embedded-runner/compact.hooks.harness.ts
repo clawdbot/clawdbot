@@ -97,6 +97,13 @@ function createDefaultSessionMessages(): unknown[] {
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const guardSessionManagerMock = vi.fn(() => ({
+  flushPendingToolResults: vi.fn(),
+}));
+export const applyPiCompactionSettingsFromConfigMock = vi.fn();
+export const createPreparedEmbeddedPiSettingsManagerMock = vi.fn(() => ({
+  getGlobalSettings: vi.fn(() => ({})),
+}));
 export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { surface?: string }) =>
   params?.surface === "subagent"
     ? ["Subagent compact command guidance."]
@@ -120,6 +127,7 @@ export const rotateTranscriptAfterCompactionMock: Mock<
 > = vi.fn(async () => ({
   rotated: false,
 }));
+export const enqueueCommandInLaneMock = vi.fn((_lane: unknown, task: () => unknown) => task());
 
 function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
@@ -272,6 +280,8 @@ export function resetCompactSessionStateMocks(): void {
   maybeCompactAgentHarnessSessionMock.mockResolvedValue(undefined);
   rotateTranscriptAfterCompactionMock.mockReset();
   rotateTranscriptAfterCompactionMock.mockResolvedValue({ rotated: false });
+  enqueueCommandInLaneMock.mockReset();
+  enqueueCommandInLaneMock.mockImplementation((_lane: unknown, task: () => unknown) => task());
   listRegisteredPluginAgentPromptGuidanceMock.mockReset();
   listRegisteredPluginAgentPromptGuidanceMock.mockImplementation((params?: { surface?: string }) =>
     params?.surface === "subagent"
@@ -332,6 +342,15 @@ export function resetCompactHooksHarnessMocks(): void {
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
+  guardSessionManagerMock.mockReset();
+  guardSessionManagerMock.mockReturnValue({
+    flushPendingToolResults: vi.fn(),
+  });
+  applyPiCompactionSettingsFromConfigMock.mockReset();
+  createPreparedEmbeddedPiSettingsManagerMock.mockReset();
+  createPreparedEmbeddedPiSettingsManagerMock.mockReturnValue({
+    getGlobalSettings: vi.fn(() => ({})),
+  });
 }
 
 export async function loadCompactHooksHarness(): Promise<{
@@ -470,14 +489,12 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../session-tool-result-guard-wrapper.js", () => ({
-    guardSessionManager: vi.fn(() => ({
-      flushPendingToolResults: vi.fn(),
-    })),
+    guardSessionManager: guardSessionManagerMock,
   }));
 
   vi.doMock("../pi-settings.js", () => ({
     applyPiAutoCompactionGuard: vi.fn(() => ({ supported: true, disabled: false })),
-    applyPiCompactionSettingsFromConfig: vi.fn(),
+    applyPiCompactionSettingsFromConfig: applyPiCompactionSettingsFromConfigMock,
     ensurePiCompactionReserveTokens: vi.fn(),
     isSilentOverflowProneModel: vi.fn(() => false),
     resolveCompactionReserveTokensFloor: vi.fn(() => 0),
@@ -532,7 +549,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../../process/command-queue.js", () => ({
-    enqueueCommandInLane: vi.fn((_lane: unknown, task: () => unknown) => task()),
+    enqueueCommandInLane: enqueueCommandInLaneMock,
     clearCommandLane: vi.fn(() => 0),
   }));
 
@@ -793,9 +810,7 @@ export async function loadCompactHooksHarness(): Promise<{
   }));
 
   vi.doMock("../pi-project-settings.js", () => ({
-    createPreparedEmbeddedPiSettingsManager: vi.fn(() => ({
-      getGlobalSettings: vi.fn(() => ({})),
-    })),
+    createPreparedEmbeddedPiSettingsManager: createPreparedEmbeddedPiSettingsManagerMock,
   }));
 
   vi.doMock("./sandbox-info.js", () => ({

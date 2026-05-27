@@ -484,6 +484,23 @@ function canonicalizeLoadedSkillRecord(
   };
 }
 
+/**
+ * Sets only the sync source directory for a skill record, without modifying
+ * the baseDir or filePath. This is used for plugin skills where the symlink
+ * path should be preserved for display purposes, but the real path is needed
+ * for syncing to the sandbox workspace.
+ */
+function setSyncSourceForPluginSkill(
+  record: LoadedSkillRecord,
+  syncSourceDir: string,
+): LoadedSkillRecord {
+  return {
+    ...record,
+    syncSourceDir,
+    syncDirName: path.basename(record.skill.baseDir),
+  };
+}
+
 function isPathInsideAnyRoot(rootRealPaths: readonly string[], candidateRealPath: string): boolean {
   return rootRealPaths.some((rootRealPath) => isPathInside(rootRealPath, candidateRealPath));
 }
@@ -625,12 +642,22 @@ function loadGeneratedPluginSkillRecords(params: {
       continue;
     }
 
+    // Plugin skills live as symlinks under ~/.openclaw/plugin-skills/, so
+    // skillDir is the symlink path while skillDirRealPath is the real target.
+    // We set syncSourceDir to the real path so syncSkillsToWorkspace can copy
+    // the actual skill directory into the sandbox workspace, but we preserve
+    // the symlink path as baseDir for display purposes.  Without this,
+    // sandboxed agents see host-only symlink paths in <available_skills> and
+    // every read of the SKILL.md fails with "Path escapes sandbox root".
+    // skillDirRealPath is safe to use here because it was already validated
+    // against allowedRootRealPaths above.
+    const loadedRecords = loadContainedSkillRecords({
+      skillDir,
+      source: params.source,
+      maxSkillFileBytes: params.limits.maxSkillFileBytes,
+    });
     loadedSkills.push(
-      ...loadContainedSkillRecords({
-        skillDir,
-        source: params.source,
-        maxSkillFileBytes: params.limits.maxSkillFileBytes,
-      }),
+      ...loadedRecords.map((record) => setSyncSourceForPluginSkill(record, skillDirRealPath)),
     );
     if (loadedSkills.length >= maxSkillsLoadedPerSource) {
       break;
@@ -1292,6 +1319,7 @@ export async function syncSkillsToWorkspace(params: {
   eligibility?: SkillEligibilityContext;
   managedSkillsDir?: string;
   bundledSkillsDir?: string;
+  pluginSkillsDir?: string;
 }) {
   const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
   const targetDir = resolveUserPath(params.targetWorkspaceDir);
@@ -1309,6 +1337,7 @@ export async function syncSkillsToWorkspace(params: {
       eligibility: params.eligibility,
       managedSkillsDir: params.managedSkillsDir,
       bundledSkillsDir: params.bundledSkillsDir,
+      pluginSkillsDir: params.pluginSkillsDir,
     });
 
     await fsp.rm(targetSkillsDir, { recursive: true, force: true });

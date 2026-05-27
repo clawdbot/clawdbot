@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
-import { callGatewayCli } from "./rpc.js";
+import { callGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
 
 /**
  * Regression test for #12098:
@@ -59,6 +59,29 @@ describe("exec approval transport timeout (#12098)", () => {
     const callOpts = firstGatewayCall();
     expect(callOpts.method).toBe("exec.approval.request");
     expect(callOpts.timeoutMs).toBe(35_000);
+  });
+
+  it("callGatewayCli rejects invalid opts.timeout instead of forwarding NaN", async () => {
+    await expect(
+      callGatewayCli("exec.approval.request", { timeout: "nope" } as never, {
+        timeoutMs: 120_000,
+      }),
+    ).rejects.toThrow("Invalid --timeout");
+
+    expect(callGatewaySpy).not.toHaveBeenCalled();
+  });
+
+  it("callNodePairApprovalGatewayCli rejects invalid opts.timeout instead of forwarding NaN", async () => {
+    await expect(
+      callNodePairApprovalGatewayCli(
+        "node.pair.list",
+        { timeout: "Infinity" } as never,
+        {},
+        { scopes: [] },
+      ),
+    ).rejects.toThrow("Invalid --timeout");
+
+    expect(callGatewaySpy).not.toHaveBeenCalled();
   });
 
   it("fix: overriding transportTimeoutMs gives the approval enough transport time", async () => {

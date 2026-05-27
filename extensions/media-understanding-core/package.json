@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw media understanding runtime package",
   "type": "module",
-  "dependencies": {
-    "@silvia-odwyer/photon-node": "0.3.4"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

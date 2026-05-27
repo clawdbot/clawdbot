@@ -414,14 +414,17 @@ export const OpenClawSchema = z
         lastTouchedAt: z
           .union([
             z.string(),
-            z.number().transform((n, ctx) => {
-              const d = new Date(n);
-              if (Number.isNaN(d.getTime())) {
-                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
-                return z.NEVER;
-              }
-              return d.toISOString();
-            }),
+            z
+              .number()
+              .transform((n, ctx) => {
+                const d = new Date(n);
+                if (Number.isNaN(d.getTime())) {
+                  ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                  return z.NEVER;
+                }
+                return d.toISOString();
+              })
+              .pipe(z.string()),
           ])
           .optional(),
       })
@@ -816,6 +819,28 @@ export const OpenClawSchema = z
           }
         }
       })
+      .optional(),
+    transcripts: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxUtterances: z.number().int().min(1).max(10_000).optional(),
+        autoStart: z
+          .array(
+            z
+              .object({
+                providerId: z.string().min(1),
+                sessionId: z.string().min(1).optional(),
+                title: z.string().min(1).optional(),
+                accountId: z.string().min(1).optional(),
+                guildId: z.string().min(1).optional(),
+                channelId: z.string().min(1).optional(),
+                meetingUrl: z.string().min(1).optional(),
+              })
+              .strict(),
+          )
+          .optional(),
+      })
+      .strict()
       .optional(),
     commitments: CommitmentsSchema,
     hooks: z

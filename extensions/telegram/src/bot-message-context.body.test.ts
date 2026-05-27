@@ -230,6 +230,37 @@ describe("resolveTelegramInboundBody", () => {
     expect(result).toBeNull();
   });
 
+  it("accepts targeted bot commands as explicit mentions in requireMention groups", async () => {
+    const logger = { info: vi.fn() };
+    const text = "/deploy@bot check status";
+
+    const result = await resolveTelegramBody({
+      cfg: { channels: { telegram: {} } } as never,
+      msg: {
+        message_id: 8,
+        date: 1_700_000_008,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 46, first_name: "Eve" },
+        text,
+        entities: [{ type: "bot_command", offset: 0, length: "/deploy@bot".length }],
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "46",
+      senderUsername: "",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result?.rawBody).toBe(text);
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
   it("does not transcribe group audio for unauthorized senders", async () => {
     transcribeFirstAudioMock.mockReset();
     const logger = { info: vi.fn() };

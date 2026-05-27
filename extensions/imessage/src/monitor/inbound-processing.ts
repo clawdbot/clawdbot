@@ -1,12 +1,15 @@
 import {
   buildMentionRegexes,
+  buildChannelInboundEventContext,
   type EnvelopeFormatOptions,
+  filterChannelInboundQuoteContext,
   formatInboundEnvelope,
   formatInboundFromLabel,
   logInboundDrop,
   matchesMentionPatterns,
   resolveEnvelopeFormatOptions,
   resolveInboundMentionDecision,
+  toInboundMediaFacts,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelIngressResolver,
@@ -21,9 +24,8 @@ import { hasControlCommand } from "openclaw/plugin-sdk/command-auth-native";
 import type { DmPolicy, GroupPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -686,15 +688,24 @@ export async function resolveIMessageInboundDecision(params: {
             chatIdentifier,
           })
         : false;
-  const filteredReplyContext =
-    !replyContext ||
-    evaluateSupplementalContextVisibility({
-      mode: contextVisibilityMode,
-      kind: "quote",
-      senderAllowed: replySenderAllowed,
-    }).include
-      ? replyContext
-      : null;
+  const visibleReply = filterChannelInboundQuoteContext(
+    contextVisibilityMode,
+    replyContext
+      ? {
+          id: replyContext.id,
+          body: replyContext.body,
+          sender: replyContext.sender,
+          senderAllowed: replySenderAllowed,
+        }
+      : undefined,
+  );
+  const filteredReplyContext = visibleReply
+    ? {
+        id: visibleReply.id,
+        body: visibleReply.body ?? "",
+        sender: visibleReply.sender,
+      }
+    : null;
   if (replyContext && !filteredReplyContext && isGroup) {
     params.logVerbose?.(
       `imessage: drop reply context (mode=${contextVisibilityMode}, sender_allowed=${replySenderAllowed ? "yes" : "no"})`,
@@ -794,7 +805,7 @@ export async function resolveIMessageInboundDecision(params: {
   };
 }
 
-export function buildIMessageInboundContext(params: {
+export async function buildIMessageInboundContext(params: {
   cfg: OpenClawConfig;
   decision: IMessageInboundDispatchDecision;
   message: IMessagePayload;
@@ -810,13 +821,13 @@ export function buildIMessageInboundContext(params: {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmHistory?: IMessageDmHistoryContext;
-}): {
-  ctxPayload: ReturnType<typeof finalizeInboundContext>;
+}): Promise<{
+  ctxPayload: FinalizedMsgContext;
   fromLabel: string;
   chatTarget?: string;
   imessageTo: string;
   inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
-} {
+}> {
   const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;
@@ -902,51 +913,78 @@ export function buildIMessageInboundContext(params: {
           })
         : undefined;
 
-  const ctxPayload = finalizeInboundContext({
-    Body: combinedBody,
-    BodyForAgent: decision.bodyText,
-    InboundHistory: inboundHistory,
-    RawBody: decision.bodyText,
-    CommandBody: decision.bodyText,
-    From: decision.isGroup
+  const mediaInput =
+    params.media?.paths && params.media.paths.length > 0
+      ? params.media.paths.map((path, index) => ({
+          path,
+          url: path,
+          contentType: params.media?.types?.[index],
+        }))
+      : params.media?.path
+        ? [{ path: params.media.path, url: params.media.path, contentType: params.media.type }]
+        : undefined;
+  const media = toInboundMediaFacts(mediaInput);
+  const ctxPayload = buildChannelInboundEventContext({
+    channel: "imessage",
+    supplemental: {
+      quote: decision.replyContext
+        ? {
+            id: decision.replyContext.id,
+            body: decision.replyContext.body,
+            sender: decision.replyContext.sender,
+          }
+        : undefined,
+      groupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
+    },
+    media,
+    messageId: messageSid,
+    messageIdFull: messageGuid,
+    timestamp: decision.createdAt,
+    from: decision.isGroup
       ? `imessage:group:${chatId ?? "unknown"}`
       : `imessage:${decision.sender}`,
-    To: imessageTo,
-    SessionKey: decision.route.sessionKey,
-    AccountId: decision.route.accountId,
-    ChatType: decision.isGroup ? "group" : "direct",
-    ConversationLabel: fromLabel,
-    GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
-    GroupSystemPrompt: decision.isGroup ? decision.groupSystemPrompt : undefined,
-    GroupMembers: decision.isGroup
-      ? (params.message.participants ?? []).filter(Boolean).join(", ")
-      : undefined,
-    SenderName: decision.senderNormalized,
-    SenderId: decision.sender,
-    Provider: "imessage",
-    Surface: "imessage",
-    MessageSid: messageSid,
-    MessageSidFull: messageGuid,
-    ReplyToId: decision.replyContext?.id,
-    ReplyToBody: decision.replyContext?.body,
-    ReplyToSender: decision.replyContext?.sender,
-    Timestamp: decision.createdAt,
-    MediaPath: params.media?.path,
-    MediaType: params.media?.type,
-    MediaUrl: params.media?.path,
-    MediaPaths:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
-    MediaTypes:
-      params.media?.types && params.media.types.length > 0 ? params.media.types : undefined,
-    MediaUrls:
-      params.media?.paths && params.media.paths.length > 0 ? params.media.paths : undefined,
-    MediaRemoteHost: params.remoteHost,
-    WasMentioned: decision.effectiveWasMentioned,
-    CommandAuthorized: decision.commandAuthorized,
-    CommandSource:
-      decision.commandAuthorized && decision.hasControlCommand ? ("text" as const) : undefined,
-    OriginatingChannel: "imessage" as const,
-    OriginatingTo: imessageTo,
+    sender: {
+      id: decision.sender,
+      name: decision.senderNormalized,
+    },
+    conversation: {
+      kind: decision.isGroup ? "group" : "direct",
+      id: chatId != null ? String(chatId) : decision.sender,
+      label: fromLabel,
+    },
+    route: {
+      agentId: decision.route.agentId,
+      accountId: decision.route.accountId,
+      routeSessionKey: decision.route.sessionKey,
+    },
+    reply: {
+      to: imessageTo,
+    },
+    message: {
+      body: combinedBody,
+      bodyForAgent: decision.bodyText,
+      inboundHistory,
+      rawBody: decision.bodyText,
+      commandBody: decision.bodyText,
+    },
+    access: {
+      mentions: {
+        canDetectMention: decision.isGroup,
+        wasMentioned: decision.effectiveWasMentioned,
+      },
+      commands: {
+        authorized: decision.commandAuthorized,
+      },
+    },
+    extra: {
+      GroupSubject: decision.isGroup ? (params.message.chat_name ?? undefined) : undefined,
+      GroupMembers: decision.isGroup
+        ? (params.message.participants ?? []).filter(Boolean).join(", ")
+        : undefined,
+      MediaRemoteHost: params.remoteHost,
+      CommandSource:
+        decision.commandAuthorized && decision.hasControlCommand ? ("text" as const) : undefined,
+    },
   });
 
   return { ctxPayload, fromLabel, chatTarget, imessageTo, inboundHistory };

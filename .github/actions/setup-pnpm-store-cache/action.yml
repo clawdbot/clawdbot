@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ""
   use-actions-cache:
-    description: Whether pnpm/action-setup should cache the pnpm store.
+    description: Whether actions/cache should cache the pnpm store.
     required: false
     default: "true"
 outputs:
@@ -47,20 +47,48 @@ runs:
         openclaw_ensure_node "$requested_node"
 
     - name: Setup pnpm from packageManager
-      uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093
-      with:
-        package_json_file: ${{ inputs.package-manager-file }}
-        run_install: false
-        cache: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
-        cache_dependency_path: ${{ inputs.lockfile-path }}
+      shell: bash
+      env:
+        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        PACKAGE_MANAGER_FILE: ${{ inputs.package-manager-file }}
+      run: |
+        set -euo pipefail
+        package_manager="$(node -e "const fs = require('node:fs'); const path = require('node:path'); const pkg = JSON.parse(fs.readFileSync(path.resolve(process.argv[1]), 'utf8')); process.stdout.write(pkg.packageManager || '')" "$PACKAGE_MANAGER_FILE")"
+        case "$package_manager" in
+          pnpm@*) ;;
+          *)
+            echo "::error::Expected packageManager to pin pnpm, got '${package_manager:-<empty>}'"
+            exit 1
+            ;;
+        esac
+        corepack enable
+        for attempt in 1 2 3; do
+          if corepack prepare "$package_manager" --activate; then
+            exit 0
+          fi
+          sleep $((attempt * 5))
+        done
+        corepack prepare "$package_manager" --activate
 
-    - name: Ensure pnpm store cache directory exists
+    - name: Resolve pnpm store path
+      id: pnpm-store
       if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
       shell: bash
       run: |
         set -euo pipefail
         store_path="$(pnpm store path --silent)"
         node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "$store_path"
+        echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+    - name: Restore pnpm store cache
+      if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
+      uses: actions/cache@v5
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: pnpm-store-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles(inputs.lockfile-path) }}
+        restore-keys: |
+          pnpm-store-${{ runner.os }}-${{ inputs.node-version }}-
+          pnpm-store-${{ runner.os }}-
 
     - name: Record pnpm version
       id: pnpm-version

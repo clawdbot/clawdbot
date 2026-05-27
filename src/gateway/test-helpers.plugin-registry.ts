@@ -19,7 +19,7 @@ function createStubPluginRegistry(): PluginRegistry {
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],
     mediaUnderstandingProviders: [],
-    meetingNotesSourceProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],

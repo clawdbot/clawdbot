@@ -413,4 +413,30 @@ describe("qa suite planning helpers", () => {
       }).map((scenario) => scenario.id),
     ).toEqual(["generic", "live-only"]);
   });
+
+  it("keeps live-only runtime parity scenarios out of implicit mock selections", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("generic"),
+      makeQaSuiteTestScenario("live-runtime", {
+        runtimeParityTier: "live-only",
+      }),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["generic"]);
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["live-runtime"],
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["live-runtime"]);
+  });
 });

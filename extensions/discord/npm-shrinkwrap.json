@@ -11,8 +11,7 @@
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.48",
         "https-proxy-agent": "9.0.0",
-        "libopus-wasm": "0.0.1",
-        "prism-media": "1.3.5",
+        "libopus-wasm": "0.1.0",
         "typebox": "1.1.38",
         "undici": "8.3.0",
         "ws": "8.21.0"
@@ -424,9 +423,9 @@
       }
     },
     "node_modules/libopus-wasm": {
-      "version": "0.0.1",
-      "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.0.1.tgz",
-      "integrity": "sha512-w//dxORfJfLl4quaA5nEA0xZlbbtS/Gba+NrZyCDPmAQh2THX4KI6aI600f+jpxf6v3p9ApGCx0/DCCe4Xftug==",
+      "version": "0.1.0",
+      "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.1.0.tgz",
+      "integrity": "sha512-/aurGcAVgy0GcBEUzFaX9pm9qv7zYcy8W5hBXFiK+cyqOXAX4lOS6rlFogkY9CcSIajhjnuXyixsbmziSHCDMQ==",
       "license": "MIT",
       "engines": {
         "node": ">=20"

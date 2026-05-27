@@ -349,10 +349,11 @@ function assertAgentTurn() {
       `OpenClaw agent reply did not contain ${marker}:\nstdout=${stdout}\nstderr=${stderr}`,
     );
   }
+  const expectedProvider = modelRef.split("/")[0] || "codex";
   const executionTrace = response.meta?.executionTrace;
-  if (!executionTrace || executionTrace.winnerProvider !== "codex") {
+  if (!executionTrace || executionTrace.winnerProvider !== expectedProvider) {
     throw new Error(
-      `expected Codex plugin to win the agent turn, got ${JSON.stringify(executionTrace)}`,
+      `expected Codex plugin model provider ${expectedProvider} to win the agent turn, got ${JSON.stringify(executionTrace)}`,
     );
   }
 

@@ -23,6 +23,7 @@ export {
   queueEmbeddedPiMessageWithOutcome,
   resolveActiveEmbeddedAgentRunSessionId,
   resolveActiveEmbeddedRunSessionId,
+  resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveEmbeddedSessionLane,
   runEmbeddedAgent,
   runEmbeddedPiAgent,

@@ -3,7 +3,10 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
-import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
+import {
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -370,6 +373,386 @@ export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig
   });
 }
 
+const PROFILE_CONFIGURED_TOOL_SECTIONS = [
+  { key: "exec", label: "tools.exec", grants: ["exec", "process"] },
+  { key: "fs", label: "tools.fs", grants: ["read", "write", "edit"] },
+] as const;
+
+type ConfiguredToolSectionGrantEntry = {
+  label: string;
+  grants: string[];
+};
+
+function collectConfiguredToolSectionGrantEntries(params: {
+  tools?: Record<string, unknown> | null;
+  pathLabel: string;
+}): ConfiguredToolSectionGrantEntry[] {
+  const entries: ConfiguredToolSectionGrantEntry[] = [];
+  for (const section of PROFILE_CONFIGURED_TOOL_SECTIONS) {
+    if (hasRecord(params.tools?.[section.key])) {
+      entries.push({
+        label: `${params.pathLabel}.${section.key}`,
+        grants: [...section.grants],
+      });
+    }
+  }
+  return entries;
+}
+
+function formatQuotedList(values: string[]): string {
+  return values.map((value) => `"${value}"`).join(", ");
+}
+
+function hasNonEmptyStringList(value: unknown): value is string[] {
+  return Array.isArray(value) && value.some((entry) => typeof entry === "string");
+}
+
+function readPreviewStringList(value: unknown): string[] | undefined {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+}
+
+function formatProfileConfiguredSectionGrantAdvice(params: {
+  pathLabel: string;
+  grants: string[];
+  hasAllow: boolean;
+  provider?: boolean;
+}): string {
+  const providerSuffix = params.provider ? " for that provider" : "";
+  if (params.hasAllow) {
+    return `Add these grants to ${params.pathLabel}.allow and set ${params.pathLabel}.profile to "full" if these tools should be available${providerSuffix}.`;
+  }
+  return `Add ${params.pathLabel}.alsoAllow: [${formatQuotedList(
+    params.grants,
+  )}] if these tools should be available${providerSuffix}.`;
+}
+
+function collectProfileConfiguredToolSectionScopeWarnings(params: {
+  tools?: Record<string, unknown> | null;
+  inheritedTools?: Record<string, unknown> | null;
+  pathLabel: string;
+  inheritedPathLabel?: string;
+  includeInheritedSections?: boolean;
+  inheritedProfile?: string;
+  inheritedAlsoAllow?: string[];
+}): string[] {
+  const tools = params.tools;
+  const profile =
+    (typeof tools?.profile === "string" ? tools.profile : undefined) ?? params.inheritedProfile;
+  if (!profile) {
+    return [];
+  }
+  const configuredEntries = [
+    ...(params.includeInheritedSections && params.inheritedTools && params.inheritedPathLabel
+      ? collectConfiguredToolSectionGrantEntries({
+          tools: params.inheritedTools,
+          pathLabel: params.inheritedPathLabel,
+        })
+      : []),
+    ...collectConfiguredToolSectionGrantEntries({ tools, pathLabel: params.pathLabel }),
+  ];
+  if (configuredEntries.length === 0) {
+    return [];
+  }
+  const alsoAllow = Array.isArray(tools?.alsoAllow)
+    ? tools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
+    : params.inheritedAlsoAllow;
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+  const uncoveredEntries = configuredEntries
+    .map((entry) => {
+      const grants = entry.grants.filter(
+        (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+      );
+      return { grants, label: entry.label };
+    })
+    .filter((entry) => entry.grants.length > 0);
+  if (uncoveredEntries.length === 0) {
+    return [];
+  }
+  const uncoveredGrants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
+  const advice = formatProfileConfiguredSectionGrantAdvice({
+    pathLabel: params.pathLabel,
+    grants: uncoveredGrants,
+    hasAllow: hasNonEmptyStringList(tools?.allow),
+  });
+  return [
+    `- ${params.pathLabel}.profile is "${profile}" and ${uncoveredEntries
+      .map((entry) => entry.label)
+      .join(
+        " / ",
+      )} is configured, but configured sections no longer widen the active profile. ${advice}`,
+  ];
+}
+
+function collectByProviderConfiguredToolSectionWarnings(params: {
+  tools?: Record<string, unknown> | null;
+  inheritedTools?: Record<string, unknown> | null;
+  pathLabel: string;
+  configuredEntries: ConfiguredToolSectionGrantEntry[];
+}): string[] {
+  const byProvider = hasRecord(params.tools?.byProvider) ? params.tools.byProvider : undefined;
+  if (!byProvider || params.configuredEntries.length === 0) {
+    return [];
+  }
+  const inheritedByProvider = hasRecord(params.inheritedTools?.byProvider)
+    ? params.inheritedTools.byProvider
+    : undefined;
+  return Object.entries(byProvider).flatMap(([providerKey, policyValue]) => {
+    const policy = hasRecord(policyValue) ? policyValue : undefined;
+    if (!policy) {
+      return [];
+    }
+    const profile = typeof policy.profile === "string" ? policy.profile : undefined;
+    if (!profile) {
+      return [];
+    }
+    const inheritedPolicy = resolveInheritedProviderPolicyForPreview(
+      inheritedByProvider,
+      providerKey,
+    );
+    const alsoAllow =
+      readPreviewStringList(policy.alsoAllow) ?? readPreviewStringList(inheritedPolicy?.alsoAllow);
+    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+    const uncoveredEntries = params.configuredEntries
+      .map((entry) => ({
+        ...entry,
+        grants: entry.grants.filter(
+          (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+        ),
+      }))
+      .filter((entry) => entry.grants.length > 0);
+    if (uncoveredEntries.length === 0) {
+      return [];
+    }
+    const providerPath = `${params.pathLabel}.byProvider.${providerKey}`;
+    const uncoveredGrants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
+    const advice = formatProfileConfiguredSectionGrantAdvice({
+      pathLabel: providerPath,
+      grants: uncoveredGrants,
+      hasAllow: hasNonEmptyStringList(policy.allow),
+      provider: true,
+    });
+    return [
+      `- ${providerPath}.profile is "${profile}" and ${uncoveredEntries
+        .map((entry) => entry.label)
+        .join(
+          " / ",
+        )} is configured, but configured sections no longer widen the provider profile. ${advice}`,
+    ];
+  });
+}
+
+function resolveInheritedProviderPolicyForPreview(
+  inheritedByProvider: Record<string, unknown> | undefined,
+  providerKey: string,
+): ToolPolicyConfig | undefined {
+  if (!inheritedByProvider) {
+    return undefined;
+  }
+  const normalized = normalizeProviderPolicyKey(providerKey);
+  const slashIndex = normalized.indexOf("/");
+  const modelProvider = slashIndex > 0 ? normalized.slice(0, slashIndex) : normalized;
+  const modelId = slashIndex > 0 ? normalized.slice(slashIndex + 1) : "";
+  const policy = resolveProviderToolPolicy({
+    byProvider: inheritedByProvider as Record<string, ToolPolicyConfig>,
+    modelProvider,
+    modelId,
+  });
+  return policy && hasRecord(policy) ? policy : undefined;
+}
+
+function resolveProviderPolicyEntryForPreview(params: {
+  byProvider?: Record<string, unknown>;
+  modelProvider?: string;
+  modelId?: string;
+}): { key: string; policy: Record<string, unknown> } | undefined {
+  if (!params.byProvider || !params.modelProvider) {
+    return undefined;
+  }
+  const lookup = new Map<
+    string,
+    { key: string; policy: Record<string, unknown>; canonical: boolean }
+  >();
+  for (const [key, value] of Object.entries(params.byProvider)) {
+    const policy = hasRecord(value) ? value : undefined;
+    if (!policy) {
+      continue;
+    }
+    const normalized = normalizeProviderPolicyKey(key);
+    if (!normalized) {
+      continue;
+    }
+    const canonical = isCanonicalProviderPolicyKey(key);
+    const existing = lookup.get(normalized);
+    if (!existing || (canonical && !existing.canonical)) {
+      lookup.set(normalized, { key, policy, canonical });
+    }
+  }
+  const provider = normalizeProviderPolicyKey(params.modelProvider);
+  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
+  const candidates = [...(modelId ? [`${provider}/${modelId}`] : []), provider];
+  for (const candidate of candidates) {
+    const match = lookup.get(candidate);
+    if (match) {
+      return { key: match.key, policy: match.policy };
+    }
+  }
+  return undefined;
+}
+
+function collectInheritedByProviderConfiguredToolSectionWarnings(params: {
+  inheritedTools?: Record<string, unknown> | null;
+  inheritedPathLabel: string;
+  overridingTools?: Record<string, unknown> | null;
+  overridingPathLabel: string;
+  configuredEntries: ConfiguredToolSectionGrantEntry[];
+  modelProvider?: string;
+  modelId?: string;
+}): string[] {
+  const inheritedByProvider = hasRecord(params.inheritedTools?.byProvider)
+    ? params.inheritedTools.byProvider
+    : undefined;
+  if (!inheritedByProvider || params.configuredEntries.length === 0) {
+    return [];
+  }
+  const overridingByProvider = hasRecord(params.overridingTools?.byProvider)
+    ? params.overridingTools.byProvider
+    : undefined;
+  const inheritedEntryForModel = resolveProviderPolicyEntryForPreview({
+    byProvider: inheritedByProvider,
+    modelProvider: params.modelProvider,
+    modelId: params.modelId,
+  });
+  return Object.entries(inheritedByProvider).flatMap(([providerKey, policyValue]) => {
+    if (params.modelProvider && inheritedEntryForModel?.key !== providerKey) {
+      return [];
+    }
+    const inheritedPolicy = hasRecord(policyValue) ? policyValue : undefined;
+    if (!inheritedPolicy) {
+      return [];
+    }
+    const profile =
+      typeof inheritedPolicy.profile === "string" ? inheritedPolicy.profile : undefined;
+    if (!profile) {
+      return [];
+    }
+    const overridingEntry =
+      resolveProviderPolicyEntryForPreview({
+        byProvider: overridingByProvider,
+        modelProvider: params.modelProvider,
+        modelId: params.modelId,
+      }) ??
+      (hasRecord(overridingByProvider?.[providerKey])
+        ? { key: providerKey, policy: overridingByProvider[providerKey] }
+        : undefined);
+    const overridingPolicy = overridingEntry?.policy;
+    if (typeof overridingPolicy?.profile === "string") {
+      return [];
+    }
+    const alsoAllow =
+      readPreviewStringList(overridingPolicy?.alsoAllow) ??
+      readPreviewStringList(inheritedPolicy.alsoAllow);
+    const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), alsoAllow);
+    const uncoveredEntries = params.configuredEntries
+      .map((entry) => ({
+        ...entry,
+        grants: entry.grants.filter(
+          (toolName) => !isToolAllowedByPolicyName(toolName, profilePolicy),
+        ),
+      }))
+      .filter((entry) => entry.grants.length > 0);
+    if (uncoveredEntries.length === 0) {
+      return [];
+    }
+    const overridePath = `${params.overridingPathLabel}.byProvider.${
+      overridingEntry?.key ?? providerKey
+    }`;
+    const inheritedPath = `${params.inheritedPathLabel}.byProvider.${providerKey}`;
+    const uncoveredGrants = [...new Set(uncoveredEntries.flatMap((entry) => entry.grants))];
+    const advice = formatProfileConfiguredSectionGrantAdvice({
+      pathLabel: overridePath,
+      grants: uncoveredGrants,
+      hasAllow: hasNonEmptyStringList(overridingPolicy?.allow),
+      provider: true,
+    });
+    return [
+      `- ${inheritedPath}.profile is "${profile}" and ${uncoveredEntries
+        .map((entry) => entry.label)
+        .join(
+          " / ",
+        )} is configured, but configured sections no longer widen the inherited provider profile. ${advice}`,
+    ];
+  });
+}
+
+export function collectProfileConfiguredToolSectionWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+  const globalTools = hasRecord(cfg.tools) ? cfg.tools : undefined;
+  const globalAlsoAllow = Array.isArray(globalTools?.alsoAllow)
+    ? globalTools.alsoAllow.filter((entry): entry is string => typeof entry === "string")
+    : undefined;
+  const globalProfile = typeof globalTools?.profile === "string" ? globalTools.profile : undefined;
+  const globalConfiguredEntries = collectConfiguredToolSectionGrantEntries({
+    tools: globalTools,
+    pathLabel: "tools",
+  });
+
+  warnings.push(
+    ...collectProfileConfiguredToolSectionScopeWarnings({
+      tools: globalTools,
+      pathLabel: "tools",
+    }),
+    ...collectByProviderConfiguredToolSectionWarnings({
+      tools: globalTools,
+      pathLabel: "tools",
+      configuredEntries: globalConfiguredEntries,
+    }),
+  );
+
+  listAgentRecords(cfg).forEach((agent, index) => {
+    const agentTools = hasRecord(agent.tools) ? agent.tools : undefined;
+    const agentId = typeof agent.id === "string" ? agent.id : undefined;
+    const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+    const modelRef = resolvePrimaryModelRef(cfg, agentConfig?.model);
+    const agentPath = `agents.list[${index}].tools`;
+    const includeInheritedSections =
+      agentTools !== undefined && typeof agentTools.profile !== "string";
+    const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
+      tools: agentTools,
+      pathLabel: agentPath,
+    });
+    const agentConfiguredEntries = [...globalConfiguredEntries, ...ownAgentConfiguredEntries];
+    warnings.push(
+      ...collectProfileConfiguredToolSectionScopeWarnings({
+        tools: agentTools,
+        inheritedTools: globalTools,
+        pathLabel: agentPath,
+        inheritedPathLabel: "tools",
+        includeInheritedSections,
+        inheritedProfile: globalProfile,
+        inheritedAlsoAllow: globalAlsoAllow,
+      }),
+      ...collectByProviderConfiguredToolSectionWarnings({
+        tools: agentTools,
+        inheritedTools: globalTools,
+        pathLabel: agentPath,
+        configuredEntries: agentConfiguredEntries,
+      }),
+      ...collectInheritedByProviderConfiguredToolSectionWarnings({
+        inheritedTools: globalTools,
+        inheritedPathLabel: "tools",
+        overridingTools: agentTools,
+        overridingPathLabel: agentPath,
+        configuredEntries: ownAgentConfiguredEntries,
+        modelProvider: modelRef.provider,
+        modelId: modelRef.model,
+      }),
+    );
+  });
+  return warnings;
+}
+
 export type DoctorPreviewNotes = {
   infoNotes: string[];
   warningNotes: string[];
@@ -388,6 +771,11 @@ export async function collectDoctorPreviewNotes(params: {
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
   warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
+  warnings.push(...collectProfileConfiguredToolSectionWarnings(params.cfg));
+
+  const { collectActiveToolSchemaProjectionWarnings } =
+    await import("./active-tool-schema-warnings.js");
+  warnings.push(...collectActiveToolSchemaProjectionWarnings({ cfg: params.cfg, env }));
 
   const channelPluginRuntime =
     hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)

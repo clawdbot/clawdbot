@@ -88,6 +88,11 @@ vi.mock("../agents/provider-auth-aliases.js", () => ({
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   getProviderEnvVars: vi.fn((provider: string) => providerEnvVarsById[provider] ?? []),
+  resolveProviderAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  }),
 }));
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {

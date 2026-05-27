@@ -1,3 +1,8 @@
+import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  resolveOutboundSendDep,
+  type OutboundSendDeps,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import {
   attachChannelToResult,
@@ -7,11 +12,6 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import type { OutboundDeliveryFormattingOptions } from "openclaw/plugin-sdk/outbound-runtime";
-import {
-  resolveOutboundSendDep,
-  type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,

@@ -162,6 +162,7 @@ fi
 
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:?missing OPENCLAW_CODEX_NPM_PLUGIN_SPEC}"
 MODEL_REF="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:?missing OPENCLAW_CODEX_NPM_PLUGIN_MODEL}"
+POST_UNINSTALL_MODEL_REF="codex/${MODEL_REF#*/}"
 SESSION_ID="codex-npm-plugin-live"
 SUCCESS_MARKER="OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK"
 PLUGIN_INSTALL_FLAGS=(--force)
@@ -197,6 +198,7 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
 openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
@@ -295,7 +297,7 @@ node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-uninstalled
 if openclaw agent --local \
   --agent main \
   --session-id "${SESSION_ID}-after-uninstall" \
-  --model "$MODEL_REF" \
+  --model "$POST_UNINSTALL_MODEL_REF" \
   --message "Reply exactly: ${SUCCESS_MARKER}-AFTER-UNINSTALL" \
   --thinking low \
   --timeout 120 \

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import {
+  testing as embeddedRunTesting,
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../agents/pi-embedded-runner/runs.js";
+import {
   testing as replyRunTesting,
   createReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
@@ -22,6 +27,7 @@ function delay(ms: number): Promise<"blocked"> {
 describe("stuck session recovery integration", () => {
   afterEach(() => {
     recoveryTesting.resetRecoveriesInFlight();
+    embeddedRunTesting.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     resetCommandQueueStateForTest();
   });
@@ -56,6 +62,50 @@ describe("stuck session recovery integration", () => {
     expect(getQueueSize(lane)).toBe(2);
 
     operation.complete();
+    expect(resetCommandLane(lane)).toBe(1);
+    await expect(queued).resolves.toBe("drained");
+  });
+
+  it("does not reset sibling-key lane work while the same session file has an active embedded run", async () => {
+    const activeSessionKey = "agent:main:visible";
+    const fallbackSessionKey = "agent:main:fallback";
+    const activeSessionId = "active-session-file-run";
+    const fallbackSessionId = "fallback-session-file-run";
+    const sessionFile = "/tmp/openclaw-diagnostic-shared-session.jsonl";
+    const lane = resolveEmbeddedSessionLane(fallbackSessionKey);
+    const handle = {
+      queueMessage: async () => {},
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: () => {},
+    };
+
+    setActiveEmbeddedRun(activeSessionId, handle, activeSessionKey, sessionFile);
+    void enqueueCommandInLane(lane, () => new Promise<never>(() => {}), {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+    const queued = enqueueCommandInLane(lane, async () => "drained", {
+      warnAfterMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: fallbackSessionId,
+      sessionKey: fallbackSessionKey,
+      sessionFile,
+      ageMs: 180_000,
+      queueDepth: 1,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "skipped",
+      action: "observe_only",
+      reason: "active_embedded_run",
+      activeSessionId,
+    });
+    await expect(Promise.race([queued, delay(100)])).resolves.toBe("blocked");
+    expect(getQueueSize(lane)).toBe(2);
+
+    clearActiveEmbeddedRun(activeSessionId, handle, activeSessionKey, sessionFile);
     expect(resetCommandLane(lane)).toBe(1);
     await expect(queued).resolves.toBe("drained");
   });

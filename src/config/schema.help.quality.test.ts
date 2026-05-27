@@ -28,6 +28,7 @@ const ROOT_SECTIONS = [
   "approvals",
   "session",
   "cron",
+  "transcripts",
   "hooks",
   "web",
   "channels",

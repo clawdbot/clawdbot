@@ -8,7 +8,7 @@ import type {
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
 
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai-codex", "openai"]);
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",

@@ -34,10 +34,7 @@ import {
   resolveAuthStorePathForDisplay,
 } from "./auth-profiles.js";
 import * as cliCredentials from "./cli-credentials.js";
-import {
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
-} from "./model-auth-env-vars.js";
+import { resolveProviderEnvAuthLookupMaps } from "./model-auth-env-vars.js";
 import {
   resolveEnvApiKey,
   type EnvApiKeyLookupOptions,
@@ -51,7 +48,6 @@ import {
 } from "./model-auth-markers.js";
 import { type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 
 export {
   ensureAuthProfileStore,
@@ -119,11 +115,12 @@ export function createRuntimeProviderAuthLookup(params: {
     params.includePluginSyntheticAuth === false
       ? undefined
       : resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
+  const authLookupMaps = resolveProviderEnvAuthLookupMaps(lookupParams);
   return {
     envApiKey: {
-      aliasMap: resolveProviderAuthAliasMap(lookupParams),
-      candidateMap: resolveProviderEnvApiKeyCandidates(lookupParams),
-      authEvidenceMap: resolveProviderEnvAuthEvidence(lookupParams),
+      aliasMap: authLookupMaps.aliasMap,
+      candidateMap: authLookupMaps.envCandidateMap,
+      authEvidenceMap: authLookupMaps.authEvidenceMap,
     },
     syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
       ? syntheticAuthProviderRefs.refs

@@ -7,6 +7,7 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-kitchen-sink-rpc-e2e" OPENCLAW_KITCHEN_SINK_RPC_E2E_IMAGE)"
 MAX_MEMORY_MIB="${OPENCLAW_KITCHEN_SINK_MAX_MEMORY_MIB:-2048}"
 MAX_CPU_PERCENT="${OPENCLAW_KITCHEN_SINK_MAX_CPU_PERCENT:-1200}"
+DOCKER_RUN_TIMEOUT="${OPENCLAW_KITCHEN_SINK_RPC_DOCKER_RUN_TIMEOUT:-900s}"
 CONTAINER_NAME="openclaw-kitchen-sink-rpc-e2e-$$"
 RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-rpc.XXXXXX")"
 STATS_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-kitchen-sink-rpc-stats.XXXXXX")"
@@ -42,7 +43,7 @@ done
 echo "Running kitchen-sink RPC Docker E2E..."
 docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 docker_e2e_harness_mount_args
-docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" \
+DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run --name "$CONTAINER_NAME" "${DOCKER_E2E_HARNESS_ARGS[@]}" "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" \
   node scripts/e2e/kitchen-sink-rpc-walk.mjs >"$RUN_LOG" 2>&1 &
 docker_pid="$!"
 
@@ -60,6 +61,10 @@ set -e
 
 cat "$RUN_LOG"
 
-node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc
+if [ "$run_status" -eq 0 ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc
+elif [ -s "$STATS_LOG" ]; then
+  node scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs "$STATS_LOG" "$MAX_MEMORY_MIB" "$MAX_CPU_PERCENT" kitchen-sink-rpc || true
+fi
 
 exit "$run_status"

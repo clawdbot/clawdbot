@@ -131,7 +131,10 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
-  /** Direct-message threading behavior. Defaults to flat DM sessions. */
+  /**
+   * @deprecated Telegram DM topic session detection is automatic from bot
+   * getMe.has_topics_enabled. This legacy config is removed by doctor --fix.
+   */
   dm?: TelegramDmConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
@@ -234,10 +237,18 @@ export type TelegramAccountConfig = {
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
+/**
+ * @deprecated Telegram DM topic session detection is automatic from bot
+ * getMe.has_topics_enabled. This legacy type remains for plugin SDK
+ * compatibility only.
+ */
 export type TelegramDmThreadReplies = "off" | "inbound" | "always";
 
+/**
+ * @deprecated Legacy config removed by doctor --fix.
+ */
 export type TelegramDmConfig = {
-  /** DM-only session threading override for message_thread_id (off|inbound|always). Default: off. */
+  /** @deprecated Use bot getMe.has_topics_enabled; doctor removes this key. */
   threadReplies?: TelegramDmThreadReplies;
 };
 
@@ -304,8 +315,8 @@ export type AutoTopicLabelConfig =
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
-  /** Controls whether Telegram DM message_thread_id values split sessions. Default: off unless topic config requires it. */
-  threadReplies?: "off" | "inbound" | "always";
+  /** @deprecated Use bot getMe.has_topics_enabled; doctor removes this key. */
+  threadReplies?: TelegramDmThreadReplies;
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

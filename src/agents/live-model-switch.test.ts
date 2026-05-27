@@ -398,12 +398,13 @@ describe("live model switch", () => {
 
   describe("shouldSwitchToLiveModel", () => {
     it("returns the persisted selection when liveModelSwitchPending is true and model differs", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+      };
       state.loadSessionStoreMock.mockReturnValue({
-        main: {
-          liveModelSwitchPending: true,
-          providerOverride: "openai",
-          modelOverride: "gpt-5.4",
-        },
+        main: sessionEntry,
       });
 
       const { shouldSwitchToLiveModel } = await loadModule();
@@ -431,15 +432,20 @@ describe("live model switch", () => {
       const result = shouldSwitchToLiveModel(makeShouldSwitchParams());
 
       expect(result).toBeUndefined();
+      expect(state.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/session-store.json", {
+        skipCache: true,
+        clone: false,
+      });
     });
 
     it("returns undefined when liveModelSwitchPending is true but models match", async () => {
+      const sessionEntry = {
+        liveModelSwitchPending: true,
+        providerOverride: "anthropic",
+        modelOverride: "claude-opus-4-6",
+      };
       state.loadSessionStoreMock.mockReturnValue({
-        main: {
-          liveModelSwitchPending: true,
-          providerOverride: "anthropic",
-          modelOverride: "claude-opus-4-6",
-        },
+        main: sessionEntry,
       });
 
       const { shouldSwitchToLiveModel } = await loadModule();

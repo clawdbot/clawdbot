@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createGauntletPrebuildCommand,
+  hasGauntletWorkRows,
   parseTimedMetrics,
   runMeasuredCommand,
   runMeasuredCommandLive,
@@ -328,6 +329,16 @@ describe("plugin gateway gauntlet helpers", () => {
     });
   });
 
+  it("does not count prebuild setup as gauntlet work", () => {
+    expect(hasGauntletWorkRows([])).toBe(false);
+    expect(hasGauntletWorkRows([{ phase: "prebuild" }])).toBe(false);
+    expect(hasGauntletWorkRows([{ phase: "prebuild" }, { phase: "lifecycle:install" }])).toBe(
+      true,
+    );
+    expect(hasGauntletWorkRows([{ phase: "slash:help" }])).toBe(true);
+    expect(hasGauntletWorkRows([{ phase: "qa:rpc" }])).toBe(true);
+  });
+
   it("parses macOS time -l metrics from strict trailing lines", () => {
     const metrics = parseTimedMetrics(
       [
@@ -457,7 +468,7 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(markerPath, "utf8")).resolves.toBe(afterReturn);
   });
 
-  it("cleans the isolated run root after a successful dry run", async () => {
+  it("fails dry runs that do not execute any gauntlet commands", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     const result = spawnSync(
       process.execPath,
@@ -478,10 +489,48 @@ describe("plugin gateway gauntlet helpers", () => {
       },
     );
 
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain("No lifecycle, slash-help, or QA gauntlet commands ran");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.guardFailures).toEqual([
+      expect.objectContaining({
+        kind: "empty-run",
+      }),
+    ]);
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await expect(fs.stat(summary.isolatedRunRoot)).resolves.toBeTruthy();
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
+  it("cleans the isolated run root after an explicitly empty dry run", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--skip-qa",
+        "--allow-empty",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
     expect(result.status, result.stderr).toBe(0);
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
     );
+    expect(summary.guardFailures).toEqual([]);
     expect(summary.isolatedRunRootPreserved).toBe(false);
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
   });

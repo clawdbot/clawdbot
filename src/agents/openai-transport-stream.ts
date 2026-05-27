@@ -1905,7 +1905,10 @@ function raiseMinimalReasoningForResponsesWebSearch(params: {
 }
 
 function isOpenAICodexResponsesModel(model: Model<Api>): boolean {
-  return model.provider === "openai-codex" && model.api === "openai-codex-responses";
+  return (
+    model.provider === "openai-codex" &&
+    (model.api === "openai-codex-responses" || model.api === "openclaw-openai-responses-transport")
+  );
 }
 
 function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {

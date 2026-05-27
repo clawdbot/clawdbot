@@ -6,9 +6,13 @@ IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 DISABLE_LIBRARY_VALIDATION="${DISABLE_LIBRARY_VALIDATION:-0}"
 SKIP_TEAM_ID_CHECK="${SKIP_TEAM_ID_CHECK:-0}"
-ENT_TMP_BASE=$(mktemp -t openclaw-entitlements-base.XXXXXX)
-ENT_TMP_APP_BASE=$(mktemp -t openclaw-entitlements-app-base.XXXXXX)
-ENT_TMP_RUNTIME=$(mktemp -t openclaw-entitlements-runtime.XXXXXX)
+ENT_TMP_DIR=""
+
+cleanup() {
+  if [[ -n "$ENT_TMP_DIR" ]]; then
+    rm -rf "$ENT_TMP_DIR"
+  fi
+}
 
 if [[ "${APP_BUNDLE}" == "--help" || "${APP_BUNDLE}" == "-h" ]]; then
   cat <<'HELP'
@@ -129,28 +133,17 @@ if [[ "$IDENTITY" == "-" ]]; then
   timestamp_arg="--timestamp=none"
 fi
 
+ENT_TMP_DIR=$(mktemp -d -t openclaw-entitlements.XXXXXX)
+trap cleanup EXIT
+ENT_TMP_APP="$ENT_TMP_DIR/app.plist"
+
 options_args=()
 if [[ "$IDENTITY" != "-" ]]; then
   options_args=("--options" "runtime")
 fi
 timestamp_args=("$timestamp_arg")
 
-cat > "$ENT_TMP_BASE" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.automation.apple-events</key>
-    <true/>
-    <key>com.apple.security.device.audio-input</key>
-    <true/>
-    <key>com.apple.security.device.camera</key>
-    <true/>
-</dict>
-</plist>
-PLIST
-
-cat > "$ENT_TMP_APP_BASE" <<'PLIST'
+cat > "$ENT_TMP_APP" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -167,26 +160,13 @@ cat > "$ENT_TMP_APP_BASE" <<'PLIST'
 </plist>
 PLIST
 
-cat > "$ENT_TMP_RUNTIME" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-</dict>
-</plist>
-PLIST
-
 if [[ "$DISABLE_LIBRARY_VALIDATION" == "1" ]]; then
-  /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ENT_TMP_APP_BASE" >/dev/null 2>&1 || \
-    /usr/libexec/PlistBuddy -c "Set :com.apple.security.cs.disable-library-validation true" "$ENT_TMP_APP_BASE"
+  /usr/libexec/PlistBuddy -c "Add :com.apple.security.cs.disable-library-validation bool true" "$ENT_TMP_APP" >/dev/null 2>&1 || \
+    /usr/libexec/PlistBuddy -c "Set :com.apple.security.cs.disable-library-validation true" "$ENT_TMP_APP"
   echo "Note: disable-library-validation entitlement enabled (DISABLE_LIBRARY_VALIDATION=1)."
 fi
 
-APP_ENTITLEMENTS="$ENT_TMP_APP_BASE"
+APP_ENTITLEMENTS="$ENT_TMP_APP"
 
 # clear extended attributes to avoid stale signatures
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
@@ -291,5 +271,4 @@ sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
 verify_team_ids
 
-rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_RUNTIME"
 echo "Codesign complete for $APP_BUNDLE"

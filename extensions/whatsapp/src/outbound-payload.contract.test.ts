@@ -6,7 +6,7 @@ import {
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyDurableFinalCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { describe, expect, it, vi } from "vitest";
 import { whatsappMessageAdapter } from "./channel-outbound.js";
 import { whatsappOutbound } from "./outbound-adapter.js";

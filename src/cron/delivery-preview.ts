@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronDeliveryPlan } from "./delivery-plan.js";
+import { hasExplicitCronDeliveryTarget, resolveCronDeliveryPlan } from "./delivery-plan.js";
 import { resolveDeliveryTarget } from "./isolated-agent/delivery-target.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
 import type { CronDeliveryPreview, CronJob } from "./types.js";
@@ -40,7 +40,7 @@ export async function resolveCronDeliveryPreview(params: {
   job: CronJob;
 }): Promise<CronDeliveryPreview> {
   const plan = resolveCronDeliveryPlan(params.job);
-  if (plan.mode === "none") {
+  if (plan.mode === "none" && !hasExplicitCronDeliveryTarget(plan)) {
     return { label: "not requested", detail: "not requested" };
   }
   if (plan.mode === "webhook") {
@@ -67,12 +67,15 @@ export async function resolveCronDeliveryPreview(params: {
   if (!resolved.ok) {
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
-      detail: formatDeliveryDetail({
-        requestedChannel,
-        resolved: false,
-        sessionKey: deliverySessionKey,
-        error: resolved.error.message,
-      }),
+      detail:
+        plan.mode === "none"
+          ? `message tool target unresolved: ${resolved.error.message}`
+          : formatDeliveryDetail({
+              requestedChannel,
+              resolved: false,
+              sessionKey: deliverySessionKey,
+              error: resolved.error.message,
+            }),
     };
   }
   return {

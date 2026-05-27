@@ -109,6 +109,8 @@ const DEFAULT_RUNS = 5;
 const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_ENTRY = "dist/entry.js";
+const TEARDOWN_GRACE_MS = 2_000;
+const TEARDOWN_KILL_GRACE_MS = 1_000;
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -708,7 +710,10 @@ function sanitizedEnv(
   return env;
 }
 
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<StopChildResult> {
+async function stopChild(
+  child: ChildProcessWithoutNullStreams,
+  options: { killGraceMs?: number; teardownGraceMs?: number } = {},
+): Promise<StopChildResult> {
   const currentExit = (): ChildExit | null =>
     child.exitCode != null || child.signalCode != null
       ? { exitCode: child.exitCode, signal: child.signalCode }
@@ -726,6 +731,8 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<StopChi
       resolve(observedExit);
     });
   });
+  const waitForExit = async (ms: number): Promise<ChildExit | null> =>
+    await Promise.race([exited, delay(ms).then(() => null)]);
 
   await new Promise<void>((resolve) => setImmediate(resolve));
   const queuedExit = observedExit ?? currentExit();
@@ -733,15 +740,39 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<StopChi
     return { ...queuedExit, exitedBeforeTeardown: true };
   }
 
+  const teardownGraceMs = options.teardownGraceMs ?? TEARDOWN_GRACE_MS;
+  const killGraceMs = options.killGraceMs ?? TEARDOWN_KILL_GRACE_MS;
   const sentTeardownSignal = killProcessTree(child, "SIGTERM");
-  const timeout = delay(2000).then(() => {
-    if (child.exitCode == null && child.signalCode == null) {
-      killProcessTree(child, "SIGKILL");
-    }
-    return exited;
-  });
-  const exit = await Promise.race([exited, timeout]);
-  return { ...exit, exitedBeforeTeardown: !sentTeardownSignal };
+  const gracefulExit = await waitForExit(teardownGraceMs);
+  if (gracefulExit != null) {
+    return { ...gracefulExit, exitedBeforeTeardown: !sentTeardownSignal };
+  }
+
+  const postGraceExit = currentExit() ?? observedExit;
+  if (postGraceExit != null) {
+    return { ...postGraceExit, exitedBeforeTeardown: !sentTeardownSignal };
+  }
+  if (!sentTeardownSignal) {
+    releaseUnsettledChild(child);
+    return { exitCode: null, exitedBeforeTeardown: true, signal: null };
+  }
+
+  killProcessTree(child, "SIGKILL");
+  const killedExit = await waitForExit(killGraceMs);
+  const finalExit = killedExit ?? currentExit() ?? observedExit;
+  if (finalExit != null) {
+    return { ...finalExit, exitedBeforeTeardown: false };
+  }
+
+  releaseUnsettledChild(child);
+  return { exitCode: null, exitedBeforeTeardown: false, signal: "SIGKILL" };
+}
+
+function releaseUnsettledChild(child: ChildProcessWithoutNullStreams): void {
+  child.stdin.destroy();
+  child.stdout.destroy();
+  child.stderr.destroy();
+  child.unref();
 }
 
 function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): boolean {
@@ -1006,7 +1037,8 @@ async function runGatewaySample(options: {
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
-  await childExitPromise.catch(() => null);
+  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
+  void childExitPromise.catch(() => null);
   rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 
   return {

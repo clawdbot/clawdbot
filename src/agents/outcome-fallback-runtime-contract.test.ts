@@ -1,10 +1,8 @@
 import {
-  createContractFallbackConfig,
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 
@@ -12,12 +10,17 @@ vi.mock("./auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: () => false,
 }));
 
+const contractFallbackOverride = [
+  `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel}`,
+];
+
 describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
   beforeAll(async () => {
     await runWithModelFallback({
-      cfg: {} as OpenClawConfig,
+      cfg: undefined,
       provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: [],
       run: vi.fn().mockResolvedValue(createContractRunResult({ meta: { durationMs: 1 } })),
       skipAuthProfileRuntime: true,
     });
@@ -64,9 +67,10 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback({
-      cfg: createContractFallbackConfig() as unknown as OpenClawConfig,
+      cfg: undefined,
       provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: contractFallbackOverride,
       run,
       classifyResult: ({ provider, model, result }) =>
         classifyEmbeddedPiRunResultForModelFallback({
@@ -177,9 +181,10 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
     const contractCase = nonFallbackCases[0];
     const run = vi.fn().mockResolvedValue(contractCase.result);
     const result = await runWithModelFallback({
-      cfg: createContractFallbackConfig() as unknown as OpenClawConfig,
+      cfg: undefined,
       provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
       model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      fallbacksOverride: contractFallbackOverride,
       run,
       classifyResult: ({ provider, model, result }) =>
         classifyEmbeddedPiRunResultForModelFallback({

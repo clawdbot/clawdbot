@@ -27,12 +27,25 @@ if ! [[ "$retry_delay_seconds" =~ ^[0-9]+$ ]]; then
 fi
 
 last_status=1
-for attempt in $(seq 1 "$attempts"); do
-  echo "==> Pull Docker image attempt ${attempt}/${attempts}: ${image}"
-  if timeout --foreground --kill-after=30s "${timeout_seconds}s" docker pull "$image"; then
-    exit 0
+run_docker_pull() {
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout command not found; cannot bound Docker pull after ${timeout_seconds}s" >&2
+    return 127
   fi
-  last_status="$?"
+  if timeout --kill-after=1s 1s true >/dev/null 2>&1; then
+    timeout --kill-after=30s "${timeout_seconds}s" docker pull "$image"
+  else
+    timeout "${timeout_seconds}s" docker pull "$image"
+  fi
+}
+
+for ((attempt = 1; attempt <= attempts; attempt++)); do
+  echo "==> Pull Docker image attempt ${attempt}/${attempts}: ${image}"
+  if run_docker_pull; then
+    exit 0
+  else
+    last_status="$?"
+  fi
   echo "Docker pull failed or timed out after ${timeout_seconds}s: status=${last_status}" >&2
   if [[ "$attempt" -lt "$attempts" && "$retry_delay_seconds" -gt 0 ]]; then
     sleep "$retry_delay_seconds"

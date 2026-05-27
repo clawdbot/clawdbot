@@ -5,7 +5,7 @@ import {
   deliverWithFinalizableLivePreviewAdapter,
   markLiveMessageFinalized,
   type LiveMessageState,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
@@ -17,7 +17,7 @@ import {
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftLabel,
   resolveChannelStreamingPreviewToolProgress,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig, ReplyPayload } from "../runtime-api.js";
 import { formatUnknownError } from "./errors.js";

@@ -52,7 +52,7 @@ export function buildPluginSdkPackageExports() {
 }
 
 export function listPluginSdkDistArtifacts() {
-  return pluginSdkEntrypoints.flatMap((entry) => [
+  return publicPluginSdkEntrypoints.flatMap((entry) => [
     `dist/plugin-sdk/${entry}.js`,
     `dist/plugin-sdk/${entry}.d.ts`,
   ]);

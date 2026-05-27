@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
   mergeTelegramProofIntoReleaseBody,
+  parseArgs,
   parseWorkflowRunIdFromOutput,
   selectNewestDispatchedRunId,
 } from "../../scripts/release-beta-smoke.ts";
 
 describe("release-beta-smoke", () => {
+  it("rejects runs with both validation lanes skipped", () => {
+    expect(() => parseArgs(["--skip-parallels", "--skip-telegram"])).toThrow(
+      "--skip-parallels and --skip-telegram cannot be used together",
+    );
+  });
+
   it("parses workflow run urls when gh includes them in dispatch output", () => {
     expect(
       parseWorkflowRunIdFromOutput(

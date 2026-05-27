@@ -4,8 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../../test/helpers/temp-repo.js";
 
 // Delegate to the plugin-dir resolver for candidate-order policy; mock it here
-// so these tests focus on the loader's responsibility (parse package.jsons in
-// the returned dir, fall back to dist/channel-catalog.json when empty). The
+// so these tests focus on the loader's responsibility (merge
+// dist/channel-catalog.json entries with package.json metadata from the
+// returned dir). The
 // precedence policy (source vs dist-runtime vs dist, VITEST/tsx source-first,
 // isSourceCheckoutRoot detection, etc.) is exercised in
 // src/plugins/bundled-dir.test.ts and is intentionally not re-tested here.
@@ -123,8 +124,8 @@ describe("listBundledChannelCatalogEntries", () => {
     expect(telegram?.channel.label).toBe("Telegram");
   });
 
-  it("merges downloadable official catalog channels with bundled channels", () => {
-    const root = seedRoot("bcr-merge-official-");
+  it("merges the generated official catalog with bundled package metadata", () => {
+    const root = seedRoot("bcr-generated-official-");
     const extensionsRoot = path.join(root, "dist", "extensions");
     seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
       id: "telegram",
