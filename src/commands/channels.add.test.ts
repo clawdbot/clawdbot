@@ -880,6 +880,39 @@ describe("channelsAddCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed numeric channel setup options before plugin setup", async () => {
+    const applyAccountConfig = vi.fn(({ cfg, input }: ApplyAccountConfigParams) => ({
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        matrix: {
+          enabled: true,
+          initialSyncLimit: input.initialSyncLimit,
+        },
+      },
+    }));
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "matrix", label: "Matrix" }),
+      setup: { applyAccountConfig },
+    };
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", plugin, source: "test" }]));
+
+    await expect(
+      channelsAddCommand(
+        {
+          channel: "matrix",
+          initialSyncLimit: "10x",
+        },
+        runtime,
+        { hasFlags: true },
+      ),
+    ).rejects.toThrow("--initial-sync-limit must be a non-negative integer.");
+
+    expect(applyAccountConfig).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("falls back from untrusted workspace catalog shadows when adding by alias", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());

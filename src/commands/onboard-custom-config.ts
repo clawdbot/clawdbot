@@ -16,7 +16,7 @@ import { normalizeAlias } from "./models/alias-name.js";
 /**
  * Wizard default for non-Azure custom APIs when context length is unknown.
  * Mirrors the generic persisted custom-model catalog fallback and leaves enough
- * room above the default compaction reserve floor in `pi-settings.ts`.
+ * room above the default compaction reserve floor in `agent-settings.ts`.
  */
 export const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_CONTEXT_WINDOW = CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;

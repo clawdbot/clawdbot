@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { getModel, type Api, type Model } from "@earendil-works/pi-ai";
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
+import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
@@ -24,7 +24,7 @@ import plugin from "./index.js";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY ?? "";
 const LIVE_MODEL_ID = process.env.OPENCLAW_LIVE_OPENAI_PLUGIN_MODEL?.trim() || "gpt-5.5";
 const LIVE_IMAGE_MODEL = process.env.OPENCLAW_LIVE_OPENAI_IMAGE_MODEL?.trim() || "gpt-image-2";
-const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() || "gpt-4.1-mini";
+const LIVE_VISION_MODEL = process.env.OPENCLAW_LIVE_OPENAI_VISION_MODEL?.trim() || "gpt-5.4-mini";
 const liveEnabled = OPENAI_API_KEY.trim().length > 0 && process.env.OPENCLAW_LIVE_TEST === "1";
 const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
@@ -32,45 +32,21 @@ const ModelRegistryCtor = ModelRegistry as unknown as {
   new (authStorage: AuthStorage, modelsJsonPath?: string): ModelRegistry;
 };
 
-function findOpenAIModel(modelId: string): Model<Api> | null {
-  return (getModel("openai", modelId as never) as Model<Api> | undefined) ?? null;
-}
-
-function resolveTemplateModelId(modelId: string) {
-  switch (modelId) {
-    case "gpt-5.5":
-      return "gpt-5.4";
-    case "gpt-5.4":
-      return "gpt-5.2";
-    case "gpt-5.4-mini":
-      return "gpt-5-mini";
-    case "gpt-5.4-nano":
-      return "gpt-5-nano";
-    default:
-      throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
-  }
-}
-
 function createLiveModelRegistry(modelId: string): ModelRegistry {
   const registry = new ModelRegistryCtor(AuthStorage.inMemory());
-  const template = findOpenAIModel(modelId) ?? findOpenAIModel(resolveTemplateModelId(modelId));
-  if (!template) {
-    throw new Error(`Unsupported live OpenAI plugin model: ${modelId}`);
-  }
   registry.registerProvider("openai", {
     apiKey: "test",
-    baseUrl: template.baseUrl,
+    baseUrl: "https://api.openai.com/v1",
     models: [
       {
-        id: template.id,
-        name: template.name,
-        api: template.api,
-        reasoning: template.reasoning,
-        input: template.input,
-        cost: template.cost,
-        contextWindow: template.contextWindow,
-        maxTokens: template.maxTokens,
-        ...(template.compat ? { compat: template.compat } : {}),
+        id: modelId,
+        name: modelId,
+        api: "openai-responses",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400_000,
+        maxTokens: 128_000,
       },
     ],
   });
@@ -311,6 +287,8 @@ describeLive("openai plugin live", () => {
       fileName: "openai-plugin-live.mp3",
       mime: "audio/mpeg",
       apiKey: OPENAI_API_KEY,
+      language: "en",
+      prompt: "Speech transcription check okay.",
       timeoutMs: 30_000,
     });
 

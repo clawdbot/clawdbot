@@ -37,7 +37,11 @@ describe("embedding provider registry", () => {
     registerEmbeddingProvider(alpha);
     registerEmbeddingProvider(beta);
 
-    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["alpha", "beta"]);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "alpha",
+      "beta",
+    ]);
     expect(getEmbeddingProvider("alpha")).toBe(alpha);
   });
 
@@ -50,6 +54,10 @@ describe("embedding provider registry", () => {
 
     expect(getEmbeddingProvider("alpha")).toBeUndefined();
     expect(getEmbeddingProvider("beta")).toBe(beta);
+    expect(listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "beta",
+    ]);
   });
 
   it("preserves owner metadata in registered snapshots", () => {

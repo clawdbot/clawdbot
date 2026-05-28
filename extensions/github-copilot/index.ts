@@ -268,8 +268,7 @@ export default definePluginEntry({
       ctx: ProviderCatalogContext,
     ): Promise<ProviderCatalogResult> {
       const pluginConfig = resolveCurrentPluginConfig(ctx.config);
-      const discoveryEnabled =
-        pluginConfig.discovery?.enabled ?? ctx.config?.models?.copilotDiscovery?.enabled;
+      const discoveryEnabled = pluginConfig.discovery?.enabled;
       if (discoveryEnabled === false) {
         return null;
       }

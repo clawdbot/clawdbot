@@ -1,5 +1,7 @@
 {
   "id": "googlechat",
+  "name": "Google Chat",
+  "description": "OpenClaw Google Chat channel plugin for spaces and direct messages.",
   "activation": {
     "onStartup": false
   },

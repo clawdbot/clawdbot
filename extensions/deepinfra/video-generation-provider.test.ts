@@ -28,6 +28,17 @@ describe("deepinfra video generation provider", () => {
     expectExplicitVideoGenerationCapabilities(buildDeepInfraVideoGenerationProvider());
   });
 
+  it("uses the current DeepInfra text-to-video fallback model first", () => {
+    const provider = buildDeepInfraVideoGenerationProvider();
+
+    expect(provider.defaultModel).toBe("Pixverse/Pixverse-T2V");
+    expect(provider.models?.slice(0, 3)).toEqual([
+      "Pixverse/Pixverse-T2V",
+      "Pixverse/Pixverse-T2V-HD",
+      "Wan-AI/Wan2.6-T2V",
+    ]);
+  });
+
   it("creates native text-to-video requests and returns the hosted output URL", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({
@@ -164,6 +175,40 @@ describe("deepinfra video generation provider", () => {
       buffer: Buffer.from("webm-data"),
       mimeType: "video/webm",
       fileName: "video-1.webm",
+    });
+  });
+
+  it("accepts DeepInfra video array responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          videos: [{ url: "/generated/video-array.mp4" }],
+          request_id: "req_array",
+          status: "succeeded",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/google/veo-3.1-fast",
+      prompt: "A videos array response",
+      cfg: {},
+    });
+
+    expect(result.videos).toEqual([
+      {
+        url: "https://api.deepinfra.com/generated/video-array.mp4",
+        mimeType: "video/mp4",
+        fileName: "video-1.mp4",
+      },
+    ]);
+    expect(result.metadata).toEqual({
+      requestId: "req_array",
+      seed: undefined,
+      status: "succeeded",
     });
   });
 

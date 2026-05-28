@@ -37,9 +37,17 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "kimi": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
-    "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "kimi",
+        "envVars": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+      },
+      {
+        "id": "kimi-coding",
+        "envVars": ["KIMI_API_KEY", "KIMICODE_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

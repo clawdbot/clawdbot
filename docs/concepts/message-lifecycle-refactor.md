@@ -694,8 +694,8 @@ channel-owned dispatcher
   -> messages.send for final delivery
 ```
 
-The old `channel.turn` runtime surface remains a deprecated alias only. New code
-uses inbound/message nouns.
+The old `channel.turn` runtime surface was removed. Runtime callers use
+`channel.inbound.*`; channel docs and SDK subpaths use inbound/message nouns.
 
 ## Compatibility guardrails
 

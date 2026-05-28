@@ -457,18 +457,3 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
 };
-
-export type RunResolvedChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResult> = {
-  channel: string;
-  accountId?: string;
-  raw: TRaw;
-  input:
-    | NormalizedTurnInput
-    | ((raw: TRaw) => Promise<NormalizedTurnInput | null> | NormalizedTurnInput | null);
-  resolveTurn: (
-    input: NormalizedTurnInput,
-    eventClass: ChannelEventClass,
-    preflight: PreflightFacts,
-  ) => Promise<ChannelTurnResolved<TDispatchResult>> | ChannelTurnResolved<TDispatchResult>;
-  log?: (event: ChannelTurnLogEvent) => void;
-};

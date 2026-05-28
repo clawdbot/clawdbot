@@ -1,7 +1,34 @@
-import { describe, expect, it } from "vitest";
-import type { MSTeamsConfig } from "../runtime-api.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import { resolveMSTeamsProactiveReplyStyle } from "./send-context.js";
+import { resolveMSTeamsProactiveReplyStyle, resolveMSTeamsSendContext } from "./send-context.js";
+
+const sendContextMockState = vi.hoisted(() => {
+  const store = {
+    upsert: vi.fn(),
+    get: vi.fn(),
+    list: vi.fn(),
+    remove: vi.fn(),
+    findPreferredDmByUserId: vi.fn(),
+    findByUserId: vi.fn(),
+  };
+  return {
+    store,
+    logWarn: vi.fn(),
+  };
+});
+
+vi.mock("./conversation-store-fs.js", () => ({
+  createMSTeamsConversationStoreFs: () => sendContextMockState.store,
+}));
+
+vi.mock("./runtime.js", () => ({
+  getMSTeamsRuntime: () => ({
+    logging: {
+      getChildLogger: () => ({ warn: sendContextMockState.logWarn }),
+    },
+  }),
+}));
 
 function channelRef(params?: Partial<StoredConversationReference>): StoredConversationReference {
   return {
@@ -13,6 +40,49 @@ function channelRef(params?: Partial<StoredConversationReference>): StoredConver
     ...params,
   };
 }
+
+beforeEach(() => {
+  sendContextMockState.store.upsert.mockReset();
+  sendContextMockState.store.get.mockReset();
+  sendContextMockState.store.list.mockReset();
+  sendContextMockState.store.remove.mockReset();
+  sendContextMockState.store.findPreferredDmByUserId.mockReset();
+  sendContextMockState.store.findByUserId.mockReset();
+  sendContextMockState.logWarn.mockReset();
+});
+
+describe("resolveMSTeamsSendContext", () => {
+  it("removes stored conversation references with blocked serviceUrl hosts", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://attacker.example.com/teams/",
+      }),
+    );
+    sendContextMockState.store.remove.mockResolvedValue(true);
+
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "app-id",
+          appPassword: "app-password",
+          tenantId: "tenant-id",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).rejects.toThrow(
+      /Stored Microsoft Teams conversation reference has blocked serviceUrl host: attacker\.example\.com/,
+    );
+
+    expect(sendContextMockState.store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
+  });
+});
 
 describe("resolveMSTeamsProactiveReplyStyle", () => {
   it("uses thread for channel conversations with a stored thread root", () => {

@@ -253,6 +253,7 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
     source,
     dropped: rejected.length,
     reasons,
+    ...(reasons.invalid_type ? { validTypes: [...AUTH_PROFILE_TYPES] } : {}),
     keys: rejected.slice(0, 10).map((entry) => entry.key),
   });
 }

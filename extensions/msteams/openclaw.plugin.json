@@ -1,5 +1,7 @@
 {
   "id": "msteams",
+  "name": "Microsoft Teams",
+  "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "activation": {
     "onStartup": false
   },

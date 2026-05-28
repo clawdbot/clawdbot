@@ -150,11 +150,11 @@ describe("qa multipass runtime", () => {
     const plan = createQaMultipassPlan({
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-runtime-pair-test"),
-      runtimePair: ["pi", "codex"],
+      runtimePair: ["openclaw", "codex"],
       scenarioIds: ["channel-chat-baseline"],
     });
 
-    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--runtime-pair", "pi,codex"]));
+    expect(plan.qaCommand).toEqual(expect.arrayContaining(["--runtime-pair", "openclaw,codex"]));
   });
 
   it("redacts forwarded live secrets in the persisted artifact script", () => {

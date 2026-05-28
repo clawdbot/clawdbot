@@ -38,41 +38,89 @@ afterAll(() => {
   }
 });
 
-async function openDeviceTokenWs(): Promise<WebSocket> {
+async function openDeviceTokenWsWithDetails(
+  params: { issuerGeneration?: string; browserClient?: boolean } = {},
+): Promise<{
+  ws: WebSocket;
+  deviceId: string;
+  hello: Awaited<ReturnType<typeof connectOk>> & {
+    auth?: { deviceToken?: unknown };
+  };
+}> {
   const identityPath = path.join(os.tmpdir(), `openclaw-shared-auth-${process.pid}-${port}.json`);
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
-  const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
+  const { approveDevicePairing, ensureDeviceToken, requestDevicePairing, rotateDeviceToken } =
     await import("../infra/device-pairing.js");
+  const client = params.browserClient
+    ? {
+        id: "openclaw-control-ui",
+        version: "1.0.0",
+        platform: "test",
+        mode: "webchat",
+      }
+    : {
+        id: "test",
+        version: "1.0.0",
+        platform: "test",
+        mode: "test",
+      };
 
   const identity = loadOrCreateDeviceIdentity(identityPath);
   const pending = await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    clientId: "test",
-    clientMode: "test",
+    clientId: client.id,
+    clientMode: client.mode,
     role: "operator",
     scopes: ["operator.admin"],
   });
   await approveDevicePairing(pending.request.requestId, {
     callerScopes: ["operator.admin"],
   });
-  const rotated = await rotateDeviceToken({
-    deviceId: identity.deviceId,
-    role: "operator",
-    scopes: ["operator.admin"],
-  });
-  expect(rotated.ok).toBe(true);
+  let issuedDeviceToken = "";
+  if (params.issuerGeneration) {
+    const deviceToken = await ensureDeviceToken({
+      deviceId: identity.deviceId,
+      role: "operator",
+      scopes: ["operator.admin"],
+      issuer: {
+        kind: "shared-gateway-auth",
+        generation: params.issuerGeneration,
+      },
+    });
+    expect(deviceToken?.token).toBeTypeOf("string");
+    issuedDeviceToken = deviceToken?.token ?? "";
+  } else {
+    const rotated = await rotateDeviceToken({
+      deviceId: identity.deviceId,
+      role: "operator",
+      scopes: ["operator.admin"],
+    });
+    expect(rotated.ok).toBe(true);
+    issuedDeviceToken = rotated.ok ? rotated.entry.token : "";
+  }
 
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}`,
+    params.browserClient ? { headers: { origin: `http://127.0.0.1:${port}` } } : undefined,
+  );
   trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => ws.once("open", resolve));
-  await connectOk(ws, {
+  const hello = (await connectOk(ws, {
     skipDefaultAuth: true,
+    client,
     deviceIdentityPath: identityPath,
-    deviceToken: rotated.ok ? rotated.entry.token : "",
+    deviceToken: issuedDeviceToken,
     scopes: ["operator.admin"],
-  });
+  })) as Awaited<ReturnType<typeof connectOk>> & {
+    auth?: { deviceToken?: unknown };
+  };
+  return { ws, deviceId: identity.deviceId, hello };
+}
+
+async function openDeviceTokenWs(params: { issuerGeneration?: string } = {}): Promise<WebSocket> {
+  const { ws } = await openDeviceTokenWsWithDetails(params);
   return ws;
 }
 
@@ -161,6 +209,128 @@ describe("gateway shared auth rotation", () => {
       const followUp = await rpcReq<{ hash?: string }>(ws, "config.get", {});
       expect(followUp.ok).toBe(true);
       expect(typeof followUp.payload?.hash).toBe("string");
+    } finally {
+      await closeWsAndWait(ws);
+    }
+  });
+
+  it("disconnects issuer-tagged device-token websocket sessions after shared token rotation", async () => {
+    const { resolveSharedGatewaySessionGeneration } =
+      await import("./server/ws-shared-generation.js");
+    const issuerGeneration = resolveSharedGatewaySessionGeneration({
+      mode: "token",
+      token: OLD_TOKEN,
+      allowTailscale: false,
+    });
+    expect(issuerGeneration).toBeTypeOf("string");
+    if (!issuerGeneration) {
+      throw new Error("expected shared gateway generation");
+    }
+    const ws = await openDeviceTokenWs({
+      issuerGeneration,
+    });
+    try {
+      const closed = waitForGatewayWsClose(ws);
+      const res = await sendSharedTokenRotationPatch(ws);
+
+      expect(res.ok).toBe(true);
+      await expect(closed).resolves.toEqual({
+        code: 4001,
+        reason: "gateway auth changed",
+      });
+    } finally {
+      await closeWsAndWait(ws);
+    }
+  });
+
+  it("preserves issuer-tagged browser device tokens on reconnect", async () => {
+    const { getPairedDevice, verifyDeviceToken } = await import("../infra/device-pairing.js");
+    const { resolveSharedGatewaySessionGeneration } =
+      await import("./server/ws-shared-generation.js");
+    const issuerGeneration = resolveSharedGatewaySessionGeneration({
+      mode: "token",
+      token: OLD_TOKEN,
+      allowTailscale: false,
+    });
+    expect(issuerGeneration).toBeTypeOf("string");
+    if (!issuerGeneration) {
+      throw new Error("expected shared gateway generation");
+    }
+    const { ws, deviceId, hello } = await openDeviceTokenWsWithDetails({
+      issuerGeneration,
+      browserClient: true,
+    });
+    try {
+      const helloDeviceToken = hello.auth?.deviceToken;
+      if (typeof helloDeviceToken !== "string") {
+        throw new Error("expected hello device token");
+      }
+      const paired = await getPairedDevice(deviceId);
+      expect(paired?.tokens?.operator?.issuer).toEqual({
+        kind: "shared-gateway-auth",
+        generation: issuerGeneration,
+      });
+      await expect(
+        verifyDeviceToken({
+          deviceId,
+          token: helloDeviceToken,
+          role: "operator",
+          scopes: ["operator.admin"],
+          requiredSharedGatewaySessionGeneration: issuerGeneration,
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        issuer: {
+          kind: "shared-gateway-auth",
+          generation: issuerGeneration,
+        },
+      });
+    } finally {
+      await closeWsAndWait(ws);
+    }
+  });
+
+  it("keeps issuer metadata when tagged device tokens reconnect through non-browser clients", async () => {
+    const { getPairedDevice, verifyDeviceToken } = await import("../infra/device-pairing.js");
+    const { resolveSharedGatewaySessionGeneration } =
+      await import("./server/ws-shared-generation.js");
+    const issuerGeneration = resolveSharedGatewaySessionGeneration({
+      mode: "token",
+      token: OLD_TOKEN,
+      allowTailscale: false,
+    });
+    expect(issuerGeneration).toBeTypeOf("string");
+    if (!issuerGeneration) {
+      throw new Error("expected shared gateway generation");
+    }
+    const { ws, deviceId, hello } = await openDeviceTokenWsWithDetails({
+      issuerGeneration,
+    });
+    try {
+      const helloDeviceToken = hello.auth?.deviceToken;
+      if (typeof helloDeviceToken !== "string") {
+        throw new Error("expected hello device token");
+      }
+      const paired = await getPairedDevice(deviceId);
+      expect(paired?.tokens?.operator?.issuer).toEqual({
+        kind: "shared-gateway-auth",
+        generation: issuerGeneration,
+      });
+      await expect(
+        verifyDeviceToken({
+          deviceId,
+          token: helloDeviceToken,
+          role: "operator",
+          scopes: ["operator.admin"],
+          requiredSharedGatewaySessionGeneration: issuerGeneration,
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        issuer: {
+          kind: "shared-gateway-auth",
+          generation: issuerGeneration,
+        },
+      });
     } finally {
       await closeWsAndWait(ws);
     }

@@ -183,81 +183,12 @@ local proof.
   </Step>
 </Steps>
 
-## Plugin capabilities
+<a id="registering-agent-tools"></a>
 
-A single plugin can register any number of capabilities via the `api` object:
+## Registering tools
 
-| Capability             | Registration method                              | Detailed guide                                                                  |
-| ---------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
-| Text inference (LLM)   | `api.registerProvider(...)`                      | [Provider Plugins](/plugins/sdk-provider-plugins)                               |
-| CLI inference backend  | `api.registerCliBackend(...)`                    | [CLI Backend Plugins](/plugins/cli-backend-plugins)                             |
-| Channel / messaging    | `api.registerChannel(...)`                       | [Channel Plugins](/plugins/sdk-channel-plugins)                                 |
-| Speech (TTS/STT)       | `api.registerSpeechProvider(...)`                | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Image generation       | `api.registerImageGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Music generation       | `api.registerMusicGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Video generation       | `api.registerVideoGenerationProvider(...)`       | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Web fetch              | `api.registerWebFetchProvider(...)`              | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Web search             | `api.registerWebSearchProvider(...)`             | [Provider Plugins](/plugins/sdk-provider-plugins#step-5-add-extra-capabilities) |
-| Tool-result middleware | `api.registerAgentToolResultMiddleware(...)`     | [SDK Overview](/plugins/sdk-overview#registration-api)                          |
-| Agent tools            | `api.registerTool(...)`                          | Below                                                                           |
-| Custom commands        | `api.registerCommand(...)`                       | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| Plugin hooks           | `api.on(...)`                                    | [Plugin hooks](/plugins/hooks)                                                  |
-| Internal event hooks   | `api.registerHook(...)`                          | [Entry Points](/plugins/sdk-entrypoints)                                        |
-| HTTP routes            | `api.registerHttpRoute(...)`                     | [Internals](/plugins/architecture-internals#gateway-http-routes)                |
-| CLI subcommands        | `api.registerCli(...)`                           | [Entry Points](/plugins/sdk-entrypoints)                                        |
-
-For the full registration API, see [SDK Overview](/plugins/sdk-overview#registration-api).
-
-Bundled plugins can use `api.registerAgentToolResultMiddleware(...)` when they
-need async tool-result rewriting before the model sees the output. Declare the
-targeted runtimes in `contracts.agentToolResultMiddleware`, for example
-`["pi", "codex"]`. This is a trusted bundled-plugin seam; external
-plugins should prefer regular OpenClaw plugin hooks unless OpenClaw grows an
-explicit trust policy for this capability.
-
-If your plugin registers custom gateway RPC methods, keep them on a
-plugin-specific prefix. Core admin namespaces (`config.*`,
-`exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
-`operator.admin`, even if a plugin asks for a narrower scope.
-
-`openclaw/plugin-sdk/gateway-method-runtime` is a reserved control-plane bridge
-for plugin HTTP routes that declare
-`contracts.gatewayMethodDispatch: ["authenticated-request"]`. It is an
-intentional-use guard for reviewed native plugins, not a sandbox boundary.
-
-Hook guard semantics to keep in mind:
-
-- `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.
-- `before_tool_call`: `{ block: false }` is treated as no decision.
-- `before_tool_call`: `{ requireApproval: { ... } }` pauses agent execution and prompts the user for approval via the exec approval overlay, native channel approval clients, or the `/approve` command on any channel.
-- `before_install`: `{ block: true }` is terminal and stops lower-priority handlers.
-- `before_install`: `{ block: false }` is treated as no decision.
-- `message_sending`: `{ cancel: true }` is terminal and stops lower-priority handlers.
-- `message_sending`: `{ cancel: false }` is treated as no decision.
-- `message_received`: prefer the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
-- `message_sending`: prefer typed `replyToId` / `threadId` routing fields over channel-specific metadata keys.
-
-The `/approve` command handles both exec and plugin approvals with bounded fallback: when an exec approval id is not found, OpenClaw retries the same id through plugin approvals. Plugin approval forwarding can be configured independently via `approvals.plugin` in config.
-
-If custom approval plumbing needs to detect that same bounded fallback case,
-prefer `isApprovalNotFoundError` from `openclaw/plugin-sdk/error-runtime`
-instead of matching approval-expiry strings manually.
-
-See [Plugin hooks](/plugins/hooks) for examples and the hook reference.
-
-## Registering agent tools
-
-Tools are typed functions the LLM can call. They can be required (always
-available) or optional (user opt-in):
-
-For simple plugins that only own a fixed set of tools, prefer
-[`defineToolPlugin`](/plugins/tool-plugins). It generates manifest metadata and
-keeps `contracts.tools` aligned. Use the lower-level `api.registerTool(...)`
-surface when the plugin also owns channels, providers, hooks, services,
-commands, or fully dynamic tool registration.
+Tools can be required or optional. Required tools are always available when the
+plugin is enabled. Optional tools require user opt-in.
 
 ```typescript
 register(api) {

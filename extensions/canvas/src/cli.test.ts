@@ -130,4 +130,44 @@ describe("canvas CLI", () => {
     expect(deps.callGatewayCli).not.toHaveBeenCalled();
     expect(writtenFiles).toHaveLength(0);
   });
+
+  it.each([
+    ["--max-width", "640px", "--max-width must be a positive integer."],
+    ["--quality", "0.8x", "--quality must be a number."],
+  ])("rejects partial numeric snapshot %s values", async (flag, value, message) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node", flag, value], {
+        from: "user",
+      }),
+    ).rejects.toThrow(message);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["--x", "1x"],
+    ["--y", "2px"],
+    ["--width", "800wide"],
+    ["--height", "600tall"],
+  ])("rejects partial numeric present %s values", async (flag, value) => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps } = createCanvasCliDeps();
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "present", "--node", "ios-node", flag, value], {
+        from: "user",
+      }),
+    ).rejects.toThrow(`${flag} must be a number.`);
+    expect(deps.callGatewayCli).not.toHaveBeenCalled();
+  });
 });

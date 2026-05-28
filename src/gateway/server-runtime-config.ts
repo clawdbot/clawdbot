@@ -5,6 +5,10 @@ import type {
 } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
+import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
   resolveGatewayAuth,
@@ -133,6 +137,9 @@ export async function resolveGatewayRuntimeConfig(params: {
     throw new Error(
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
+  }
+  if (isUnsafeGatewayTailscaleNoAuth({ authMode, tailscaleMode })) {
+    throw new Error(formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode));
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
     throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");

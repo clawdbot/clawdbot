@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import type { SandboxContext } from "../sandbox.js";
 import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+import { createAgentToolsSandboxContext } from "./agent-tools-sandbox-context.js";
 import { createSandboxFsBridgeFromResolver } from "./host-sandbox-fs-bridge.js";
-import { createPiToolsSandboxContext } from "./pi-tools-sandbox-context.js";
 
 function createUnsafeMountedBridge(params: {
   root: string;
@@ -57,7 +57,7 @@ export function createUnsafeMountedSandbox(params: {
     agentHostRoot: params.agentRoot,
     workspaceContainerRoot: params.workspaceContainerRoot,
   });
-  return createPiToolsSandboxContext({
+  return createAgentToolsSandboxContext({
     workspaceDir: params.sandboxRoot,
     agentWorkspaceDir: params.agentRoot,
     workspaceAccess: params.workspaceAccess ?? "rw",

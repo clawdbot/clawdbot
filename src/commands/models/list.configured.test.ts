@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "models-list-configured-test-empty-plugin-metadata",
@@ -16,6 +17,10 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
 }));
 
 import { resolveConfiguredEntries } from "./list.configured.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("resolveConfiguredEntries", () => {
   it("parses configured models without loading provider-runtime normalization", () => {
@@ -73,7 +78,6 @@ describe("resolveConfiguredEntries", () => {
     expect(entries[0]?.aliases).toEqual(["Kilo Gemini"]);
     expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
   });
-
   it("treats provider wildcard defaults as selectors, not configured model rows", () => {
     const { entries } = resolveConfiguredEntries({
       agents: {
@@ -90,6 +94,26 @@ describe("resolveConfiguredEntries", () => {
 
     expect(entries.map((entry) => entry.key)).toEqual(["openai/gpt-5.5"]);
     expect(entries[0]?.aliases).toEqual(["Primary"]);
+    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+  });
+
+  it("canonicalizes manifest-owned provider aliases in configured rows", () => {
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+
+    const { entries } = resolveConfiguredEntries({
+      agents: {
+        defaults: {
+          model: { primary: "z.ai/glm-4.7" },
+          models: {
+            "z.ai/glm-4.7": { alias: "GLM" },
+          },
+        },
+      },
+      models: { providers: {} },
+    });
+
+    expect(entries.map((entry) => entry.key)).toEqual(["zai/glm-4.7"]);
+    expect(entries[0]?.aliases).toEqual(["GLM"]);
     expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
   });
 });

@@ -138,8 +138,13 @@
       "mistral": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "mistral": ["MISTRAL_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "mistral",
+        "envVars": ["MISTRAL_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -16,6 +16,7 @@ import {
   DEFAULT_GMAIL_SUBSCRIPTION,
   DEFAULT_GMAIL_TOPIC,
 } from "../hooks/gmail.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -141,11 +142,11 @@ function parseGmailCommonOptions(raw: Record<string, unknown>) {
     hookToken: normalizeOptionalString(raw.hookToken),
     pushToken: normalizeOptionalString(raw.pushToken),
     bind: normalizeOptionalString(raw.bind),
-    port: numberOption(raw.port),
+    port: numberOption(raw.port, "--port"),
     path: normalizeOptionalString(raw.path),
     includeBody: booleanOption(raw.includeBody),
-    maxBytes: numberOption(raw.maxBytes),
-    renewEveryMinutes: numberOption(raw.renewMinutes),
+    maxBytes: numberOption(raw.maxBytes, "--max-bytes"),
+    renewEveryMinutes: numberOption(raw.renewMinutes, "--renew-minutes"),
     tailscaleRaw: normalizeOptionalString(raw.tailscale),
     tailscalePath: normalizeOptionalString(raw.tailscalePath),
     tailscaleTarget: normalizeOptionalString(raw.tailscaleTarget),
@@ -174,15 +175,15 @@ function gmailOptionsFromCommon(
   };
 }
 
-function numberOption(value: unknown): number | undefined {
+function numberOption(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n) || n <= 0) {
-    return undefined;
+  const n = parseStrictPositiveInteger(value);
+  if (n === undefined) {
+    throw new Error(`${label} must be a positive integer.`);
   }
-  return Math.floor(n);
+  return n;
 }
 
 function booleanOption(value: unknown): boolean | undefined {

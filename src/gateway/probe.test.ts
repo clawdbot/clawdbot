@@ -20,6 +20,10 @@ const gatewayClientState = vi.hoisted(() => ({
     reason: "scope-upgrade",
     requestId: "req-123",
   } as Record<string, unknown> | null,
+  stopCalls: 0,
+  stopAndWaitCalls: [] as Array<{ timeoutMs?: number } | undefined>,
+  stopAndWaitMode: "resolve" as "resolve" | "defer" | "reject",
+  resolveStopAndWait: null as (() => void) | null,
 }));
 
 const deviceIdentityState = vi.hoisted(() => ({
@@ -114,7 +118,21 @@ class MockGatewayClient {
       .catch(() => {});
   }
 
-  stop(): void {}
+  stop(): void {
+    gatewayClientState.stopCalls += 1;
+  }
+
+  async stopAndWait(opts?: { timeoutMs?: number }): Promise<void> {
+    gatewayClientState.stopAndWaitCalls.push(opts);
+    if (gatewayClientState.stopAndWaitMode === "reject") {
+      throw new Error("close drain failed");
+    }
+    if (gatewayClientState.stopAndWaitMode === "defer") {
+      await new Promise<void>((resolve) => {
+        gatewayClientState.resolveStopAndWait = resolve;
+      });
+    }
+  }
 
   async request(method: string): Promise<unknown> {
     gatewayClientState.requests.push(method);
@@ -231,6 +249,10 @@ describe("probeGateway", () => {
       reason: "scope-upgrade",
       requestId: "req-123",
     };
+    gatewayClientState.stopCalls = 0;
+    gatewayClientState.stopAndWaitCalls = [];
+    gatewayClientState.stopAndWaitMode = "resolve";
+    gatewayClientState.resolveStopAndWait = null;
     eventLoopReadyState.calls = [];
     eventLoopReadyState.result = {
       ready: true,
@@ -473,6 +495,50 @@ describe("probeGateway", () => {
     });
     expectProbeAuthFields(result, { capability: "pairing_pending" });
     expect(gatewayClientState.requests).toStrictEqual([]);
+  });
+
+  it("waits for gateway client close drain before resolving", async () => {
+    gatewayClientState.stopAndWaitMode = "defer";
+
+    const probePromise = probeGateway({
+      url: nextProbeUrl("close-drain"),
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      includeDetails: false,
+    });
+    let resolved = false;
+    void probePromise.then(() => {
+      resolved = true;
+    });
+
+    await vi.waitFor(() => {
+      expect(gatewayClientState.stopAndWaitCalls).toHaveLength(1);
+    });
+    expect(gatewayClientState.stopAndWaitCalls[0]).toEqual({ timeoutMs: 1_000 });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    gatewayClientState.resolveStopAndWait?.();
+    const result = await probePromise;
+
+    expect(result.ok).toBe(true);
+    expect(resolved).toBe(true);
+    expect(gatewayClientState.stopCalls).toBe(0);
+  });
+
+  it("falls back to stop when close drain fails", async () => {
+    gatewayClientState.stopAndWaitMode = "reject";
+
+    const result = await probeGateway({
+      url: nextProbeUrl("close-drain-fallback"),
+      auth: { token: "secret" },
+      timeoutMs: 1_000,
+      includeDetails: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(gatewayClientState.stopAndWaitCalls).toHaveLength(1);
+    expect(gatewayClientState.stopCalls).toBe(1);
   });
 
   it("reports write-capable auth when hello-ok scopes include operator.write", async () => {

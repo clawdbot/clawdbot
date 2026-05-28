@@ -1383,12 +1383,12 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
+  it("falls back provider catalog source from .ts to emitted .js files", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "anthropic-vertex",
       providers: ["anthropic-vertex"],
-      providerDiscoveryEntry: "./provider-discovery.ts",
+      providerCatalogEntry: "./provider-discovery.ts",
       configSchema: { type: "object" },
     });
     fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
@@ -1404,30 +1404,7 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
-  it("prefers providerCatalogEntry over legacy providerDiscoveryEntry", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
-      id: "catalog-provider",
-      providers: ["catalog-provider"],
-      providerCatalogEntry: "./provider-catalog.ts",
-      providerDiscoveryEntry: "./provider-discovery.ts",
-      configSchema: { type: "object" },
-    });
-    fs.writeFileSync(path.join(dir, "provider-catalog.js"), "export default {};\n", "utf8");
-    fs.writeFileSync(path.join(dir, "provider-discovery.js"), "export default {};\n", "utf8");
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "catalog-provider",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.providerDiscoverySource).toBe(
-      path.join(dir, "provider-catalog.js"),
-    );
-  });
-
-  it("ignores legacy provider discovery entries outside the plugin root", () => {
+  it("ignores provider catalog entries outside the plugin root", () => {
     const root = makeTempDir();
     const pluginDir = path.join(root, "plugin");
     const outsideDir = path.join(root, "outside");
@@ -1436,7 +1413,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(pluginDir, {
       id: "outside-provider",
       providers: ["outside-provider"],
-      providerDiscoveryEntry: "../outside/provider-discovery.js",
+      providerCatalogEntry: "../outside/provider-discovery.js",
       configSchema: { type: "object" },
     });
     fs.writeFileSync(
@@ -1456,11 +1433,11 @@ describe("loadPluginManifestRegistry", () => {
       level: "warn",
       pluginId: "outside-provider",
       source: path.join(pluginDir, "openclaw.plugin.json"),
-      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
     });
   });
 
-  it("ignores absolute provider discovery entries", () => {
+  it("ignores absolute provider catalog entries", () => {
     const dir = makeTempDir();
     const outsideDir = makeTempDir();
     const outsideEntry = path.join(outsideDir, "provider-discovery.js");
@@ -1468,7 +1445,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "absolute-provider",
       providers: ["absolute-provider"],
-      providerDiscoveryEntry: outsideEntry,
+      providerCatalogEntry: outsideEntry,
       configSchema: { type: "object" },
     });
 
@@ -1483,7 +1460,7 @@ describe("loadPluginManifestRegistry", () => {
       level: "warn",
       pluginId: "absolute-provider",
       source: path.join(dir, "openclaw.plugin.json"),
-      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
     });
   });
 
@@ -1514,7 +1491,7 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
-  it("ignores provider discovery entries that resolve through a symlink outside the plugin root", () => {
+  it("ignores provider catalog entries that resolve through a symlink outside the plugin root", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1531,7 +1508,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "symlink-provider",
       providers: ["symlink-provider"],
-      providerDiscoveryEntry: "./provider-discovery.js",
+      providerCatalogEntry: "./provider-discovery.js",
       configSchema: { type: "object" },
     });
 
@@ -1546,11 +1523,11 @@ describe("loadPluginManifestRegistry", () => {
       level: "warn",
       pluginId: "symlink-provider",
       source: path.join(dir, "openclaw.plugin.json"),
-      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
     });
   });
 
-  it("ignores provider discovery .js fallbacks that resolve outside the plugin root", () => {
+  it("ignores provider catalog .js fallbacks that resolve outside the plugin root", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1567,7 +1544,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "fallback-symlink-provider",
       providers: ["fallback-symlink-provider"],
-      providerDiscoveryEntry: "./provider-discovery.ts",
+      providerCatalogEntry: "./provider-discovery.ts",
       configSchema: { type: "object" },
     });
 
@@ -1582,11 +1559,11 @@ describe("loadPluginManifestRegistry", () => {
       level: "warn",
       pluginId: "fallback-symlink-provider",
       source: path.join(dir, "openclaw.plugin.json"),
-      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
     });
   });
 
-  it("ignores non-bundled provider discovery entries that are hardlinked", () => {
+  it("ignores non-bundled provider catalog entries that are hardlinked", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1606,7 +1583,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "hardlink-provider",
       providers: ["hardlink-provider"],
-      providerDiscoveryEntry: "./provider-discovery.js",
+      providerCatalogEntry: "./provider-discovery.js",
       configSchema: { type: "object" },
     });
 
@@ -1621,11 +1598,11 @@ describe("loadPluginManifestRegistry", () => {
       level: "warn",
       pluginId: "hardlink-provider",
       source: path.join(dir, "openclaw.plugin.json"),
-      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
     });
   });
 
-  it("ignores non-bundled provider discovery .js fallbacks that are hardlinked", () => {
+  it("ignores non-bundled provider catalog .js fallbacks that are hardlinked", () => {
     if (process.platform === "win32") {
       return;
     }
@@ -1645,7 +1622,7 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(dir, {
       id: "fallback-hardlink-provider",
       providers: ["fallback-hardlink-provider"],
-      providerDiscoveryEntry: "./provider-discovery.ts",
+      providerCatalogEntry: "./provider-discovery.ts",
       configSchema: { type: "object" },
     });
 
@@ -1660,7 +1637,7 @@ describe("loadPluginManifestRegistry", () => {
       level: "warn",
       pluginId: "fallback-hardlink-provider",
       source: path.join(dir, "openclaw.plugin.json"),
-      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
     });
   });
 

@@ -20,16 +20,13 @@ export function installModelsConfigTestHooks(opts?: {
 }) {
   let previousHome: string | undefined;
   let previousOpenClawAgentDir: string | undefined;
-  let previousPiCodingAgentDir: string | undefined;
   const originalFetch = globalThis.fetch;
   const shouldResetPluginLoaderState = opts?.resetPluginLoaderState !== false;
 
   beforeEach(() => {
     previousHome = process.env.HOME;
     previousOpenClawAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    previousPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
     delete process.env.OPENCLAW_AGENT_DIR;
-    delete process.env.PI_CODING_AGENT_DIR;
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     if (shouldResetPluginLoaderState) {
@@ -44,11 +41,6 @@ export function installModelsConfigTestHooks(opts?: {
       delete process.env.OPENCLAW_AGENT_DIR;
     } else {
       process.env.OPENCLAW_AGENT_DIR = previousOpenClawAgentDir;
-    }
-    if (previousPiCodingAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiCodingAgentDir;
     }
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -108,7 +100,7 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "OPENCLAW_AGENT_DIR",
   "OPENAI_API_KEY",
   "OPENROUTER_API_KEY",
-  "PI_CODING_AGENT_DIR",
+  "OPENCLAW_AGENT_DIR",
   "QIANFAN_API_KEY",
   "QWEN_API_KEY",
   "MODELSTUDIO_API_KEY",

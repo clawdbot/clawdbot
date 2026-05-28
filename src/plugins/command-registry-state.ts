@@ -1,5 +1,6 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import type {
   AgentPromptGuidance,
   AgentPromptSurfaceKind,
@@ -71,7 +72,7 @@ export function listRegisteredPluginAgentPromptGuidance(params?: {
   for (const command of pluginCommands.values()) {
     for (const entry of command.agentPromptGuidance ?? []) {
       const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
-        surface: params?.surface,
+        surface: params?.surface ? normalizeAgentPromptSurfaceKind(params.surface) : undefined,
         includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
       });
       if (!trimmed || seen.has(trimmed)) {

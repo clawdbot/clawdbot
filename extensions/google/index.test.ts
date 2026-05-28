@@ -1,4 +1,4 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,

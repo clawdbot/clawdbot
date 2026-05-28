@@ -1,4 +1,3 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
@@ -18,12 +17,13 @@ import {
   resolveProviderTextTransforms,
   transformProviderSystemPrompt,
 } from "../../plugins/provider-runtime.js";
-import { resolvePreparedExtraParams } from "../pi-embedded-runner/extra-params.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "../pi-embedded-runner/result-fallback-classifier.js";
+import { resolvePreparedExtraParams } from "../embedded-agent-runner/extra-params.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
-} from "../pi-embedded-runner/tool-schema-runtime.js";
+} from "../embedded-agent-runner/tool-schema-runtime.js";
+import type { AgentTool } from "../runtime/index.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
 import type {
@@ -62,12 +62,18 @@ function isProviderRuntimePluginHandle(
 
 function resolveProviderRuntimeHandleForPlugins(params: {
   provider: string;
+  modelId?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   runtimeHandle?: BuildAgentRuntimePlanParams["providerRuntimeHandle"];
   resolveWhenMissing?: boolean;
 }): ProviderRuntimePluginHandle | undefined {
-  if (isProviderRuntimePluginHandle(params.runtimeHandle)) {
+  if (
+    isProviderRuntimePluginHandle(params.runtimeHandle) &&
+    (params.runtimeHandle.plugin ||
+      !params.modelId ||
+      params.runtimeHandle.modelId === params.modelId)
+  ) {
     return params.runtimeHandle;
   }
   if (!params.runtimeHandle && !params.resolveWhenMissing) {
@@ -75,11 +81,11 @@ function resolveProviderRuntimeHandleForPlugins(params: {
   }
   return resolveProviderRuntimePluginHandle({
     provider: params.runtimeHandle?.provider ?? params.provider,
+    modelId: params.modelId,
     config: asOpenClawConfig(params.runtimeHandle?.config) ?? params.config,
     workspaceDir: params.runtimeHandle?.workspaceDir ?? params.workspaceDir,
     env: params.runtimeHandle?.env ?? process.env,
     applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-    bundledProviderAllowlistCompat: params.runtimeHandle?.bundledProviderAllowlistCompat,
     bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
   });
 }
@@ -90,6 +96,7 @@ export function buildAgentRuntimeDeliveryPlan(
   const config = asOpenClawConfig(params.config);
   const providerRuntimeHandle = resolveProviderRuntimeHandleForPlugins({
     provider: params.provider,
+    modelId: params.modelId,
     config,
     workspaceDir: params.workspaceDir,
     runtimeHandle: params.providerRuntimeHandle,
@@ -126,7 +133,7 @@ export function buildAgentRuntimeDeliveryPlan(
 
 export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   return {
-    classifyRunResult: classifyEmbeddedPiRunResultForModelFallback,
+    classifyRunResult: classifyEmbeddedAgentRunResultForModelFallback,
   };
 }
 
@@ -147,6 +154,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   };
   const providerRuntimeHandleForPlugins = resolveProviderRuntimeHandleForPlugins({
     provider: params.provider,
+    modelId: params.modelId,
     config,
     workspaceDir: params.workspaceDir,
     runtimeHandle: params.providerRuntimeHandle,

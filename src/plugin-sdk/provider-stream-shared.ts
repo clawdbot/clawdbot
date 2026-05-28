@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream, streamSimple } from "@earendil-works/pi-ai";
-import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
+import type { StreamFn } from "../agents/runtime/index.js";
+import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
+import { streamSimple } from "../llm/stream.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 import { parseStandalonePlainTextToolCallBlocks } from "./tool-payload.js";
@@ -40,37 +41,24 @@ function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> 
   return new Set(names);
 }
 
-function couldStillBePlainTextToolCall(text: string, toolNames: Set<string>): boolean {
-  if (text.length > 256_000) {
-    return false;
-  }
-  const trimmed = text.trimStart();
-  return (
-    trimmed.length === 0 ||
-    couldStillBeBracketedToolCall(trimmed, toolNames) ||
-    couldStillBeHarmonyToolCall(trimmed, toolNames)
-  );
-}
-
 function matchesLiteralPrefix(text: string, literal: string): boolean {
   return literal.startsWith(text) || text.startsWith(literal);
 }
 
 function skipHorizontalWhitespace(text: string, start: number): number {
   let cursor = start;
-  while (text[cursor] === " " || text[cursor] === "\t") {
+  while (cursor < text.length && /[ \t]/.test(text[cursor] ?? "")) {
     cursor += 1;
   }
   return cursor;
 }
 
-function isToolNameChar(char: string | undefined): boolean {
-  return Boolean(char && /[A-Za-z0-9_-]/.test(char));
-}
-
-function hasToolNamePrefix(toolNames: Set<string>, prefix: string): boolean {
+function matchesAnyToolNamePrefix(text: string, toolNames: Set<string>): boolean {
+  if (!text) {
+    return true;
+  }
   for (const toolName of toolNames) {
-    if (toolName.startsWith(prefix)) {
+    if (toolName.startsWith(text) || text.startsWith(toolName)) {
       return true;
     }
   }
@@ -95,12 +83,13 @@ function couldStillBeBracketedToolCall(text: string, toolNames: Set<string>): bo
     if (text.length <= toolPrefix.length) {
       return true;
     }
-    let cursor = toolPrefix.length;
-    while (isToolNameChar(text[cursor])) {
+    const nameStart = toolPrefix.length;
+    let cursor = nameStart;
+    while (cursor < text.length && text[cursor] !== "]") {
       cursor += 1;
     }
-    const name = text.slice(toolPrefix.length, cursor);
-    if (!name || !hasToolNamePrefix(toolNames, name)) {
+    const name = text.slice(nameStart, cursor).trim();
+    if (!matchesAnyToolNamePrefix(name, toolNames)) {
       return false;
     }
     if (cursor >= text.length) {
@@ -113,28 +102,17 @@ function couldStillBeBracketedToolCall(text: string, toolNames: Set<string>): bo
   }
 
   let cursor = 1;
-  while (isToolNameChar(text[cursor])) {
+  while (cursor < text.length && text[cursor] !== "\n" && text[cursor] !== "]") {
     cursor += 1;
   }
-  const name = text.slice(1, cursor);
-  if (!name || !hasToolNamePrefix(toolNames, name)) {
+  const firstLine = text.slice(1, cursor);
+  if (!matchesAnyToolNamePrefix(firstLine.trim(), toolNames)) {
     return false;
   }
   if (cursor >= text.length) {
     return true;
   }
-  if (text[cursor] !== "]") {
-    return false;
-  }
-
-  cursor = skipHorizontalWhitespace(text, cursor + 1);
-  if (cursor >= text.length) {
-    return true;
-  }
-  if (text[cursor] === "\r") {
-    if (cursor + 1 >= text.length) {
-      return true;
-    }
+  if (text[cursor] === "]") {
     return couldStillBeJsonPayload(text, text[cursor + 1] === "\n" ? cursor + 2 : cursor + 1);
   }
   if (text[cursor] !== "\n") {
@@ -144,85 +122,81 @@ function couldStillBeBracketedToolCall(text: string, toolNames: Set<string>): bo
 }
 
 function couldStillBeHarmonyToolCall(text: string, toolNames: Set<string>): boolean {
-  const channelMarker = "<|channel|>";
+  const harmonyChannelPrefix = "<|channel|>";
   let cursor = 0;
-  if (matchesLiteralPrefix(text, channelMarker)) {
-    if (text.length <= channelMarker.length) {
+  if (matchesLiteralPrefix(text, harmonyChannelPrefix)) {
+    if (text.length <= harmonyChannelPrefix.length) {
       return true;
     }
-    cursor = channelMarker.length;
+    cursor = harmonyChannelPrefix.length;
   }
 
-  const rest = text.slice(cursor);
-  const channel = ["commentary", "analysis", "final"].find((candidate) =>
-    matchesLiteralPrefix(rest, candidate),
+  const channelRest = text.slice(cursor);
+  const channelName = ["commentary", "analysis", "final"].find((marker) =>
+    matchesLiteralPrefix(channelRest, marker),
   );
-  if (!channel) {
+  if (channelName) {
+    if (channelRest.length <= channelName.length) {
+      return true;
+    }
+    cursor += channelName.length;
+  } else if (cursor === 0) {
+    return false;
+  } else {
     return false;
   }
-  if (rest.length <= channel.length) {
-    return true;
-  }
 
-  cursor += channel.length;
-  cursor = skipHorizontalWhitespace(text, cursor);
-  if (cursor >= text.length) {
-    return true;
-  }
-
-  const toMarker = "to=";
-  const toRest = text.slice(cursor);
-  if (!matchesLiteralPrefix(toRest, toMarker)) {
-    return false;
-  }
-  if (toRest.length <= toMarker.length) {
-    return true;
-  }
-
-  cursor += toMarker.length;
-  const nameStart = cursor;
-  while (isToolNameChar(text[cursor])) {
-    cursor += 1;
-  }
-  const name = text.slice(nameStart, cursor);
-  if (!name || !hasToolNamePrefix(toolNames, name)) {
-    return false;
-  }
-  if (cursor >= text.length) {
-    return true;
+  const constraintMarker = " to=";
+  const constraintRest = text.slice(cursor);
+  if (matchesLiteralPrefix(constraintRest, constraintMarker)) {
+    if (constraintRest.length <= constraintMarker.length) {
+      return true;
+    }
+    cursor += constraintMarker.length;
+    const nameStart = cursor;
+    while (cursor < text.length && text[cursor] !== " " && text[cursor] !== "\n") {
+      cursor += 1;
+    }
+    const name = text.slice(nameStart, cursor).trim();
+    if (!matchesAnyToolNamePrefix(name, toolNames)) {
+      return false;
+    }
   }
 
   cursor = skipHorizontalWhitespace(text, cursor);
   if (cursor >= text.length) {
     return true;
   }
-  if (!toolNames.has(name)) {
-    return false;
-  }
-
   const codeMarker = "code";
   const codeRest = text.slice(cursor);
-  if (!matchesLiteralPrefix(codeRest, codeMarker)) {
-    return false;
+  if (matchesLiteralPrefix(codeRest, codeMarker)) {
+    if (codeRest.length <= codeMarker.length) {
+      return true;
+    }
+    cursor += codeMarker.length;
+    cursor = skipHorizontalWhitespace(text, cursor);
+    if (cursor >= text.length) {
+      return true;
+    }
   }
-  if (codeRest.length <= codeMarker.length) {
-    return true;
-  }
-
-  cursor += codeMarker.length;
-  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
-    cursor += 1;
-  }
-  if (cursor >= text.length) {
-    return true;
-  }
-
   const messageMarker = "<|message|>";
   const messageRest = text.slice(cursor);
   if (matchesLiteralPrefix(messageRest, messageMarker)) {
     return true;
   }
   return text[cursor] === "{";
+}
+
+function couldStillBePlainTextToolCall(text: string, toolNames: Set<string>): boolean {
+  if (text.length > 256_000) {
+    return false;
+  }
+  const trimmed = text.trimStart();
+  return (
+    trimmed.length === 0 ||
+    couldStillBeBracketedToolCall(trimmed, toolNames) ||
+    couldStillBeHarmonyToolCall(trimmed, toolNames)
+  );
 }
 
 function createSyntheticToolCallId(): string {
@@ -1063,7 +1037,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     return;
   }
 
-  // pi-ai can emit thinkingBudget=-1 for some Google model IDs; a negative budget
+  // shared model runtime can emit thinkingBudget=-1 for some Google model IDs; a negative budget
   // is invalid for Google-compatible backends and can lead to malformed handling.
   delete thinkingConfigObj.thinkingBudget;
   if (Object.keys(thinkingConfigObj).length === 0) {
@@ -1098,13 +1072,13 @@ export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "../agents/anthropic-payload-policy.js";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
+export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
 export {
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
-} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/zai.js";

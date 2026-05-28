@@ -54,14 +54,6 @@ interface ParsedApprovalAction {
   decision: ApprovalDecision;
 }
 
-type ApprovalTextAction = {
-  kind?: "decision" | "command";
-  decision?: ApprovalDecision;
-  label: string;
-  style?: string;
-  command: string;
-};
-
 // ============ Text Builders ============
 
 export function buildExecApprovalText(request: ExecApprovalRequest): string {
@@ -81,26 +73,7 @@ export function buildExecApprovalText(request: ExecApprovalRequest): string {
   return lines.join("\n");
 }
 
-function appendCommandActionLines(lines: string[], actions: readonly ApprovalTextAction[]): void {
-  const commandActions = actions.filter(
-    (action) =>
-      (action.kind === "command" || action.decision == null) &&
-      typeof action.command === "string" &&
-      action.command.trim().length > 0,
-  );
-  if (commandActions.length === 0) {
-    return;
-  }
-  lines.push("", "\u{1f5e8}\ufe0f \u547d\u4ee4:");
-  for (const action of commandActions) {
-    lines.push(`- ${action.label}: ${action.command.trim()}`);
-  }
-}
-
-export function buildPluginApprovalText(
-  request: PluginApprovalRequest,
-  actions: readonly ApprovalTextAction[] = [],
-): string {
+export function buildPluginApprovalText(request: PluginApprovalRequest): string {
   const timeoutSec = Math.round((request.request.timeoutMs ?? 120_000) / 1000);
   const severityIcon =
     request.request.severity === "critical"
@@ -123,7 +96,6 @@ export function buildPluginApprovalText(
   if (request.request.agentId) {
     lines.push(`\u{1f916} Agent: ${request.request.agentId}`);
   }
-  appendCommandActionLines(lines, actions);
   lines.push("", `\u23f1\ufe0f \u8d85\u65f6: ${timeoutSec} \u79d2`);
   return lines.join("\n");
 }

@@ -7,10 +7,62 @@ import {
 
 describe("filterSupportedLanguageHints", () => {
   it("keeps supported languages", async () => {
-    await expect(filterSupportedLanguageHints(["typescript", "text"])).resolves.toEqual([
+    await expect(filterSupportedLanguageHints(["typescript", "cpp", "text"])).resolves.toEqual([
       "typescript",
+      "cpp",
       "text",
     ]);
+  });
+
+  it("normalizes common aliases to base viewer languages", async () => {
+    await expect(
+      filterSupportedLanguageHints(["ts", "c++", "c#", "bash", "dockerfile", "rb", "kt", "ps1"]),
+    ).resolves.toEqual([
+      "typescript",
+      "cpp",
+      "csharp",
+      "sh",
+      "docker",
+      "ruby",
+      "kotlin",
+      "powershell",
+    ]);
+  });
+
+  it("keeps mainstream languages in the base viewer without the language pack", async () => {
+    await expect(
+      filterSupportedLanguageHints([
+        "ruby",
+        "swift",
+        "kotlin",
+        "r",
+        "dart",
+        "lua",
+        "powershell",
+        "xml",
+        "toml",
+      ]),
+    ).resolves.toEqual([
+      "ruby",
+      "swift",
+      "kotlin",
+      "r",
+      "dart",
+      "lua",
+      "powershell",
+      "xml",
+      "toml",
+    ]);
+  });
+
+  it("drops uncommon languages without the language pack", async () => {
+    await expect(filterSupportedLanguageHints(["abap"])).resolves.toEqual(["text"]);
+  });
+
+  it("keeps uncommon languages when the language pack is available", async () => {
+    await expect(
+      filterSupportedLanguageHints(["abap"], { languagePackAvailable: true }),
+    ).resolves.toEqual(["abap"]);
   });
 
   it("drops invalid languages and falls back to text", async () => {
@@ -86,6 +138,37 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
     expect(result.langs).toEqual(["typescript", "text"]);
     expect(result.oldFile?.lang).toBe("text");
     expect(result.newFile?.lang).toBe("typescript");
+  });
+
+  it("keeps uncommon hydrated languages when the language pack is available", async () => {
+    const result = await normalizeDiffViewerPayloadLanguages(
+      {
+        prerenderedHTML: "<div>diff</div>",
+        options: {
+          theme: {
+            light: "pierre-light",
+            dark: "pierre-dark",
+          },
+          diffStyle: "unified",
+          diffIndicators: "bars",
+          disableLineNumbers: false,
+          expandUnchanged: false,
+          themeType: "dark",
+          backgroundEnabled: true,
+          overflow: "wrap",
+          unsafeCSS: "",
+        },
+        langs: ["abap" as never],
+        fileDiff: {
+          name: "demo.abap",
+          lang: "abap" as never,
+        } as unknown as FileDiffMetadata,
+      },
+      { languagePackAvailable: true },
+    );
+
+    expect(result.langs).toEqual(["abap"]);
+    expect(result.fileDiff?.lang).toBe("abap");
   });
 
   it("rewrites blank explicit language overrides to plain text", async () => {

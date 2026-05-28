@@ -5,8 +5,13 @@
   },
   "enabledByDefault": true,
   "providers": ["microsoft-foundry"],
-  "providerAuthEnvVars": {
-    "microsoft-foundry": ["AZURE_OPENAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "microsoft-foundry",
+        "envVars": ["AZURE_OPENAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

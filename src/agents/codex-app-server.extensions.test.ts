@@ -85,7 +85,7 @@ describe("agent tool result middleware", () => {
 
     loadOpenClawPlugins(options);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
-    expect(listAgentToolResultMiddlewares("pi")).toHaveLength(0);
+    expect(listAgentToolResultMiddlewares("openclaw")).toHaveLength(0);
 
     resetActivePluginRegistryForTest();
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
@@ -114,7 +114,7 @@ describe("agent tool result middleware", () => {
       filename: "index.mjs",
       manifest: {
         contracts: {
-          agentToolResultMiddleware: ["pi"],
+          agentToolResultMiddleware: ["openclaw"],
         },
       },
       body: `export default { id: "tool-result-middleware", register(api) {
@@ -191,12 +191,12 @@ describe("agent tool result middleware", () => {
       filename: "index.mjs",
       manifest: {
         contracts: {
-          agentToolResultMiddleware: ["pi", "codex"],
+          agentToolResultMiddleware: ["openclaw", "codex"],
         },
       },
       body: `const middleware = () => undefined;
 export default { id: "tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["pi"] });
+  api.registerAgentToolResultMiddleware(middleware, { runtimes: ["openclaw"] });
   api.registerAgentToolResultMiddleware(middleware, { runtimes: ["codex"] });
 } };`,
     });
@@ -214,7 +214,7 @@ export default { id: "tool-result-middleware", register(api) {
       },
     });
 
-    expect(listAgentToolResultMiddlewares("pi")).toHaveLength(1);
+    expect(listAgentToolResultMiddlewares("openclaw")).toHaveLength(1);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
   });
 

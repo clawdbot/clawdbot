@@ -30,6 +30,8 @@ export type {
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
   closePluginStateSqliteStore,
+  countPluginStateLiveEntries,
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   isPluginStateDatabaseOpen,
   probePluginStateStore,
   sweepExpiredPluginStateEntries,

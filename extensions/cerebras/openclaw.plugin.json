@@ -85,8 +85,13 @@
       "cerebras": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "cerebras": ["CEREBRAS_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "cerebras",
+        "envVars": ["CEREBRAS_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

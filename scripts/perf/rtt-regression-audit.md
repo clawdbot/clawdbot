@@ -49,7 +49,7 @@ Status: branch-local checkpoint, not release notes.
 - After rebasing onto `b5046968f61`, a fresh Testbox `pnpm check:changed`
   attempt on `tbx_01krwbsg15xvjdgpcz8fxq1htz` was blocked before reaching the
   changed gate: pnpm install rejected newly published
-  `@earendil-works/pi-ai@0.74.1` under `minimumReleaseAge`.
+  `openclaw/plugin-sdk/llm@0.74.1` under `minimumReleaseAge`.
 - After rebasing again, Testbox-through-Crabbox
   `tbx_01krwcxpxx1n22t8jmvcj40228` ran
   `pnpm check:changed` with an explicit `origin/main` fetch to repair the

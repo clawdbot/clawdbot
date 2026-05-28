@@ -34,7 +34,7 @@ const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
   authChoicePluginProvidersRuntime: {
-    resolveOwningPluginIdsForProvider,
+    resolveOwningPluginIdsForProviderRef: resolveOwningPluginIdsForProvider,
     resolveProviderPluginChoice,
     resolvePluginProviders,
   },

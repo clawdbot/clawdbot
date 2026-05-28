@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
 export {

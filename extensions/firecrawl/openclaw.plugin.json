@@ -3,8 +3,13 @@
   "activation": {
     "onStartup": false
   },
-  "providerAuthEnvVars": {
-    "firecrawl": ["FIRECRAWL_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "firecrawl",
+        "envVars": ["FIRECRAWL_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {

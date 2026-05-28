@@ -13,7 +13,10 @@ import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.j
 import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
-import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
+import {
+  resolveWorkspaceTemplateDir,
+  resolveWorkspaceTemplateSearchDirs,
+} from "./workspace-templates.js";
 export {
   DEFAULT_AGENT_WORKSPACE_DIR,
   resolveDefaultAgentWorkspaceDir,
@@ -108,16 +111,26 @@ async function loadTemplate(name: string): Promise<string> {
   }
 
   const pending = (async () => {
-    const templateDir = await resolveWorkspaceTemplateDir();
-    const templatePath = path.join(templateDir, name);
-    try {
-      const content = await fs.readFile(templatePath, "utf-8");
-      return stripFrontMatter(content);
-    } catch {
-      throw new Error(
-        `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
-      );
+    const templateDirs =
+      name === DEFAULT_HEARTBEAT_FILENAME
+        ? [await resolveWorkspaceTemplateDir()]
+        : await resolveWorkspaceTemplateSearchDirs();
+    const triedPaths: string[] = [];
+    for (const templateDir of templateDirs) {
+      const templatePath = path.join(templateDir, name);
+      triedPaths.push(templatePath);
+      try {
+        const content = await fs.readFile(templatePath, "utf-8");
+        return stripFrontMatter(content);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+          throw error;
+        }
+      }
     }
+    throw new Error(
+      `Missing workspace template: ${name} (${triedPaths.join(", ")}). Ensure workspace templates are packaged.`,
+    );
   })();
 
   workspaceTemplateCache.set(name, pending);

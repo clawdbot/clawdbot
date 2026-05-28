@@ -28,6 +28,18 @@ function isNodeReadableStream(value: unknown): value is NodeJS.ReadableStream {
   return Boolean(value && typeof (value as NodeJS.ReadableStream).pipe === "function");
 }
 
+async function cancelIgnoredResponseBody(response: Response): Promise<void> {
+  const body = response.body as unknown;
+  const cancel =
+    body && typeof (body as { cancel?: unknown }).cancel === "function"
+      ? (body as { cancel: () => Promise<void> | void }).cancel
+      : undefined;
+  if (!cancel) {
+    return;
+  }
+  await Promise.resolve(cancel.call(body)).catch(() => undefined);
+}
+
 function resolveDownloadTargetDir(entry: SkillEntry, spec: SkillInstallSpec): string {
   const root = resolveSkillToolsRootDir(entry);
   const raw = spec.targetDir?.trim();
@@ -91,6 +103,7 @@ async function downloadFile(params: {
   });
   try {
     if (!response.ok || !response.body) {
+      await cancelIgnoredResponseBody(response);
       throw new Error(`Download failed (${response.status} ${response.statusText})`);
     }
     const file = fs.createWriteStream(tempPath);

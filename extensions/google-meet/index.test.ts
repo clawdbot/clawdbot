@@ -4119,7 +4119,7 @@ describe("google-meet plugin", () => {
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: createMockSessionRuntime(sessionStore),
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        runEmbeddedAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
         })),
@@ -4152,7 +4152,7 @@ describe("google-meet plugin", () => {
     const audioChunk = mockCallArg(sendAudio, 0) as Buffer;
     expect(Buffer.isBuffer(audioChunk)).toBe(true);
     expect(audioChunk.byteLength).toBeGreaterThan(0);
-    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalled();
     expect(runtime.tts.textToSpeechTelephony).toHaveBeenCalledWith({
       text: "Use the Portugal launch data.",
       cfg: {},
@@ -4281,7 +4281,7 @@ describe("google-meet plugin", () => {
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: createMockSessionRuntime(sessionStore),
-        runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
+        runEmbeddedAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
         })),
@@ -4411,9 +4411,9 @@ describe("google-meet plugin", () => {
     ]) {
       expect(talkEventTypes).toContain(type);
     }
-    expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
     const agentRequest = requireRecord(
-      mockCallArg(runtime.agent.runEmbeddedPiAgent, 0),
+      mockCallArg(runtime.agent.runEmbeddedAgent, 0),
       "embedded agent request",
     );
     expect(agentRequest.messageProvider).toBe("google-meet");
@@ -4502,7 +4502,7 @@ describe("google-meet plugin", () => {
           resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
           ensureAgentWorkspace: vi.fn(async () => {}),
           session: createMockSessionRuntime(sessionStore),
-          runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
+          runEmbeddedAgent: vi.fn(async (_request: unknown) => ({
             payloads: [{ text: "The launch is still on track." }],
             meta: {},
           })),
@@ -4532,10 +4532,10 @@ describe("google-meet plugin", () => {
 
       await vi.advanceTimersByTimeAsync(GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS);
       await vi.waitFor(() => {
-        expect(runtime.agent.runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+        expect(runtime.agent.runEmbeddedAgent).toHaveBeenCalledTimes(1);
       });
       const consultArgs = requireRecord(
-        (runtime.agent.runEmbeddedPiAgent.mock.calls as unknown[][])[0]?.[0],
+        (runtime.agent.runEmbeddedAgent.mock.calls as unknown[][])[0]?.[0],
         "default talk-back agent request",
       );
       expect(consultArgs.agentId).toBe("jay");
@@ -4774,7 +4774,7 @@ describe("google-meet plugin", () => {
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: createMockSessionRuntime(sessionStore),
-        runEmbeddedPiAgent: vi.fn(async () => ({
+        runEmbeddedAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the launch update." }],
           meta: {},
         })),

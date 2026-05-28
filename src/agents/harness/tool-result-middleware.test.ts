@@ -3,7 +3,7 @@ import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.
 
 describe("createAgentToolResultMiddlewareRunner", () => {
   it("fails closed when middleware throws", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       () => {
         throw new Error("raw secret should not be logged or returned");
       },
@@ -47,7 +47,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("fails closed when middleware mutates the current result into an invalid shape", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
       (event) => {
         event.result.content = "not an array" as never;
         return undefined;
@@ -122,7 +122,7 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       content: [{ type: "text" as const, text: "delivered" }],
       details: cyclicDetails,
     };
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, []);
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, []);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -147,7 +147,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
       client,
     };
     client.message = payload;
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",
@@ -476,7 +478,9 @@ describe("createAgentToolResultMiddlewareRunner", () => {
   });
 
   it("collapses oversized incoming details to a truncation marker", async () => {
-    const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" }, [() => undefined]);
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "openclaw" }, [
+      () => undefined,
+    ]);
 
     const result = await runner.applyToolResultMiddleware({
       toolCallId: "call-1",

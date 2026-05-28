@@ -24,6 +24,10 @@ type StatusJsonScanPolicy = {
   commandName: string;
   allowMissingConfigFastPath?: boolean;
   includeChannelSummary?: boolean;
+  fetchGitUpdate?: boolean;
+  includeRegistryUpdate?: boolean;
+  includeLocalStatusRpcFallback?: boolean;
+  gatewayProbeTimeoutMs?: number | ((cfg: OpenClawConfig) => number | undefined);
   resolveHasConfiguredChannels: (
     cfg: OpenClawConfig,
     sourceConfig: OpenClawConfig,
@@ -90,6 +94,10 @@ export async function scanStatusJsonWithPolicy(
     includeChannelsData: false,
     includeChannelSecretTargets: false,
     skipConfigPluginValidation: true,
+    fetchGitUpdate: policy.fetchGitUpdate,
+    includeRegistryUpdate: policy.includeRegistryUpdate,
+    includeLocalStatusRpcFallback: policy.includeLocalStatusRpcFallback,
+    gatewayProbeTimeoutMs: policy.gatewayProbeTimeoutMs,
   });
   return await executeStatusScanFromOverview({
     overview,
@@ -115,6 +123,13 @@ export async function scanStatusJsonFast(
     commandName: "status --json",
     allowMissingConfigFastPath: true,
     includeChannelSummary: false,
+    fetchGitUpdate: opts.all === true,
+    includeRegistryUpdate: opts.all === true,
+    includeLocalStatusRpcFallback: opts.all === true,
+    gatewayProbeTimeoutMs:
+      opts.all === true
+        ? undefined
+        : (cfg) => opts.timeoutMs ?? Math.max(1000, cfg.gateway?.handshakeTimeoutMs ?? 0),
     resolveHasConfiguredChannels: (cfg) => hasPotentialConfiguredChannelsForStatusJson(cfg),
     resolveMemory: async ({ cfg, agentStatus, memoryPlugin }) =>
       opts.all

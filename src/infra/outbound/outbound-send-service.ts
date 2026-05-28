@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";

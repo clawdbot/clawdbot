@@ -6,7 +6,12 @@ import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtim
 import { chromium } from "playwright-core";
 import type { OpenClawConfig } from "../api.js";
 import type { DiffRenderOptions, DiffTheme } from "./types.js";
-import { VIEWER_ASSET_PREFIX, getServedViewerAsset } from "./viewer-assets.js";
+import {
+  LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
+  VIEWER_ASSET_PREFIX,
+  getServedLanguagePackViewerAsset,
+  getServedViewerAsset,
+} from "./viewer-assets.js";
 
 const DEFAULT_BROWSER_IDLE_MS = 30_000;
 const SHARED_BROWSER_KEY = "__default__";
@@ -97,12 +102,18 @@ export class PlaywrightDiffScreenshotter implements DiffScreenshotter {
             await route.abort();
             return;
           }
-          if (!parsed.pathname.startsWith(VIEWER_ASSET_PREFIX)) {
+          const isBaseViewerAsset = parsed.pathname.startsWith(VIEWER_ASSET_PREFIX);
+          const isLanguagePackViewerAsset = parsed.pathname.startsWith(
+            LANGUAGE_PACK_VIEWER_ASSET_PREFIX,
+          );
+          if (!isBaseViewerAsset && !isLanguagePackViewerAsset) {
             await route.abort();
             return;
           }
           const pathname = parsed.pathname;
-          const asset = await getServedViewerAsset(pathname);
+          const asset = isLanguagePackViewerAsset
+            ? await getServedLanguagePackViewerAsset(pathname)
+            : await getServedViewerAsset(pathname);
           if (!asset) {
             await route.abort();
             return;

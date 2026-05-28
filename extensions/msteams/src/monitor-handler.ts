@@ -2,6 +2,7 @@ import path from "node:path";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { tryNormalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
@@ -268,6 +269,7 @@ async function handleFeedbackInvoke(
   }
 
   // Build conversation reference for proactive messages (ack + reflection follow-up)
+  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
   const conversationRef = {
     activityId: activity.id,
     user: {
@@ -287,7 +289,7 @@ async function handleFeedbackInvoke(
       tenantId: activity.conversation?.tenantId,
     },
     channelId: activity.channelId ?? "msteams",
-    serviceUrl: activity.serviceUrl,
+    ...(serviceUrl ? { serviceUrl } : {}),
     locale: activity.locale,
   };
 

@@ -1,4 +1,4 @@
-import type { EmbeddedPiRunResult } from "../../../agents/pi-embedded-runner/types.js";
+import type { EmbeddedAgentRunResult } from "../../../agents/embedded-agent-runner/types.js";
 
 export const OUTCOME_FALLBACK_RUNTIME_CONTRACT = {
   primaryProvider: "openai-codex",
@@ -14,8 +14,8 @@ export const OUTCOME_FALLBACK_RUNTIME_CONTRACT = {
 } as const;
 
 export function createContractRunResult(
-  overrides: Partial<EmbeddedPiRunResult> = {},
-): EmbeddedPiRunResult {
+  overrides: Partial<EmbeddedAgentRunResult> = {},
+): EmbeddedAgentRunResult {
   const { meta, ...rest } = overrides;
   return {
     payloads: [],

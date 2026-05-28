@@ -3,7 +3,7 @@ import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
 
 type TelegramPayload = {
   text: string;
-  buttons?: Array<Array<{ text: string; callback_data?: string }>>;
+  buttons?: Array<Array<{ text: string }>>;
 };
 
 describe("telegramApprovalNativeRuntime", () => {
@@ -30,14 +30,12 @@ describe("telegramApprovalNativeRuntime", () => {
         commandText: "echo hi",
         actions: [
           {
-            kind: "decision",
             decision: "allow-once",
             label: "Allow Once",
             command: "/approve req-1 allow-once",
             style: "success",
           },
           {
-            kind: "decision",
             decision: "deny",
             label: "Deny",
             command: "/approve req-1 deny",
@@ -47,72 +45,9 @@ describe("telegramApprovalNativeRuntime", () => {
       } as never,
     })) as TelegramPayload;
 
-    expect(payload.text).toContain("echo hi");
+    expect(payload.text).toContain("/approve req-1 allow-once");
     expect(payload.text).not.toContain("allow-always");
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
-  });
-
-  it("keeps plugin command actions as text instead of Telegram callbacks", async () => {
-    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        token: "tg-token",
-      },
-      request: {
-        id: "plugin-req-1",
-        request: {
-          title: "World ID proof",
-          description: "Approve the verified proof.",
-          actions: [
-            {
-              kind: "command",
-              label: "Open AgentKit",
-              style: "primary",
-              command: "/agentkit approve plugin-req-1",
-            },
-            {
-              kind: "decision",
-              decision: "deny",
-              label: "Deny",
-              style: "danger",
-              command: "/agentkit deny plugin-req-1",
-            },
-          ],
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "plugin",
-      nowMs: 0,
-      view: {
-        approvalKind: "plugin",
-        approvalId: "plugin-req-1",
-        title: "World ID proof",
-        severity: "warning",
-        actions: [
-          {
-            kind: "command",
-            label: "Open AgentKit",
-            command: "/agentkit approve plugin-req-1",
-            style: "primary",
-          },
-          {
-            kind: "decision",
-            decision: "deny",
-            label: "Deny",
-            command: "/agentkit deny plugin-req-1",
-            style: "danger",
-          },
-        ],
-      } as never,
-    })) as TelegramPayload;
-
-    expect(payload.text).toContain("/agentkit approve plugin-req-1");
-    expect(payload.text).toContain("/agentkit deny plugin-req-1");
-    expect(payload.buttons).toEqual([
-      [{ text: "Deny", callback_data: "/approve plugin-req-1 deny", style: "danger" }],
-    ]);
   });
 
   it("passes topic thread ids to typing and message delivery", async () => {

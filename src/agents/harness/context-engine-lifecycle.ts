@@ -1,12 +1,12 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
-import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
-import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
+import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-} from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
+} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
+import type { AgentMessage } from "../runtime/index.js";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
 export type HarnessContextEngine = ContextEngine;

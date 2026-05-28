@@ -12,7 +12,7 @@ OpenClaw standardizes timestamps so the model sees a **single reference time** i
 
 | Surface           | What it shows                                                                                           | Default                               | Configured via                                          |
 | ----------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------- | ------------------------------------------------------- |
-| Message envelopes | Wraps inbound channel messages: `[Signal +1555 2026-01-18 00:19 PST] hello`                             | Host-local                            | `agents.defaults.envelopeTimezone`                      |
+| Message envelopes | Wraps inbound channel messages: `[Signal +1555 Sun 2026-01-18 00:19:42 PST] hello`                      | Host-local                            | `agents.defaults.envelopeTimezone`                      |
 | Tool payloads     | Channel `readMessages`-style tools return raw provider time + normalized `timestampMs` / `timestampUtc` | UTC fields always present             | Not configurable — preserves provider-native timestamps |
 | System prompt     | A small `Current Date & Time` block with the **time zone only** (no clock value, for cache stability)   | Host timezone if `userTimezone` unset | `agents.defaults.userTimezone`                          |
 

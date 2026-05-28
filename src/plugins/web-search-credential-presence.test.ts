@@ -29,7 +29,6 @@ describe("hasConfiguredWebSearchCredential", () => {
         config: {} as OpenClawConfig,
         env: {},
         origin: "bundled",
-        bundledAllowlistCompat: true,
       }),
     ).toBe(false);
   });
@@ -42,7 +41,6 @@ describe("hasConfiguredWebSearchCredential", () => {
         } as OpenClawConfig,
         env: {},
         origin: "bundled",
-        bundledAllowlistCompat: true,
       }),
     ).toBe(true);
   });

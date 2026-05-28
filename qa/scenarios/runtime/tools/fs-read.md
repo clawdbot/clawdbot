@@ -8,15 +8,15 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.fs.read
-objective: Verify file read behavior is tracked across Pi and Codex while Codex owns read natively.
+objective: Verify file read behavior is tracked across OpenClaw and Codex while Codex owns read natively.
 successCriteria:
-  - Pi may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
+  - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
   - Mock provider read plans are reported as fixture intent, not as actual runtime tool calls.
   - The row stays report-only until failure-path injection proves native Codex read behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
-  - src/agents/pi-tools.read.ts
+  - src/agents/agent-tools.read.ts
   - extensions/qa-lab/src/runtime-tool-fixture.ts
 execution:
   kind: flow

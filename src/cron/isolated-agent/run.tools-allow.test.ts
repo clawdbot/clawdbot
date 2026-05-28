@@ -4,7 +4,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   resetRunCronIsolatedAgentTurnHarness,
   resolveDeliveryTargetMock,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -49,14 +49,14 @@ function requireEmbeddedAgentCall(): {
   jobId?: string;
   toolsAllow?: string[];
 } {
-  const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+  const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
     | {
         jobId?: string;
         toolsAllow?: string[];
       }
     | undefined;
   if (!call) {
-    throw new Error("Expected embedded PI agent call for toolsAllow passthrough");
+    throw new Error("Expected embedded OpenClaw agent call for toolsAllow passthrough");
   }
   return call;
 }
@@ -95,7 +95,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["cron"]));
 
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
       expect(call.jobId).toBe("tools-allow");
       expect(call.toolsAllow).toEqual(["cron"]);
@@ -108,7 +108,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow([" CRON "]));
 
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
       expect(call.jobId).toBe("tools-allow");
       expect(call.toolsAllow).toEqual([" CRON "]);
@@ -121,7 +121,7 @@ describe("runCronIsolatedAgentTurn toolsAllow passthrough", () => {
     async () => {
       await runCronIsolatedAgentTurn(makeParamsWithToolsAllow(["maniple__check_idle_workers"]));
 
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const call = requireEmbeddedAgentCall();
       expect(call.toolsAllow).toEqual(["maniple__check_idle_workers"]);
     },

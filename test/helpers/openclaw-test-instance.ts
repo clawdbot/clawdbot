@@ -64,7 +64,62 @@ const GATEWAY_START_TIMEOUT_MS = 60_000;
 const GATEWAY_STOP_TIMEOUT_MS = 1_500;
 const GATEWAY_ENTRYPOINT_PREPARE_TIMEOUT_MS = 120_000;
 const COMMAND_TIMEOUT_MS = 30_000;
+const LOG_TAIL_MAX_BYTES = 256 * 1024;
 const entrypointPromises = new Map<string, Promise<string[]>>();
+
+type BoundedStringLog = string[] & {
+  byteLength?: number;
+  truncated?: boolean;
+};
+
+function createBoundedStringLog(): string[] {
+  const log = [] as BoundedStringLog;
+  log.byteLength = 0;
+  log.truncated = false;
+  return log;
+}
+
+function appendLogChunk(log: string[], chunk: unknown, maxBytes = LOG_TAIL_MAX_BYTES): void {
+  const chunks = log as BoundedStringLog;
+  const limit = Math.max(1, maxBytes);
+  const text = String(chunk);
+  const textBytes = Buffer.byteLength(text);
+  if (textBytes >= limit) {
+    const buffer = Buffer.from(text);
+    const tail = buffer.subarray(buffer.length - limit).toString("utf8");
+    chunks.splice(0, chunks.length, tail);
+    chunks.byteLength = Buffer.byteLength(tail);
+    chunks.truncated = true;
+    return;
+  }
+
+  chunks.push(text);
+  chunks.byteLength = (chunks.byteLength ?? 0) + textBytes;
+  while ((chunks.byteLength ?? 0) > limit && chunks.length > 0) {
+    const first = chunks[0] ?? "";
+    const firstBytes = Buffer.byteLength(first);
+    const overflow = (chunks.byteLength ?? 0) - limit;
+    if (firstBytes <= overflow) {
+      chunks.shift();
+      chunks.byteLength = (chunks.byteLength ?? 0) - firstBytes;
+      chunks.truncated = true;
+      continue;
+    }
+
+    const buffer = Buffer.from(first);
+    const tail = buffer.subarray(overflow).toString("utf8");
+    chunks[0] = tail;
+    chunks.byteLength = chunks.reduce((total, entry) => total + Buffer.byteLength(entry), 0);
+    chunks.truncated = true;
+  }
+}
+
+function readLogBuffer(log: string[]): string {
+  const text = log.join("");
+  return (log as BoundedStringLog).truncated
+    ? `[output truncated to last ${LOG_TAIL_MAX_BYTES} bytes]\n${text}`
+    : text;
+}
 
 async function resolveBuiltGatewayEntrypoint(cwd: string): Promise<string[] | null> {
   const buildStampPath = path.join(cwd, "dist", BUILD_STAMP_FILE);
@@ -90,8 +145,8 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
     return builtEntrypoint;
   }
 
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+  const stdout = createBoundedStringLog();
+  const stderr = createBoundedStringLog();
   const child = spawn("node", ["scripts/run-node.mjs", "--help"], {
     cwd,
     env: { ...process.env, VITEST: "1" },
@@ -99,8 +154,8 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
   });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (d) => stdout.push(String(d)));
-  child.stderr?.on("data", (d) => stderr.push(String(d)));
+  child.stdout?.on("data", (d) => appendLogChunk(stdout, d));
+  child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
 
   const completed = await Promise.race([
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
@@ -112,15 +167,13 @@ async function prepareGatewayEntrypoint(cwd: string): Promise<string[]> {
 
   if (completed === null) {
     child.kill("SIGKILL");
-    throw new Error(
-      `timeout preparing gateway entrypoint\n--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
-    );
+    throw new Error(`timeout preparing gateway entrypoint\n${formatLogs(stdout, stderr)}`);
   }
   if (completed.code !== 0) {
     throw new Error(
       `failed preparing gateway entrypoint (code=${String(completed.code)} signal=${String(
         completed.signal,
-      )})\n--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`,
+      )})\n${formatLogs(stdout, stderr)}`,
     );
   }
 
@@ -224,7 +277,7 @@ function mergeConfig(
 }
 
 function formatLogs(stdout: string[], stderr: string[]): string {
-  return `--- stdout ---\n${stdout.join("")}\n--- stderr ---\n${stderr.join("")}`;
+  return `--- stdout ---\n${readLogBuffer(stdout)}\n--- stderr ---\n${readLogBuffer(stderr)}`;
 }
 
 function createInstanceEnv(params: {
@@ -282,8 +335,8 @@ export async function createOpenClawTestInstance(
     ),
   );
 
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+  const stdout = createBoundedStringLog();
+  const stderr = createBoundedStringLog();
   const env = createInstanceEnv({
     stateEnv: state.env,
     extraEnv: options.env ?? {},
@@ -343,8 +396,8 @@ export async function createOpenClawTestInstance(
 
       child.stdout?.setEncoding("utf8");
       child.stderr?.setEncoding("utf8");
-      child.stdout?.on("data", (d) => stdout.push(String(d)));
-      child.stderr?.on("data", (d) => stderr.push(String(d)));
+      child.stdout?.on("data", (d) => appendLogChunk(stdout, d));
+      child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
 
       try {
         await waitForPortOpen(
@@ -410,8 +463,8 @@ async function runCommand(params: {
   if (!command) {
     throw new Error("missing command");
   }
-  const stdout: string[] = [];
-  const stderr: string[] = [];
+  const stdout = createBoundedStringLog();
+  const stderr = createBoundedStringLog();
   const child = spawn(command, args, {
     cwd: params.cwd,
     env: params.env,
@@ -419,8 +472,8 @@ async function runCommand(params: {
   });
   child.stdout?.setEncoding("utf8");
   child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (d) => stdout.push(String(d)));
-  child.stderr?.on("data", (d) => stderr.push(String(d)));
+  child.stdout?.on("data", (d) => appendLogChunk(stdout, d));
+  child.stderr?.on("data", (d) => appendLogChunk(stderr, d));
 
   const completed = await Promise.race([
     new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
@@ -438,7 +491,13 @@ async function runCommand(params: {
   }
   return {
     ...completed,
-    stdout: stdout.join(""),
-    stderr: stderr.join(""),
+    stdout: readLogBuffer(stdout),
+    stderr: readLogBuffer(stderr),
   };
 }
+
+export const testing = {
+  appendLogChunk,
+  createBoundedStringLog,
+  formatLogs,
+};

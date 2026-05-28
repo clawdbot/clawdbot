@@ -16,7 +16,7 @@ import type {
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
-import { shouldCreateBundleMcpRuntimeForAttempt } from "./pi-embedded-runner/run/attempt-tool-construction-plan.js";
+import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 
 export type {
   CodexBundleMcpThreadConfig,

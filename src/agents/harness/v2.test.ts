@@ -1,6 +1,6 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { PI_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import {
   onInternalDiagnosticEvent,
@@ -8,8 +8,8 @@ import {
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
-import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
-import { createPiAgentHarness } from "./builtin-pi.js";
+import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { createOpenClawAgentHarness } from "./builtin-openclaw.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 import type { AgentHarnessV2 } from "./v2.js";
 import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
@@ -25,7 +25,7 @@ function createAttemptParams(): AgentHarnessAttemptParams {
     timeoutMs: 5_000,
     provider: "codex",
     modelId: "gpt-5.4",
-    model: { id: "gpt-5.4", provider: "codex" } as Model<Api>,
+    model: { id: "gpt-5.4", provider: "codex" } as Model,
     authStorage: {} as never,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
@@ -213,11 +213,11 @@ describe("AgentHarness V2 compatibility adapter", () => {
     expect(runAttempt).toHaveBeenCalledOnce();
   });
 
-  it("advertises Pi embedded host capabilities through the V1 adapter", async () => {
-    const harness = createPiAgentHarness();
+  it("advertises OpenClaw embedded host capabilities through the V1 adapter", async () => {
+    const harness = createOpenClawAgentHarness();
 
     expect(harness.contextEngineHostCapabilities).toEqual(
-      PI_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+      OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
     );
   });
 

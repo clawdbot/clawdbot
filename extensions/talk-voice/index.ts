@@ -96,6 +96,15 @@ function asTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+function parsePositiveIntegerToken(value: unknown): number | undefined {
+  const trimmed = asTrimmedString(value);
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 function resolveCommandLabel(channel: string): string {
   return channel === "discord" ? "/talkvoice" : "/voice";
 }
@@ -163,7 +172,7 @@ export default definePluginEntry({
         }
 
         if (action === "list") {
-          const limit = Number.parseInt(tokens[1] ?? "12", 10);
+          const limit = parsePositiveIntegerToken(tokens[1]) ?? 12;
           try {
             const voices = await api.runtime.tts.listVoices({
               provider: providerId,
@@ -172,7 +181,7 @@ export default definePluginEntry({
               baseUrl,
             });
             return {
-              text: formatVoiceList(voices, Number.isFinite(limit) ? limit : 12, providerId),
+              text: formatVoiceList(voices, limit, providerId),
             };
           } catch (error) {
             const message = formatErrorMessage(error);

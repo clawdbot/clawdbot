@@ -551,25 +551,31 @@ jobs:
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
       - name: Prepare clawgrit reports checkout
+        id: clawgrit_reports
         if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
         env:
           CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
+          echo "ready=false" >> "$GITHUB_OUTPUT"
           reports_root=".artifacts/clawgrit-reports"
           mkdir -p "$reports_root"
           git -C "$reports_root" init -b main
           git -C "$reports_root" remote add origin "https://x-access-token:${CLAWGRIT_REPORTS_TOKEN}@github.com/openclaw/clawgrit-reports.git"
-          if git -C "$reports_root" ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
-            git -C "$reports_root" fetch --depth=1 origin main
+          if timeout 60s git -C "$reports_root" ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            if ! timeout 120s git -C "$reports_root" fetch --depth=1 origin main; then
+              echo "::warning::Skipping optional clawgrit report publish because the reports checkout fetch timed out or failed."
+              exit 0
+            fi
             git -C "$reports_root" checkout -B main FETCH_HEAD
           else
             git -C "$reports_root" checkout -B main
           fi
+          echo "ready=true" >> "$GITHUB_OUTPUT"
 
       - name: Publish to clawgrit reports
-        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
+        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' && steps.clawgrit_reports.outputs.ready == 'true' }}
         env:
           CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
         shell: bash
@@ -642,6 +648,9 @@ jobs:
               exit 0
             fi
             sleep $((attempt * 2))
-            git -C "$reports_root" fetch --depth=1 origin main
+            timeout 120s git -C "$reports_root" fetch --depth=1 origin main || {
+              echo "::warning::Skipping optional clawgrit report rebase because the reports fetch timed out or failed."
+              exit 0
+            }
             git -C "$reports_root" rebase FETCH_HEAD
           done

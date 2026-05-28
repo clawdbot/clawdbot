@@ -193,9 +193,9 @@ function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): 
 
 function collectAgentHarnessRuntimePluginIds(
   cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
+  _env: NodeJS.ProcessEnv,
 ): string[] {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env)
+  return collectConfiguredAgentHarnessRuntimes(cfg)
     .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
     .filter((pluginId): pluginId is string => Boolean(pluginId))
     .toSorted((left, right) => left.localeCompare(right));

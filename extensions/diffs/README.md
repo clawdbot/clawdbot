@@ -61,6 +61,7 @@ Useful options:
 - `expandUnchanged`: expand unchanged sections (per-call option only, not a plugin default key)
 - `path`: display name for before and after input
 - `lang`: language hint for before/after input; unknown values fall back to plain text
+- Default syntax highlighting covers common source, config, and documentation languages. Install `diffs-language-pack` for the extended language catalog.
 - `title`: explicit viewer title
 - `ttlSeconds`: artifact lifetime for viewer and standalone file outputs
 - `baseUrl`: override the gateway base URL used in the returned viewer link (origin or origin+base path only; no query/hash)

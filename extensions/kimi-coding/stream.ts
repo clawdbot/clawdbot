@@ -1,5 +1,9 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  streamSimple,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +22,9 @@ type KimiToolCallBlock = {
 };
 
 type KimiThinkingType = "enabled" | "disabled";
+interface MutableAssistantMessageEventStream extends AsyncIterable<AssistantMessageEvent> {
+  result: () => Promise<AssistantMessage>;
+}
 type KimiThinkingConfig = {
   type: KimiThinkingType;
   budget_tokens?: number;
@@ -319,9 +326,9 @@ function transformKimiStreamEvent(
 }
 
 function wrapStreamMessageObjects(
-  stream: ReturnType<typeof streamSimple>,
+  stream: MutableAssistantMessageEventStream,
   transformMessage: (message: unknown) => void,
-): ReturnType<typeof streamSimple> {
+): MutableAssistantMessageEventStream {
   const readFinalMessage = stream.result.bind(stream);
   Object.assign(stream, {
     async result() {

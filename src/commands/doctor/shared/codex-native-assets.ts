@@ -107,8 +107,8 @@ async function discoverPluginHits(root: string): Promise<CodexNativeAssetHit[]> 
   return [...hits.values()];
 }
 
-function isCodexRuntimeConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  return collectConfiguredAgentHarnessRuntimes(cfg, env).includes("codex");
+function isCodexRuntimeConfigured(cfg: OpenClawConfig, _env: NodeJS.ProcessEnv): boolean {
+  return collectConfiguredAgentHarnessRuntimes(cfg).includes("codex");
 }
 
 function isCodexPluginConfigured(cfg: OpenClawConfig): boolean {

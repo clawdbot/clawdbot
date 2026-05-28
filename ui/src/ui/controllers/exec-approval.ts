@@ -17,24 +17,6 @@ export type ExecApprovalRequestPayload = {
 };
 
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
-export type ApprovalActionStyle = "primary" | "secondary" | "success" | "danger";
-
-export type ExecApprovalDecisionAction = {
-  kind: "decision";
-  label: string;
-  style: ApprovalActionStyle;
-  decision: ExecApprovalDecision;
-  command?: string | null;
-};
-
-export type ExecApprovalCommandAction = {
-  kind: "command";
-  label: string;
-  style: ApprovalActionStyle;
-  command: string;
-};
-
-export type ExecApprovalAction = ExecApprovalDecisionAction | ExecApprovalCommandAction;
 
 export type ExecApprovalRequest = {
   id: string;
@@ -44,8 +26,6 @@ export type ExecApprovalRequest = {
   pluginDescription?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
-  allowedDecisions?: readonly ExecApprovalDecision[];
-  actions?: readonly ExecApprovalAction[];
   createdAtMs: number;
   expiresAtMs: number;
 };
@@ -72,69 +52,6 @@ const APPROVAL_NOT_FOUND = "APPROVAL_NOT_FOUND";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function parseApprovalDecision(value: unknown): ExecApprovalDecision | null {
-  return value === "allow-once" || value === "allow-always" || value === "deny" ? value : null;
-}
-
-function parseApprovalStyle(value: unknown): ApprovalActionStyle {
-  return value === "primary" || value === "success" || value === "danger" ? value : "secondary";
-}
-
-function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const decisions: ExecApprovalDecision[] = [];
-  for (const item of value) {
-    const decision = parseApprovalDecision(item);
-    if (decision && !decisions.includes(decision)) {
-      decisions.push(decision);
-    }
-  }
-  return decisions.length > 0 ? decisions : undefined;
-}
-
-function parsePluginApprovalActions(value: unknown): ExecApprovalAction[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const actions: ExecApprovalAction[] = [];
-  for (const item of value) {
-    if (!isRecord(item)) {
-      continue;
-    }
-    const kind = item.kind;
-    const label = normalizeOptionalString(item.label) ?? "";
-    const command = normalizeOptionalString(item.command) ?? "";
-    if (!label || !command) {
-      continue;
-    }
-    if (kind === "decision") {
-      const decision = parseApprovalDecision(item.decision);
-      if (!decision) {
-        continue;
-      }
-      actions.push({
-        kind: "decision",
-        label,
-        style: parseApprovalStyle(item.style),
-        decision,
-        command,
-      });
-      continue;
-    }
-    if (kind === "command") {
-      actions.push({
-        kind: "command",
-        label,
-        style: parseApprovalStyle(item.style),
-        command,
-      });
-    }
-  }
-  return actions.length > 0 ? actions : undefined;
 }
 
 function parseCommandSpans(
@@ -172,6 +89,17 @@ function parseCommandSpans(
     },
   );
   return spans.length > 0 ? spans : undefined;
+}
+
+function parseAllowedDecisions(value: unknown): ExecApprovalDecision[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const decisions = value.filter(
+    (decision): decision is ExecApprovalDecision =>
+      decision === "allow-once" || decision === "allow-always" || decision === "deny",
+  );
+  return decisions.length > 0 ? decisions : undefined;
 }
 
 export function parseExecApprovalRequested(payload: unknown): ExecApprovalRequest | null {
@@ -250,8 +178,6 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
   const description = typeof request.description === "string" ? request.description : null;
   const severity = typeof request.severity === "string" ? request.severity : null;
   const pluginId = typeof request.pluginId === "string" ? request.pluginId : null;
-  const allowedDecisions = parseAllowedDecisions(request.allowedDecisions);
-  const actions = parsePluginApprovalActions(request.actions);
 
   return {
     id,
@@ -266,8 +192,6 @@ export function parsePluginApprovalRequested(payload: unknown): ExecApprovalRequ
     pluginDescription: description,
     pluginSeverity: severity,
     pluginId,
-    ...(allowedDecisions ? { allowedDecisions } : {}),
-    ...(actions ? { actions } : {}),
     createdAtMs,
     expiresAtMs,
   };

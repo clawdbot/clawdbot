@@ -6,6 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 
 const ISSUE_FILE_COUNTS = [
   ["memory/transcripts", 9394],
@@ -23,6 +24,7 @@ const ISSUE_FILE_COUNTS = [
 const ISSUE_MEMORY_FILE_COUNT = ISSUE_FILE_COUNTS.reduce((sum, [, count]) => sum + count, 0);
 const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
+export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -261,6 +263,19 @@ function writeConfig({ homeDir, workspaceDir, port, token }) {
   return configPath;
 }
 
+export function updateGatewayReadyOutputState(
+  state,
+  chunk,
+  maxChars = GATEWAY_READY_OUTPUT_MAX_CHARS,
+) {
+  const text = String(chunk);
+  const combined = `${state.tail ?? ""}${text}`;
+  return {
+    tail: combined.length > maxChars ? combined.slice(-maxChars) : combined,
+    readySeen: Boolean(state.readySeen || combined.includes("[gateway] ready")),
+  };
+}
+
 function runLsofForPid(pid) {
   const result = spawnSync("lsof", ["-nP", "-p", String(pid)], {
     encoding: "utf8",
@@ -329,17 +344,17 @@ function sampleFds({ label, pid, workspaceRealPath }) {
 
 async function waitForGatewayReady({ child, port, logPath, timeoutMs }) {
   const startedAt = Date.now();
-  let output = "";
+  let outputState = { tail: "", readySeen: false };
   const append = (chunk) => {
     const text = chunk.toString();
-    output += text;
+    outputState = updateGatewayReadyOutputState(outputState, text);
     fs.appendFileSync(logPath, text);
   };
   child.stdout.on("data", append);
   child.stderr.on("data", append);
 
   while (Date.now() - startedAt < timeoutMs) {
-    if (output.includes("[gateway] ready") && findGatewayPid(port)) {
+    if (outputState.readySeen && findGatewayPid(port)) {
       return;
     }
     if (child.exitCode !== null) {
@@ -545,9 +560,16 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(
-    `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
-  );
-  process.exit(1);
-});
+function isMainModule() {
+  const entrypoint = process.argv[1];
+  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
+}
+
+if (isMainModule()) {
+  main().catch((error) => {
+    console.error(
+      `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  });
+}

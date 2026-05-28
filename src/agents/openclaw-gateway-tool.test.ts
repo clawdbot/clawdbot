@@ -219,7 +219,7 @@ describe("gateway tool", () => {
           };
           expect(parsed.payload?.kind).toBe("restart");
           expect(parsed.payload?.doctorHint).toBe(
-            "Run: openclaw --profile isolated doctor --non-interactive",
+            "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
           );
         },
       );

@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   calculateCost,
   getEnvApiKey,
@@ -6,7 +6,7 @@ import {
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
@@ -192,13 +192,15 @@ function isJsonLikeThoughtSignature(value: string): boolean {
 }
 
 const GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE = /[\u2026]|\.\.\./;
-const GEMINI_THOUGHT_SIGNATURE_BASE64_RE = /^[A-Za-z0-9+/=]+$/;
+const GEMINI_THOUGHT_SIGNATURE_BASE64_RE =
+  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
 function hasGeminiThoughtSignatureTruncationFootprint(value: string): boolean {
-  return (
-    GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value) ||
-    (GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length % 4 !== 0)
-  );
+  return GEMINI_THOUGHT_SIGNATURE_ELLIPSIS_RE.test(value);
+}
+
+function isGeminiThoughtSignaturePayload(value: string): boolean {
+  return GEMINI_THOUGHT_SIGNATURE_BASE64_RE.test(value) && value.length > 0;
 }
 
 function sanitizeGeminiThoughtSignature(thoughtSignature: string | undefined): string | undefined {
@@ -220,6 +222,9 @@ function sanitizeGeminiThoughtSignature(thoughtSignature: string | undefined): s
     return undefined;
   }
   if (hasGeminiThoughtSignatureTruncationFootprint(trimmed)) {
+    return undefined;
+  }
+  if (!isGeminiThoughtSignaturePayload(trimmed)) {
     return undefined;
   }
   return trimmed;

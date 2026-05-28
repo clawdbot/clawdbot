@@ -29,12 +29,12 @@ import {
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
+import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
-import type { MessagingToolSend } from "../pi-embedded-messaging.types.js";
-import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
 import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
-type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
+type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
 type DurableSendResult = Awaited<ReturnType<typeof sendDurableMessageBatch>>;
 
 export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
@@ -70,7 +70,7 @@ export type AgentCommandDeliveryStatus = {
 
 export type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
-  meta: EmbeddedPiRunMeta & AgentCommandResultMetaOverrides;
+  meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
   didSendViaMessagingTool?: boolean;
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
@@ -155,9 +155,9 @@ function logNestedOutput(
 }
 
 function mergeResultMetaOverrides(
-  meta: EmbeddedPiRunMeta,
+  meta: EmbeddedAgentRunMeta,
   overrides: AgentCommandResultMetaOverrides | undefined,
-): EmbeddedPiRunMeta & AgentCommandResultMetaOverrides {
+): EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides {
   if (!overrides) {
     return meta;
   }

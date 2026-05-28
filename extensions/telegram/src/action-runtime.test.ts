@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -15,10 +16,127 @@ import {
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
-const sendMessageTelegram = vi.fn(async () => ({
-  messageId: "789",
-  chatId: "123",
-}));
+const sendMessageTelegram = vi.fn(
+  async (_to: string, _text: string, _opts?: Record<string, unknown>) => ({
+    messageId: "789",
+    chatId: "123",
+  }),
+);
+const sendDurableMessageBatch = vi.fn(
+  async (params: {
+    cfg: OpenClawConfig;
+    to: string;
+    accountId?: string;
+    payloads: Array<{
+      text?: string;
+      mediaUrl?: string;
+      mediaUrls?: string[];
+      audioAsVoice?: boolean;
+      delivery?: {
+        pin?: true | { enabled?: boolean; notify?: boolean; required?: boolean };
+      };
+      channelData?: { telegram?: { buttons?: unknown; quoteText?: string } };
+    }>;
+    replyToId?: string;
+    threadId?: string | number;
+    forceDocument?: boolean;
+    silent?: boolean;
+    gatewayClientScopes?: readonly string[];
+    session?: {
+      key?: string;
+      agentId?: string;
+      requesterAccountId?: string;
+    };
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+    };
+  }) => {
+    const payload = params.payloads[0] ?? {};
+    const mediaUrls = payload.mediaUrls?.length
+      ? payload.mediaUrls
+      : payload.mediaUrl
+        ? [payload.mediaUrl]
+        : [];
+    const telegramData = payload.channelData?.telegram;
+    const cfg = params.cfg as {
+      channels?: {
+        telegram?: {
+          botToken?: string;
+          accounts?: Record<string, { botToken?: string }>;
+        };
+      };
+    };
+    const token =
+      (params.accountId
+        ? cfg.channels?.telegram?.accounts?.[params.accountId]?.botToken
+        : undefined) ??
+      cfg.channels?.telegram?.botToken ??
+      process.env.TELEGRAM_BOT_TOKEN;
+    const baseOptions = {
+      cfg: params.cfg,
+      token,
+      accountId: params.accountId,
+      gatewayClientScopes: params.gatewayClientScopes,
+      replyToMessageId:
+        params.replyToId == null ? undefined : Number.parseInt(params.replyToId, 10),
+      messageThreadId:
+        params.threadId == null ? undefined : Number.parseInt(String(params.threadId), 10),
+      quoteText: telegramData?.quoteText,
+      asVoice: payload.audioAsVoice,
+      silent: params.silent,
+      forceDocument: params.forceDocument,
+      mediaLocalRoots: params.mediaAccess?.localRoots,
+      mediaReadFile: params.mediaAccess?.readFile,
+    };
+    const calls = mediaUrls.length > 0 ? mediaUrls : [undefined];
+    let last = { messageId: "789", chatId: "123" };
+    for (const [index, mediaUrl] of calls.entries()) {
+      last = await sendMessageTelegram(params.to, index === 0 ? (payload.text ?? "") : "", {
+        ...baseOptions,
+        ...(mediaUrl ? { mediaUrl } : {}),
+        ...(index === 0 && telegramData?.buttons ? { buttons: telegramData.buttons } : {}),
+      });
+    }
+    const pin =
+      payload.delivery?.pin === true
+        ? { enabled: true }
+        : payload.delivery?.pin && payload.delivery.pin.enabled
+          ? payload.delivery.pin
+          : undefined;
+    if (pin && last.messageId) {
+      try {
+        await pinMessageTelegram(params.to, last.messageId, {
+          cfg: params.cfg,
+          accountId: params.accountId,
+          notify: pin.notify,
+          verbose: false,
+          gatewayClientScopes: params.gatewayClientScopes,
+        });
+      } catch (err) {
+        if (pin.required) {
+          throw err;
+        }
+      }
+    }
+    return {
+      status: "sent",
+      results: [{ channel: "telegram", messageId: last.messageId, chatId: last.chatId }],
+      receipt: {
+        primaryPlatformMessageId: last.messageId,
+        platformMessageIds: [last.messageId],
+        parts: [
+          {
+            platformMessageId: last.messageId,
+            kind: mediaUrls.length > 0 ? "media" : "text",
+            index: 0,
+          },
+        ],
+        sentAt: Date.now(),
+      },
+    } as const;
+  },
+);
 const sendPollTelegram = vi.fn(async () => ({
   messageId: "790",
   chatId: "123",
@@ -40,11 +158,13 @@ const editForumTopicTelegram = vi.fn(async () => ({
   messageThreadId: 42,
   name: "Renamed",
 }));
-const pinMessageTelegram = vi.fn(async () => ({
-  ok: true,
-  messageId: "789",
-  chatId: "123",
-}));
+const pinMessageTelegram = vi.fn(
+  async (_to: string, _messageId: string, _opts?: Record<string, unknown>) => ({
+    ok: true,
+    messageId: "789",
+    chatId: "123",
+  }),
+);
 const createForumTopicTelegram = vi.fn(async () => ({
   topicId: 99,
   name: "Topic",
@@ -107,6 +227,20 @@ function mockCall(source: MockCallSource, callIndex: number, label: string) {
 
 function resultDetails(result: Awaited<ReturnType<typeof handleTelegramAction>>) {
   return requireRecord(result.details, "Telegram action details");
+}
+
+function readDurableQueueEntries(stateDir: string): Record<string, unknown>[] {
+  const queueDir = path.join(stateDir, "delivery-queue");
+  if (!fs.existsSync(queueDir)) {
+    return [];
+  }
+  return fs
+    .readdirSync(queueDir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => JSON.parse(fs.readFileSync(path.join(queueDir, name), "utf-8"))) as Record<
+    string,
+    unknown
+  >[];
 }
 
 describe("handleTelegramAction", () => {
@@ -175,11 +309,12 @@ describe("handleTelegramAction", () => {
   }
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["TELEGRAM_BOT_TOKEN"]);
+    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "TELEGRAM_BOT_TOKEN"]);
     resetTopicNameCacheForTest();
     installTopicNameStoreForTest();
     Object.assign(telegramActionRuntime, originalTelegramActionRuntime, {
       reactMessageTelegram,
+      sendDurableMessageBatch,
       sendMessageTelegram,
       sendPollTelegram,
       sendStickerTelegram,
@@ -190,6 +325,7 @@ describe("handleTelegramAction", () => {
       createForumTopicTelegram,
     });
     reactMessageTelegram.mockClear();
+    sendDurableMessageBatch.mockClear();
     sendMessageTelegram.mockClear();
     sendPollTelegram.mockClear();
     sendStickerTelegram.mockClear();
@@ -417,7 +553,10 @@ describe("handleTelegramAction", () => {
         content: "Hello, Telegram!",
       },
       telegramConfig(),
-      { gatewayClientScopes: ["operator.write"] },
+      {
+        gatewayClientScopes: ["operator.write"],
+        sessionKey: "agent:main:telegram:direct:123",
+      },
     );
     const call = mockCall(sendMessageTelegram, 0, "text message");
     expect(call[0]).toBe("@testchannel");
@@ -425,6 +564,15 @@ describe("handleTelegramAction", () => {
     const options = requireRecord(call[2], "text message options");
     expect(options.token).toBe("tok");
     expect(options.mediaUrl).toBeUndefined();
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "durable text message");
+    expect(requireRecord(durableCall[0], "durable text message params")).toMatchObject({
+      channel: "telegram",
+      to: "@testchannel",
+      durability: "required",
+      gatewayClientScopes: ["operator.write"],
+      session: { key: "agent:main:telegram:direct:123", agentId: "main" },
+      payloads: [{ text: "Hello, Telegram!" }],
+    });
     expect(result.content).toStrictEqual([
       {
         type: "text",
@@ -436,6 +584,135 @@ describe("handleTelegramAction", () => {
       messageId: "789",
       chatId: "123",
     });
+  });
+
+  it("persists sendMessage action deliveries before Telegram platform send", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-action-durable-"));
+    const { createOutboundTestPlugin, createTestRegistry, setActivePluginRegistry } =
+      await import("openclaw/plugin-sdk/plugin-test-runtime");
+    const sendText = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        const entries = readDurableQueueEntries(stateDir);
+        expect(entries).toHaveLength(1);
+        expect(entries[0]).toMatchObject({
+          channel: "telegram",
+          to: "12345",
+          payloads: [
+            {
+              text: "times out after queue write",
+              delivery: { pin: { enabled: true, required: true } },
+            },
+          ],
+          session: { key: "agent:main:telegram:direct:12345", agentId: "main" },
+          gatewayClientScopes: ["operator.write"],
+          retryCount: 0,
+        });
+        throw new Error("telegram timeout");
+      })
+      .mockImplementationOnce(async () => {
+        const entries = readDurableQueueEntries(stateDir);
+        const liveEntry = entries.find((entry) =>
+          JSON.stringify(entry.payloads).includes("delivers after queue write"),
+        );
+        expect(liveEntry).toMatchObject({
+          channel: "telegram",
+          to: "12345",
+          payloads: [{ text: "delivers after queue write" }],
+          retryCount: 0,
+        });
+        return { channel: "telegram", messageId: "tg-ok" };
+      });
+
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    telegramActionRuntime.sendDurableMessageBatch =
+      originalTelegramActionRuntime.sendDurableMessageBatch;
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: {
+              deliveryMode: "direct",
+              deliveryCapabilities: {
+                durableFinal: {
+                  text: true,
+                  media: true,
+                  payload: true,
+                  silent: true,
+                  replyTo: true,
+                  thread: true,
+                  messageSendingHooks: true,
+                  batch: true,
+                },
+              },
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    try {
+      await expect(
+        handleTelegramAction(
+          {
+            action: "sendMessage",
+            to: "12345",
+            content: "times out after queue write",
+            delivery: { pin: { enabled: true, required: true } },
+          },
+          telegramConfig(),
+          {
+            gatewayClientScopes: ["operator.write"],
+            sessionKey: "agent:main:telegram:direct:12345",
+          },
+        ),
+      ).rejects.toThrow("telegram timeout");
+
+      const retryableEntries = readDurableQueueEntries(stateDir);
+      expect(retryableEntries).toHaveLength(1);
+      expect(retryableEntries[0]).toMatchObject({
+        payloads: [
+          {
+            text: "times out after queue write",
+            delivery: { pin: { enabled: true, required: true } },
+          },
+        ],
+        retryCount: 1,
+      });
+      expect(String(retryableEntries[0]?.lastError)).toContain("telegram timeout");
+
+      const result = await handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "12345",
+          content: "delivers after queue write",
+        },
+        telegramConfig(),
+        { sessionKey: "agent:main:telegram:direct:12345" },
+      );
+
+      expect(result.details).toMatchObject({
+        ok: true,
+        messageId: "tg-ok",
+      });
+      expect(readDurableQueueEntries(stateDir)).toHaveLength(1);
+      expect(readDurableQueueEntries(stateDir)[0]).toMatchObject({
+        payloads: [
+          {
+            text: "times out after queue write",
+            delivery: { pin: { enabled: true, required: true } },
+          },
+        ],
+        retryCount: 1,
+      });
+    } finally {
+      setActivePluginRegistry(createTestRegistry([]));
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("normalizes legacy group targets for sendMessage actions", async () => {
@@ -1092,6 +1369,10 @@ describe("handleTelegramAction", () => {
     expect(options.accountId).toBeUndefined();
     expect(options.verbose).toBe(false);
     expect(options.gatewayClientScopes).toEqual(["operator.write"]);
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "durable delivery pin");
+    expect(requireRecord(durableCall[0], "durable delivery pin params")).toMatchObject({
+      payloads: [{ delivery: { pin: { enabled: true } } }],
+    });
   });
 
   it("passes delivery pin notify requests for action sends", async () => {
@@ -1109,6 +1390,10 @@ describe("handleTelegramAction", () => {
     expect(call[0]).toBe("123456");
     expect(call[1]).toBe("789");
     expect(requireRecord(call[2], "delivery pin notify options").notify).toBe(true);
+    const durableCall = mockCall(sendDurableMessageBatch, 0, "durable delivery pin notify");
+    expect(requireRecord(durableCall[0], "durable delivery pin notify params")).toMatchObject({
+      payloads: [{ delivery: { pin: { enabled: true, notify: true } } }],
+    });
   });
 
   it("fails required action-send pins when pinning fails", async () => {

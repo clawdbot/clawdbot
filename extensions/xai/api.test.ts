@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isXaiModelHint, resolveXaiTransport, shouldContributeXaiCompat } from "./api.js";
+import { isXaiModelHint, resolveXaiTransport } from "./api.js";
 
 describe("xai api helpers", () => {
   it("uses shared endpoint classification for native xAI transports", () => {
@@ -27,25 +27,7 @@ describe("xai api helpers", () => {
     });
   });
 
-  it("contributes compat for native xAI hosts and model hints", () => {
-    expect(
-      shouldContributeXaiCompat({
-        modelId: "custom-model",
-        model: {
-          api: "openai-completions",
-          baseUrl: "https://api.x.ai/v1",
-        },
-      }),
-    ).toBe(true);
-    expect(
-      shouldContributeXaiCompat({
-        modelId: "x-ai/grok-4",
-        model: {
-          api: "openai-completions",
-          baseUrl: "https://proxy.example.com/v1",
-        },
-      }),
-    ).toBe(true);
+  it("detects xAI model hints", () => {
     expect(isXaiModelHint("x-ai/grok-4")).toBe(true);
   });
 });

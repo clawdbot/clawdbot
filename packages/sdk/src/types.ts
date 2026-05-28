@@ -28,7 +28,7 @@ export type ConnectableOpenClawTransport = OpenClawTransport & {
 
 export type RuntimeSelection =
   | "auto"
-  | { type: "embedded"; id: "pi" | "codex" | (string & {}) }
+  | { type: "embedded"; id: "openclaw" | "codex" | (string & {}) }
   | { type: "cli"; id: "claude-cli" | (string & {}) }
   | { type: "acp"; harness: "claude" | "cursor" | "gemini" | "opencode" | (string & {}) }
   | { type: "managed"; provider: "local" | "node" | "testbox" | "cloud" | (string & {}) };

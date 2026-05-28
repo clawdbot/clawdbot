@@ -1,5 +1,5 @@
-import type { AssistantMessage, Model, ToolResultMessage } from "@earendil-works/pi-ai";
-import { streamOpenAIResponses } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Model, ToolResultMessage } from "openclaw/plugin-sdk/llm";
+import { stream } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 
@@ -88,7 +88,7 @@ async function runAbortedOpenAIResponsesStream(params: {
   controller.abort();
   let payload: Record<string, unknown> | undefined;
 
-  const stream = streamOpenAIResponses(
+  const responseStream = stream(
     buildModel(),
     {
       systemPrompt: "system",
@@ -104,7 +104,7 @@ async function runAbortedOpenAIResponsesStream(params: {
     },
   );
 
-  await stream.result();
+  await responseStream.result();
   const input = extractInput(payload);
   return {
     input,

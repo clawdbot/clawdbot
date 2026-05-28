@@ -1,5 +1,3 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -17,17 +15,19 @@ import type {
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/context-truncation-notice.js";
+import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   truncateToolResultMessage,
-} from "./pi-embedded-runner/tool-result-truncation.js";
+} from "./embedded-agent-runner/tool-result-truncation.js";
+import type { AgentMessage } from "./runtime/index.js";
 import {
   getRawSessionAppendMessage,
   setRawSessionAppendMessage,
 } from "./session-raw-append-message.js";
 import { createPendingToolCallState } from "./session-tool-result-state.js";
 import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
+import type { SessionManager } from "./sessions/index.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
 /**

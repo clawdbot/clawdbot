@@ -128,6 +128,11 @@ describe("setupOfficialPluginInstalls", () => {
           hint: "OpenClaw diagnostics Prometheus exporter",
         },
         {
+          value: "diffs-language-pack",
+          label: "Diff Viewer Language Pack",
+          hint: "OpenClaw diffs viewer syntax highlighting language pack",
+        },
+        {
           value: "diffs",
           label: "Diffs",
           hint: "OpenClaw diff viewer plugin",

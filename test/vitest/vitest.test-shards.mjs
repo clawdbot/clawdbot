@@ -35,7 +35,11 @@ export const fullSuiteVitestShards = [
   {
     config: "test/vitest/vitest.full-core-support-boundary.config.ts",
     name: "core-support-boundary",
-    projects: ["test/vitest/vitest.boundary.config.ts", "test/vitest/vitest.tooling.config.ts"],
+    projects: [
+      "test/vitest/vitest.boundary.config.ts",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
+    ],
   },
   {
     config: "test/vitest/vitest.full-core-contracts.config.ts",
@@ -88,7 +92,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
       "test/vitest/vitest.agents-core.config.ts",
-      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.daemon.config.ts",

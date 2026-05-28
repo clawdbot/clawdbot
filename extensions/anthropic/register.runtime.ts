@@ -261,6 +261,32 @@ function resolveAnthropic46ForwardCompatModel(params: {
   });
 }
 
+function buildAnthropicForwardCompatModel(
+  ctx: ProviderResolveDynamicModelContext,
+): ProviderRuntimeModel | undefined {
+  const trimmedModelId = ctx.modelId.trim();
+  const lower = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  if (trimmedModelId !== lower || !matchesAnthropicModernModel(lower)) {
+    return undefined;
+  }
+  const provider =
+    normalizeLowercaseStringOrEmpty(ctx.provider) === CLAUDE_CLI_BACKEND_ID
+      ? CLAUDE_CLI_BACKEND_ID
+      : PROVIDER_ID;
+  return {
+    id: trimmedModelId,
+    name: trimmedModelId,
+    provider,
+    api: "anthropic-messages",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 64_000,
+  };
+}
+
 function resolveAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -288,7 +314,8 @@ function resolveAnthropicForwardCompatModel(
       dashTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
       dotTemplateId: ANTHROPIC_SONNET_46_MODEL_ID,
       fallbackTemplateIds: [ANTHROPIC_SONNET_46_MODEL_ID, ANTHROPIC_SONNET_46_DOT_MODEL_ID],
-    })
+    }) ??
+    buildAnthropicForwardCompatModel(ctx)
   );
 }
 

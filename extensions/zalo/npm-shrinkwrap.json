@@ -1,17 +1,17 @@
 {
   "name": "@openclaw/zalo",
-  "version": "2026.5.26",
+  "version": "2026.5.28",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/zalo",
-      "version": "2026.5.26",
+      "version": "2026.5.28",
       "dependencies": {
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.26"
+        "openclaw": ">=2026.5.28"
       },
       "peerDependenciesMeta": {
         "openclaw": {

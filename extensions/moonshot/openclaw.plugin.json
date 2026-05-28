@@ -6,6 +6,10 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["moonshot"],
+  "providerAuthAliases": {
+    "moonshotai": "moonshot",
+    "moonshot-ai": "moonshot"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "moonshot-native",
@@ -120,8 +124,13 @@
       "moonshot": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "moonshot": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "moonshot",
+        "envVars": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

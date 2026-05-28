@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { buildBootstrapInjectionStats } from "./bootstrap-budget.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { AgentTool } from "./runtime/index.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
@@ -13,42 +13,8 @@ const toolSchemaStatsCache = new WeakMap<
   Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">
 >();
 
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function normalizeForStableHash(value: unknown, seen = new WeakSet<object>()): unknown {
-  if (typeof value === "bigint") {
-    return `${value.toString()}n`;
-  }
-  if (value && typeof value === "object") {
-    if (seen.has(value)) {
-      return "[Circular]";
-    }
-    seen.add(value);
-    if (Array.isArray(value)) {
-      const normalized = value.map((entry) => normalizeForStableHash(entry, seen));
-      seen.delete(value);
-      return normalized;
-    }
-    const record = value as Record<string, unknown>;
-    const normalized = Object.fromEntries(
-      Object.keys(record)
-        .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key], seen)]),
-    );
-    seen.delete(value);
-    return normalized;
-  }
-  return value;
-}
-
-function stableJsonHash(value: unknown): string {
-  try {
-    return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
-  } catch {
-    return sha256("[unserializable]");
-  }
+function sha256(input: string): string {
+  return createHash("sha256").update(input).digest("hex");
 }
 
 function extractBetween(input: string, startMarker: string, endMarker: string): string {
@@ -80,21 +46,21 @@ function buildToolSchemaStats(
   parameters: AgentTool["parameters"],
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
-    return { schemaChars: 0, schemaHash: stableJsonHash(null), propertiesCount: null };
+    return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
   }
   const cached = toolSchemaStatsCache.get(parameters);
   if (cached) {
     return cached;
   }
+  let schemaJson = "";
+  try {
+    schemaJson = JSON.stringify(parameters);
+  } catch {
+    schemaJson = "";
+  }
   const stats = {
-    schemaChars: (() => {
-      try {
-        return JSON.stringify(parameters).length;
-      } catch {
-        return 0;
-      }
-    })(),
-    schemaHash: stableJsonHash(parameters),
+    schemaChars: schemaJson.length,
+    schemaHash: sha256(schemaJson),
     propertiesCount: (() => {
       const schema = parameters as Record<string, unknown>;
       const props = typeof schema.properties === "object" ? schema.properties : null;
@@ -167,9 +133,9 @@ export function buildSystemPromptReport(params: {
     sandbox: params.sandbox,
     systemPrompt: {
       chars: systemPromptChars,
+      hash: sha256(params.systemPrompt),
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
-      hash: sha256(params.systemPrompt),
     },
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
     injectedWorkspaceFiles: buildBootstrapInjectionStats({

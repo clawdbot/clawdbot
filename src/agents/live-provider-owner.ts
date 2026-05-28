@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 type LiveProviderOwnerContext = {
@@ -19,7 +19,7 @@ function resolveCachedOwningPluginIdsForProvider(
     return cached;
   }
   const owners =
-    resolveOwningPluginIdsForProvider({
+    resolveOwningPluginIdsForProviderRef({
       provider: normalized,
       config: context.config,
       workspaceDir: context.workspaceDir,

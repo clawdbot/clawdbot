@@ -215,4 +215,10 @@ describe("channelsLogsCommand", () => {
     expect(payload.file).toBe(configuredFile);
     expect(payload.lines).toStrictEqual([]);
   });
+
+  it("rejects partial line limits", async () => {
+    await expect(channelsLogsCommand({ lines: "2x", json: true }, runtime)).rejects.toThrow(
+      "--lines must be a positive integer.",
+    );
+  });
 });

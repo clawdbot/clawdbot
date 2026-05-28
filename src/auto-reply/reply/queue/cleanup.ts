@@ -1,4 +1,4 @@
-import { resolveEmbeddedSessionLane } from "../../../agents/pi-embedded-runner/lanes.js";
+import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
 import { clearCommandLane } from "../../../process/command-queue.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { clearFollowupDrainCallback } from "./drain.js";

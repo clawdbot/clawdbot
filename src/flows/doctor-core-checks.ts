@@ -288,7 +288,7 @@ const bootstrapSizeCheck: HealthCheck = {
       await import("../agents/bootstrap-budget.js");
     const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
     const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
-      await import("../agents/pi-embedded-helpers.js");
+      await import("../agents/embedded-agent-helpers.js");
     const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
     const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
       workspaceDir,

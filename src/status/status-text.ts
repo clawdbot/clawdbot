@@ -281,6 +281,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
   const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
     modelRefs.selected.label,
     modelRefs.active.label,
+    { config: cfg },
   );
   if (
     shouldPreferActiveRuntimeAliasAuthLabel({

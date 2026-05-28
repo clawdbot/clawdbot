@@ -154,6 +154,29 @@ describe("talk-voice plugin", () => {
     });
   });
 
+  it("does not coerce partial voice list limits", async () => {
+    const { command, runtime } = createHarness({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            apiKey: "sk-eleven",
+          },
+        },
+      },
+    });
+    vi.mocked(runtime.tts.listVoices).mockResolvedValue(
+      Array.from({ length: 13 }, (_, index) => ({
+        id: `voice-${index}`,
+        name: `Voice ${index}`,
+      })),
+    );
+
+    const result = await command.handler(createCommandContext("list 1x"));
+
+    expect(result.text).toContain("(showing first 12)");
+  });
+
   it("surfaces richer provider voice metadata when available", async () => {
     const { command, runtime } = createHarness({
       talk: {

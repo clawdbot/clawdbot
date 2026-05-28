@@ -268,6 +268,26 @@ describe("media-generation runtime shared normalization", () => {
     ).toBe("1K");
   });
 
+  it("maps video-style resolutions by numeric distance", () => {
+    expect(
+      resolveClosestResolution({
+        requestedResolution: "480P",
+        supportedResolutions: ["360P", "540P", "720P"],
+        order: ["360P", "480P", "540P", "720P"],
+      }),
+    ).toBe("540P");
+  });
+
+  it("does not map across image and video resolution units", () => {
+    expect(
+      resolveClosestResolution({
+        requestedResolution: "4K",
+        supportedResolutions: ["768P", "1080P"],
+        order: ["360P", "480P", "540P", "720P", "768P", "1080P"],
+      }),
+    ).toBeUndefined();
+  });
+
   it("clamps durations to the closest supported max", () => {
     expect(normalizeDurationToClosestMax(12, 8)).toBe(8);
     expect(normalizeDurationToClosestMax(6, 8)).toBe(6);

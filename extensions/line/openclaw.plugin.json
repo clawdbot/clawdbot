@@ -1,5 +1,7 @@
 {
   "id": "line",
+  "name": "LINE",
+  "description": "OpenClaw LINE channel plugin for LINE Bot API chats.",
   "activation": {
     "onStartup": false
   },

@@ -1,10 +1,10 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { estimateBase64DecodedBytes } from "../../media/base64.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { extractAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { extractAssistantText } from "../pi-embedded-utils.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
 export type ImageModelConfig = ToolModelConfig;

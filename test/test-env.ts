@@ -174,7 +174,6 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
-    { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
     { key: "TELEGRAM_BOT_TOKEN", value: process.env.TELEGRAM_BOT_TOKEN },
     { key: "DISCORD_BOT_TOKEN", value: process.env.DISCORD_BOT_TOKEN },
     { key: "SLACK_BOT_TOKEN", value: process.env.SLACK_BOT_TOKEN },
@@ -205,7 +204,6 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
   delete process.env.OPENCLAW_STATE_DIR;
   delete process.env.OPENCLAW_AGENT_DIR;
-  delete process.env.PI_CODING_AGENT_DIR;
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
   delete process.env.OPENCLAW_GATEWAY_PORT;
   delete process.env.OPENCLAW_BRIDGE_ENABLED;

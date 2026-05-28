@@ -1,5 +1,5 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
-import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
+import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";

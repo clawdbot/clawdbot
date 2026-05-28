@@ -532,6 +532,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
       "subagent:child": sessionStoreEntry("sess-child", {
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/subagent-workspace",
+        spawnedCwd: "/tmp/task-repo",
         forkedFromParent: true,
         spawnDepth: 2,
         subagentRole: "orchestrator",
@@ -568,6 +569,7 @@ test("sessions.changed mutation events include subagent ownership metadata", asy
     reason: "patch",
     spawnedBy: "agent:main:main",
     spawnedWorkspaceDir: "/tmp/subagent-workspace",
+    spawnedCwd: "/tmp/task-repo",
     forkedFromParent: true,
     spawnDepth: 2,
     subagentRole: "orchestrator",

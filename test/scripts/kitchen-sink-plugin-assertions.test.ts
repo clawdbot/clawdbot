@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
+const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   "only bundled plugins can register trusted tool policies",
   "plugin must declare contracts.tools for: kitchen-sink-tool",
@@ -114,6 +115,17 @@ function runAssertInstalled({
   }
 }
 
+function runScanLogs({ home, scratchRoot }: { home: string; scratchRoot: string }) {
+  return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "scan-logs"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: home,
+      KITCHEN_SINK_TMP_DIR: scratchRoot,
+    },
+  });
+}
+
 describe("kitchen-sink plugin assertions", () => {
   it("fails full-surface installs when stable diagnostic canaries disappear", () => {
     const result = runAssertInstalled();
@@ -142,5 +154,75 @@ describe("kitchen-sink plugin assertions", () => {
     expect(`${result.stdout}\n${result.stderr}`).toContain(
       "cli registration missing explicit commands metadata",
     );
+  });
+
+  it("scans only the configured kitchen-sink scratch root", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    const siblingRoot = path.join(parent, "sibling");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+      mkdirSync(siblingRoot, { recursive: true });
+      writeFileSync(path.join(scratchRoot, "large.log"), `${"x".repeat(70 * 1024)}\n0 errors\n`);
+      writeFileSync(path.join(siblingRoot, "stale.log"), "[ERROR] stale sibling failure\n");
+
+      const result = runScanLogs({ home, scratchRoot });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain("log scan passed");
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("stale sibling failure");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds repeated kitchen-sink log scan findings", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    const home = path.join(parent, "home");
+    const scratchRoot = path.join(parent, "scratch");
+    try {
+      mkdirSync(home, { recursive: true });
+      mkdirSync(scratchRoot, { recursive: true });
+      writeFileSync(
+        path.join(scratchRoot, "errors.log"),
+        Array.from({ length: 105 }, (_, index) => `[ERROR] failure ${index}`).join("\n"),
+      );
+
+      const result = runScanLogs({ home, scratchRoot });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("additional findings omitted");
+      expect(`${result.stdout}\n${result.stderr}`).not.toContain("[ERROR] failure 104");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects kitchen-sink log scans without an isolated scratch root", () => {
+    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+    try {
+      const spawnEnv = { ...process.env, HOME: parent };
+      delete spawnEnv.KITCHEN_SINK_TMP_DIR;
+      const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "scan-logs"], {
+        encoding: "utf8",
+        env: spawnEnv,
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toContain("KITCHEN_SINK_TMP_DIR is required");
+    } finally {
+      rmSync(parent, { force: true, recursive: true });
+    }
+  });
+
+  it("allocates an isolated scratch root by default", () => {
+    const sweep = readFileSync(SWEEP_SCRIPT, "utf8");
+
+    expect(sweep).toContain('mktemp -d "/tmp/openclaw-kitchen-sink.XXXXXX"');
+    expect(sweep).toContain('mktemp -d "${KITCHEN_SINK_TMP_DIR}/clawhub.XXXXXX"');
+    expect(sweep).not.toContain('KITCHEN_SINK_TMP_DIR="${KITCHEN_SINK_TMP_DIR:-/tmp}"');
+    expect(sweep).not.toContain('mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX"');
   });
 });

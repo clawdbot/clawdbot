@@ -1,0 +1,251 @@
+import type { HeartbeatToolResponse } from "../../auto-reply/heartbeat-tool-response.js";
+import type {
+  CliSessionBinding,
+  SessionContextBudgetStatus,
+  SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
+import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
+import type { AcceptedSessionSpawn } from "../accepted-session-spawn.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../embedded-agent-messaging.types.js";
+import type { FallbackAttempt } from "../model-fallback.types.js";
+import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
+
+export type EmbeddedAgentMeta = {
+  sessionId: string;
+  sessionFile?: string;
+  provider: string;
+  model: string;
+  contextTokens?: number;
+  agentHarnessId?: string;
+  fallbackAttempts?: FallbackAttempt[];
+  cliSessionBinding?: CliSessionBinding;
+  compactionCount?: number;
+  /**
+   * Token count estimate after the most recent successful auto-compaction.
+   * Used as the freshest context snapshot when the follow-up model call omits
+   * usage metadata.
+   */
+  compactionTokensAfter?: number;
+  /**
+   * Prompt/context snapshot from the latest model request. Prefer this for
+   * context-window utilization because provider usage totals can include cached
+   * and completion tokens that are useful for billing but noisy as live context.
+   */
+  promptTokens?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    reasoningTokens?: number;
+    total?: number;
+  };
+  /**
+   * Usage from the last individual API call (not accumulated across tool-use
+   * loops or compaction retries). Used for context-window utilization display
+   * (`totalTokens` in sessions.json) because the accumulated `usage.input`
+   * sums input tokens from every API call in the run, which overstates the
+   * actual context size.
+   */
+  lastCallUsage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    reasoningTokens?: number;
+    total?: number;
+  };
+  contextBudgetStatus?: SessionContextBudgetStatus;
+};
+
+export type TraceAttempt = {
+  provider: string;
+  model: string;
+  result:
+    | "success"
+    | "timeout"
+    | "surface_error"
+    | "candidate_failed"
+    | "rotate_profile"
+    | "fallback_model"
+    | "aborted"
+    | "error";
+  reason?: string;
+  stage?: "prompt" | "assistant";
+  elapsedMs?: number;
+  status?: number;
+};
+
+export type ExecutionTrace = {
+  winnerProvider?: string;
+  winnerModel?: string;
+  attempts?: TraceAttempt[];
+  fallbackUsed?: boolean;
+  runner?: "embedded" | "cli";
+};
+
+export type RequestShapingTrace = {
+  authMode?: string;
+  thinking?: string;
+  reasoning?: string;
+  verbose?: string;
+  trace?: string;
+  fallbackEligible?: boolean;
+  blockStreaming?: string;
+};
+
+export type PromptSegmentTrace = {
+  key: string;
+  chars: number;
+};
+
+export type ToolSummaryTrace = {
+  calls: number;
+  tools: string[];
+  failures?: number;
+  totalToolTimeMs?: number;
+};
+
+export type CompletionTrace = {
+  finishReason?: string;
+  stopReason?: string;
+  refusal?: boolean;
+};
+
+export type ContextManagementTrace = {
+  sessionCompactions?: number;
+  lastTurnCompactions?: number;
+  preflightCompactionApplied?: boolean;
+  postCompactionContextInjected?: boolean;
+};
+
+export type EmbeddedRunLivenessState = "working" | "paused" | "blocked" | "abandoned";
+
+export type EmbeddedRunFailureSignal = {
+  kind: "execution_denied";
+  source: "tool";
+  toolName?: string;
+  code: "SYSTEM_RUN_DENIED" | "INVALID_REQUEST";
+  message: string;
+  fatalForCron: true;
+};
+
+export type EmbeddedAgentRunMeta = {
+  durationMs: number;
+  agentMeta?: EmbeddedAgentMeta;
+  aborted?: boolean;
+  systemPromptReport?: SessionSystemPromptReport;
+  finalPromptText?: string;
+  finalAssistantVisibleText?: string;
+  finalAssistantRawText?: string;
+  replayInvalid?: boolean;
+  livenessState?: EmbeddedRunLivenessState;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
+  agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  terminalReplyKind?: "silent-empty";
+  yielded?: boolean;
+  error?: {
+    kind:
+      | "context_overflow"
+      | "compaction_failure"
+      | "role_ordering"
+      | "image_size"
+      | "retry_limit"
+      | "hook_block";
+    message: string;
+  };
+  failureSignal?: EmbeddedRunFailureSignal;
+  /** Stop reason for the agent run (e.g., "completed", "tool_calls"). */
+  stopReason?: string;
+  /** Pending tool calls when stopReason is "tool_calls". */
+  pendingToolCalls?: Array<{
+    id: string;
+    name: string;
+    arguments: string;
+  }>;
+  executionTrace?: ExecutionTrace;
+  requestShaping?: RequestShapingTrace;
+  promptSegments?: PromptSegmentTrace[];
+  toolSummary?: ToolSummaryTrace;
+  completion?: CompletionTrace;
+  contextManagement?: ContextManagementTrace;
+};
+
+export type EmbeddedAgentRunResult = {
+  payloads?: Array<{
+    text?: string;
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    replyToId?: string;
+    isError?: boolean;
+    isReasoning?: boolean;
+    audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
+    channelData?: Record<string, unknown>;
+  }>;
+  meta: EmbeddedAgentRunMeta;
+  diagnosticTrace?: DiagnosticTraceContext;
+  // True if a messaging tool successfully sent a message.
+  // Used to suppress agent's confirmation text.
+  didSendViaMessagingTool?: boolean;
+  // True if a deterministic approval prompt was sent through the tool-result channel.
+  didSendDeterministicApprovalPrompt?: boolean;
+  // Texts successfully sent via messaging tools during the run.
+  messagingToolSentTexts?: string[];
+  // Media URLs successfully sent via messaging tools during the run.
+  messagingToolSentMediaUrls?: string[];
+  // Messaging tool targets that successfully sent a message during the run.
+  messagingToolSentTargets?: MessagingToolSend[];
+  // Message-tool replies delivered to the active internal UI source.
+  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
+  // Child sessions successfully accepted by sessions_spawn during the run.
+  acceptedSessionSpawns?: AcceptedSessionSpawn[];
+  // Structured heartbeat outcome recorded by the heartbeat response tool.
+  heartbeatToolResponse?: HeartbeatToolResponse;
+  // Count of successful cron.add tool calls in this run.
+  successfulCronAdds?: number;
+};
+
+export type EmbeddedAgentCompactResult = {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+  /** Structured failure metadata used by model fallback classification. */
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+    rawError?: string;
+  };
+  result?: {
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+    tokensAfter?: number;
+    details?: unknown;
+    sessionId?: string;
+    sessionFile?: string;
+  };
+};
+
+export type EmbeddedFullAccessBlockedReason = "sandbox" | "host-policy" | "channel" | "runtime";
+
+export type EmbeddedSandboxInfo = {
+  enabled: boolean;
+  workspaceDir?: string;
+  containerWorkspaceDir?: string;
+  workspaceAccess?: "none" | "ro" | "rw";
+  agentWorkspaceMount?: string;
+  browserBridgeUrl?: string;
+  hostBrowserAllowed?: boolean;
+  elevated?: {
+    allowed: boolean;
+    defaultLevel: "on" | "off" | "ask" | "full";
+    fullAccessAvailable: boolean;
+    fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
+  };
+};

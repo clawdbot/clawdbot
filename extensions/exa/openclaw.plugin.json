@@ -3,8 +3,13 @@
   "activation": {
     "onStartup": false
   },
-  "providerAuthEnvVars": {
-    "exa": ["EXA_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "exa",
+        "envVars": ["EXA_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {

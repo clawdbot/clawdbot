@@ -1,5 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { resolveDefaultDiscordAccountId } from "../accounts.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import {

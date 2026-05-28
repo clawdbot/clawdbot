@@ -33,13 +33,23 @@ export type ConnectAuthState = {
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
 };
 
-type VerifyDeviceTokenResult = { ok: boolean; reason?: string };
+type SharedGatewayAuthDeviceTokenIssuer = {
+  kind: "shared-gateway-auth";
+  generation: string;
+};
+
+type VerifyDeviceTokenResult = {
+  ok: boolean;
+  reason?: string;
+  issuer?: SharedGatewayAuthDeviceTokenIssuer;
+};
 type VerifyBootstrapTokenResult = { ok: boolean; reason?: string };
 
 export type ConnectAuthDecision = {
   authResult: GatewayAuthResult;
   authOk: boolean;
   authMethod: GatewayAuthResult["method"];
+  deviceTokenSharedGatewaySessionGeneration?: string;
 };
 
 function mapDeviceTokenAuthFailureReason(params: {
@@ -173,6 +183,7 @@ export async function resolveConnectAuthDecision(params: {
   let authResult = params.state.authResult;
   let authOk = params.state.authOk;
   let authMethod = params.state.authMethod;
+  let deviceTokenSharedGatewaySessionGeneration: string | undefined;
 
   const bootstrapTokenCandidate = params.state.bootstrapTokenCandidate;
   if (params.hasDeviceIdentity && params.deviceId && params.publicKey && bootstrapTokenCandidate) {
@@ -227,6 +238,9 @@ export async function resolveConnectAuthDecision(params: {
     if (tokenCheck.ok) {
       authOk = true;
       authMethod = "device-token";
+      if (tokenCheck.issuer?.kind === "shared-gateway-auth") {
+        deviceTokenSharedGatewaySessionGeneration = tokenCheck.issuer.generation;
+      }
       params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
       if (params.state.sharedAuthProvided) {
         params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
@@ -244,5 +258,10 @@ export async function resolveConnectAuthDecision(params: {
     }
   }
 
-  return { authResult, authOk, authMethod };
+  return {
+    authResult,
+    authOk,
+    authMethod,
+    deviceTokenSharedGatewaySessionGeneration,
+  };
 }

@@ -4,13 +4,12 @@ import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import "../components/modal-dialog.ts";
 import type {
-  ExecApprovalAction,
   ExecApprovalDecision,
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
 } from "../controllers/exec-approval.ts";
 
-const DEFAULT_APPROVAL_DECISIONS = [
+const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",
@@ -115,105 +114,47 @@ ${active.pluginDescription}</pre
   `;
 }
 
-function decisionLabel(decision: ExecApprovalDecision): string {
-  if (decision === "allow-once") {
-    return t("execApproval.allowOnce");
-  }
-  if (decision === "allow-always") {
-    return t("execApproval.alwaysAllow");
+function approvalDecisionLabel(decision: ExecApprovalDecision): string {
+  switch (decision) {
+    case "allow-once":
+      return t("execApproval.allowOnce");
+    case "allow-always":
+      return t("execApproval.alwaysAllow");
+    case "deny":
+      return t("execApproval.deny");
   }
   return t("execApproval.deny");
 }
 
-function decisionStyle(decision: ExecApprovalDecision): ExecApprovalAction["style"] {
-  if (decision === "allow-once") {
-    return "primary";
+function approvalDecisionClass(decision: ExecApprovalDecision): string {
+  switch (decision) {
+    case "allow-once":
+      return "btn primary";
+    case "allow-always":
+      return "btn";
+    case "deny":
+      return "btn danger";
   }
-  if (decision === "deny") {
-    return "danger";
-  }
-  return "secondary";
+  return "btn danger";
 }
 
-function buttonClass(style: ExecApprovalAction["style"]) {
-  if (style === "danger") {
-    return "btn danger";
-  }
-  if (style === "primary" || style === "success") {
-    return "btn primary";
-  }
-  return "btn";
-}
-
-function resolveExecApprovalDecisions(
-  active: ExecApprovalRequest,
-): readonly ExecApprovalDecision[] {
+function resolveApprovalDecisions(active: ExecApprovalRequest): readonly ExecApprovalDecision[] {
   if (active.request.allowedDecisions?.length) {
     return active.request.allowedDecisions;
   }
-  if (active.request.ask === "always") {
+  if (active.kind === "exec" && active.request.ask === "always") {
     return ["allow-once", "deny"];
   }
-  return DEFAULT_APPROVAL_DECISIONS;
-}
-
-function resolveApprovalActions(active: ExecApprovalRequest): ExecApprovalAction[] {
-  if (active.kind === "exec") {
-    return resolveExecApprovalDecisions(active).map((decision) => ({
-      kind: "decision",
-      decision,
-      label: decisionLabel(decision),
-      style: decisionStyle(decision),
-    }));
-  }
-  const actions = [...(active.actions ?? [])];
-  const representedDecisions = new Set(
-    actions.flatMap((action) => (action.kind === "decision" ? [action.decision] : [])),
-  );
-  const allowedDecisions =
-    active.allowedDecisions ?? active.request.allowedDecisions ?? DEFAULT_APPROVAL_DECISIONS;
-  for (const decision of allowedDecisions) {
-    if (representedDecisions.has(decision)) {
-      continue;
-    }
-    actions.push({
-      kind: "decision",
-      decision,
-      label: decisionLabel(decision),
-      style: decisionStyle(decision),
-    });
-  }
-  return actions;
-}
-
-function resolveDecisionValues(actions: readonly ExecApprovalAction[]): ExecApprovalDecision[] {
-  return actions.flatMap((action) => (action.kind === "decision" ? [action.decision] : []));
+  return DEFAULT_EXEC_APPROVAL_DECISIONS;
 }
 
 function renderUnavailableDecisionWarning(
   active: ExecApprovalRequest,
-  actions: readonly ExecApprovalAction[],
+  decisions: readonly ExecApprovalDecision[],
 ) {
-  const decisions = resolveDecisionValues(actions);
   return active.kind !== "exec" || decisions.includes("allow-always")
     ? nothing
     : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
-}
-
-function renderApprovalAction(action: ExecApprovalAction, state: AppViewState) {
-  if (action.kind === "command") {
-    return html`<div class="exec-approval-command-action">
-      <span>${action.label}</span>
-      <code>${action.command}</code>
-    </div>`;
-  }
-  return html`<button
-    class=${buttonClass(action.style)}
-    ?disabled=${state.execApprovalBusy}
-    @click=${() => state.handleExecApprovalDecision(action.decision)}
-  >
-    ${action.label}
-  </button>`;
 }
 
 export function renderExecApprovalPrompt(state: AppViewState) {
@@ -234,8 +175,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
     : t("execApproval.execApprovalNeeded");
   const titleId = "exec-approval-title";
   const descriptionId = "exec-approval-description";
-  const actions = resolveApprovalActions(active);
-  const decisions = resolveDecisionValues(actions);
+  const decisions = resolveApprovalDecisions(active);
   const handleCancel = () => {
     if (!state.execApprovalBusy && decisions.includes("deny")) {
       void state.handleExecApprovalDecision("deny");
@@ -256,12 +196,22 @@ export function renderExecApprovalPrompt(state: AppViewState) {
             : nothing}
         </div>
         ${isPlugin ? renderPluginBody(active) : renderExecBody(request)}
-        ${renderUnavailableDecisionWarning(active, actions)}
+        ${renderUnavailableDecisionWarning(active, decisions)}
         ${state.execApprovalError
           ? html`<div class="exec-approval-error">${state.execApprovalError}</div>`
           : nothing}
         <div class="exec-approval-actions">
-          ${actions.map((action) => renderApprovalAction(action, state))}
+          ${decisions.map(
+            (decision) => html`
+              <button
+                class=${approvalDecisionClass(decision)}
+                ?disabled=${state.execApprovalBusy}
+                @click=${() => state.handleExecApprovalDecision(decision)}
+              >
+                ${approvalDecisionLabel(decision)}
+              </button>
+            `,
+          )}
         </div>
       </div>
     </openclaw-modal-dialog>

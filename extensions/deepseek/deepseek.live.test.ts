@@ -1,16 +1,16 @@
 import {
   completeSimple,
   streamSimple,
-  Type,
   type AssistantMessage,
   type Context,
   type Model,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
 } from "openclaw/plugin-sdk/test-env";
+import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";

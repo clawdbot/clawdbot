@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
@@ -1038,7 +1038,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    // Agent-run delivery is a live projection; Pi message_end owns persisted
+    // Agent-run delivery is a live projection; message_end owns persisted
     // assistant transcript entries, including stale media/text final payloads.
     expect(assistantUpdates).toStrictEqual([]);
     const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
@@ -1086,7 +1086,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (update.message as { role?: unknown }).role === "assistant",
     );
     // Normal agent-run final text must not be mirrored into JSONL by WebChat;
-    // Pi persists the model-visible assistant turn from message_end.
+    // The agent runtime persists the model-visible assistant turn from message_end.
     expect(assistantUpdates).toStrictEqual([]);
     const transcriptLines = readTranscriptJsonLines(mockState.transcriptPath);
     const assistantEntries = transcriptLines.filter(

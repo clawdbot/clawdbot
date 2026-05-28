@@ -61,16 +61,32 @@
       "destination": "/channels/matrix-migration"
     },
     {
+      "source": "/mcp",
+      "destination": "/cli/mcp"
+    },
+    {
       "source": "/help/gpt54-codex-agentic-parity",
-      "destination": "/help/gpt55-codex-agentic-parity"
+      "destination": "/agent-runtime-architecture"
     },
     {
       "source": "/help/gpt54-codex-agentic-parity-maintainers",
-      "destination": "/help/gpt55-codex-agentic-parity-maintainers"
+      "destination": "/agent-runtime-architecture"
     },
     {
-      "source": "/mcp",
-      "destination": "/cli/mcp"
+      "source": "/help/gpt55-codex-agentic-parity",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/help/gpt55-codex-agentic-parity-maintainers",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/pi",
+      "destination": "/agent-runtime-architecture"
+    },
+    {
+      "source": "/pi-dev",
+      "destination": "/openclaw-agent-runtime"
     },
     {
       "source": "/providers/modelstudio",
@@ -1050,7 +1066,7 @@
               },
               {
                 "group": "Advanced setup",
-                "pages": ["start/setup", "pi-dev"]
+                "pages": ["start/setup", "openclaw-agent-runtime"]
               }
             ]
           },
@@ -1406,6 +1422,7 @@
                   "providers/opencode-go",
                   "providers/openrouter",
                   "providers/perplexity-provider",
+                  "providers/pixverse",
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
@@ -1766,7 +1783,7 @@
               {
                 "group": "Technical reference",
                 "pages": [
-                  "pi",
+                  "agent-runtime-architecture",
                   "reference/wizard",
                   "reference/token-use",
                   "reference/secretref-credential-surface",
@@ -1786,9 +1803,7 @@
                   "concepts/markdown-formatting",
                   "concepts/typing-indicators",
                   "concepts/usage-tracking",
-                  "concepts/timezone",
-                  "help/gpt55-codex-agentic-parity",
-                  "help/gpt55-codex-agentic-parity-maintainers"
+                  "concepts/timezone"
                 ]
               },
               {

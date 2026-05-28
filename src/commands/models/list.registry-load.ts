@@ -1,9 +1,8 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
-import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
+import { loadAgentModelRegistry } from "../../agents/model-registry-loader.js";
 import { shouldSuppressBuiltInModel } from "../../agents/model-suppression.js";
-import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import type { Model } from "../../llm/types.js";
 import { loadModelRegistry } from "./list.registry.js";
 import type { ConfiguredEntry } from "./list.types.js";
 import { modelKey } from "./shared.js";
@@ -28,7 +27,7 @@ function findConfiguredRegistryModel(params: {
   registry: ModelRegistry;
   entry: ConfiguredEntry;
   cfg: OpenClawConfig;
-}): Model<Api> | undefined {
+}): Model | undefined {
   const model = params.registry.find(params.entry.ref.provider, params.entry.ref.model);
   if (!model) {
     return undefined;
@@ -51,13 +50,8 @@ export function loadConfiguredListModelRegistry(
   entries: ConfiguredEntry[],
   opts?: { providerFilter?: string; workspaceDir?: string },
 ) {
-  const agentDir = resolveDefaultAgentDir(cfg);
-  const authStorage = discoverAuthStorage(agentDir, {
-    readOnly: true,
-    config: cfg,
+  const { registry } = loadAgentModelRegistry(cfg, {
     workspaceDir: opts?.workspaceDir,
-  });
-  const registry = discoverModels(authStorage, agentDir, {
     providerFilter: opts?.providerFilter,
   });
   const discoveredKeys = new Set<string>();

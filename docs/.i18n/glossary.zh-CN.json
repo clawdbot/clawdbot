@@ -4,6 +4,14 @@
     "target": "OpenClaw"
   },
   {
+    "source": "macOS platform notes",
+    "target": "macOS 平台说明"
+  },
+  {
+    "source": "Logging",
+    "target": "日志"
+  },
+  {
     "source": "iMessage",
     "target": "iMessage"
   },
@@ -1050,6 +1058,30 @@
   {
     "source": "Plugin architecture",
     "target": "插件架构"
+  },
+  {
+    "source": "Agent runtime architecture",
+    "target": "Agent runtime architecture"
+  },
+  {
+    "source": "OpenClaw agent runtime workflow",
+    "target": "OpenClaw agent runtime workflow"
+  },
+  {
+    "source": "OpenClaw agent runtime architecture",
+    "target": "OpenClaw agent runtime architecture"
+  },
+  {
+    "source": "Install and Configure Plugins",
+    "target": "安装和配置插件"
+  },
+  {
+    "source": "Building Plugins",
+    "target": "Building Plugins"
+  },
+  {
+    "source": "Plugin Manifest",
+    "target": "Plugin Manifest"
   },
   {
     "source": "Z.AI (GLM)",

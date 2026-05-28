@@ -238,7 +238,7 @@ describe("maybeRepairLegacyCronStore", () => {
     await writeCronStore(storePath, [
       {
         id: "alias-pinned",
-        name: "Alias pinned",
+        name: "Alias the native runtime",
         enabled: true,
         createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
         updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
@@ -259,7 +259,7 @@ describe("maybeRepairLegacyCronStore", () => {
         cron: { store: storePath },
         agents: {
           defaults: {
-            model: { primary: "pi:opus", fallbacks: [] },
+            model: { primary: "test:opus", fallbacks: [] },
           },
         },
       },

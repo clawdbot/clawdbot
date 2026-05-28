@@ -7,13 +7,13 @@ import { resolveUserPath } from "../utils.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
-import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "./pi-embedded-helpers.js";
+} from "./embedded-agent-helpers.js";
+import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
 import {
   DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,

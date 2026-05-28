@@ -1,8 +1,8 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { resolveFailoverReasonFromError } from "../agents/failover-error.js";
-import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";

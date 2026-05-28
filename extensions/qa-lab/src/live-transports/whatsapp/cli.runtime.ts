@@ -1,8 +1,6 @@
+import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
-import {
-  printLiveTransportQaArtifacts,
-  resolveLiveTransportQaRunOptions,
-} from "../shared/live-transport-cli.runtime.js";
+import { resolveLiveTransportQaRunOptions } from "../shared/live-transport-cli.runtime.js";
 import { runWhatsAppQaLive } from "./whatsapp-live.runtime.js";
 
 export async function runQaWhatsAppCommand(opts: LiveTransportQaCommandOptions) {

@@ -5,19 +5,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as pdfExtractModule from "../../media/pdf-extract.js";
 import * as webMedia from "../../media/web-media.js";
+import * as modelDiscovery from "../agent-model-discovery.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as modelAuth from "../model-auth.js";
 import * as modelsConfig from "../models-config.js";
-import * as modelDiscovery from "../pi-model-discovery.js";
 import * as pdfNativeProviders from "./pdf-native-providers.js";
 import * as pdfModelConfigModule from "./pdf-tool.model-config.js";
 import { resetPdfToolAuthEnv, withTempPdfAgentDir } from "./pdf-tool.test-support.js";
 
 const completeMock = vi.hoisted(() => vi.fn());
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const actual =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("../../llm/stream.js", async () => {
+  const actual = await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
   return {
     ...actual,
     complete: completeMock,

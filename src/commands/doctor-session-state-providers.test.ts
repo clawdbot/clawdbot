@@ -107,7 +107,7 @@ describe("doctor session state provider routes", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5" },
-            agentRuntime: { id: "pi" },
+            agentRuntime: { id: "openclaw" },
           },
         },
       },
@@ -153,7 +153,7 @@ describe("doctor session state provider routes", () => {
         [sessionKey]: {
           defaultProvider: "github-copilot",
           configuredModelRefs: ["github-copilot/gpt-5-mini"],
-          runtime: "pi",
+          runtime: "openclaw",
         },
       },
     });
@@ -222,7 +222,7 @@ describe("doctor session state provider routes", () => {
         [sessionKey]: {
           defaultProvider: "github-copilot",
           configuredModelRefs: ["github-copilot/gpt-5-mini"],
-          runtime: "pi",
+          runtime: "openclaw",
         },
       },
     });
@@ -260,7 +260,7 @@ describe("doctor session state provider routes", () => {
         [sessionKey]: {
           defaultProvider: "github-copilot",
           configuredModelRefs: ["github-copilot/gpt-5-mini", "openai-codex/gpt-5.4"],
-          runtime: "pi",
+          runtime: "openclaw",
         },
       },
     });
@@ -340,7 +340,7 @@ describe("doctor session state provider routes", () => {
         [sessionKey]: {
           defaultProvider: "openai",
           configuredModelRefs: ["openai/gpt-5.5"],
-          runtime: "pi",
+          runtime: "openclaw",
         },
       },
     });
@@ -419,7 +419,7 @@ describe("doctor session state provider routes", () => {
         [sessionKey]: {
           defaultProvider: "anthropic",
           configuredModelRefs: ["anthropic/claude-opus-4.7"],
-          runtime: "pi",
+          runtime: "openclaw",
         },
       },
     });
@@ -457,7 +457,7 @@ describe("doctor session state provider routes", () => {
         [sessionKey]: {
           defaultProvider: "openai",
           configuredModelRefs: ["openai/gpt-5.5"],
-          runtime: "pi",
+          runtime: "openclaw",
         },
       },
     });

@@ -1,4 +1,4 @@
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
@@ -7,6 +7,7 @@ const ensureCustomApiRegistered = vi.fn();
 const resolveProviderStreamFn = vi.fn();
 const buildTransportAwareSimpleStreamFn = vi.fn();
 const createOpenClawTransportStreamFnForModel = vi.fn();
+const createTransportAwareStreamFnForModel = vi.fn();
 const prepareTransportAwareSimpleModel = vi.fn();
 const resolveTransportAwareSimpleApi = vi.fn();
 
@@ -21,6 +22,7 @@ vi.mock("./custom-api-registry.js", () => ({
 vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn,
   createOpenClawTransportStreamFnForModel,
+  createTransportAwareStreamFnForModel,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 }));
@@ -48,12 +50,14 @@ describe("prepareModelForSimpleCompletion", () => {
     resolveProviderStreamFn.mockReset();
     buildTransportAwareSimpleStreamFn.mockReset();
     createOpenClawTransportStreamFnForModel.mockReset();
+    createTransportAwareStreamFnForModel.mockReset();
     prepareTransportAwareSimpleModel.mockReset();
     resolveTransportAwareSimpleApi.mockReset();
     createAnthropicVertexStreamFnForModel.mockReturnValue("vertex-stream");
     resolveProviderStreamFn.mockReturnValue("ollama-stream");
     buildTransportAwareSimpleStreamFn.mockReturnValue(undefined);
     createOpenClawTransportStreamFnForModel.mockReturnValue(undefined);
+    createTransportAwareStreamFnForModel.mockReturnValue(undefined);
     prepareTransportAwareSimpleModel.mockImplementation((model) => model);
     resolveTransportAwareSimpleApi.mockReturnValue(undefined);
   });

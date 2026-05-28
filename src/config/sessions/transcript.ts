@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "../../agents/runtime/index.js";
+import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -17,6 +17,8 @@ import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
+import { writeJsonlEntry } from "./transcript-jsonl.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import {
@@ -25,36 +27,17 @@ import {
 } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
-let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
-  null;
-
-async function loadPiCodingAgentModule(): Promise<
-  typeof import("@earendil-works/pi-coding-agent")
-> {
-  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
-  return await piCodingAgentModulePromise;
-}
-
 async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
+  cwd?: string;
 }): Promise<void> {
   if (fs.existsSync(params.sessionFile)) {
     return;
   }
-  const { CURRENT_SESSION_VERSION } = await loadPiCodingAgentModule();
   await fs.promises.mkdir(path.dirname(params.sessionFile), { recursive: true });
-  const header = {
-    type: "session",
-    version: CURRENT_SESSION_VERSION,
-    id: params.sessionId,
-    timestamp: new Date().toISOString(),
-    cwd: process.cwd(),
-  };
-  await fs.promises.writeFile(params.sessionFile, `${JSON.stringify(header)}\n`, {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  const header = createSessionTranscriptHeader({ sessionId: params.sessionId, cwd: params.cwd });
+  await writeJsonlEntry(params.sessionFile, header, { mode: 0o600 });
 }
 
 export type SessionTranscriptAppendResult =
@@ -337,7 +320,11 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       } = await runWithOwnedSessionTranscriptWritePublication(
         { sessionFile, sessionKey: resolved.normalizedKey },
         async () => {
-          await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+          await ensureSessionHeader({
+            sessionFile,
+            sessionId: entry.sessionId,
+            cwd: entry.spawnedCwd,
+          });
           return await appendSessionTranscriptMessage({
             transcriptPath: sessionFile,
             message,

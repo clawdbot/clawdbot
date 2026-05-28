@@ -118,7 +118,7 @@ describe("codex plugin", () => {
     expect((mockCallArg(registerProvider) as { id?: string } | undefined)?.id).toBe("codex");
   });
 
-  it("only claims the codex provider by default", () => {
+  it("claims the Codex routing providers by default", () => {
     const harness = createCodexAppServerAgentHarness();
 
     expect(harness.deliveryDefaults?.sourceVisibleReplies).toBe("message_tool");
@@ -126,8 +126,14 @@ describe("codex plugin", () => {
       harness.supports({ provider: "codex", modelId: "gpt-5.4", requestedRuntime: "auto" })
         .supported,
     ).toBe(true);
-    const unsupported = harness.supports({
+    const openAiCodex = harness.supports({
       provider: "openai-codex",
+      modelId: "gpt-5.4",
+      requestedRuntime: "auto",
+    });
+    expect(openAiCodex.supported).toBe(true);
+    const unsupported = harness.supports({
+      provider: "9router",
       modelId: "gpt-5.4",
       requestedRuntime: "auto",
     });

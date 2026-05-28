@@ -2,10 +2,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveVisibleModelCatalog } from "../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
-import {
-  isModelPickerVisibleModelRef,
-  isModelPickerVisibleProvider,
-} from "../agents/model-picker-visibility.js";
+import { createModelPickerVisibleProviderPredicate } from "../agents/model-picker-visibility.js";
 import { createProviderAuthChecker } from "../agents/model-provider-auth.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import {
@@ -27,7 +24,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
@@ -244,13 +241,14 @@ async function addModelSelectOption(params: {
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => Promise<boolean>;
   literalPrefixProviders: Set<string>;
+  isVisibleProvider: (provider: string) => boolean;
 }) {
   const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
   const key = modelKey(normalizedRef.provider, normalizedRef.model);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
-    !isModelPickerVisibleProvider(normalizedRef.provider)
+    !params.isVisibleProvider(normalizedRef.provider)
   ) {
     return;
   }
@@ -304,6 +302,7 @@ async function addModelKeySelectOption(params: {
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
   hasAuth: (provider: string) => Promise<boolean>;
   literalPrefixProviders?: Set<string>;
+  isVisibleProvider: (provider: string) => boolean;
   fallbackHint: string;
 }) {
   const entry = splitModelKey(params.key);
@@ -318,6 +317,7 @@ async function addModelKeySelectOption(params: {
     aliasIndex: params.aliasIndex,
     hasAuth: params.hasAuth,
     literalPrefixProviders: params.literalPrefixProviders ?? EMPTY_LITERAL_PREFIX_PROVIDERS,
+    isVisibleProvider: params.isVisibleProvider,
   });
   if (params.seen.size > before) {
     const option = params.options.at(-1);
@@ -334,7 +334,7 @@ function createPreferredProviderMatcher(params: {
   env?: NodeJS.ProcessEnv;
 }): (entryProvider: string) => boolean {
   const normalizedPreferredProvider = normalizeProviderId(params.preferredProvider);
-  const preferredOwnerPluginIds = resolveOwningPluginIdsForProvider({
+  const preferredOwnerPluginIds = resolveOwningPluginIdsForProviderRef({
     provider: normalizedPreferredProvider,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -355,7 +355,7 @@ function createPreferredProviderMatcher(params: {
     }
     const value =
       !!preferredOwnerPluginIdSet &&
-      !!resolveOwningPluginIdsForProvider({
+      !!resolveOwningPluginIdsForProviderRef({
         provider: normalizedEntryProvider,
         config: params.cfg,
         workspaceDir: params.workspaceDir,
@@ -415,8 +415,9 @@ async function maybeFilterModelsByProvider(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  isVisibleProvider: (provider: string) => boolean;
 }): Promise<typeof params.models> {
-  let next = params.models.filter((entry) => isModelPickerVisibleProvider(entry.provider));
+  let next = params.models.filter((entry) => params.isVisibleProvider(entry.provider));
   const providerIds = sortUniqueStrings(next.map((entry) => entry.provider));
   const hasPreferredProvider = !!params.preferredProvider;
   const shouldPromptProvider =
@@ -704,7 +705,7 @@ export async function promptDefaultModel(
   const catalogProgress = params.prompter.progress(t("wizard.model.loadingModels"));
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>>;
   try {
-    catalog = await loadPickerModelCatalog(cfg);
+    catalog = await loadPickerModelCatalog(cfg, { preferredProvider });
   } finally {
     catalogProgress.stop();
   }
@@ -738,6 +739,11 @@ export async function promptDefaultModel(
     });
   }
 
+  const isVisibleProvider = createModelPickerVisibleProviderPredicate({
+    config: cfg,
+    env: params.env,
+    includeSetupRegistry: true,
+  });
   const filteredModels = await maybeFilterModelsByProvider({
     models,
     preferredProvider,
@@ -745,6 +751,7 @@ export async function promptDefaultModel(
     cfg,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    isVisibleProvider,
   });
   if (filteredModels.length === 0) {
     return promptManualModel({
@@ -807,6 +814,7 @@ export async function promptDefaultModel(
       aliasIndex,
       hasAuth,
       literalPrefixProviders,
+      isVisibleProvider,
     });
   }
   if (configuredKey && !seen.has(configuredKey)) {
@@ -947,6 +955,11 @@ export async function promptModelAllowlist(params: {
           })
         : [];
   if (scopedFastKeys.length > 0) {
+    const isVisibleProvider = createModelPickerVisibleProviderPredicate({
+      config: cfg,
+      env: params.env,
+      includeSetupRegistry: true,
+    });
     const scopeKeys = allowedKeys.length > 0 ? allowedKeys : scopedFastKeys;
     const scopeKeySet = new Set(scopeKeys);
     const initialKeys = normalizeModelKeys(initialSeeds.filter((key) => scopeKeySet.has(key)));
@@ -964,6 +977,7 @@ export async function promptModelAllowlist(params: {
         seen,
         aliasIndex,
         hasAuth,
+        isVisibleProvider,
         fallbackHint:
           allowedKeys.length > 0 ? t("wizard.model.allowed") : t("wizard.model.configured"),
       });
@@ -1037,6 +1051,15 @@ export async function promptModelAllowlist(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  const isVisibleProvider = createModelPickerVisibleProviderPredicate({
+    config: cfg,
+    env: params.env,
+    includeSetupRegistry: true,
+  });
+  const isVisibleModelRef = (ref: string): boolean => {
+    const separatorIndex = ref.indexOf("/");
+    return separatorIndex <= 0 || isVisibleProvider(ref.slice(0, separatorIndex));
+  };
 
   const options: WizardSelectOption[] = [];
   const seen = new Set<string>();
@@ -1044,7 +1067,7 @@ export async function promptModelAllowlist(params: {
     allowedKeySet
       ? catalog.filter((entry) => allowedKeySet.has(modelKey(entry.provider, entry.id)))
       : catalog
-  ).filter((entry) => isModelPickerVisibleProvider(entry.provider));
+  ).filter((entry) => isVisibleProvider(entry.provider));
   const filteredCatalog =
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
@@ -1067,7 +1090,7 @@ export async function promptModelAllowlist(params: {
       : initialSeeds;
   const initialKeys = allowedKeySet
     ? initialSeeds.filter((key) => allowedKeySet.has(key))
-    : selectableInitialSeeds.filter(isModelPickerVisibleModelRef);
+    : selectableInitialSeeds.filter(isVisibleModelRef);
 
   for (const entry of filteredCatalog) {
     await addModelSelectOption({
@@ -1077,11 +1100,12 @@ export async function promptModelAllowlist(params: {
       aliasIndex,
       hasAuth,
       literalPrefixProviders,
+      isVisibleProvider,
     });
   }
 
   const supplementalKeys = (allowedKeySet ? allowedKeys : selectableInitialSeeds).filter(
-    isModelPickerVisibleModelRef,
+    isVisibleModelRef,
   );
   for (const key of supplementalKeys) {
     if (seen.has(key)) {
@@ -1266,9 +1290,17 @@ export function applyModelFallbacksFromSelection(
     scopeKeySet && !includesResolvedPrimary
       ? rawSelectedFallbacks.filter((key) => existingFallbackSet.has(key))
       : rawSelectedFallbacks;
+  const isVisibleProvider = createModelPickerVisibleProviderPredicate({
+    config: cfg,
+    includeSetupRegistry: true,
+  });
+  const isVisibleModelRef = (ref: string): boolean => {
+    const separatorIndex = ref.indexOf("/");
+    return separatorIndex <= 0 || isVisibleProvider(ref.slice(0, separatorIndex));
+  };
   const preserveExistingFallback = scopeKeySet
     ? (fallback: string) => !scopeKeySet.has(fallback)
-    : (fallback: string) => !isModelPickerVisibleModelRef(fallback);
+    : (fallback: string) => !isVisibleModelRef(fallback);
   const fallbacks = mergeFallbackSelection({
     existingFallbacks,
     selectedFallbacks,

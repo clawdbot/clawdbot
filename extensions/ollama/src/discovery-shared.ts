@@ -18,9 +18,6 @@ type OllamaDiscoveryContext = {
   config: {
     models?: {
       providers?: Record<string, ModelProviderConfig | undefined>;
-      ollamaDiscovery?: {
-        enabled?: boolean;
-      };
     };
   };
   env: NodeJS.ProcessEnv;
@@ -239,8 +236,7 @@ export async function resolveOllamaDiscoveryResult(params: {
   const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
     params.ctx.config.models?.providers,
   );
-  const discoveryEnabled =
-    params.pluginConfig.discovery?.enabled ?? params.ctx.config.models?.ollamaDiscovery?.enabled;
+  const discoveryEnabled = params.pluginConfig.discovery?.enabled;
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }

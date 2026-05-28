@@ -127,9 +127,6 @@ function isAnthropicCacheRetentionTarget(
 }
 
 function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
-  if (config.agents?.defaults?.agentRuntime?.id === CLAUDE_CLI_BACKEND_ID) {
-    return true;
-  }
   const primary = resolveModelPrimaryValue(
     config.agents?.defaults?.model as
       | string

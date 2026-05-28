@@ -55,11 +55,11 @@ describe("sessionsCommand model resolution", () => {
       {
         modelProvider: "openai-codex",
         model: "gpt-5.4",
-        modelOverride: "pi:opus",
+        modelOverride: "test:opus",
       },
       "subagent-1",
     );
-    expect(model).toBe("pi:opus");
+    expect(model).toBe("test:opus");
   });
 
   it("falls back to modelOverride when runtime model is missing", async () => {

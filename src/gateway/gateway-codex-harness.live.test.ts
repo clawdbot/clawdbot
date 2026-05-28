@@ -237,16 +237,15 @@ async function writeLiveGatewayConfig(params: {
         },
       },
     },
-    // The Codex plugin owns the `codex/*` catalog/auth marker. Keeping the
-    // fixture on that provider proves the app-server harness path instead of
-    // exercising legacy OpenAI-Codex provider overrides.
+    // The Codex plugin owns the `codex/*` catalog/auth marker. Keeping runtime
+    // policy on the model entry proves the app-server harness path.
     agents: {
       defaults: {
         workspace: params.workspace,
-        agentRuntime: { id: "codex" },
         skipBootstrap: true,
         timeoutSeconds: CODEX_HARNESS_AGENT_TIMEOUT_SECONDS,
         model: { primary: params.modelKey },
+        models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         sandbox: { mode: "off" },
       },
       list: [
@@ -254,7 +253,6 @@ async function writeLiveGatewayConfig(params: {
           id: "dev",
           default: true,
           workspace: params.workspace,
-          agentRuntime: { id: "codex" },
           model: { primary: params.modelKey },
           models: { [params.modelKey]: { agentRuntime: { id: "codex" } } },
         },

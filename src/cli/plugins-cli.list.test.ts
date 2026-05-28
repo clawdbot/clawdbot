@@ -229,7 +229,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain("Set plugins.entries.acpx.enabled=true");
     expect(output).toContain("disable ACP/acpx in acp config");
-    expect(output).not.toContain('runtime policy to "pi"');
+    expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
     expect(output).not.toContain("No plugin issues detected.");
   });
@@ -252,7 +252,7 @@ describe("plugins cli list", () => {
     expect(output).toContain('Configured runtime "acpx" requires the ACPX Runtime plugin');
     expect(output).toContain('Enable the "acpx" plugin');
     expect(output).toContain("disable ACP/acpx in acp config");
-    expect(output).not.toContain('runtime policy to "pi"');
+    expect(output).not.toContain('runtime policy to "openclaw"');
     expect(output).not.toContain("openclaw plugins install @openclaw/acpx");
     expect(output).not.toContain("No plugin issues detected.");
   });

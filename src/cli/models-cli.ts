@@ -17,10 +17,7 @@ export function registerModelsCli(program: Command) {
     .description("Model discovery, scanning, and configuration")
     .option("--status-json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
-    .option(
-      "--agent <id>",
-      "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
-    )
+    .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .addHelpText(
       "after",
       () =>
@@ -66,10 +63,7 @@ export function registerModelsCli(program: Command) {
     .option("--probe-timeout <ms>", "Per-probe timeout in ms")
     .option("--probe-concurrency <n>", "Concurrent probes")
     .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
-    .option(
-      "--agent <id>",
-      "Agent id to inspect (overrides OPENCLAW_AGENT_DIR/PI_CODING_AGENT_DIR)",
-    )
+    .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .action(async (opts, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command, opts);
@@ -333,10 +327,7 @@ export function registerModelsCli(program: Command) {
     .option("--provider <id>", "Provider id registered by a plugin")
     .option("--method <id>", "Provider auth method id")
     .option("--device-code", "Use the provider device-code auth method", false)
-    .option(
-      "--profile-id <id>",
-      "Auth profile id override for single-profile login methods",
-    )
+    .option("--profile-id <id>", "Auth profile id override for single-profile login methods")
     .option("--set-default", "Apply the provider's default model recommendation", false)
     .action(async (opts, command) => {
       if (opts.deviceCode && typeof opts.method === "string" && opts.method !== "device-code") {

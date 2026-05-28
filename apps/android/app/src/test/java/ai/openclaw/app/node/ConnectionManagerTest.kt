@@ -4,8 +4,8 @@ import ai.openclaw.app.LocationMode
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.VoiceWakeMode
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gateway.isLoopbackGatewayHost
-import ai.openclaw.app.gateway.isPrivateLanGatewayHost
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawCapability
@@ -109,7 +109,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun resolveTlsParamsForEndpoint_manualPrivateLanForcesTlsWhenToggleIsOff() {
+  fun resolveTlsParamsForEndpoint_manualPrivateLanRespectsManualTlsToggle() {
     val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
 
     val params =
@@ -119,9 +119,21 @@ class ConnectionManagerTest {
         manualTlsEnabled = false,
       )
 
-    assertEquals(true, params?.required)
-    assertNull(params?.expectedFingerprint)
-    assertEquals(false, params?.allowTOFU)
+    assertNull(params)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_manualPrivateLanCleartextCanOverrideStoredPin() {
+    val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = "pinned",
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
   }
 
   @Test
@@ -245,11 +257,11 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun isPrivateLanGatewayHost_acceptsLanIpsButRejectsMdnsAndTailnetHosts() {
-    assertTrue(isPrivateLanGatewayHost("192.168.1.20"))
-    assertFalse(isPrivateLanGatewayHost("gateway.local"))
-    assertFalse(isPrivateLanGatewayHost("100.64.0.9"))
-    assertFalse(isPrivateLanGatewayHost("gateway.tailnet.ts.net"))
+  fun isLocalCleartextGatewayHost_acceptsLanIpsButRejectsMdnsAndTailnetHosts() {
+    assertTrue(isLocalCleartextGatewayHost("192.168.1.20"))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local"))
+    assertFalse(isLocalCleartextGatewayHost("100.64.0.9"))
+    assertFalse(isLocalCleartextGatewayHost("gateway.tailnet.ts.net"))
   }
 
   @Test

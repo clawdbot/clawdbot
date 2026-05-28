@@ -172,12 +172,14 @@ export async function ensureOpenClawModelsJson(
     (agentDirOverride?.trim()
       ? undefined
       : resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)));
+  const providerScopedDiscovery = Boolean(options.providerDiscoveryProviderIds?.length);
   const pluginMetadataSnapshot =
     options.pluginMetadataSnapshot ??
     resolvePluginMetadataSnapshot({
       config: cfg,
       env: createConfigRuntimeEnv(cfg),
       ...(workspaceDir ? { workspaceDir } : {}),
+      ...(providerScopedDiscovery ? { preferPersisted: false } : {}),
     });
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveDefaultAgentDir(cfg);
   const targetPath = path.join(agentDir, "models.json");

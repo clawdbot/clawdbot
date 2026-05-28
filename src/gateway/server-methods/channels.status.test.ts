@@ -143,7 +143,6 @@ describe("channelsHandlers channels.status", () => {
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
-      env: process.env,
     });
     const snapshotArgs = requireRecord(requireFirstCallArg(mocks.buildChannelAccountSnapshot));
     expect(snapshotArgs.cfg).toBe(autoEnabledConfig);

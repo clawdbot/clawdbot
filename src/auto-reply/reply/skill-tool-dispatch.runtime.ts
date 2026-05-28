@@ -1,11 +1,11 @@
-import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
-} from "../../agents/pi-tools.policy.js";
-import type { AnyAgentTool } from "../../agents/pi-tools.types.js";
+} from "../../agents/agent-tools.policy.js";
+import type { AnyAgentTool } from "../../agents/agent-tools.types.js";
+import { createOpenClawTools } from "../../agents/openclaw-tools.runtime.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../../agents/sender-tool-policy.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";

@@ -176,6 +176,23 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("does not reuse persisted plugin metadata for provider-scoped discovery", async () => {
+    await withModelsTempHome(async (home) => {
+      const workspaceDir = path.join(home, "agent-workspace");
+      const snapshot = createPluginMetadataSnapshot(workspaceDir);
+      setCurrentPluginMetadataSnapshot(snapshot, { config: {} });
+      const agentDir = path.join(home, "agent-non-default");
+
+      await ensureOpenClawModelsJson({}, agentDir, {
+        workspaceDir,
+        providerDiscoveryProviderIds: ["google"],
+      });
+
+      const params = planParamsAt(0);
+      expect(params.pluginMetadataSnapshot).not.toBe(snapshot);
+    });
+  });
+
   it("writes implicit models.json into the configured default agent dir", async () => {
     await withModelsTempHome(async (home) => {
       const cfg = {

@@ -1,13 +1,13 @@
 import { vi } from "vitest";
+import { normalizeHostname } from "../infra/net/hostname.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import type { LookupFn } from "../infra/net/ssrf.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export function mockPinnedHostnameResolution(addresses: string[] = ["93.184.216.34"]) {
   const resolvePinnedHostname = ssrf.resolvePinnedHostname;
   const resolvePinnedHostnameWithPolicy = ssrf.resolvePinnedHostnameWithPolicy;
   const lookupFn = (async (hostname: string, options?: { all?: boolean }) => {
-    const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.$/, "");
+    const normalized = normalizeHostname(hostname);
     const resolved = addresses.map((address) => ({
       address,
       family: address.includes(":") ? 6 : 4,

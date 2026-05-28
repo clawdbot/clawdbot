@@ -584,7 +584,7 @@ function describeCronSeamKinds(relativePath, source) {
   const seamKinds = [];
   const importsAgentRunner = hasAnyImportSource(source, [
     "../../agents/cli-runner.js",
-    "../../agents/pi-embedded.js",
+    "../../agents/embedded-agent.js",
     "../../agents/model-fallback.js",
     "../../agents/subagent-registry.js",
     "../../infra/agent-events.js",
@@ -625,7 +625,7 @@ function describeCronSeamKinds(relativePath, source) {
 
   if (
     importsAgentRunner &&
-    /\brunCliAgent\b|\brunEmbeddedPiAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
+    /\brunCliAgent\b|\brunEmbeddedAgent\b|\brunWithModelFallback\b|\bregisterAgentRunContext\b/.test(
       source,
     )
   ) {
@@ -746,7 +746,7 @@ function describeSubagentSeamKinds(relativePath, source) {
 
   if (
     (importsAnnounceDelivery || isAnnounceDispatchPath) &&
-    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedPiMessage\b|\bwaitForEmbeddedPiRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
+    /\brunSubagentAnnounceFlow\b|\brunSubagentAnnounceDispatch\b|\benqueueAnnounce\b|\bcreateBoundDeliveryRouter\b|\bqueueEmbeddedAgentMessage\b|\bwaitForEmbeddedAgentRunEnd\b|\bqueue-fallback\b|\bdirect-primary\b/.test(
       source,
     )
   ) {

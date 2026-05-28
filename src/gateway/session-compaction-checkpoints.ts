@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
-  CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   SessionManager,
-  type FileEntry as PiSessionFileEntry,
-} from "@earendil-works/pi-coding-agent";
+  type FileEntry as SessionFileEntry,
+} from "../agents/sessions/session-manager.js";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
@@ -15,6 +14,7 @@ import type {
 } from "../config/sessions.js";
 import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/artifacts.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
+import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGatewaySessionStoreTarget } from "./session-utils.js";
@@ -214,8 +214,8 @@ function parseTranscriptLineId(
 async function readTranscriptEntriesForForkAsync(params: {
   sessionFile: string;
   stopAfterEntryId?: string;
-}): Promise<PiSessionFileEntry[] | null> {
-  const entries: PiSessionFileEntry[] = [];
+}): Promise<SessionFileEntry[] | null> {
+  const entries: SessionFileEntry[] = [];
   const stopAfterEntryId = params.stopAfterEntryId?.trim();
   let foundStopEntry = false;
   try {
@@ -225,7 +225,7 @@ async function readTranscriptEntriesForForkAsync(params: {
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           continue;
         }
-        entries.push(parsed as PiSessionFileEntry);
+        entries.push(parsed as SessionFileEntry);
         if (
           stopAfterEntryId &&
           (parsed as { type?: unknown; id?: unknown }).type !== "session" &&
@@ -235,7 +235,7 @@ async function readTranscriptEntriesForForkAsync(params: {
           break;
         }
       } catch {
-        // Match pi-coding-agent's loader: malformed JSONL entries are ignored.
+        // Match session runtime's loader: malformed JSONL entries are ignored.
       }
     }
   } catch {
@@ -252,9 +252,9 @@ async function readTranscriptEntriesForForkAsync(params: {
 }
 
 function trimTranscriptEntriesThroughLeaf(
-  entries: PiSessionFileEntry[],
+  entries: SessionFileEntry[],
   leafId: string | undefined,
-): PiSessionFileEntry[] | null {
+): SessionFileEntry[] | null {
   const normalizedLeafId = leafId?.trim();
   if (!normalizedLeafId) {
     return entries;

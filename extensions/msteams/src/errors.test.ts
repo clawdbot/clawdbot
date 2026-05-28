@@ -41,6 +41,24 @@ describe("msteams errors", () => {
     expect(result.retryAfterMs).toBe(1500);
   });
 
+  it("does not parse partial retry-after values", () => {
+    expect(
+      classifyMSTeamsSendError({ statusCode: 429, retryAfter: "1.5s" }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: { "retry-after": "2 seconds" } },
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: new Headers({ "retry-after": "3 seconds" }) },
+      }).retryAfterMs,
+    ).toBeUndefined();
+  });
+
   it("classifies transient errors", () => {
     const result = classifyMSTeamsSendError({ statusCode: 503 });
     expect(result.kind).toBe("transient");

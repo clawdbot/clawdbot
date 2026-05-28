@@ -8,6 +8,14 @@ import {
   replyRunRegistry,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
+import {
+  getDiagnosticSessionActivitySnapshot,
+  resetDiagnosticRunActivityForTest,
+} from "../logging/diagnostic-run-activity.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   makeBootstrapWarn as realMakeBootstrapWarn,
@@ -45,6 +53,7 @@ type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 
 beforeEach(() => {
   resetAgentEventsForTest();
+  resetDiagnosticRunActivityForTest();
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
   restoreCliRunnerPrepareTestDeps();
@@ -53,6 +62,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
+  resetDiagnosticRunActivityForTest();
   resetClaudeLiveSessionsForTest();
   replyRunTesting.resetReplyRunRegistry();
 });
@@ -73,6 +84,7 @@ function buildPreparedCliRunContext(params: {
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
   thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   workspaceDir?: string;
+  timeoutMs?: number;
 }): PreparedCliRunContext {
   const workspaceDir = params.workspaceDir ?? "/tmp";
   const baseBackend =
@@ -116,7 +128,7 @@ function buildPreparedCliRunContext(params: {
       provider: params.provider,
       model: params.model,
       thinkLevel: params.thinkLevel,
-      timeoutMs: 1_000,
+      timeoutMs: params.timeoutMs ?? 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
     },
@@ -622,6 +634,7 @@ describe("runCliAgent spawn path", () => {
       sessionId: "openclaw-session",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
+      cwd: "/tmp/task-repo",
       prompt: "hi",
       timeoutMs: 1_000,
       runId: "run-claude-channel-wrapper",
@@ -631,6 +644,7 @@ describe("runCliAgent spawn path", () => {
 
     expect(params.messageChannel).toBe("telegram");
     expect(params.messageProvider).toBe("acp");
+    expect(params.cwd).toBe("/tmp/task-repo");
   });
 
   it("forwards static extra system prompt through the compat wrapper", () => {
@@ -1600,6 +1614,164 @@ ${JSON.stringify({
     expect(parsed.response.request_id).toBe("req-allow");
     expect(parsed.response.response.behavior).toBe("allow");
     expect(parsed.response.response.toolUseID).toBe("tool-allow-1");
+  });
+
+  it("reports Claude live stream progress and keeps native tools fresh while they are running", async () => {
+    vi.useFakeTimers({
+      toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+    });
+    vi.setSystemTime(new Date("2026-05-28T00:00:00.000Z"));
+    const diagnosticEvents: string[] = [];
+    const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+      if (event.type === "run.progress" || event.type.startsWith("tool.execution.")) {
+        diagnosticEvents.push(event.type);
+      }
+    });
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          [
+            JSON.stringify({
+              type: "system",
+              subtype: "init",
+              session_id: "live-diagnostics",
+            }),
+            JSON.stringify({
+              type: "assistant",
+              session_id: "live-diagnostics",
+              message: {
+                role: "assistant",
+                content: [
+                  {
+                    type: "tool_use",
+                    id: "tool-live-1",
+                    name: "Bash",
+                    input: { command: "sleep 45" },
+                  },
+                ],
+              },
+            }),
+          ].join("\n") + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-diagnostics",
+        pid: 3060,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    try {
+      const context = buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-diagnostics",
+        sessionId: "session-live-diagnostics",
+        sessionKey: "agent:main:diagnostics",
+        prompt: "hello",
+        backend: { liveSession: "claude-stdio" },
+        timeoutMs: 120_000,
+      });
+      const resultPromise = runClaudeLiveSessionTurn({
+        context,
+        args: context.preparedBackend.backend.args ?? [],
+        env: {},
+        prompt: "hello",
+        useResume: false,
+        noOutputTimeoutMs: 120_000,
+        getProcessSupervisor: () => ({
+          spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+            supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+          cancel: vi.fn(),
+          cancelScope: vi.fn(),
+          reconcileOrphans: vi.fn(),
+          getRecord: vi.fn(),
+        }),
+        onAssistantDelta: () => {},
+        cleanup: async () => {},
+      });
+
+      await waitForDiagnosticEventsDrained();
+      await vi.waitFor(() =>
+        expect(
+          getDiagnosticSessionActivitySnapshot({
+            sessionKey: "agent:main:diagnostics",
+          }).activeToolName,
+        ).toBe("Bash"),
+      );
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
+          .lastProgressReason,
+      ).toBe("cli_live:tool_started");
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      await waitForDiagnosticEventsDrained();
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
+          .lastProgressReason,
+      ).toBe("cli_live:tool_running");
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
+          .lastProgressAgeMs,
+      ).toBeLessThan(100);
+
+      stdoutListener?.(
+        [
+          JSON.stringify({
+            type: "user",
+            session_id: "live-diagnostics",
+            message: {
+              role: "user",
+              content: [
+                {
+                  type: "tool_result",
+                  tool_use_id: "tool-live-1",
+                  content: "done",
+                },
+              ],
+            },
+          }),
+          JSON.stringify({
+            type: "assistant",
+            session_id: "live-diagnostics",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "ok" }],
+            },
+          }),
+          JSON.stringify({
+            type: "result",
+            session_id: "live-diagnostics",
+            result: "ok",
+          }),
+        ].join("\n") + "\n",
+      );
+
+      await expect(resultPromise).resolves.toMatchObject({ output: { text: "ok" } });
+      await waitForDiagnosticEventsDrained();
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
+          .activeToolName,
+      ).toBeUndefined();
+      expect(
+        getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
+          .lastProgressReason,
+      ).toBe("cli_live:result");
+      expect(diagnosticEvents).toContain("tool.execution.started");
+      expect(diagnosticEvents).toContain("tool.execution.completed");
+    } finally {
+      stopDiagnostics();
+    }
   });
 
   it("answers Claude live control_request can_use_tool with deny when exec policy is restrictive", async () => {

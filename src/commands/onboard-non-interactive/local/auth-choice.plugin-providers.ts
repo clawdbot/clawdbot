@@ -65,10 +65,13 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       workspaceDir,
       includeUntrustedWorkspacePlugins: false,
     }));
-  const { resolveOwningPluginIdsForProvider, resolveProviderPluginChoice, resolvePluginProviders } =
-    await loadAuthChoicePluginProvidersRuntime();
+  const {
+    resolveOwningPluginIdsForProviderRef,
+    resolveProviderPluginChoice,
+    resolvePluginProviders,
+  } = await loadAuthChoicePluginProvidersRuntime();
   const owningPluginIds = preferredProviderId
-    ? resolveOwningPluginIdsForProvider({
+    ? resolveOwningPluginIdsForProviderRef({
         provider: preferredProviderId,
         config: params.nextConfig,
         workspaceDir,

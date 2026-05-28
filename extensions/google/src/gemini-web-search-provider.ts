@@ -92,17 +92,25 @@ function withGoogleModelProviderFallbacks(
     return searchConfig;
   }
   const gemini = isRecord(searchConfig?.gemini) ? { ...searchConfig.gemini } : {};
-  const mergedSearchConfig = searchConfig ? { ...searchConfig } : {};
+  const mergedSearchConfig: Record<string, unknown> = searchConfig
+    ? Object.defineProperties({}, Object.getOwnPropertyDescriptors(searchConfig))
+    : {};
+  const geminiDescriptor = searchConfig
+    ? Object.getOwnPropertyDescriptor(searchConfig, "gemini")
+    : undefined;
   if (provider.apiKey !== undefined) {
     gemini.providerApiKey = provider.apiKey;
   }
   if (provider.baseUrl !== undefined) {
     gemini.providerBaseUrl = provider.baseUrl;
   }
-  return {
-    ...mergedSearchConfig,
-    gemini,
-  };
+  Object.defineProperty(mergedSearchConfig, "gemini", {
+    value: gemini,
+    enumerable: geminiDescriptor?.enumerable ?? false,
+    configurable: true,
+    writable: true,
+  });
+  return mergedSearchConfig;
 }
 
 export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
@@ -144,5 +152,6 @@ export const testing = {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
   resolveGeminiModel,
+  withGoogleModelProviderFallbacks,
 } as const;
 export { testing as __testing };

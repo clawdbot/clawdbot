@@ -36,9 +36,9 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
     expect(listStaticExtensionAssetOutputs()).toEqual([
-      "dist/extensions/acpx/error-format.mjs",
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
   });
@@ -56,11 +56,14 @@ describe("runtime postbuild static assets", () => {
     `);
 
     expect(payload.outputs).toEqual([
-      "dist/extensions/acpx/error-format.mjs",
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
+      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
+    expect(payload.sources).toContain(
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    );
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
   });
 

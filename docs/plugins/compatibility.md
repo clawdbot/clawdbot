@@ -130,6 +130,9 @@ Current compatibility records include:
   `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
+- legacy memory-specific embedding provider registration while embedding
+  providers move to `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`
 - legacy channel SDK helpers for native message schemas, mention gating,
   inbound envelope formatting, and approval capability nesting
 - legacy channel route key and comparable-target helper aliases while plugins

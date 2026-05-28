@@ -41,6 +41,10 @@ function normalizeOverrides(overrides) {
   return normalizeOverrideValue(overrides);
 }
 
+function isPlainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+
 function readWorkspaceOverrides() {
   const workspace = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-workspace.yaml"), "utf8"));
   return normalizeOverrides(workspace?.overrides);
@@ -162,8 +166,197 @@ function readPnpmLockVersionOverrides() {
   );
 }
 
+function addNestedOverride(overrides, parentSelector, dependencyName, version, conflicts) {
+  const current = overrides[parentSelector];
+  if (current !== undefined && !isPlainObject(current)) {
+    conflicts.add(parentSelector);
+    return;
+  }
+  const nested = current ?? {};
+  const existing = nested[dependencyName];
+  if (existing !== undefined && JSON.stringify(existing) !== JSON.stringify(version)) {
+    conflicts.add(parentSelector);
+    return;
+  }
+  nested[dependencyName] = version;
+  overrides[parentSelector] = nested;
+}
+
+function expandScopedOverrideValue(overrides, dependencyName, version, seen = new Set()) {
+  const childSelector = `${dependencyName}@${version}`;
+  if (seen.has(childSelector)) {
+    return version;
+  }
+  const childOverrides = overrides[childSelector];
+  if (!isPlainObject(childOverrides)) {
+    return version;
+  }
+  const childSeen = new Set(seen);
+  childSeen.add(childSelector);
+  return Object.fromEntries(
+    [
+      [".", version],
+      ...Object.entries(childOverrides).map(([nestedName, nestedVersion]) => [
+        nestedName,
+        typeof nestedVersion === "string"
+          ? expandScopedOverrideValue(overrides, nestedName, nestedVersion, childSeen)
+          : nestedVersion,
+      ]),
+    ].toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function expandScopedOverrideChildren(overrides) {
+  return Object.fromEntries(
+    Object.entries(overrides)
+      .map(([parentSelector, nestedOverrides]) => [
+        parentSelector,
+        isPlainObject(nestedOverrides)
+          ? Object.fromEntries(
+              Object.entries(nestedOverrides)
+                .map(([dependencyName, version]) => [
+                  dependencyName,
+                  typeof version === "string"
+                    ? expandScopedOverrideValue(overrides, dependencyName, version)
+                    : version,
+                ])
+                .toSorted(([left], [right]) => left.localeCompare(right)),
+            )
+          : typeof nestedOverrides === "string" &&
+              exactVersionFromOverrideSpec(nestedOverrides) !== null
+            ? isPlainObject(
+                overrides[`${parentSelector}@${exactVersionFromOverrideSpec(nestedOverrides)}`],
+              )
+              ? expandScopedOverrideValue(
+                  overrides,
+                  parentSelector,
+                  exactVersionFromOverrideSpec(nestedOverrides),
+                )
+              : nestedOverrides
+            : nestedOverrides,
+      ])
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  );
+}
+
+function readPnpmLockScopedVersionOverrides() {
+  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const versionsByName = collectPnpmLockPackageVersions(lockfile);
+  if (versionsByName.size === 0) {
+    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+  }
+  const forkedPackageNames = new Set(
+    [...versionsByName.entries()]
+      .filter(
+        ([, versions]) =>
+          versions.size > 1 && pnpmLockOverrideVersionForVersions(versions) === null,
+      )
+      .map(([name]) => name),
+  );
+  if (forkedPackageNames.size === 0) {
+    return {};
+  }
+
+  const overrides = {};
+  const conflicts = new Set();
+  for (const [snapshotKey, snapshot] of Object.entries(lockfile?.snapshots ?? {})) {
+    const parent = parsePnpmPackageKey(snapshotKey);
+    const dependencies = snapshot?.dependencies;
+    if (
+      !parent ||
+      !dependencies ||
+      typeof dependencies !== "object" ||
+      Array.isArray(dependencies)
+    ) {
+      continue;
+    }
+    const parentSelector = `${parent.name}@${parent.version}`;
+    for (const [dependencyName, dependencySpec] of Object.entries(dependencies)) {
+      if (!forkedPackageNames.has(dependencyName)) {
+        continue;
+      }
+      const version = exactVersionFromOverrideSpec(String(dependencySpec));
+      if (!version || !versionsByName.get(dependencyName)?.has(version)) {
+        continue;
+      }
+      addNestedOverride(overrides, parentSelector, dependencyName, version, conflicts);
+    }
+  }
+
+  for (const parentSelector of conflicts) {
+    delete overrides[parentSelector];
+  }
+  return expandScopedOverrideChildren(overrides);
+}
+
 function setKey(values) {
   return [...values].toSorted((left, right) => left.localeCompare(right)).join("\0");
+}
+
+function mergeOverrideEntry(merged, name, spec) {
+  const current = merged[name];
+  if (current === undefined) {
+    merged[name] = spec;
+    return;
+  }
+  if (isPlainObject(current) && isPlainObject(spec)) {
+    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
+      mergeOverrideEntry(current, nestedName, nestedSpec);
+    }
+    return;
+  }
+  if (
+    typeof current === "string" &&
+    isPlainObject(spec) &&
+    typeof spec["."] === "string" &&
+    exactOverrideVersionsMatch(current, spec["."])
+  ) {
+    merged[name] = { ".": preferredExactOverrideRootSpec(current, spec["."]) };
+    for (const [nestedName, nestedSpec] of Object.entries(spec)) {
+      if (nestedName === ".") {
+        continue;
+      }
+      mergeOverrideEntry(merged[name], nestedName, nestedSpec);
+    }
+    return;
+  }
+  if (
+    isPlainObject(current) &&
+    typeof spec === "string" &&
+    typeof current["."] === "string" &&
+    exactOverrideVersionsMatch(current["."], spec)
+  ) {
+    current["."] = preferredExactOverrideRootSpec(current["."], spec);
+    return;
+  }
+  if (JSON.stringify(current) !== JSON.stringify(spec)) {
+    throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
+  }
+}
+
+function preferredExactOverrideRootSpec(current, incoming) {
+  return incoming.startsWith("npm:") ? incoming : current;
+}
+
+function exactOverrideVersionsMatch(left, right) {
+  const leftVersion = exactVersionFromOverrideSpec(left);
+  if (leftVersion === null || leftVersion !== exactVersionFromOverrideSpec(right)) {
+    return false;
+  }
+  const leftAlias = parseNpmAliasOverrideSpec(left);
+  const rightAlias = parseNpmAliasOverrideSpec(right);
+  return !leftAlias || !rightAlias || leftAlias.name === rightAlias.name;
+}
+
+function parseNpmAliasOverrideSpec(spec) {
+  if (!spec.startsWith("npm:")) {
+    return null;
+  }
+  const versionIndex = spec.lastIndexOf("@");
+  if (versionIndex <= "npm:".length) {
+    return null;
+  }
+  return { name: spec.slice("npm:".length, versionIndex) };
 }
 
 function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides) {
@@ -172,17 +365,19 @@ function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides)
     ...Object.entries(workspaceOverrides),
     ...Object.entries(pnpmLockOverrides),
   ]) {
-    const current = merged[name];
-    if (current !== undefined && JSON.stringify(current) !== JSON.stringify(spec)) {
-      throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
-    }
-    merged[name] = spec;
+    mergeOverrideEntry(merged, name, spec);
   }
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
 function readShrinkwrapOverrides() {
-  return mergeOverrides(undefined, readWorkspaceOverrides(), readPnpmLockVersionOverrides());
+  return expandScopedOverrideChildren(
+    mergeOverrides(
+      undefined,
+      readWorkspaceOverrides(),
+      mergeOverrides(readPnpmLockVersionOverrides(), readPnpmLockScopedVersionOverrides(), {}),
+    ),
+  );
 }
 
 function packageJsonForShrinkwrap(packageJson, shrinkwrapOverrides) {
@@ -466,6 +661,7 @@ function generateShrinkwrap(packageDir, options = {}) {
   const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-shrinkwrap-"));
   try {
     const packageJson = JSON.parse(readFileSync(path.join(packageDir, "package.json"), "utf8"));
+    const currentShrinkwrap = readCurrentShrinkwrap(packageDir);
     const shrinkwrapOverrides = mergeOverrides(
       options.useCurrentShrinkwrapOverrides
         ? readCurrentShrinkwrapOverrides(packageDir, declaredPackageDependencies(packageJson))
@@ -488,10 +684,13 @@ function generateShrinkwrap(packageDir, options = {}) {
     runNpm(npmInstallArgs, tempDir);
     runNpm(["shrinkwrap", "--ignore-scripts", "--no-audit", "--no-fund"], tempDir);
     normalizeShrinkwrapOverrides(tempDir, shrinkwrapOverrides, npmInstallArgs);
-    const generated = normalizeNpmVersionDrift(
-      applyPackageExtensionPeerMetadata(
-        JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+    const generated = restoreCurrentPnpmLockedPackages(
+      normalizeNpmVersionDrift(
+        applyPackageExtensionPeerMetadata(
+          JSON.parse(readFileSync(path.join(tempDir, "npm-shrinkwrap.json"), "utf8")),
+        ),
       ),
+      currentShrinkwrap,
     );
     assertShrinkwrapMatchesPnpmLock(generated);
     return `${JSON.stringify(generated, null, 2)}\n`;
@@ -536,6 +735,46 @@ function declaredPackageDependencies(packageJson) {
   return dependencies;
 }
 
+function packageNameForLockPath(lockPath) {
+  return parseLockPackagePath(lockPath).at(-1)?.name;
+}
+
+function dependencyCandidatePaths(parentLockPath, dependencyName) {
+  const candidates = new Set();
+  if (parentLockPath) {
+    candidates.add(`${parentLockPath}/node_modules/${dependencyName}`);
+  }
+
+  let current = parentLockPath;
+  while (current) {
+    const nestedNodeModulesIndex = current.lastIndexOf("/node_modules/");
+    if (nestedNodeModulesIndex === -1) {
+      candidates.add(`node_modules/${dependencyName}`);
+      break;
+    }
+    const ancestorPackagePath = current.slice(0, nestedNodeModulesIndex);
+    candidates.add(`${ancestorPackagePath}/node_modules/${dependencyName}`);
+    current = ancestorPackagePath;
+  }
+  if (!parentLockPath) {
+    candidates.add(`node_modules/${dependencyName}`);
+  }
+  return [...candidates];
+}
+
+function resolveShrinkwrapDependency(packages, parentLockPath, dependencyName) {
+  for (const candidatePath of dependencyCandidatePaths(parentLockPath, dependencyName)) {
+    const candidate = packages[candidatePath];
+    if (candidate?.version) {
+      return {
+        path: candidatePath,
+        version: candidate.version,
+      };
+    }
+  }
+  return null;
+}
+
 function collectCurrentShrinkwrapOverrides(
   shrinkwrap,
   declaredDependencies = new Set(),
@@ -550,7 +789,7 @@ function collectCurrentShrinkwrapOverrides(
     if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
       continue;
     }
-    const packageName = metadata.name ?? parseLockPackagePath(lockPath).at(-1)?.name;
+    const packageName = metadata.name ?? packageNameForLockPath(lockPath);
     if (
       !packageName ||
       declaredDependencies.has(packageName) ||
@@ -562,12 +801,47 @@ function collectCurrentShrinkwrapOverrides(
     versions.add(metadata.version);
     versionsByName.set(packageName, versions);
   }
-  return Object.fromEntries(
+
+  const overrides = Object.fromEntries(
     [...versionsByName.entries()]
       .filter(([, versions]) => versions.size === 1)
       .map(([name, versions]) => [name, [...versions][0]])
       .toSorted(([left], [right]) => left.localeCompare(right)),
   );
+  const forkedPackageNames = new Set(
+    [...versionsByName.entries()].filter(([, versions]) => versions.size > 1).map(([name]) => name),
+  );
+  const conflicts = new Set();
+  for (const [lockPath, metadata] of Object.entries(packages)) {
+    if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
+      continue;
+    }
+    const parentName = metadata.name ?? packageNameForLockPath(lockPath);
+    const dependencies = metadata.dependencies;
+    if (
+      !parentName ||
+      !dependencies ||
+      typeof dependencies !== "object" ||
+      Array.isArray(dependencies)
+    ) {
+      continue;
+    }
+    const parentSelector = `${parentName}@${metadata.version}`;
+    for (const dependencyName of Object.keys(dependencies)) {
+      if (!forkedPackageNames.has(dependencyName)) {
+        continue;
+      }
+      const resolved = resolveShrinkwrapDependency(packages, lockPath, dependencyName);
+      if (!resolved || !pnpmLockPackages.has(`${dependencyName}@${resolved.version}`)) {
+        continue;
+      }
+      addNestedOverride(overrides, parentSelector, dependencyName, resolved.version, conflicts);
+    }
+  }
+  for (const parentSelector of conflicts) {
+    delete overrides[parentSelector];
+  }
+  return expandScopedOverrideChildren(overrides);
 }
 
 function readCurrentShrinkwrapOverrides(
@@ -587,6 +861,139 @@ function readCurrentShrinkwrapOverrides(
     }
     throw error;
   }
+}
+
+function readCurrentShrinkwrap(packageDir) {
+  try {
+    return JSON.parse(readFileSync(shrinkwrapPathForPackage(packageDir), "utf8"));
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function isStablePatchDrift(generatedVersion, currentVersion) {
+  const generatedParts = stableVersionParts(generatedVersion);
+  const currentParts = stableVersionParts(currentVersion);
+  return (
+    generatedParts !== null &&
+    currentParts !== null &&
+    generatedParts.major === currentParts.major &&
+    generatedParts.minor === currentParts.minor &&
+    generatedParts.patch !== currentParts.patch
+  );
+}
+
+function compareStableVersions(leftVersion, rightVersion) {
+  const left = stableVersionParts(leftVersion);
+  const right = stableVersionParts(rightVersion);
+  if (!left || !right) {
+    return null;
+  }
+  return left.major - right.major || left.minor - right.minor || left.patch - right.patch;
+}
+
+function versionSatisfiesSimpleSpec(version, spec) {
+  const normalized = typeof spec === "string" ? spec.trim() : "";
+  if (normalized === "" || normalized === "*") {
+    return true;
+  }
+  const match = normalized.match(/^(?<operator>\^|~|>=)?(?<version>\d+\.\d+\.\d+)$/u);
+  if (!match?.groups) {
+    return normalized === version;
+  }
+  const minimumVersion = match.groups.version;
+  const comparison = compareStableVersions(version, minimumVersion);
+  if (comparison === null || comparison < 0) {
+    return false;
+  }
+  const candidate = stableVersionParts(version);
+  const minimum = stableVersionParts(minimumVersion);
+  if (!candidate || !minimum) {
+    return false;
+  }
+  switch (match.groups.operator) {
+    case "^":
+      return minimum.major > 0
+        ? candidate.major === minimum.major
+        : minimum.minor > 0
+          ? candidate.major === 0 && candidate.minor === minimum.minor
+          : candidate.major === 0 && candidate.minor === 0 && candidate.patch === minimum.patch;
+    case "~":
+      return candidate.major === minimum.major && candidate.minor === minimum.minor;
+    case ">=":
+      return true;
+    default:
+      return comparison === 0;
+  }
+}
+
+function dependencySpecForLockPath(packages, lockPath, dependencyName) {
+  const packagePath = parseLockPackagePath(lockPath);
+  const parentPath = packagePath.at(-2)?.path ?? "";
+  const parent = packages[parentPath];
+  return (
+    parent?.dependencies?.[dependencyName] ??
+    parent?.optionalDependencies?.[dependencyName] ??
+    parent?.peerDependencies?.[dependencyName] ??
+    null
+  );
+}
+
+function restoreCurrentPnpmLockedPackages(
+  generated,
+  current,
+  pnpmLockPackages = readPnpmLockPackages(),
+) {
+  if (!current) {
+    return generated;
+  }
+  const generatedPackages = generated?.packages;
+  const currentPackages = current?.packages;
+  if (
+    !generatedPackages ||
+    typeof generatedPackages !== "object" ||
+    !currentPackages ||
+    typeof currentPackages !== "object"
+  ) {
+    return generated;
+  }
+
+  for (const [lockPath, metadata] of Object.entries(generatedPackages)) {
+    if (lockPath === "" || !metadata || typeof metadata !== "object" || !metadata.version) {
+      continue;
+    }
+    const packageName = metadata.name ?? packageNameForLockPath(lockPath);
+    if (!packageName || pnpmLockPackages.has(`${packageName}@${metadata.version}`)) {
+      continue;
+    }
+
+    const currentMetadata = currentPackages[lockPath];
+    const currentPackageName = currentMetadata?.name ?? packageNameForLockPath(lockPath);
+    if (
+      !currentMetadata ||
+      typeof currentMetadata !== "object" ||
+      !currentMetadata.version ||
+      currentPackageName !== packageName ||
+      !isStablePatchDrift(metadata.version, currentMetadata.version) ||
+      !versionSatisfiesSimpleSpec(
+        currentMetadata.version,
+        dependencySpecForLockPath(generatedPackages, lockPath, packageName),
+      ) ||
+      !pnpmLockPackages.has(`${packageName}@${currentMetadata.version}`)
+    ) {
+      continue;
+    }
+
+    // npm can float transitive patch ranges beyond pnpm's lock when one package
+    // name has multiple locked major lines. Keep the existing shrinkwrap entry
+    // when it still matches the canonical pnpm lock.
+    generatedPackages[lockPath] = currentMetadata;
+  }
+
+  return generated;
 }
 
 function assertShrinkwrapMatchesPnpmLock(shrinkwrap) {
@@ -864,6 +1271,7 @@ export {
   disableShrinkwrappedOverrideConflictSources,
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
+  mergeOverrides,
   applyPackageExtensionPeerMetadata,
   normalizeNpmVersionDrift,
   packageJsonForShrinkwrap,
@@ -872,6 +1280,7 @@ export {
   parsePnpmPackageKey,
   parseLockPackagePath,
   readShrinkwrapOverrides,
+  restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
 };

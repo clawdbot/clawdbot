@@ -46,6 +46,8 @@ preserving issue/PR refs and thanks.
    - `### Fixes`: user-facing fixes first, grouped by impact and surface
 6. Preserve attribution:
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
+   - every human-authored merged PR represented by a user-facing entry needs
+     its PR ref and `Thanks @author`, even when the PR had no linked issue
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`

@@ -1829,6 +1829,137 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses valid qmd query JSON captured before a non-zero exit", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit("data", "initializing qmd reranker\n");
+          child.stdout.emit(
+            "data",
+            JSON.stringify(
+              [
+                {
+                  file: "qmd://workspace-main/notes/welcome.md",
+                  score: 0.93,
+                  snippet: "@@ -7,1\nrouter glacier backup",
+                },
+              ],
+              null,
+              2,
+            ),
+          );
+          child.stderr.emit("data", "ggml-metal-device.m:612 assertion failed");
+          child.closeWith(134);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).resolves.toEqual([
+      {
+        path: "notes/welcome.md",
+        startLine: 7,
+        endLine: 7,
+        score: 0.93,
+        snippet: "@@ -7,1\nrouter glacier backup",
+        source: "memory",
+      },
+    ]);
+    expectMockMessageContains(
+      logWarnMock,
+      "qmd query exited non-zero after producing valid JSON; using captured search results (code 134)",
+    );
+    await manager.close();
+  });
+
+  it("keeps invalid qmd query stdout failed after a non-zero exit", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", "not json", 134);
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/qmd query router glacier backup .* failed \(code 134\): not json/);
+    await manager.close();
+  });
+
+  it("does not use qmd query JSON from a non-crash search failure", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "query") {
+        const child = createMockChild({ autoClose: false });
+        queueMicrotask(() => {
+          child.stdout.emit("data", "[]");
+          child.stderr.emit("data", "SQLITE_BUSY: database is locked");
+          child.closeWith(2);
+        });
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+
+    await expect(
+      manager.search("router glacier backup", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/SQLITE_BUSY: database is locked/);
+    expect(logWarnMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("using captured search results"),
+    );
+    await manager.close();
+  });
+
   it("repairs missing managed collections and retries search once", async () => {
     cfg = {
       ...cfg,
@@ -1864,7 +1995,11 @@ describe("QmdMemoryManager", () => {
         if (collection === "memory-root-main" && !missingCollectionSeen) {
           missingCollectionSeen = true;
           const child = createMockChild({ autoClose: false });
-          emitAndClose(child, "stderr", "Collection not found: memory-root-main", 1);
+          queueMicrotask(() => {
+            child.stdout.emit("data", "[]");
+            child.stderr.emit("data", "Collection not found: memory-root-main");
+            child.closeWith(1);
+          });
           return child;
         }
         if (collection === "memory-root-main") {

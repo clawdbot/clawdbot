@@ -57,7 +57,7 @@ export function isStrictAgenticSupportedProviderModel(params: {
 }
 
 /**
- * Returns the effective execution contract for an embedded Pi run.
+ * Returns the effective execution contract for an embedded OpenClaw run.
  *
  * strict-agentic is a GPT-5-family openai/openai-codex-only runtime contract,
  * so an unsupported provider/model pair always collapses to `"default"`

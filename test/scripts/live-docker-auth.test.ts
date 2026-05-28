@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -17,46 +17,30 @@ function writeExecutable(filePath: string, contents: string) {
   chmodSync(filePath, 0o755);
 }
 
-function resolveDockerRunArgs(pathPrefix: string) {
+function runDockerRunArgs(pathPrefix: string) {
   const script = [
     "source scripts/lib/live-docker-auth.sh",
     "ARGS=()",
-    "openclaw_live_init_docker_run_args ARGS 42s",
+    "openclaw_live_init_docker_run_args ARGS 42s || exit $?",
     "printf '%s\\n' \"${ARGS[@]}\"",
   ].join("\n");
 
-  const output = execFileSync("/bin/bash", ["-c", script], {
+  return spawnSync("/bin/bash", ["-c", script], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: {
       ...process.env,
       PATH: pathPrefix,
     },
-  }).trimEnd();
-  return output ? output.split("\n") : [];
+  });
 }
 
-function failDockerRunArgs(pathPrefix: string) {
-  const script = [
-    "source scripts/lib/live-docker-auth.sh",
-    "ARGS=()",
-    "openclaw_live_init_docker_run_args ARGS 42s",
-  ].join("\n");
-
-  try {
-    execFileSync("/bin/bash", ["-c", script], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: pathPrefix,
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-  } catch (error) {
-    return error as { status?: number; stderr?: Buffer | string };
+function resolveDockerRunArgs(pathPrefix: string) {
+  const result = runDockerRunArgs(pathPrefix);
+  if (result.status !== 0) {
+    throw new Error(result.stderr || result.stdout);
   }
-  throw new Error("Expected live Docker run arg initialization to fail");
+  return result.stdout.trimEnd().split("\n");
 }
 
 afterEach(() => {
@@ -129,12 +113,12 @@ describe("scripts/lib/live-docker-auth.sh", () => {
     ]);
   });
 
-  it("fails fast when timeout is unavailable", () => {
+  it("fails fast when no timeout wrapper is available", () => {
     const binDir = makeTempBin("openclaw-live-docker-auth-no-timeout-");
-    const error = failDockerRunArgs(binDir);
 
-    expect(error.status).toBe(127);
-    expect(String(error.stderr)).toContain(
+    const result = runDockerRunArgs(binDir);
+    expect(result.status).toBe(127);
+    expect(result.stderr).toContain(
       "timeout command not found; cannot bound live Docker run after 42s",
     );
   });

@@ -11,7 +11,7 @@ import {
   resolveCronSessionMock,
   resolveSessionAuthProfileOverrideMock,
   resetRunCronIsolatedAgentTurnHarness,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runWithModelFallbackMock,
   updateSessionStoreMock,
 } from "./run.test-harness.js";
@@ -71,7 +71,7 @@ function requireEmbeddedAgentCall(index: number): {
   authProfileId?: string;
   authProfileIdSource?: string;
 } {
-  const call = runEmbeddedPiAgentMock.mock.calls[index]?.[0] as
+  const call = runEmbeddedAgentMock.mock.calls[index]?.[0] as
     | {
         provider?: string;
         model?: string;
@@ -80,7 +80,7 @@ function requireEmbeddedAgentCall(index: number): {
       }
     | undefined;
   if (!call) {
-    throw new Error(`Expected embedded PI agent call ${index}`);
+    throw new Error(`Expected embedded OpenClaw agent call ${index}`);
   }
   return call;
 }
@@ -201,7 +201,7 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
       model,
       attempts: [],
     }));
-    runEmbeddedPiAgentMock
+    runEmbeddedAgentMock
       .mockRejectedValueOnce(
         new LiveSessionModelSwitchError({
           provider: "anthropic",
@@ -224,7 +224,7 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("ok");
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     const retryParams = requireEmbeddedAgentCall(1);
     expect(retryParams.provider).toBe("anthropic");
     expect(retryParams.model).toBe("claude-sonnet-4-6");

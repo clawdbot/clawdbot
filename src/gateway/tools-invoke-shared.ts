@@ -1,6 +1,6 @@
+import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
+import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
-import { runBeforeToolCallHook } from "../agents/pi-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../agents/pi-tools.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { ToolInputError, type AnyAgentTool } from "../agents/tools/common.js";
 import { resolveMainSessionKey } from "../config/sessions.js";

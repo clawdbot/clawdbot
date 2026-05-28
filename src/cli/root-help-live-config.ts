@@ -18,7 +18,6 @@ export function hasPluginHelpAffectingConfig(config: OpenClawConfig | null | und
     plugins.enabled === false ||
     hasListEntries(plugins.allow) ||
     hasListEntries(plugins.deny) ||
-    plugins.bundledDiscovery !== undefined ||
     hasListEntries(plugins.load?.paths) ||
     hasEntries(plugins.slots) ||
     hasEntries(plugins.entries) ||

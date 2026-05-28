@@ -408,6 +408,7 @@ function resolveSegmentAllowlistMatch(params: {
           segment: allowlistSegment,
           cwd: params.context.cwd,
           env: params.context.env,
+          platform: params.context.platform,
         })
       : undefined;
   const shellPositionalArgvMatch = shellPositionalArgvCandidatePath
@@ -822,6 +823,7 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
   segment: ExecCommandSegment;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): string | undefined {
   if (!isShellWrapperSegment(params.segment)) {
     return undefined;
@@ -860,7 +862,12 @@ function resolveShellWrapperPositionalArgvCandidatePath(params: {
     return undefined;
   }
 
-  const resolution = resolveCommandResolutionFromArgv([carriedExecutable], params.cwd, params.env);
+  const resolution = resolveCommandResolutionFromArgv(
+    [carriedExecutable],
+    params.cwd,
+    params.env,
+    (params.platform ?? undefined) as NodeJS.Platform | undefined,
+  );
   return resolveExecutionTargetCandidatePath(resolution, params.cwd);
 }
 
@@ -965,7 +972,11 @@ function collectAllowAlwaysPatterns(params: {
     return;
   }
 
-  const trustPlan = resolveExecWrapperTrustPlan(params.segment.argv);
+  const trustPlan = resolveExecWrapperTrustPlan(
+    params.segment.argv,
+    undefined,
+    (params.platform ?? undefined) as NodeJS.Platform | undefined,
+  );
   if (trustPlan.policyBlocked) {
     return;
   }
@@ -976,7 +987,12 @@ function collectAllowAlwaysPatterns(params: {
           raw: trustPlan.argv.join(" "),
           argv: trustPlan.argv,
           sourceArgv: params.segment.sourceArgv,
-          resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env),
+          resolution: resolveCommandResolutionFromArgv(
+            trustPlan.argv,
+            params.cwd,
+            params.env,
+            (params.platform ?? undefined) as NodeJS.Platform | undefined,
+          ),
         };
 
   const candidatePath = resolveExecutionTargetTrustPath(segment.resolution, params.cwd);
@@ -1005,6 +1021,7 @@ function collectAllowAlwaysPatterns(params: {
           segment,
           cwd: params.cwd,
           env: params.env,
+          platform: params.platform,
         })
       : undefined;
   if (positionalArgvPath) {

@@ -106,8 +106,7 @@ function createModelManifestPluginContext(params: {
 
 function listModelAliasCandidates(cfg: OpenClawConfig): ModelAliasCandidate[] {
   return Object.entries(cfg.agents?.defaults?.models ?? {}).flatMap(([keyRaw, entryRaw]) => {
-    const trimmedKey = keyRaw.trim();
-    if (trimmedKey.endsWith("/*") && normalizeProviderId(trimmedKey.slice(0, -2))) {
+    if (parseProviderWildcardModelRef(keyRaw)) {
       return [];
     }
     const alias =
@@ -559,11 +558,7 @@ function buildModelCatalogMetadata(
   const aliasByKey = new Map<string, string>();
   const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [rawKey, entryRaw] of Object.entries(configuredModels)) {
-    if (rawKey.trim().endsWith("/*")) {
-      continue;
-    }
-    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
-    if (!alias) {
+    if (parseProviderWildcardModelRef(rawKey)) {
       continue;
     }
     const key = resolveAllowlistModelKey({
@@ -577,7 +572,10 @@ function buildModelCatalogMetadata(
     if (!key) {
       continue;
     }
-    aliasByKey.set(key, alias);
+    const alias = ((entryRaw as { alias?: string } | undefined)?.alias ?? "").trim();
+    if (alias) {
+      aliasByKey.set(key, alias);
+    }
   }
 
   return { configuredByKey, aliasByKey };
@@ -598,7 +596,10 @@ function applyModelCatalogMetadata(params: {
   const nextContextTokens = configuredEntry?.contextTokens ?? params.entry.contextTokens;
   const nextReasoning = configuredEntry?.reasoning ?? params.entry.reasoning;
   const nextInput = configuredEntry?.input ?? params.entry.input;
-  const nextCompat = configuredEntry?.compat ?? params.entry.compat;
+  const nextCompat =
+    params.entry.compat || configuredEntry?.compat
+      ? { ...params.entry.compat, ...configuredEntry?.compat }
+      : undefined;
 
   return {
     ...params.entry,
@@ -1180,9 +1181,14 @@ export function buildConfiguredModelCatalog(params: {
         typeof model?.contextTokens === "number" && model.contextTokens > 0
           ? model.contextTokens
           : undefined;
-      const reasoning = typeof model?.reasoning === "boolean" ? model.reasoning : undefined;
       const input = Array.isArray(model?.input) ? model.input : undefined;
       const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
+      const reasoning =
+        typeof model?.reasoning === "boolean"
+          ? model.reasoning
+          : isVllmQwenThinkingCompat(providerId, compat)
+            ? true
+            : undefined;
       catalog.push({
         provider: providerId,
         id,
@@ -1197,6 +1203,16 @@ export function buildConfiguredModelCatalog(params: {
   }
 
   return catalog;
+}
+
+function isVllmQwenThinkingCompat(
+  providerId: string,
+  compat?: { thinkingFormat?: unknown } | null,
+): boolean {
+  return (
+    providerId === "vllm" &&
+    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
+  );
 }
 
 export function resolveHooksGmailModel(
@@ -1242,6 +1258,14 @@ export function normalizeModelSelection(value: unknown): string | undefined {
   return undefined;
 }
 
+function parseProviderWildcardModelRef(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed.endsWith("/*")) {
+    return null;
+  }
+  return normalizeProviderId(trimmed.slice(0, -2)) || null;
+}
+
 export function parseConfiguredModelVisibilityEntries(params: { cfg?: OpenClawConfig }): {
   exactModelRefs: string[];
   providerWildcards: Set<string>;
@@ -1256,12 +1280,10 @@ export function parseConfiguredModelVisibilityEntries(params: { cfg?: OpenClawCo
     if (!trimmed) {
       continue;
     }
-    if (trimmed.endsWith("/*")) {
-      const provider = normalizeProviderId(trimmed.slice(0, -2));
-      if (provider) {
-        providerWildcards.add(provider);
-        continue;
-      }
+    const wildcardProvider = parseProviderWildcardModelRef(trimmed);
+    if (wildcardProvider) {
+      providerWildcards.add(wildcardProvider);
+      continue;
     }
     exactModelRefs.push(raw);
   }

@@ -1,31 +1,21 @@
-import fs from "node:fs";
+import { createConfigReloadLogScanner } from "./log-scanner.mjs";
 
 const logPath = process.env.OPENCLAW_CONFIG_RELOAD_LOG_PATH ?? "/tmp/config-reload-e2e.log";
 const deadlineMs = Date.now() + Number(process.env.OPENCLAW_CONFIG_RELOAD_LOG_TIMEOUT_MS ?? 30_000);
+const maxReadBytes = Number.parseInt(
+  process.env.OPENCLAW_CONFIG_RELOAD_LOG_MAX_READ_BYTES ?? `${256 * 1024}`,
+  10,
+);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function readLog() {
-  return fs.readFileSync(logPath, "utf8");
-}
-
-function inspectLog(log) {
-  const lines = log.split("\n");
-  const reloadLines = lines.filter((line) =>
-    line.includes("config change detected; evaluating reload"),
-  );
-  const restartLines = lines.filter((line) =>
-    line.includes("config change requires gateway restart"),
-  );
-  return { lines, reloadLines, restartLines };
-}
-
-let log = "";
-let result = { lines: [], reloadLines: [], restartLines: [] };
+const scanner = createConfigReloadLogScanner(logPath, {
+  maxReadBytes: Number.isSafeInteger(maxReadBytes) && maxReadBytes > 0 ? maxReadBytes : 256 * 1024,
+  tailLineLimit: 160,
+});
+let result = { reloadLines: [], restartLines: [], tailLines: [] };
 
 while (Date.now() < deadlineMs) {
-  log = readLog();
-  result = inspectLog(log);
+  result = scanner.scan();
   if (result.restartLines.length > 0 || result.reloadLines.length > 0) {
     break;
   }
@@ -33,18 +23,18 @@ while (Date.now() < deadlineMs) {
 }
 
 if (result.restartLines.length > 0) {
-  console.error(result.lines.slice(-160).join("\n"));
+  console.error(result.tailLines.join("\n"));
   throw new Error("unexpected restart-required reload line found");
 }
 for (const line of result.reloadLines) {
   for (const needle of ["gateway.auth.token", "plugins.entries.firecrawl.config.webFetch"]) {
     if (line.includes(needle)) {
-      console.error(result.lines.slice(-160).join("\n"));
+      console.error(result.tailLines.join("\n"));
       throw new Error(`runtime-only path appeared in reload diff: ${needle}`);
     }
   }
 }
 if (result.reloadLines.length === 0) {
-  console.error(result.lines.slice(-160).join("\n"));
+  console.error(result.tailLines.join("\n"));
   throw new Error("expected config reload detection log after metadata write");
 }

@@ -1,7 +1,6 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
@@ -58,6 +57,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
 
@@ -1219,7 +1219,7 @@ export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const defaultBackgroundMs = clampWithDefault(
-    defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
+    defaults?.backgroundMs ?? readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS"),
     10_000,
     10,
     120_000,
@@ -1641,7 +1641,7 @@ export function createExecTool(
       const onAbortSignal = () => {
         // Immediately suppress onUpdate calls so that any late stdout/stderr
         // from the still-running process cannot push a rejected Promise into
-        // pi-agent-core's updateEvents after the agent run has ended (#62520).
+        // agent runtime's updateEvents after the agent run has ended (#62520).
         // Intentionally placed *before* the yielded/backgrounded guard: the
         // agent run is ending regardless, so no consumer exists for further
         // tool_execution_update events even for backgrounded sessions (which

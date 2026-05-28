@@ -17,18 +17,36 @@ const COMMAND_TIMEOUT_MS = readPositiveIntEnv(
 let tmpHome = null;
 let rssHookPath = null;
 
-function readPositiveIntEnv(name, fallback) {
-  const value = Number(process.env[name] ?? "");
-  return Number.isInteger(value) && value > 0 ? value : fallback;
+function readPositiveIntEnv(name, fallback, env = process.env) {
+  const value = readPositiveNumberEnv(name, fallback, env);
+  return Number.isInteger(value) ? value : fallback;
+}
+
+function readPositiveNumberEnv(name, fallback, env = process.env) {
+  const raw = env[name];
+  if (raw === undefined || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
+    return fallback;
+  }
+  const value = Number(text);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readNonEmptyEnv(name) {
+  const value = process.env[name];
+  return value === undefined || value.length === 0 ? null : value;
 }
 
 function parseArgs(argv) {
   const options = {
     jsonPath:
-      process.env.OPENCLAW_STARTUP_MEMORY_JSON_PATH ||
+      readNonEmptyEnv("OPENCLAW_STARTUP_MEMORY_JSON_PATH") ??
       path.join(repoRoot, ".artifacts", "startup-memory", "startup-memory.json"),
     summaryPath:
-      process.env.OPENCLAW_STARTUP_MEMORY_SUMMARY_PATH ||
+      readNonEmptyEnv("OPENCLAW_STARTUP_MEMORY_SUMMARY_PATH") ??
       path.join(repoRoot, ".artifacts", "startup-memory", "summary.md"),
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -80,22 +98,24 @@ const cases = [
     id: "help",
     label: "--help",
     args: ["openclaw.mjs", "--help"],
-    limitMb: Number(process.env.OPENCLAW_STARTUP_MEMORY_HELP_MB ?? DEFAULT_LIMITS_MB.help),
+    limitMb: readPositiveNumberEnv("OPENCLAW_STARTUP_MEMORY_HELP_MB", DEFAULT_LIMITS_MB.help),
   },
   {
     id: "statusJson",
     label: "status --json",
     args: ["openclaw.mjs", "status", "--json"],
-    limitMb: Number(
-      process.env.OPENCLAW_STARTUP_MEMORY_STATUS_JSON_MB ?? DEFAULT_LIMITS_MB.statusJson,
+    limitMb: readPositiveNumberEnv(
+      "OPENCLAW_STARTUP_MEMORY_STATUS_JSON_MB",
+      DEFAULT_LIMITS_MB.statusJson,
     ),
   },
   {
     id: "gatewayStatus",
     label: "gateway status",
     args: ["openclaw.mjs", "gateway", "status"],
-    limitMb: Number(
-      process.env.OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB ?? DEFAULT_LIMITS_MB.gatewayStatus,
+    limitMb: readPositiveNumberEnv(
+      "OPENCLAW_STARTUP_MEMORY_GATEWAY_STATUS_MB",
+      DEFAULT_LIMITS_MB.gatewayStatus,
     ),
   },
 ];
@@ -341,6 +361,8 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
 export const testing = {
   cases,
   parseArgs,
+  readPositiveIntEnv,
+  readPositiveNumberEnv,
   resolveDefaultLimitsMb,
   runCase,
   runStartupMemoryCheck,

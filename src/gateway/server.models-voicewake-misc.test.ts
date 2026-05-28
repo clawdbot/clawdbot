@@ -16,7 +16,7 @@ import {
   getFreePort,
   installGatewayTestHooks,
   onceMessage,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   resetTestPluginRegistry,
   setTestPluginRegistry,
@@ -90,14 +90,14 @@ type ModelCatalogRpcEntry = {
   reasoning?: boolean;
 };
 
-type PiCatalogFixtureEntry = {
+type AgentCatalogFixtureEntry = {
   id: string;
   provider: string;
   name?: string;
   contextWindow?: number;
 };
 
-const buildPiCatalogFixture = (): PiCatalogFixtureEntry[] => [
+const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
   {
     id: "gpt-test-a",
@@ -153,14 +153,14 @@ describe("gateway server models + voicewake", () => {
         : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
     );
 
-  const setPiCatalog = async (entries: PiCatalogFixtureEntry[]) => {
-    piSdkMock.enabled = true;
-    piSdkMock.models = entries;
+  const setAgentCatalog = async (entries: AgentCatalogFixtureEntry[]) => {
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = entries;
     await resetGatewayModelCatalogCacheForTest();
   };
 
-  const seedPiCatalog = async () => {
-    await setPiCatalog(buildPiCatalogFixture());
+  const seedAgentModelCatalog = async () => {
+    await setAgentCatalog(buildAgentCatalogFixture());
   };
 
   const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
@@ -219,7 +219,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        await seedPiCatalog();
+        await seedAgentModelCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(options.expected);
@@ -471,7 +471,7 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list all view returns model catalog", async () => {
-    await seedPiCatalog();
+    await seedAgentModelCatalog();
 
     const res1 = await listModels({ view: "all" });
     const res2 = await listModels({ view: "all" });
@@ -482,7 +482,7 @@ describe("gateway server models + voicewake", () => {
     const models = res1.payload?.models ?? [];
     expect(models).toEqual(expectedSortedCatalog());
 
-    expect(piSdkMock.discoverCalls).toBe(1);
+    expect(agentDiscoveryMock.discoverCalls).toBe(1);
   });
 
   test("models.list default view uses configured providers instead of the full catalog", async () => {
@@ -498,7 +498,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        await setPiCatalog([
+        await setAgentCatalog([
           { id: "remote-a", provider: "unauth-a", name: "Remote A" },
           { id: "remote-b", provider: "unauth-b", name: "Remote B" },
         ]);
@@ -522,12 +522,12 @@ describe("gateway server models + voicewake", () => {
       },
       async () => {
         await withModelsConfig({}, async () => {
-          await seedPiCatalog();
-          const discoverCallsBefore = piSdkMock.discoverCalls;
+          await seedAgentModelCatalog();
+          const discoverCallsBefore = agentDiscoveryMock.discoverCalls;
           const res = await listModels({ view: "configured" });
           expect(res.ok).toBe(true);
           expect(res.payload?.models).toStrictEqual([]);
-          expect(piSdkMock.discoverCalls).toBe(discoverCallsBefore);
+          expect(agentDiscoveryMock.discoverCalls).toBe(discoverCallsBefore);
         });
       },
     );
@@ -550,7 +550,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        await setPiCatalog([
+        await setAgentCatalog([
           { id: "remote-a", provider: "unauth-a", name: "Remote A" },
           { id: "remote-b", provider: "unauth-b", name: "Remote B" },
         ]);
@@ -590,7 +590,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        await seedPiCatalog();
+        await seedAgentModelCatalog();
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([
@@ -617,7 +617,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        await seedPiCatalog();
+        await seedAgentModelCatalog();
         const res = await listModels({ view: "all" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(expectedSortedCatalog());
@@ -690,7 +690,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        await seedPiCatalog();
+        await seedAgentModelCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         const models = res.payload?.models ?? [];
@@ -731,7 +731,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        await seedPiCatalog();
+        await seedAgentModelCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         const models = res.payload?.models ?? [];
@@ -746,8 +746,8 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list rejects unknown params", async () => {
-    piSdkMock.enabled = true;
-    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+    agentDiscoveryMock.enabled = true;
+    agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
 
     const res = await rpcReq(ws, "models.list", { extra: true });
     expect(res.ok).toBe(false);

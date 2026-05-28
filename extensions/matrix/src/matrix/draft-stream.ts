@@ -17,8 +17,11 @@ function resolveDraftPreviewOptions(mode: MatrixDraftPreviewMode): {
       includeMentions: false,
     };
   }
+  // Drafts can contain partial model text and raw tool-progress paths; keep
+  // Matrix mentions inert until callers send a normal final message.
   return {
     msgtype: MsgType.Text,
+    includeMentions: false,
   };
 }
 

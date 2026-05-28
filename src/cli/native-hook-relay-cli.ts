@@ -7,6 +7,7 @@ import {
 } from "../agents/harness/native-hook-relay.js";
 import { callGateway } from "../gateway/call.js";
 import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
+import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 
@@ -39,6 +40,13 @@ export async function runNativeHookRelayCli(
   const relayId = readRequiredOption(opts.relayId, "relay-id");
   const generation = opts.generation?.trim() || undefined;
   const event = readRequiredOption(opts.event, "event");
+  let timeoutMs: number;
+  try {
+    timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 5_000);
+  } catch (error) {
+    writeText(stderr, formatRelayCliError("invalid native hook timeout", error));
+    return 1;
+  }
 
   let rawPayload: unknown;
   try {
@@ -57,7 +65,7 @@ export async function runNativeHookRelayCli(
       event,
       rawPayload,
       registrationTimeoutMs: 100,
-      timeoutMs: normalizeTimeoutMs(opts.timeout),
+      timeoutMs,
     });
     writeText(stdout, response.stdout);
     writeText(stderr, response.stderr);
@@ -82,7 +90,7 @@ export async function runNativeHookRelayCli(
     const response = await callGatewayFn<NativeHookRelayProcessResponse>({
       method: "nativeHook.invoke",
       params: { provider, relayId, generation, event, rawPayload },
-      timeoutMs: normalizeTimeoutMs(opts.timeout),
+      timeoutMs,
       scopes: [ADMIN_SCOPE],
     });
     writeText(stdout, response.stdout);
@@ -120,11 +128,6 @@ async function readStreamText(stream: NodeJS.ReadableStream, maxBytes: number): 
     chunks.push(buffer);
   }
   return Buffer.concat(chunks, total).toString("utf8");
-}
-
-function normalizeTimeoutMs(value: string | undefined): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 5_000;
 }
 
 function writeText(stream: NodeJS.WritableStream, value: string | undefined): void {

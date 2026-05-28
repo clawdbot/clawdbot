@@ -24,7 +24,7 @@ vi.mock("../infra/agent-events.js", () => ({
 import {
   handleCompactionEnd,
   handleCompactionStart,
-} from "../agents/pi-embedded-subscribe.handlers.compaction.js";
+} from "../agents/embedded-agent-subscribe.handlers.compaction.js";
 
 describe("compaction hook wiring", () => {
   beforeEach(() => {

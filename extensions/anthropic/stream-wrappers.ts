@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -13,9 +13,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
-  normalizeStringEntries,
   readStringValue,
-  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("anthropic-stream");
@@ -29,14 +27,14 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   "claude-sonnet-4-6",
   "claude-sonnet-4.6",
 ] as const;
-const PI_AI_DEFAULT_ANTHROPIC_BETAS = [
+const OPENCLAW_DEFAULT_ANTHROPIC_BETAS = [
   "fine-grained-tool-streaming-2025-05-14",
   "interleaved-thinking-2025-05-14",
 ] as const;
-const PI_AI_OAUTH_ANTHROPIC_BETAS = [
+const OPENCLAW_OAUTH_ANTHROPIC_BETAS = [
   "claude-code-20250219",
   "oauth-2025-04-20",
-  ...PI_AI_DEFAULT_ANTHROPIC_BETAS,
+  ...OPENCLAW_DEFAULT_ANTHROPIC_BETAS,
 ] as const;
 
 type AnthropicServiceTier = "auto" | "standard_only";
@@ -50,7 +48,10 @@ function parseHeaderList(value: unknown): string[] {
   if (typeof value !== "string") {
     return [];
   }
-  return normalizeStringEntries(value.split(","));
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 function mergeAnthropicBetaHeader(
@@ -62,7 +63,7 @@ function mergeAnthropicBetaHeader(
     (key) => normalizeLowercaseStringOrEmpty(key) === "anthropic-beta",
   );
   const existing = existingKey ? parseHeaderList(merged[existingKey]) : [];
-  const values = uniqueStrings([...existing, ...betas]);
+  const values = Array.from(new Set([...existing, ...betas]));
   const key = existingKey ?? "anthropic-beta";
   merged[key] = values.join(",");
   return merged;
@@ -134,10 +135,10 @@ export function createAnthropicBetaHeadersWrapper(
     const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
     const effectiveBetas = betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA_LEGACY);
 
-    const piAiBetas = isOauth
-      ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
-      : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = uniqueStrings([...piAiBetas, ...effectiveBetas]);
+    const openClawBetas = isOauth
+      ? (OPENCLAW_OAUTH_ANTHROPIC_BETAS as readonly string[])
+      : (OPENCLAW_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
+    const allBetas = [...new Set([...openClawBetas, ...effectiveBetas])];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),

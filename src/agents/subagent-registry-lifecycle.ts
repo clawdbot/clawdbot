@@ -17,12 +17,12 @@ import {
   resolveRequiredCompletionTerminalResult,
 } from "../tasks/task-completion-contract.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { retireSessionMcpRuntimeForSessionKey } from "./agent-bundle-mcp-tools.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
-import { retireSessionMcpRuntimeForSessionKey } from "./pi-bundle-mcp-tools.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {

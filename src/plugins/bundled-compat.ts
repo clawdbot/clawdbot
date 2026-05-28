@@ -1,42 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { hasExplicitPluginConfig } from "./config-policy.js";
 import { normalizePluginId } from "./config-state.js";
-
-export function withBundledPluginAllowlistCompat(params: {
-  config: OpenClawConfig | undefined;
-  pluginIds: readonly string[];
-}): OpenClawConfig | undefined {
-  if (params.config?.plugins?.bundledDiscovery !== "compat") {
-    return params.config;
-  }
-  const allow = params.config?.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return params.config;
-  }
-
-  const allowSet = new Set(normalizeUniqueStringEntries(allow));
-  let changed = false;
-  for (const pluginId of params.pluginIds) {
-    if (!allowSet.has(pluginId)) {
-      allowSet.add(pluginId);
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return params.config;
-  }
-
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      allow: [...allowSet],
-    },
-  };
-}
 
 export function withBundledPluginEnablementCompat(params: {
   config: OpenClawConfig | undefined;
@@ -44,11 +9,11 @@ export function withBundledPluginEnablementCompat(params: {
 }): OpenClawConfig | undefined {
   const existingEntries = params.config?.plugins?.entries ?? {};
   const forcePluginsEnabled = params.config?.plugins?.enabled === false;
-  const useCompatDiscovery = params.config?.plugins?.bundledDiscovery === "compat";
   const allow = params.config?.plugins?.allow;
+  const bypassAllowlist = params.config?.plugins?.bundledDiscovery === "compat";
   const allowSet =
-    !useCompatDiscovery && Array.isArray(allow) && allow.length > 0
-      ? new Set(normalizeUniqueStringEntries(allow.map((pluginId) => normalizePluginId(pluginId))))
+    !bypassAllowlist && Array.isArray(allow) && allow.length > 0
+      ? new Set(allow.map((pluginId) => normalizePluginId(pluginId)).filter(Boolean))
       : undefined;
   let hasEligiblePlugin = false;
   let changed = false;

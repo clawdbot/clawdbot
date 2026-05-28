@@ -1,5 +1,7 @@
 {
   "id": "zalouser",
+  "name": "Zalo Personal",
+  "description": "OpenClaw Zalo Personal Account plugin via native zca-js integration.",
   "activation": {
     "onStartup": false
   },

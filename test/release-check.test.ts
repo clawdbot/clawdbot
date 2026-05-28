@@ -4,7 +4,10 @@ import { dirname, join, win32 } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
-import { listPluginSdkDistArtifacts } from "../scripts/lib/plugin-sdk-entries.mjs";
+import {
+  listPluginSdkDistArtifacts,
+  listPrivateLocalOnlyPluginSdkDistArtifacts,
+} from "../scripts/lib/plugin-sdk-entries.mjs";
 import {
   WORKSPACE_TEMPLATE_PACK_PATHS,
   createWorkspaceBootstrapSmokeEnv,
@@ -20,6 +23,7 @@ import {
   collectSkillShellScriptExecutableErrors,
   collectPackUnpackedSizeErrors,
   collectPackedInstalledPackageVerificationErrors,
+  createPackedPluginSdkTypescriptSmokeProject,
   createPackedCompletionSmokeEnv,
   createPackedCliSmokeEnv,
   createPackedBundledPluginPostinstallEnv,
@@ -46,6 +50,7 @@ function makePackResult(filename: string, unpackedSize: number) {
 }
 
 const requiredPluginSdkPackPaths = [...listPluginSdkDistArtifacts(), "dist/plugin-sdk/compat.js"];
+const privateLocalOnlyPluginSdkPackPaths = listPrivateLocalOnlyPluginSdkDistArtifacts();
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
 
 describe("collectAppcastSparkleVersionErrors", () => {
@@ -442,6 +447,21 @@ describe("collectForbiddenPackPaths", () => {
     ]);
   });
 
+  it("blocks the old deep plugin SDK declaration tree from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths([
+        "dist/index.js",
+        "dist/plugin-sdk/index.d.ts",
+        "dist/plugin-sdk/types-abc123.d.ts",
+        "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
+        "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
+      ]),
+    ).toEqual([
+      "dist/plugin-sdk/src/channels/plugins/types.public.d.ts",
+      "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts",
+    ]);
+  });
+
   it("blocks local build metadata from npm pack output", () => {
     expect(
       collectForbiddenPackPaths(["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS]),
@@ -451,6 +471,21 @@ describe("collectForbiddenPackPaths", () => {
   it("keeps local build metadata excluded by package files", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
     for (const entry of LOCAL_BUILD_METADATA_DIST_PATHS) {
+      expect(pkg.files).toContain(`!${entry}`);
+    }
+    expect(pkg.files).toContain("!dist/plugin-sdk/src/**");
+  });
+
+  it("blocks private local-only plugin SDK artifacts from npm pack output", () => {
+    expect(
+      collectForbiddenPackPaths(["dist/index.js", ...privateLocalOnlyPluginSdkPackPaths]),
+    ).toEqual([...privateLocalOnlyPluginSdkPackPaths].toSorted());
+  });
+
+  it("keeps private local-only plugin SDK artifacts excluded by package files", () => {
+    const pkg = JSON.parse(readFileSync("package.json", "utf8")) as { files?: string[] };
+
+    for (const entry of privateLocalOnlyPluginSdkPackPaths) {
       expect(pkg.files).toContain(`!${entry}`);
     }
   });
@@ -539,6 +574,25 @@ describe("collectForbiddenPackPaths", () => {
       rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it("blocks root plugin SDK declarations that still reference private test helpers", () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-private-sdk-"));
+
+    try {
+      mkdirSync(join(tempRoot, "dist", "plugin-sdk"), { recursive: true });
+      writeFileSync(
+        join(tempRoot, "dist", "plugin-sdk", "testing.d.ts"),
+        "//#region src/plugin-sdk/test-helpers/session.ts\n",
+        "utf8",
+      );
+
+      expect(collectForbiddenPackContentPaths(["dist/plugin-sdk/testing.d.ts"], tempRoot)).toEqual([
+        "dist/plugin-sdk/testing.d.ts",
+      ]);
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("collectMissingPackPaths", () => {
@@ -565,6 +619,7 @@ describe("collectMissingPackPaths", () => {
       "scripts/lib/official-external-provider-catalog.json",
       "scripts/lib/package-dist-imports.mjs",
       "scripts/postinstall-bundled-plugins.mjs",
+      "dist/agents/model-provider-auth.worker.js",
       "dist/task-registry-control.runtime.js",
       "dist/telegram-ingress-worker.runtime.js",
       bundledDistPluginFile("telegram", "runtime-api.js"),
@@ -597,6 +652,7 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
+        "dist/agents/model-provider-auth.worker.js",
         "dist/task-registry-control.runtime.js",
         "dist/telegram-ingress-worker.runtime.js",
         "dist/build-info.json",
@@ -694,6 +750,46 @@ describe("resolveMissingPackBuildHint", () => {
 
   it("does not emit a build hint for unrelated packed paths", () => {
     expect(resolveMissingPackBuildHint(["scripts/npm-runner.mjs"])).toBeNull();
+  });
+});
+
+describe("createPackedPluginSdkTypescriptSmokeProject", () => {
+  it("writes a consumer project that imports representative public SDK subpaths", () => {
+    const root = mkdtempSync(join(tmpdir(), "release-check-plugin-sdk-types-"));
+    try {
+      const consumerDir = join(root, "consumer");
+      const packageRoot = join(root, "openclaw");
+      createPackedPluginSdkTypescriptSmokeProject({
+        consumerDir,
+        packageSpec: `file:${packageRoot}`,
+      });
+
+      const packageJson = JSON.parse(readFileSync(join(consumerDir, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+      };
+      const tsconfig = JSON.parse(readFileSync(join(consumerDir, "tsconfig.json"), "utf8")) as {
+        compilerOptions?: Record<string, unknown>;
+      };
+      const source = readFileSync(join(consumerDir, "src", "index.ts"), "utf8");
+      const fixtureSource = readFileSync(
+        "scripts/fixtures/packed-plugin-sdk-type-smoke.ts",
+        "utf8",
+      );
+
+      expect(packageJson.dependencies?.openclaw).toBe(`file:${packageRoot}`);
+      expect(tsconfig.compilerOptions?.skipLibCheck).toBe(true);
+      expect(source).toBe(fixtureSource);
+      expect(source).toContain('"openclaw/plugin-sdk"');
+      expect(source).toContain('"openclaw/plugin-sdk/provider-entry"');
+      expect(source).toContain('"openclaw/plugin-sdk/channel-entry-contract"');
+      expect(source).toContain('"openclaw/plugin-sdk/config-contracts"');
+      expect(source).toContain('"openclaw/plugin-sdk/runtime-env"');
+      expect(source).toContain("type PublicPluginSdkModules = [");
+      expect(source).not.toContain("TelegramAccountConfig");
+      expect(source).not.toContain("openclaw/plugin-sdk/channel-contract-testing");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

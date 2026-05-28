@@ -681,6 +681,56 @@ describe("session cost usage", () => {
     });
   });
 
+  it("keeps queued durable aggregate refresh state scoped to the cache path", async () => {
+    const firstRoot = await makeSessionCostRoot("cost-cache-queued-first");
+    const secondRoot = await makeSessionCostRoot("cost-cache-queued-second");
+    const writeSession = async (root: string, sessionId: string) => {
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, `${sessionId}.jsonl`),
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-02-05T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: {
+              input: 10,
+              output: 20,
+              totalTokens: 30,
+              cost: { total: 0.03 },
+            },
+          },
+        }),
+        "utf-8",
+      );
+    };
+
+    await writeSession(firstRoot, "sess-cache-queued-first");
+    await writeSession(secondRoot, "sess-cache-queued-second");
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      await withStateDir(firstRoot, async () => {
+        requestCostUsageCacheRefresh();
+      });
+
+      await withStateDir(secondRoot, async () => {
+        const summary = await loadCostUsageSummaryFromCache({
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+          requestRefresh: false,
+        });
+
+        expect(summary.cacheStatus?.status).toBe("stale");
+      });
+
+      await vi.runAllTimersAsync();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("rebuilds cold durable aggregate cache synchronously when requested", async () => {
     const root = await makeSessionCostRoot("cost-cache-cold-sync");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

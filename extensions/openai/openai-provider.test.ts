@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAICodexProviderPlugin } from "./openai-codex-provider.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
@@ -356,7 +356,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
+  it("resolves gpt-5.5 locally without cached catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -380,6 +380,25 @@ describe("buildOpenAIProvider", () => {
             : null,
       } as never,
     });
+
+    expectFields(model, {
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      contextWindow: 1_000_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+      },
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+  });
+
+  it("resolves gpt-5.5-pro locally", () => {
+    const provider = buildOpenAIProvider();
+
     const pro = provider.resolveDynamicModel?.({
       provider: "openai",
       modelId: "gpt-5.5-pro",
@@ -402,7 +421,6 @@ describe("buildOpenAIProvider", () => {
       } as never,
     });
 
-    expect(model).toBeUndefined();
     expectFields(pro, {
       provider: "openai",
       id: "gpt-5.5-pro",

@@ -17,23 +17,6 @@ function findSlackActionsBlock(blocks: Array<{ type?: string; elements?: unknown
   return blocks.find((block) => block.type === "actions");
 }
 
-function collectSlackButtonValues(block?: { elements?: unknown[] }): string[] {
-  return (block?.elements ?? []).flatMap((element) =>
-    typeof element === "object" &&
-    element &&
-    typeof (element as { value?: unknown }).value === "string"
-      ? [(element as { value: string }).value]
-      : [],
-  );
-}
-
-function collectSlackMrkdwnText(blocks: Array<{ text?: { text?: unknown } }>): string {
-  return blocks
-    .map((block) => (typeof block.text?.text === "string" ? block.text.text : ""))
-    .filter(Boolean)
-    .join("\n");
-}
-
 function readChatUpdatePayload(
   chatUpdate: { mock: { calls: unknown[][] } },
   index: number,
@@ -144,21 +127,18 @@ describe("slackApprovalNativeRuntime", () => {
         ],
         actions: [
           {
-            kind: "decision",
             decision: "allow-once",
             label: "Allow Once",
             command: "/approve plugin:req-1 allow-once",
             style: "success",
           },
           {
-            kind: "decision",
             decision: "allow-always",
             label: "Allow Always",
             command: "/approve plugin:req-1 allow-always",
             style: "success",
           },
           {
-            kind: "decision",
             decision: "deny",
             label: "Deny",
             command: "/approve plugin:req-1 deny",
@@ -186,124 +166,6 @@ describe("slackApprovalNativeRuntime", () => {
 
     expect(labels).toEqual(["Allow Once", "Allow Always", "Deny"]);
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
-  });
-
-  it("renders command-only plugin actions as visible command text", async () => {
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "plugin:req-1",
-        request: {
-          title: "Verify with World",
-          description: "World proof is required before the tool can continue.",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "plugin",
-      nowMs: 0,
-      view: {
-        approvalKind: "plugin",
-        phase: "pending",
-        approvalId: "plugin:req-1",
-        title: "Verify with World",
-        description: "World proof is required before the tool can continue.",
-        severity: "warning",
-        pluginId: "agentkit",
-        toolName: "exec",
-        metadata: [{ label: "Plugin", value: "agentkit" }],
-        actions: [
-          {
-            kind: "command",
-            label: "Verify once",
-            command: "/agentkit approve plugin:req-1 allow-once",
-            style: "primary",
-          },
-        ],
-        expiresAtMs: 60_000,
-      },
-    })) as SlackPayload;
-
-    const blocks = payload.blocks as Array<{ type?: string; text?: { text?: unknown } }>;
-    expect(payload.text).toContain("*Command actions*");
-    expect(payload.text).toContain("/agentkit approve plugin:req-1 allow-once");
-    expect(collectSlackMrkdwnText(blocks)).toContain("/agentkit approve plugin:req-1 allow-once");
-    expect(blocks.some((block) => block.type === "actions")).toBe(false);
-  });
-
-  it("renders mixed plugin actions with only decision actions as buttons", async () => {
-    const payload = (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-      cfg: {} as never,
-      accountId: "default",
-      context: {
-        app: {} as never,
-        config: {} as never,
-      },
-      request: {
-        id: "plugin:req-2",
-        request: {
-          title: "Verify with World",
-          description: "World proof is required before the tool can continue.",
-        },
-        createdAtMs: 0,
-        expiresAtMs: 60_000,
-      },
-      approvalKind: "plugin",
-      nowMs: 0,
-      view: {
-        approvalKind: "plugin",
-        phase: "pending",
-        approvalId: "plugin:req-2",
-        title: "Verify with World",
-        description: "World proof is required before the tool can continue.",
-        severity: "warning",
-        pluginId: "agentkit",
-        toolName: "exec",
-        metadata: [{ label: "Plugin", value: "agentkit" }],
-        actions: [
-          {
-            kind: "command",
-            label: "Verify once",
-            command: "/agentkit approve plugin:req-2 allow-once",
-            style: "primary",
-          },
-          {
-            kind: "decision",
-            decision: "deny",
-            label: "Deny",
-            command: "/agentkit deny plugin:req-2",
-            style: "danger",
-          },
-        ],
-        expiresAtMs: 60_000,
-      },
-    })) as SlackPayload;
-
-    const blocks = payload.blocks as Array<{
-      type?: string;
-      elements?: unknown[];
-      text?: { text?: unknown };
-    }>;
-    const actionsBlock = findSlackActionsBlock(blocks);
-    const labels = (actionsBlock?.elements ?? []).map((element) =>
-      typeof element === "object" &&
-      element &&
-      typeof (element as { text?: { text?: unknown } }).text?.text === "string"
-        ? (element as { text: { text: string } }).text.text
-        : "",
-    );
-
-    expect(collectSlackMrkdwnText(blocks)).toContain("/agentkit approve plugin:req-2 allow-once");
-    expect(labels).toEqual(["Deny"]);
-    expect(collectSlackButtonValues(actionsBlock)).toEqual(["/approve plugin:req-2 deny"]);
-    expect(JSON.stringify(actionsBlock)).not.toContain("Verify once");
-    expect(JSON.stringify(actionsBlock)).not.toContain("/agentkit approve plugin:req-2 allow-once");
-    expect(JSON.stringify(actionsBlock)).not.toContain("/agentkit deny plugin:req-2");
   });
 
   it("renders resolved updates without interactive blocks", async () => {

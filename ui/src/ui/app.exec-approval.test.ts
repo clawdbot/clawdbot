@@ -35,14 +35,13 @@ async function createApp(
   queue: ExecApprovalRequest[] = [createExecApproval()],
 ) {
   const { OpenClawApp } = await import("./app.ts");
-  const app = new OpenClawApp();
-  Object.defineProperty(app, "client", {
-    value: { request },
-    writable: true,
+  const app = Object.create(OpenClawApp.prototype) as InstanceType<typeof OpenClawApp>;
+  Object.defineProperties(app, {
+    client: { value: { request }, writable: true },
+    execApprovalBusy: { value: false, writable: true },
+    execApprovalError: { value: null, writable: true },
+    execApprovalQueue: { value: queue, writable: true },
   });
-  app.execApprovalQueue = queue;
-  app.execApprovalBusy = false;
-  app.execApprovalError = null;
   return app;
 }
 

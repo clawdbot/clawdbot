@@ -36,9 +36,9 @@ changing config.
 | ---------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-5.5`                                         | Default OpenAI agent setup. Sign in with Codex auth.                  |
 | Direct API-key billing for agent models              | `openai/gpt-5.5` plus a Codex-compatible API-key profile | Use `auth.order.openai` to place the backup after subscription auth.  |
-| Direct API-key billing through explicit PI           | `openai/gpt-5.5` plus provider/model runtime `pi`        | Select a normal `openai` API-key profile.                             |
+| Direct API-key billing through explicit OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select a normal `openai` API-key profile.                             |
 | Latest ChatGPT Instant API alias                     | `openai/chat-latest`                                     | Direct API-key only. Moving alias for experiments, not the default.   |
-| ChatGPT/Codex subscription auth through explicit PI  | `openai/gpt-5.5` plus provider/model runtime `pi`        | Select an `openai-codex` auth profile for the compatibility route.    |
+| ChatGPT/Codex subscription auth through OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select an `openai-codex` auth profile for the compatibility route.    |
 | Image generation or editing                          | `openai/gpt-image-2`                                     | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.             |
 | Transparent-background images                        | `openai/gpt-image-1.5`                                   | Use `outputFormat=png` or `webp` and `openai.background=transparent`. |
 
@@ -71,11 +71,11 @@ direct API-key auth for an OpenAI agent model.
 
 <Note>
 OpenAI agent model turns require the bundled Codex app-server plugin. Explicit
-PI runtime config remains available as an opt-in compatibility route. When PI is
+OpenClaw runtime config remains available as an opt-in compatibility route. When OpenClaw is
 explicitly selected with an `openai-codex` auth profile, OpenClaw keeps the
-public model ref as `openai/*` and routes PI internally through the legacy
-Codex-auth transport. Run `openclaw doctor --fix` to repair stale
-`openai-codex/*`, `codex-cli/*`, or old PI session pins that do not come from
+public model ref as `openai/*` and routes internally through the Codex-auth
+transport. Run `openclaw doctor --fix` to repair stale
+`openai-codex/*`, `codex-cli/*`, or old runtime session pins that do not come from
 explicit runtime config.
 </Note>
 
@@ -178,7 +178,7 @@ Choose your preferred auth method and follow the setup steps.
     | ---------------------- | -------------------------- | --------------------------- | ---------------- |
     | `openai/gpt-5.5`      | omitted / provider/model `agentRuntime.id: "codex"` | Codex app-server harness | Codex-compatible OpenAI profile |
     | `openai/gpt-5.4-mini` | omitted / provider/model `agentRuntime.id: "codex"` | Codex app-server harness | Codex-compatible OpenAI profile |
-    | `openai/gpt-5.5`      | provider/model `agentRuntime.id: "pi"`              | PI embedded runtime      | `openai` profile or selected `openai-codex` profile |
+    | `openai/gpt-5.5`      | provider/model `agentRuntime.id: "openclaw"`              | OpenClaw embedded runtime      | `openai` profile or selected `openai-codex` profile |
 
     <Note>
     `openai/*` agent models use the Codex app-server harness. To use API-key
@@ -265,13 +265,13 @@ Choose your preferred auth method and follow the setup steps.
     | Model ref | Runtime config | Route | Auth |
     |-----------|----------------|-------|------|
     | `openai/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or ordered `openai` auth profile |
-    | `openai/gpt-5.5` | provider/model `agentRuntime.id: "pi"` | PI embedded runtime with internal Codex-auth transport | Selected `openai-codex` profile |
+    | `openai/gpt-5.5` | provider/model `agentRuntime.id: "openclaw"` | OpenClaw embedded runtime with internal Codex-auth transport | Selected `openai-codex` profile |
     | `openai-codex/gpt-5.5` | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Existing `openai-codex` profile |
     | `codex-cli/gpt-5.5` | repaired by doctor | Legacy CLI route rewritten to `openai/gpt-5.5` | Codex app-server auth |
 
     <Warning>
     Prefer `openai/gpt-5.5` for new subscription-backed agent config. Older
-    `openai-codex/gpt-*` refs are legacy PI routes, not the native Codex runtime
+    `openai-codex/gpt-*` refs are legacy OpenClaw routes, not the native Codex runtime
     path; run `openclaw doctor --fix` when you want to migrate them to canonical
     `openai/*` refs. `openai-codex/gpt-5.3-codex-spark` is the exception for
     accounts whose Codex catalog advertises that model; direct `openai/*` and
@@ -345,7 +345,7 @@ Choose your preferred auth method and follow the setup steps.
     openclaw models auth list --agent <id> --provider openai-codex
     ```
 
-    If an older config still has `openai-codex/gpt-*` or a stale OpenAI PI
+    If an older config still has `openai-codex/gpt-*` or a stale OpenAI runtime
     session pin without explicit runtime config, repair it:
 
     ```bash
@@ -377,14 +377,14 @@ Choose your preferred auth method and follow the setup steps.
 
     Chat `/status` shows which model runtime is active for the current session.
     The bundled Codex app-server harness appears as `Runtime: OpenAI Codex` for
-    OpenAI agent model turns. Stale PI session pins are repaired to Codex unless
-    config explicitly pins PI.
+    OpenAI agent model turns. Stale OpenAI runtime session pins are repaired to Codex unless
+    config explicitly pins OpenClaw.
 
     ### Doctor warning
 
-    If `openai-codex/*` routes or stale OpenAI PI pins remain in config or
+    If `openai-codex/*` routes or stale OpenAI runtime pins remain in config or
     session state, `openclaw doctor --fix` rewrites them to `openai/*` with the
-    Codex runtime unless PI is explicitly configured.
+    Codex runtime unless OpenClaw is explicitly configured.
 
     ### Context window cap
 
@@ -571,7 +571,7 @@ See [Video Generation](/tools/video-generation) for shared tool parameters, prov
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs on OpenClaw-assembled prompt surfaces. It applies by model id, so PI/provider routes such as legacy pre-repair refs (`openai-codex/gpt-5.5`), `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
+OpenClaw adds a shared GPT-5 prompt contribution for GPT-5-family runs on OpenClaw-assembled prompt surfaces. It applies by model id, so OpenClaw/provider routes such as legacy pre-repair refs (`openai-codex/gpt-5.5`), `openrouter/openai/gpt-5.5`, `opencode/gpt-5.5`, and other compatible GPT-5 refs receive the same overlay. Older GPT-4.x models do not.
 
 The bundled native Codex harness does not receive this OpenClaw GPT-5 overlay through Codex app-server developer instructions. Native Codex keeps Codex-owned base, model, and project-doc behavior, while OpenClaw disables Codex's built-in personality for native threads so agent workspace personality files stay authoritative. OpenClaw contributes only runtime context such as channel delivery, OpenClaw dynamic tools, ACP delegation, workspace context, and OpenClaw skills.
 
@@ -961,13 +961,13 @@ the Server-side compaction accordion below.
   </Accordion>
 
   <Accordion title="Server-side compaction (Responses API)">
-    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), the OpenAI plugin's Pi-harness stream wrapper auto-enables server-side compaction:
+    For direct OpenAI Responses models (`openai/*` on `api.openai.com`), the OpenAI plugin's OpenClaw stream wrapper auto-enables server-side compaction:
 
     - Forces `store: true` (unless model compat sets `supportsStore: false`)
     - Injects `context_management: [{ type: "compaction", compact_threshold: ... }]`
     - Default `compact_threshold`: 70% of `contextWindow` (or `80000` when unavailable)
 
-    This applies to the built-in Pi harness path and to OpenAI provider hooks used by embedded runs. The native Codex app-server harness manages its own context through Codex and is configured by OpenAI's default agent route or provider/model runtime policy.
+    This applies to the built-in OpenClaw runtime path and to OpenAI provider hooks used by embedded runs. The native Codex app-server harness manages its own context through Codex and is configured by OpenAI's default agent route or provider/model runtime policy.
 
     <Tabs>
       <Tab title="Enable explicitly">
@@ -1035,7 +1035,7 @@ the Server-side compaction accordion below.
     {
       agents: {
         defaults: {
-          embeddedPi: { executionContract: "strict-agentic" },
+          embeddedAgent: { executionContract: "strict-agentic" },
         },
       },
     }

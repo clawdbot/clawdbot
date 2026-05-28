@@ -1373,7 +1373,7 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.search.selectedProvider).toBe("brave");
     expect(resolveBundledWebSearchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(firstMockArg(resolvePluginWebSearchProvidersMock).bundledAllowlistCompat).toBe(true);
+    expect(firstMockArg(resolvePluginWebSearchProvidersMock).config).toBeDefined();
   });
 
   it("uses bundled public artifacts for bundled web fetch provider discovery", async () => {
@@ -1422,7 +1422,7 @@ describe("runtime web tools resolution", () => {
 
     expect(metadata.fetch.selectedProvider).toBe("firecrawl");
     expect(resolveBundledWebFetchProvidersFromPublicArtifactsMock).not.toHaveBeenCalled();
-    expect(firstMockArg(resolvePluginWebFetchProvidersMock).bundledAllowlistCompat).toBe(true);
+    expect(firstMockArg(resolvePluginWebFetchProvidersMock).origin).toBe("bundled");
   });
 
   it("uses env fallback for unresolved web fetch provider SecretRef when active", async () => {

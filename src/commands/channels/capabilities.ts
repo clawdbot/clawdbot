@@ -12,6 +12,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
@@ -50,14 +51,6 @@ type ChannelCapabilitiesReport = {
   probe?: unknown;
   diagnostics?: ChannelCapabilitiesDiagnostics;
 };
-
-function normalizeTimeout(raw: unknown, fallback = 10_000) {
-  const value = typeof raw === "string" ? Number(raw) : Number(raw);
-  if (!Number.isFinite(value) || value <= 0) {
-    return fallback;
-  }
-  return value;
-}
 
 function formatSupport(capabilities?: ChannelCapabilities) {
   if (!capabilities) {
@@ -226,7 +219,7 @@ export async function channelsCapabilitiesCommand(
     return;
   }
   let cfg = loadedCfg;
-  const timeoutMs = normalizeTimeout(opts.timeout, 10_000);
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, 10_000);
   const rawChannel = normalizeLowercaseStringOrEmpty(opts.channel);
   const rawTarget = normalizeOptionalString(opts.target) ?? "";
 

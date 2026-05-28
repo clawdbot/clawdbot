@@ -19,7 +19,7 @@ export {
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "../agents/pi-embedded-helpers/failover-matches.js";
+} from "../agents/embedded-agent-helpers/failover-matches.js";
 export { maybeLoadShellEnvForGenerationProviders } from "../test-utils/generation-live-test-helpers.js";
 export { isTruthyEnvValue } from "../infra/env.js";
 export { getShellEnvAppliedKeys } from "../infra/shell-env.js";

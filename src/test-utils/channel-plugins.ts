@@ -43,6 +43,7 @@ export const createTestRegistry = (channels: TestChannelRegistration[] = []): Pl
   agentToolResultMiddlewares: [],
   memoryEmbeddingProviders: [],
   textTransforms: [],
+  cliBackends: [],
   agentHarnesses: [],
   gatewayHandlers: {},
   gatewayMethodDescriptors: [],

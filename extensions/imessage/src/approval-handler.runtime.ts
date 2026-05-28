@@ -5,15 +5,11 @@ import {
   type ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import {
-  buildExecApprovalPendingReplyPayload,
-  type ExecApprovalReplyDecision,
-  type ExecApprovalPendingReplyParams,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
+import { buildApprovalReactionPendingContent } from "openclaw/plugin-sdk/approval-reaction-runtime";
+import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   buildApprovalResolvedReplyPayload,
   buildPluginApprovalExpiredMessage,
-  buildPluginApprovalPendingReplyPayload,
   buildPluginApprovalResolvedMessage,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -23,12 +19,10 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  addIMessageApprovalReactionHintToText,
   registerIMessageApprovalReactionTarget,
   unregisterIMessageApprovalReactionTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
-import { replaceApprovalIdPlaceholder } from "./approval-text.js";
 import { normalizeIMessageMessagingTarget } from "./normalize.js";
 import { sendMessageIMessage } from "./send.js";
 import { normalizeIMessageHandle, parseIMessageTarget } from "./targets.js";
@@ -61,46 +55,14 @@ function buildPendingPayload(params: {
   nowMs: number;
   view: PendingApprovalView;
 }): IMessagePendingDelivery {
-  const allowedDecisions = params.view.actions.flatMap((action) =>
-    action.kind === "decision" ? [action.decision] : [],
-  );
-  const payload =
-    params.approvalKind === "plugin"
-      ? buildPluginApprovalPendingReplyPayload({
-          request: params.request as PluginApprovalRequest,
-          nowMs: params.nowMs,
-          allowedDecisions,
-        })
-      : buildExecApprovalPendingReplyPayload({
-          approvalId: params.request.id,
-          approvalSlug: params.request.id.slice(0, 8),
-          approvalCommandId: params.request.id,
-          warningText:
-            params.view.approvalKind === "exec"
-              ? (params.view.warningText ?? undefined)
-              : undefined,
-          ask: params.view.approvalKind === "exec" ? (params.view.ask ?? null) : null,
-          agentId: params.view.approvalKind === "exec" ? (params.view.agentId ?? null) : null,
-          sessionKey: params.view.approvalKind === "exec" ? (params.view.sessionKey ?? null) : null,
-          command: params.view.approvalKind === "exec" ? params.view.commandText : "",
-          cwd: params.view.approvalKind === "exec" ? (params.view.cwd ?? undefined) : undefined,
-          host:
-            params.view.approvalKind === "exec" && params.view.host === "node" ? "node" : "gateway",
-          nodeId:
-            params.view.approvalKind === "exec" ? (params.view.nodeId ?? undefined) : undefined,
-          allowedDecisions,
-          expiresAtMs: params.request.expiresAtMs,
-          nowMs: params.nowMs,
-        } satisfies ExecApprovalPendingReplyParams);
+  const pendingContent = buildApprovalReactionPendingContent({
+    request: params.request,
+    view: params.view as never,
+    nowMs: params.nowMs,
+  });
   return {
-    // Use the same hint-insertion helper as the render path so the two routes
-    // produce identical prompt text and the helper's idempotency guard
-    // prevents a double-hint when the upstream payload already includes one.
-    text: addIMessageApprovalReactionHintToText({
-      text: replaceApprovalIdPlaceholder(payload.text, params.request.id),
-      allowedDecisions,
-    }),
-    allowedDecisions,
+    text: pendingContent.reactionPayload.text ?? "",
+    allowedDecisions: pendingContent.reactionPayload.allowedDecisions,
   };
 }
 

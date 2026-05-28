@@ -58,9 +58,10 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
       : {};
   const status = typeof record.status === "string" ? record.status.toLowerCase() : undefined;
   const stopReason = typeof record.stopReason === "string" ? record.stopReason.toLowerCase() : "";
+  const pendingError = record.pendingError === true;
   const hasTerminalTimeoutMetadata =
     readOptionalTimestamp(record.endedAt) !== undefined ||
-    readOptionalString(record.error) !== undefined ||
+    (!pendingError && readOptionalString(record.error) !== undefined) ||
     stopReason.length > 0 ||
     typeof record.livenessState === "string" ||
     record.yielded === true;

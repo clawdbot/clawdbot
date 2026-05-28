@@ -3,7 +3,6 @@ import { sortUniqueStrings } from "../shared/string-normalization.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
-  withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
@@ -185,12 +184,8 @@ function resolveCapabilityProviderConfig(params: {
   pluginIds?: string[];
 }) {
   const pluginIds = params.pluginIds ?? resolveBundledCapabilityCompatPluginIds(params);
-  const allowlistCompat = withBundledPluginAllowlistCompat({
-    config: params.cfg,
-    pluginIds,
-  });
   const enablementCompat = withBundledPluginEnablementCompat({
-    config: allowlistCompat,
+    config: params.cfg,
     pluginIds,
   });
   return withBundledPluginVitestCompat({

@@ -163,7 +163,7 @@ Rules of thumb:
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
-- **Parent fork policy** uses PI's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
+- **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
 
@@ -204,7 +204,7 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ## Transcript structure (`*.jsonl`)
 
-Transcripts are managed by `@earendil-works/pi-coding-agent`'s `SessionManager`.
+Transcripts are managed by `openclaw/plugin-sdk/agent-sessions`'s `SessionManager`.
 
 The file is JSONL:
 
@@ -269,9 +269,9 @@ assistant tool calls paired with their matching `toolResult` entries.
 
 ---
 
-## When auto-compaction happens (Pi runtime)
+## When auto-compaction happens (OpenClaw runtime)
 
-In the embedded Pi agent, auto-compaction triggers in two cases:
+In the embedded OpenClaw agent, auto-compaction triggers in two cases:
 
 1. **Overflow recovery**: the model returns a context overflow error
    (`request_too_large`, `context length exceeded`, `input exceeds the maximum
@@ -296,7 +296,7 @@ Where:
 - `contextWindow` is the model's context window
 - `reserveTokens` is headroom reserved for prompts + the next model output
 
-These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
+These are OpenClaw runtime semantics.
 
 OpenClaw can also trigger a preflight local compaction before opening the next
 run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
@@ -305,25 +305,25 @@ reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
 and it requires `truncateAfterCompaction` so the compacted summary can become a
 new successor transcript.
 
-For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
+For embedded OpenClaw runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
 adds an opt-in tool-loop guard. After a tool result is appended and before the
 next model call, OpenClaw estimates the prompt pressure using the same preflight
 budget logic used at turn start. If the context no longer fits, the guard does
-not compact inside Pi's `transformContext` hook. It raises a structured
+not compact inside OpenClaw runtime's `transformContext` hook. It raises a structured
 mid-turn precheck signal, stops the current prompt submission, and lets the
 outer run loop use the existing recovery path: truncate oversized tool results
 when that is enough, or trigger the configured compaction mode and retry. The
 option is disabled by default and works with both `default` and `safeguard`
 compaction modes, including provider-backed safeguard compaction.
 This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
-before a turn opens, while mid-turn precheck runs later in the embedded Pi tool
+before a turn opens, while mid-turn precheck runs later in the embedded OpenClaw tool
 loop after new tool results have been appended.
 
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
 
-Pi's compaction settings live in Pi settings:
+OpenClaw runtime's compaction settings live in agent settings:
 
 ```json5
 {
@@ -342,7 +342,7 @@ OpenClaw also enforces a safety floor for embedded runs:
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
 - If it's already higher, OpenClaw leaves it alone.
 - Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
-  and keeps Pi's recent-tail cut point. Without an explicit keep budget,
+  and keeps OpenClaw runtime's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
 - Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
@@ -362,8 +362,8 @@ OpenClaw also enforces a safety floor for embedded runs:
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 
-Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.ts`
-(called from `src/agents/pi-embedded-runner.ts`).
+Implementation: `ensureAgentCompactionReserveTokens()` in `src/agents/agent-settings.ts`
+(called from `src/agents/embedded-agent-runner.ts`).
 
 ---
 
@@ -382,7 +382,7 @@ Plugins can register a compaction provider via `registerCompactionProvider()` on
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
 - Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
 
-Source: `src/plugins/compaction-provider.ts`, `src/agents/pi-hooks/compaction-safeguard.ts`.
+Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.
 
 ---
 
@@ -427,7 +427,7 @@ erase critical context.
 OpenClaw uses the **pre-threshold flush** approach:
 
 1. Monitor session context usage.
-2. When it crosses a "soft threshold" (below Pi's compaction threshold), run a silent
+2. When it crosses a "soft threshold" (below OpenClaw runtime's compaction threshold), run a silent
    "write memory now" directive to the agent.
 3. Use the exact silent token `NO_REPLY` / `no_reply` so the user sees
    nothing.
@@ -448,11 +448,11 @@ Notes:
   active session fallback chain, so local-only housekeeping does not silently
   fall back to a paid conversation model.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
-- The flush runs only for embedded Pi sessions (CLI backends skip it).
+- The flush runs only for embedded OpenClaw sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
-Pi also exposes a `session_before_compact` hook in the extension API, but OpenClaw's
+OpenClaw also exposes a `session_before_compact` hook in the extension API, but OpenClaw's
 flush logic lives on the Gateway side today.
 
 ---

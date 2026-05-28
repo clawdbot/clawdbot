@@ -310,6 +310,7 @@ describe("plugin runtime command execution", () => {
           "resolveThinkingPolicy",
           "resolveAgentDir",
         ]);
+        expect(runtime.agent.runEmbeddedPiAgent).toBe(runtime.agent.runEmbeddedAgent);
         expectFunctionKeys(runtime.agent.session as Record<string, unknown>, [
           "getSessionEntry",
           "listSessionEntries",

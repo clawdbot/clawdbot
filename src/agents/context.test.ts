@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { createSessionManagerRuntimeRegistry } from "./agent-hooks/session-manager-runtime-registry.js";
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
   resolveContextTokensForModel,
 } from "./context.js";
-import { createSessionManagerRuntimeRegistry } from "./pi-hooks/session-manager-runtime-registry.js";
 
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 

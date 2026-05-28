@@ -12,6 +12,8 @@
  */
 
 import * as fs from "node:fs";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   MediaFileType,
   type ChatScope,
@@ -19,6 +21,7 @@ import {
   type MessageResponse,
   type EngineLogger,
 } from "../types.js";
+import { MAX_UPLOAD_SIZE } from "../utils/file-utils.js";
 import { ApiClient } from "./api-client.js";
 import { withRetry, UPLOAD_RETRY_POLICY } from "./retry.js";
 import { mediaUploadPath, messagePath, getNextMsgSeq } from "./routes.js";
@@ -48,6 +51,122 @@ interface MediaApiConfig {
   uploadCache?: UploadCacheAdapter;
   /** File name sanitizer. */
   sanitizeFileName?: SanitizeFileNameFn;
+}
+
+const DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS = 30_000;
+const DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS = 10_000;
+const DIRECT_UPLOAD_BODY_GRACE_TIMEOUT_MS = 30_000;
+const DIRECT_UPLOAD_MIN_DOWNLOAD_BYTES_PER_SECOND = 256 * 1024;
+const DIRECT_UPLOAD_MAX_BODY_TIMEOUT_MS = 8 * 60_000;
+
+function assertDirectUploadDownloadHostAllowed(hostname: string): void {
+  if (isBlockedHostnameOrIp(hostname)) {
+    throw new Error("Blocked hostname or private/internal/special-use IP address");
+  }
+}
+
+async function fetchDirectUploadDownload(url: string) {
+  const controller = new AbortController();
+  const timeoutError = new Error("Direct-upload media URL fetch timed out");
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, DIRECT_UPLOAD_DOWNLOAD_TIMEOUT_MS);
+    unrefTimer(timeout);
+  });
+  const guardedFetch = fetchWithSsrFGuard({
+    url,
+    maxRedirects: 0,
+    signal: controller.signal,
+  });
+  void guardedFetch.then(
+    (result) => {
+      if (timedOut) {
+        void result.release().catch(() => undefined);
+      }
+    },
+    () => undefined,
+  );
+  try {
+    return await Promise.race([guardedFetch, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function unrefTimer(timeout: ReturnType<typeof setTimeout>): void {
+  if (typeof timeout === "object" && "unref" in timeout) {
+    (timeout as { unref: () => void }).unref();
+  }
+}
+
+function resolveDirectUploadBodyTimeoutMs(maxBytes: number): number {
+  const transferTimeoutMs = Math.ceil(
+    (maxBytes / DIRECT_UPLOAD_MIN_DOWNLOAD_BYTES_PER_SECOND) * 1000,
+  );
+  return Math.min(
+    DIRECT_UPLOAD_BODY_GRACE_TIMEOUT_MS + transferTimeoutMs,
+    DIRECT_UPLOAD_MAX_BODY_TIMEOUT_MS,
+  );
+}
+
+async function readDirectUploadResponse(response: Response, maxBytes: number): Promise<Buffer> {
+  const timeoutMs = resolveDirectUploadBodyTimeoutMs(maxBytes);
+  const timeoutError = new Error(`Direct-upload media URL body timed out after ${timeoutMs}ms`);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      void response.body?.cancel(timeoutError).catch(() => undefined);
+      reject(timeoutError);
+    }, timeoutMs);
+    unrefTimer(timeout);
+  });
+
+  try {
+    return await Promise.race([
+      readResponseWithLimit(response, maxBytes, {
+        chunkTimeoutMs: DIRECT_UPLOAD_READ_IDLE_TIMEOUT_MS,
+      }),
+      timeoutPromise,
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export async function downloadDirectUploadUrl(
+  url: string,
+  opts: { maxBytes?: number } = {},
+): Promise<Buffer> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Direct-upload media URL must be a valid URL");
+  }
+
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("Direct-upload media URL must use HTTP or HTTPS");
+  }
+
+  assertDirectUploadDownloadHostAllowed(parsed.hostname);
+  const { response, release } = await fetchDirectUploadDownload(parsed.toString());
+  try {
+    if (!response.ok) {
+      throw new Error(`Direct-upload media URL returned HTTP ${response.status}`);
+    }
+    return await readDirectUploadResponse(response, opts.maxBytes ?? MAX_UPLOAD_SIZE);
+  } finally {
+    await release?.();
+  }
 }
 
 /**
@@ -129,12 +248,19 @@ export class MediaApi {
     } else if (opts.localPath) {
       const buf = await fs.promises.readFile(opts.localPath);
       fileData = buf.toString("base64");
+    } else if (opts.url !== undefined) {
+      const buf = await downloadDirectUploadUrl(opts.url);
+      fileData = buf.toString("base64");
     }
 
     // Check cache for base64 uploads.
-    if (fileData && this.cache) {
-      const hash = this.cache.computeHash(fileData);
-      const cached = this.cache.get(hash, scope, targetId, fileType);
+    const uploadCache =
+      fileData !== undefined && !(fileType === MediaFileType.FILE && opts.fileName)
+        ? this.cache
+        : undefined;
+    if (fileData !== undefined && uploadCache) {
+      const hash = uploadCache.computeHash(fileData);
+      const cached = uploadCache.get(hash, scope, targetId, fileType);
       if (cached) {
         return { file_uuid: "", file_info: cached, ttl: 0 };
       }
@@ -144,9 +270,7 @@ export class MediaApi {
       file_type: fileType,
       srv_send_msg: opts.srvSendMsg ?? false,
     };
-    if (opts.url) {
-      body.url = opts.url;
-    } else if (fileData) {
+    if (fileData !== undefined) {
       body.file_data = fileData;
     }
     if (fileType === MediaFileType.FILE && opts.fileName) {
@@ -168,9 +292,9 @@ export class MediaApi {
     );
 
     // Cache the result for future dedup.
-    if (fileData && result.file_info && result.ttl > 0 && this.cache) {
-      const hash = this.cache.computeHash(fileData);
-      this.cache.set(
+    if (fileData !== undefined && uploadCache && result.file_info && result.ttl > 0) {
+      const hash = uploadCache.computeHash(fileData);
+      uploadCache.set(
         hash,
         scope,
         targetId,

@@ -35,8 +35,8 @@ function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
   return {
     agents: {
       defaults: {
-        model: { primary: "pi:opus" },
-        models: { "pi:opus": {} },
+        model: { primary: "test:opus" },
+        models: { "test:opus": {} },
         contextTokens: 32000,
       },
       list: [
@@ -77,10 +77,10 @@ describe("sessionsCommand default store agent selection", () => {
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock
       .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
       })
       .mockReturnValueOnce({
-        voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "pi:opus" },
+        voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "test:opus" },
       });
     const { runtime, logs } = createRuntime();
 
@@ -99,8 +99,8 @@ describe("sessionsCommand default store agent selection", () => {
     loadConfigMock.mockImplementation(() => createSessionsConfig("/tmp/shared-sessions.json"));
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock.mockReturnValue({
-      "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
-      "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "pi:opus" },
+      "agent:main:room": { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
+      "agent:voice:room": { sessionId: "s2", updatedAt: Date.now() - 30_000, model: "test:opus" },
     });
     const { runtime, logs } = createRuntime();
 
@@ -137,7 +137,7 @@ describe("sessionsCommand default store agent selection", () => {
     loadSessionStoreMock.mockReset();
     loadSessionStoreMock
       .mockReturnValueOnce({
-        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "pi:opus" },
+        main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
       })
       .mockReturnValueOnce({});
     const { runtime, logs } = createRuntime();

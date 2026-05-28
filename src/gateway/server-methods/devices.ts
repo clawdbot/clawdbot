@@ -222,7 +222,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
     }
     const { requestId } = params as { requestId: string };
     const authz = resolveDeviceSessionAuthz(client);
-    if (authz.callerDeviceId && !authz.isAdminCaller) {
+    if (!authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!pending) {
         respond(
@@ -232,7 +232,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (pending.deviceId.trim() !== authz.callerDeviceId) {
+      if (authz.callerDeviceId && pending.deviceId.trim() !== authz.callerDeviceId) {
         context.logGateway.warn(
           `device pairing approval denied request=${requestId} reason=device-ownership-mismatch`,
         );

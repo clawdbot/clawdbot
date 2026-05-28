@@ -289,7 +289,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --runtime-pair pi,codex \
+            --runtime-pair openclaw,codex \
             --fast \
             --allow-failures \
             --output-dir "${output_dir}/runtime-suite"

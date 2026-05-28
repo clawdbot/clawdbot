@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { MINIMAX_FAST_MODE_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import { fetchMinimaxUsage } from "openclaw/plugin-sdk/provider-usage";
@@ -238,8 +239,8 @@ function createMinimaxOAuthMethod(region: MiniMaxRegion) {
   };
 }
 
-export function registerMinimaxProviders(api: OpenClawPluginApi) {
-  api.registerProvider({
+export function buildMinimaxApiProviderPlugin(): ProviderPlugin {
+  return {
     id: API_PROVIDER_ID,
     label: PROVIDER_LABEL,
     hookAliases: ["minimax-cn"],
@@ -249,6 +250,10 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
     catalog: {
       order: "simple",
       run: async (ctx) => resolveApiCatalog(ctx),
+    },
+    staticCatalog: {
+      order: "simple",
+      run: async (ctx) => ({ providers: { [API_PROVIDER_ID]: buildMinimaxProvider(ctx.env) } }),
     },
     resolveUsageAuth: async (ctx) => {
       const portalOauth = await ctx.resolveOAuthToken({ provider: PORTAL_PROVIDER_ID });
@@ -267,9 +272,11 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
       await fetchMinimaxUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn, {
         baseUrl: resolveMinimaxUsageBaseUrl(ctx.config),
       }),
-  });
+  };
+}
 
-  api.registerProvider({
+export function buildMinimaxPortalProviderPlugin(): ProviderPlugin {
+  return {
     id: PORTAL_PROVIDER_ID,
     label: PROVIDER_LABEL,
     hookAliases: ["minimax-portal-cn"],
@@ -278,8 +285,18 @@ export function registerMinimaxProviders(api: OpenClawPluginApi) {
     catalog: {
       run: async (ctx) => resolvePortalCatalog(ctx),
     },
+    staticCatalog: {
+      run: async (ctx) => ({
+        providers: { [PORTAL_PROVIDER_ID]: buildMinimaxPortalProvider(ctx.env) },
+      }),
+    },
     auth: [createMinimaxOAuthMethod("global"), createMinimaxOAuthMethod("cn")],
     ...MINIMAX_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isMiniMaxModernModelId(modelId),
-  });
+  };
+}
+
+export function registerMinimaxProviders(api: OpenClawPluginApi) {
+  api.registerProvider(buildMinimaxApiProviderPlugin());
+  api.registerProvider(buildMinimaxPortalProviderPlugin());
 }

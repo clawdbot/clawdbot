@@ -2,12 +2,15 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 const APP_ID_ENV = "OPENCLAW_GH_READ_APP_ID";
 const KEY_FILE_ENV = "OPENCLAW_GH_READ_PRIVATE_KEY_FILE";
 const INSTALLATION_ID_ENV = "OPENCLAW_GH_READ_INSTALLATION_ID";
 const PERMISSIONS_ENV = "OPENCLAW_GH_READ_PERMISSIONS";
 const API_VERSION = "2022-11-28";
+const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
+const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
 const DEFAULT_READ_PERMISSION_KEYS = [
   "actions",
   "checks",
@@ -30,6 +33,11 @@ type InstallationResponse = {
 
 type AccessTokenResponse = {
   token: string;
+};
+
+type GitHubJsonOptions = {
+  fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 };
 
 export function parseRepoArg(args: string[]): string | null {
@@ -89,6 +97,15 @@ export function buildReadPermissions(
     }
   }
   return permissions;
+}
+
+export function resolveGitHubFetchTimeoutMs(raw = process.env.OPENCLAW_GH_READ_FETCH_TIMEOUT_MS) {
+  return parseStrictIntegerOption({
+    fallback: DEFAULT_GITHUB_FETCH_TIMEOUT_MS,
+    label: "OPENCLAW_GH_READ_FETCH_TIMEOUT_MS",
+    min: 1,
+    raw,
+  });
 }
 
 function isMainModule() {
@@ -151,32 +168,104 @@ function createAppJwt(appId: string, privateKeyPem: string) {
   return `${signingInput}.${base64UrlEncode(signature)}`;
 }
 
-async function githubJson<T>(
+async function withGitHubFetchTimeout<T>(
+  label: string,
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<T>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(`${label} exceeded timeout of ${timeoutMs}ms`);
+      reject(error);
+      controller.abort(error);
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+export async function readBoundedGitHubErrorText(
+  response: Response,
+  maxChars = GITHUB_ERROR_BODY_MAX_CHARS,
+): Promise<string> {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
+export async function githubJson<T>(
   path: string,
   bearerToken: string,
   init?: {
     method?: "GET" | "POST";
     body?: unknown;
   },
+  options: GitHubJsonOptions = {},
 ): Promise<T> {
-  const response = await fetch(`https://api.github.com${path}`, {
-    method: init?.method ?? "GET",
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${bearerToken}`,
-      "Content-Type": "application/json",
-      "User-Agent": "openclaw-gh-read",
-      "X-GitHub-Api-Version": API_VERSION,
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? resolveGitHubFetchTimeoutMs();
+  return await withGitHubFetchTimeout(
+    `GitHub API ${init?.method ?? "GET"} ${path}`,
+    timeoutMs,
+    async (signal) => {
+      const response = await fetchImpl(`https://api.github.com${path}`, {
+        method: init?.method ?? "GET",
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${bearerToken}`,
+          "Content-Type": "application/json",
+          "User-Agent": "openclaw-gh-read",
+          "X-GitHub-Api-Version": API_VERSION,
+        },
+        body: init?.body === undefined ? undefined : JSON.stringify(init.body),
+        signal,
+      });
+
+      if (!response.ok) {
+        const text = await readBoundedGitHubErrorText(response);
+        fail(`${init?.method ?? "GET"} ${path} failed (${response.status}): ${text}`);
+      }
+
+      return (await response.json()) as T;
     },
-    body: init?.body === undefined ? undefined : JSON.stringify(init.body),
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    fail(`${init?.method ?? "GET"} ${path} failed (${response.status}): ${text}`);
-  }
-
-  return (await response.json()) as T;
+  );
 }
 
 async function resolveInstallation(

@@ -64,8 +64,11 @@ function resolveCursorSeq(cursor: string | undefined): number | undefined {
     return undefined;
   }
   const normalized = cursor.startsWith("seq:") ? cursor.slice(4) : cursor;
-  const value = Number.parseInt(normalized, 10);
-  return Number.isFinite(value) && value > 0 ? value : undefined;
+  if (!/^\d+$/.test(normalized)) {
+    return undefined;
+  }
+  const value = Number(normalized);
+  return Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {

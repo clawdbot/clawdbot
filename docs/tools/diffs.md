@@ -136,8 +136,10 @@ All fields are optional unless noted.
   Display filename for before and after mode.
 </ParamField>
 <ParamField path="lang" type="string">
-  Language override hint for before and after mode. Unknown values fall back to plain text.
+  Language override hint for before and after mode. Unknown values and languages outside the default viewer set fall back to plain text unless the
+  Diff Viewer Language Pack plugin is installed.
 </ParamField>
+
 <ParamField path="title" type="string">
   Viewer title override.
 </ParamField>
@@ -199,6 +201,22 @@ All fields are optional unless noted.
 
   </Accordion>
 </AccordionGroup>
+
+## Syntax highlighting
+
+OpenClaw includes syntax highlighting for common source, config, and documentation languages:
+
+`javascript`, `typescript`, `tsx`, `jsx`, `json`, `markdown`, `yaml`, `css`, `html`, `sh`, `python`, `go`, `rust`, `java`, `c`, `cpp`, `csharp`, `php`, `sql`, `docker`, `ruby`, `swift`, `kotlin`, `r`, `dart`, `lua`, `powershell`, `xml`, and `toml`.
+
+Common aliases such as `js`, `ts`, `bash`, `md`, `yml`, `c++`, `dockerfile`, `rb`, `kt`, and `ps1` are normalized to those default languages.
+
+Install the Diff Viewer Language Pack plugin to highlight other languages:
+
+```bash
+openclaw plugins install diffs-language-pack
+```
+
+With the language pack available, OpenClaw automatically uses it for languages outside the default list. Without it, those files stay readable as plain text.
 
 ## Output details contract
 
@@ -385,6 +403,7 @@ Viewer assets:
 
 - `/plugins/diffs/assets/viewer.js`
 - `/plugins/diffs/assets/viewer-runtime.js`
+- `/plugins/diffs-language-pack/assets/viewer.js` when the diff uses a language from the Diff Viewer Language Pack
 
 The viewer document resolves those assets relative to the viewer URL, so an optional `baseUrl` path prefix is preserved for both asset requests too.
 

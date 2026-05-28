@@ -235,12 +235,44 @@ function unwrapTimeInvocation(argv: string[]): string[] | null {
   });
 }
 
+function timeInvocationWritesOutputFile(argv: string[]): boolean {
+  let expectsOptionValue = false;
+  for (let idx = 1; idx < argv.length; idx += 1) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      continue;
+    }
+    if (token === "--") {
+      return false;
+    }
+    if (!token.startsWith("-") || token === "-") {
+      return false;
+    }
+    const lower = normalizeLowercaseStringOrEmpty(token);
+    const [flag] = lower.split("=", 2);
+    if (flag === "-o" || flag === "--output") {
+      return true;
+    }
+    if (TIME_OPTIONS_WITH_VALUE.has(flag) && !lower.includes("=")) {
+      expectsOptionValue = true;
+    }
+  }
+  return false;
+}
+
 function supportsScriptPositionalCommand(platform: NodeJS.Platform = process.platform): boolean {
   return platform === "darwin" || platform === "freebsd";
 }
 
-function unwrapScriptInvocation(argv: string[]): string[] | null {
-  if (!supportsScriptPositionalCommand()) {
+function unwrapScriptInvocation(
+  argv: string[],
+  platform: NodeJS.Platform = process.platform,
+): string[] | null {
+  if (!supportsScriptPositionalCommand(platform)) {
     return null;
   }
   return scanWrapperInvocation(argv, {
@@ -368,12 +400,16 @@ const DISPATCH_WRAPPER_SPECS: readonly DispatchWrapperSpec[] = [
   { name: "nice", unwrap: unwrapNiceInvocation, transparentUsage: true },
   { name: "nohup", unwrap: unwrapNohupInvocation, transparentUsage: true },
   { name: "sandbox-exec", unwrap: unwrapSandboxExecInvocation, transparentUsage: true },
-  { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: true },
+  { name: "script", unwrap: unwrapScriptInvocation, transparentUsage: false },
   { name: "setsid" },
   { name: "stdbuf", unwrap: unwrapStdbufInvocation, transparentUsage: true },
   { name: "sudo" },
   { name: "taskset" },
-  { name: "time", unwrap: unwrapTimeInvocation, transparentUsage: true },
+  {
+    name: "time",
+    unwrap: unwrapTimeInvocation,
+    transparentUsage: (argv) => !timeInvocationWritesOutputFile(argv),
+  },
   { name: "timeout", unwrap: unwrapTimeoutInvocation, transparentUsage: true },
   {
     name: "xcrun",

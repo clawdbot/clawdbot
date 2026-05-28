@@ -2,6 +2,10 @@
   "blockedEverywhereKeys": [
     "NODE_OPTIONS",
     "NODE_PATH",
+    "NODE_REDIRECT_WARNINGS",
+    "NODE_REPL_EXTERNAL_MODULE",
+    "NODE_REPL_HISTORY",
+    "NODE_V8_COVERAGE",
     "PYTHONHOME",
     "PYTHONPATH",
     "PERL5LIB",

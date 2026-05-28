@@ -1,5 +1,5 @@
+import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
-import { resolveProviderToolPolicy } from "../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
@@ -112,7 +112,6 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
     config: cfg,
     env,
     origin: "bundled",
-    bundledAllowlistCompat: true,
   });
 }
 

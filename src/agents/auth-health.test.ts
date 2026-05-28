@@ -376,7 +376,7 @@ describe("buildAuthHealthSummary", () => {
     expect(reasonCodes["github-copilot:invalid-expires"]).toBe("invalid_expires");
   });
 
-  it("normalizes provider aliases when filtering and grouping profile health", () => {
+  it("does not normalize provider aliases when filtering and grouping profile health", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {
       version: 1,
@@ -399,16 +399,13 @@ describe("buildAuthHealthSummary", () => {
       providers: ["zai"],
     });
 
-    expect(summary.profiles.map((profile) => [profile.profileId, profile.provider])).toEqual([
-      ["zai:dash", "zai"],
-      ["zai:dot", "zai"],
-    ]);
+    expect(summary.profiles).toEqual([]);
     expect(summary.providers).toEqual([
       {
         provider: "zai",
-        status: "static",
-        effectiveProfiles: summary.profiles,
-        profiles: summary.profiles,
+        status: "missing",
+        effectiveProfiles: [],
+        profiles: [],
       },
     ]);
   });

@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
@@ -7,9 +7,9 @@ import {
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { describe, expect, it } from "vitest";
+import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { buildProviderToolCompatFamilyHooks } from "../plugin-sdk/provider-tools.js";
 import { buildOpenAIResponsesParams } from "./openai-transport-stream.js";
-import { createOpenAIResponsesContextManagementWrapper } from "./pi-embedded-runner/openai-stream-wrappers.js";
 
 describe("OpenAI transport schema normalization runtime contract", () => {
   it("keeps HTTP Responses strict decisions stable for the same tool set", () => {

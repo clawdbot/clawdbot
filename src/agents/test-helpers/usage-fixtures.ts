@@ -1,4 +1,4 @@
-import type { Usage } from "@earendil-works/pi-ai";
+import type { Usage } from "openclaw/plugin-sdk/llm";
 
 export const ZERO_USAGE_FIXTURE: Usage = {
   input: 0,

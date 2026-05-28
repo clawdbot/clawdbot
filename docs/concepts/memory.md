@@ -144,9 +144,10 @@ search** — combining vector similarity (semantic meaning) with keyword matchin
 an API key for any supported provider.
 
 <Info>
-OpenClaw auto-detects your embedding provider from available API keys. If you
-have an OpenAI, Gemini, Voyage, or Mistral key configured, memory search is
-enabled automatically.
+OpenClaw uses OpenAI embeddings by default. Set
+`agents.defaults.memorySearch.provider` explicitly to use Gemini, Voyage,
+Mistral, local, Ollama, Bedrock, GitHub Copilot, or OpenAI-compatible
+embeddings.
 </Info>
 
 For details on how search works, tuning options, and provider setup, see

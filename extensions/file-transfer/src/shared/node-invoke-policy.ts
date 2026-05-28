@@ -367,10 +367,25 @@ async function listDirFetchArchiveEntries(
     child.on("error", (error) => {
       clearTimeout(watchdog);
       if (!aborted) {
+        aborted = true;
         resolve({
           ok: false,
           code: "ARCHIVE_ENTRIES_UNREADABLE",
           reason: `tar -tzf error: ${String(error)}`,
+        });
+      }
+    });
+    child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+      if (aborted && error.code === "EPIPE") {
+        return;
+      }
+      clearTimeout(watchdog);
+      if (!aborted) {
+        aborted = true;
+        resolve({
+          ok: false,
+          code: "ARCHIVE_ENTRIES_UNREADABLE",
+          reason: `tar -tzf input error: ${String(error)}`,
         });
       }
     });

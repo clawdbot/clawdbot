@@ -244,7 +244,7 @@ export async function reviewTranscriptForProposal(params: {
     api: params.api,
     agentId: params.ctx.agentId,
   });
-  const result = await params.api.runtime.agent.runEmbeddedPiAgent({
+  const result = await params.api.runtime.agent.runEmbeddedAgent({
     sessionId,
     sessionKey: params.ctx.sessionKey,
     agentId: params.ctx.agentId,

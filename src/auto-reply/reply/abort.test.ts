@@ -28,8 +28,8 @@ import {
 } from "./reply-run-registry.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(true),
+vi.mock("../../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(true),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
@@ -71,7 +71,7 @@ const acpManagerMocks = vi.hoisted(() => ({
 }));
 
 const runtimeAbortMocks = vi.hoisted(() => ({
-  abortEmbeddedPiRun: vi.fn(() => true),
+  abortEmbeddedAgentRun: vi.fn(() => true),
   resolveActiveEmbeddedRunSessionId: vi.fn(() => undefined as string | undefined),
 }));
 
@@ -193,7 +193,7 @@ describe("abort detection", () => {
           resolveSession: acpManagerMocks.resolveSession,
           cancelSession: acpManagerMocks.cancelSession,
         }) as never) as never,
-      abortEmbeddedPiRun: runtimeAbortMocks.abortEmbeddedPiRun,
+      abortEmbeddedAgentRun: runtimeAbortMocks.abortEmbeddedAgentRun,
       resolveActiveEmbeddedRunSessionId: runtimeAbortMocks.resolveActiveEmbeddedRunSessionId,
       getLatestSubagentRunByChildSessionKey:
         subagentRegistryMocks.getLatestSubagentRunByChildSessionKey,
@@ -216,7 +216,7 @@ describe("abort detection", () => {
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
-    runtimeAbortMocks.abortEmbeddedPiRun.mockReset().mockReturnValue(true);
+    runtimeAbortMocks.abortEmbeddedAgentRun.mockReset().mockReturnValue(true);
     runtimeAbortMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
     subagentRegistryMocks.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(null);
   });
@@ -398,12 +398,12 @@ describe("abort detection", () => {
     const storeKey = "agent:main:telegram:group:-1001234567890:topic:99";
     const lookupKey = "Agent:Main:Telegram:Group:-1001234567890:Topic:99";
     const store = {
-      [storeKey]: { sessionId: "pi-topic-99", updatedAt: 0 },
+      [storeKey]: { sessionId: "agent-topic-99", updatedAt: 0 },
     } as Record<string, { sessionId: string; updatedAt: number }>;
     // Direct lookup fails (store uses lowercase keys); normalization fallback must succeed.
     expect(store[lookupKey]).toBeUndefined();
     const result = resolveSessionEntryForKey(store, lookupKey);
-    expect(result.entry?.sessionId).toBe("pi-topic-99");
+    expect(result.entry?.sessionId).toBe("agent-topic-99");
     expect(result.key).toBe(storeKey);
   });
 
@@ -446,7 +446,7 @@ describe("abort detection", () => {
 
     expect(result.handled).toBe(true);
     expect(runtimeAbortMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(sessionKey);
-    expect(runtimeAbortMocks.abortEmbeddedPiRun).toHaveBeenCalledWith(activeSessionId);
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(activeSessionId);
     expect(getFollowupQueueDepth(sessionKey)).toBe(0);
     expectSessionLaneCleared(sessionKey);
   });
@@ -641,7 +641,7 @@ describe("abort detection", () => {
     });
 
     expect(result.handled).toBe(true);
-    expect(runtimeAbortMocks.abortEmbeddedPiRun).toHaveBeenCalledWith("source-store-session");
+    expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("source-store-session");
     expect(getFollowupQueueDepth(sourceSessionKey)).toBe(0);
     expect(getFollowupQueueDepth(acpSessionKey)).toBe(0);
     expectSessionLaneCleared(sourceSessionKey);

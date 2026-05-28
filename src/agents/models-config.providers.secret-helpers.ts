@@ -287,13 +287,12 @@ export function resolveMissingProviderApiKey(params: {
   const authMode = params.provider.auth;
   if (params.providerApiKeyResolver && (!authMode || authMode === "aws-sdk")) {
     const resolvedApiKey = params.providerApiKeyResolver(params.env);
-    if (!resolvedApiKey) {
-      return params.provider;
+    if (resolvedApiKey) {
+      return {
+        ...params.provider,
+        apiKey: resolvedApiKey,
+      };
     }
-    return {
-      ...params.provider,
-      apiKey: resolvedApiKey,
-    };
   }
   if (authMode === "aws-sdk") {
     const awsEnvVar = resolveAwsSdkApiKeyVarName(params.env);

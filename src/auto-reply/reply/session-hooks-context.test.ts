@@ -31,7 +31,7 @@ vi.mock("../../agents/harness/registry.js", () => ({
   resetRegisteredAgentHarnessSessions: sessionCleanupMocks.resetRegisteredAgentHarnessSessions,
 }));
 
-vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: sessionCleanupMocks.retireSessionMcpRuntime,
 }));
 

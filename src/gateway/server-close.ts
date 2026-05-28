@@ -1,7 +1,7 @@
 import type { Server as HttpServer } from "node:http";
 import type { WebSocketServer } from "ws";
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
-import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -319,7 +319,7 @@ async function disposeRuntimeWithShutdownGrace(params: {
 }
 
 async function disposeAllBundleLspRuntimesOnDemand(): Promise<void> {
-  const { disposeAllBundleLspRuntimes } = await import("../agents/pi-bundle-lsp-runtime.js");
+  const { disposeAllBundleLspRuntimes } = await import("../agents/agent-bundle-lsp-runtime.js");
   await disposeAllBundleLspRuntimes();
 }
 

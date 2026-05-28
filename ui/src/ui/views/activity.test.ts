@@ -64,7 +64,7 @@ describe("renderActivity", () => {
     render(renderActivity(createProps()), container);
 
     expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
-      "0 arguments hidden",
+      "0 Argumente ausgeblendet",
     );
   });
 

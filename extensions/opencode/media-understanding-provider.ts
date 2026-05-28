@@ -1,4 +1,4 @@
-import type { ProviderStreamOptions } from "@earendil-works/pi-ai";
+import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
   describeImageWithModelPayloadTransform,
   describeImagesWithModelPayloadTransform,

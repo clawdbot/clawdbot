@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -17,6 +16,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
+import type { AgentToolResult } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";

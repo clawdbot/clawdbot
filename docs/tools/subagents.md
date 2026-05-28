@@ -186,6 +186,9 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 <ParamField path="agentId" type="string">
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
+<ParamField path="cwd" type="string">
+  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work.
+</ParamField>
 <ParamField path="runtime" type='"subagent" | "acp"' default="subagent">
   `acp` is only for external ACP harnesses (`claude`, `droid`, `gemini`, `opencode`, or explicitly requested Codex ACP/acpx) and for `agents.list[]` entries whose `runtime.type` is `acp`.
 </ParamField>
@@ -354,7 +357,7 @@ that would run unsandboxed.
 
 Use `agents_list` to see which agent ids are currently allowed for
 `sessions_spawn`. The response includes each listed agent's effective
-model and embedded runtime metadata so callers can distinguish PI, Codex
+model and embedded runtime metadata so callers can distinguish OpenClaw, Codex
 app-server, and other configured native runtimes.
 
 `allowAgents` entries must point at configured agent ids in `agents.list[]`.

@@ -49,7 +49,6 @@ export function resolvePluginWebFetchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   activate?: boolean;
   cache?: boolean;
@@ -68,7 +67,6 @@ export function resolveRuntimeWebFetchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {

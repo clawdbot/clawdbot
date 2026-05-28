@@ -941,7 +941,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
 
-        ({ authResult, authOk, authMethod } = await resolveConnectAuthDecision({
+        const authDecision = await resolveConnectAuthDecision({
           state: {
             authResult,
             authOk,
@@ -967,8 +967,15 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               role,
               scopes,
             }),
-          verifyDeviceToken,
-        }));
+          verifyDeviceToken: async (params) =>
+            await verifyDeviceToken({
+              ...params,
+              requiredSharedGatewaySessionGeneration: getRequiredSharedGatewaySessionGeneration?.(),
+            }),
+        });
+        ({ authResult, authOk, authMethod } = authDecision);
+        const deviceTokenSharedGatewaySessionGeneration =
+          authDecision.deviceTokenSharedGatewaySessionGeneration;
         pairingLocality = resolvePairingLocality({
           connectParams,
           isLocalClient,
@@ -991,16 +998,21 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           rejectUnauthorized(authResult);
           return;
         }
-        if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
-          const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
-            resolvedAuth,
-            trustedProxies,
-          );
+        const usesSharedGatewayAuth =
+          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
+        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
+          : undefined;
+        const sessionUsesSharedGatewayAuth =
+          usesSharedGatewayAuth || deviceTokenSharedGatewaySessionGeneration !== undefined;
+        const sessionSharedGatewaySessionGeneration =
+          sharedGatewaySessionGeneration ?? deviceTokenSharedGatewaySessionGeneration;
+        if (sessionUsesSharedGatewayAuth) {
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
             requiredSharedGatewaySessionGeneration !== undefined &&
-            sharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
+            sessionSharedGatewaySessionGeneration !== requiredSharedGatewaySessionGeneration
           ) {
             setCloseCause("gateway-auth-rotated", {
               authGenerationStale: true,
@@ -1466,9 +1478,23 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         const shouldIssueDeviceToken = !trustedProxyAuthOk;
+        const sharedGatewayAuthIssuer =
+          sessionSharedGatewaySessionGeneration &&
+          (deviceTokenSharedGatewaySessionGeneration !== undefined ||
+            (usesSharedGatewayAuth && (isBrowserOperatorUi || isWebchat)))
+            ? {
+                kind: "shared-gateway-auth" as const,
+                generation: sessionSharedGatewaySessionGeneration,
+              }
+            : undefined;
         const deviceToken =
           shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
-            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            ? await ensureDeviceToken({
+                deviceId: device.id,
+                role,
+                scopes,
+                issuer: sharedGatewayAuthIssuer,
+              })
             : null;
         const bootstrapDeviceTokens: Array<{
           deviceToken: string;
@@ -1593,11 +1619,6 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             });
           }
         }
-        const usesSharedGatewayAuth =
-          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
-        const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
-          : undefined;
         const isTrustedApprovalRuntime =
           scopes.includes(APPROVALS_SCOPE) &&
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
@@ -1609,8 +1630,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connect: connectParams,
           connId,
           isDeviceTokenAuth: authMethod === "device-token",
-          usesSharedGatewayAuth,
-          sharedGatewaySessionGeneration,
+          usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
+          sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
           ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),

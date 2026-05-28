@@ -40,8 +40,8 @@ export function createSandboxContext(overrides: {
       buildExecSpec:
         overrides.buildExecSpec ??
         (async () => ({
-          argv: ["/bin/sh", "-lc", "true"],
-          env: process.env,
+          argv: [process.execPath, "-e", ""],
+          env: { PATH: process.env.PATH },
           stdinMode: "pipe-closed",
         })),
       finalizeExec: overrides.finalizeExec,

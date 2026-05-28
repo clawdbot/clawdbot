@@ -130,10 +130,7 @@ function resolveProviderAuthMode(
 
 function providerAllowsAwsSdkAuth(cfg: OpenClawConfig | undefined, provider: string): boolean {
   const authMode = resolveProviderAuthMode(cfg, provider);
-  return (
-    authMode === "aws-sdk" ||
-    (authMode === undefined && normalizeProviderId(provider) === "amazon-bedrock")
-  );
+  return authMode === "aws-sdk";
 }
 
 export function isConfiguredAwsSdkAuthProfileForProvider(params: {

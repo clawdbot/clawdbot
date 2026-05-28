@@ -297,6 +297,29 @@ describe("buildWebchatAssistantMessageFromReplyPayloads", () => {
     expect(message).toBeNull();
   });
 
+  it("keeps valid whitespace in data image payloads", async () => {
+    const imageUrl = "data:image/png;base64,cG 5n\n";
+    const message = await buildWebchatAssistantMessageFromReplyPayloads([
+      {
+        text: "whitespace image",
+        mediaUrl: imageUrl,
+      },
+    ]);
+
+    expect(message?.content).toContainEqual({ type: "input_image", image_url: imageUrl.trim() });
+  });
+
+  it("rejects invalid data image payload characters", async () => {
+    const message = await buildWebchatAssistantMessageFromReplyPayloads([
+      {
+        text: "invalid",
+        mediaUrl: "data:image/png;base64,cG5n!",
+      },
+    ]);
+
+    expect(message).toBeNull();
+  });
+
   it("rejects remote image URLs", async () => {
     const message = await buildWebchatAssistantMessageFromReplyPayloads([
       {

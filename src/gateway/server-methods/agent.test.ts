@@ -2162,6 +2162,38 @@ describe("gateway agent handler", () => {
     expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
   });
 
+  it("forwards spawnedCwd as runtime cwd for spawned sessions", async () => {
+    primeMainAgentRun();
+    mockMainSessionEntry({
+      spawnedBy: "agent:main:subagent:parent",
+      spawnedWorkspaceDir: "/tmp/inherited",
+      spawnedCwd: "/tmp/task-repo",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          spawnedBy: "agent:main:subagent:parent",
+          spawnedWorkspaceDir: "/tmp/inherited",
+          spawnedCwd: "/tmp/task-repo",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent(
+      {
+        message: "spawned run",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "cwd-forwarded",
+      },
+      { reqId: "cwd-forwarded-1" },
+    );
+    const spawnedCall = await waitForAgentCommandCall<{ cwd?: string; workspaceDir?: string }>();
+    expect(spawnedCall.workspaceDir).toBe("/tmp/inherited");
+    expect(spawnedCall.cwd).toBe("/tmp/task-repo");
+  });
+
   it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
     mockMainSessionEntry({
       sessionId: "existing-session-id",

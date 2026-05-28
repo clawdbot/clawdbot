@@ -302,6 +302,18 @@ describe("irc setup", () => {
     ).toBeNull();
 
     expect(
+      validateInput({
+        input: { host: "irc.libera.chat", nick: "openclaw", port: "7000x" },
+      } as never),
+    ).toBe("IRC port must be between 1 and 65535.");
+
+    expect(
+      validateInput({
+        input: { host: "irc.libera.chat", nick: "openclaw", port: "70000" },
+      } as never),
+    ).toBe("IRC port must be between 1 and 65535.");
+
+    expect(
       applyAccountConfig({
         cfg: { channels: { irc: {} } },
         accountId: "default",
@@ -387,6 +399,16 @@ describe("irc setup", () => {
     expect(result.cfg.channels?.irc?.channels).toEqual(["#openclaw", "#ops"]);
     expect(result.cfg.channels?.irc?.groupPolicy).toBe("allowlist");
     expect(Object.keys(result.cfg.channels?.irc?.groups ?? {})).toEqual(["#openclaw", "#ops"]);
+  });
+
+  it("rejects partial IRC setup wizard ports", async () => {
+    const portPrompt = ircSetupWizard.textInputs?.find((step) => step.inputKey === "httpPort");
+    if (!portPrompt?.validate) {
+      throw new Error("expected IRC port prompt validator");
+    }
+
+    expect(portPrompt.validate({ value: "7000x" } as never)).toBe("Use a port between 1 and 65535");
+    expect(portPrompt.validate({ value: "7000" } as never)).toBeUndefined();
   });
 
   it("writes DM allowFrom to top-level config for non-default account prompts", async () => {

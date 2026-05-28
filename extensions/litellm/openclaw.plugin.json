@@ -5,8 +5,13 @@
   },
   "enabledByDefault": true,
   "providers": ["litellm"],
-  "providerAuthEnvVars": {
-    "litellm": ["LITELLM_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "litellm",
+        "envVars": ["LITELLM_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -1106,7 +1106,7 @@ describe("xai provider models", () => {
     });
   });
 
-  it("publishes the remaining Grok 3 family that Pi still carries", () => {
+  it("publishes the remaining Grok 3 family in the OpenClaw catalog", () => {
     expectCatalogEntry("grok-3-mini-fast", {
       id: "grok-3-mini-fast",
       reasoning: true,

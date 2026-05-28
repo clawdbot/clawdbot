@@ -1,6 +1,5 @@
 import type { ModelCompatConfig } from "../config/types.models.js";
-import { normalizeToolParameterSchema } from "./pi-tools-parameter-schema.js";
-export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;

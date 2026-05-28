@@ -632,7 +632,7 @@ class GatewaySession(
 
     private fun shouldPersistBootstrapHandoffTokens(authSource: GatewayConnectAuthSource): Boolean {
       if (authSource != GatewayConnectAuthSource.BOOTSTRAP_TOKEN) return false
-      if (isLoopbackGatewayHost(endpoint.host)) return true
+      if (isLocalCleartextGatewayHost(endpoint.host)) return true
       return tls != null
     }
 
@@ -1212,9 +1212,7 @@ class GatewaySession(
     endpoint: GatewayEndpoint,
     tls: GatewayTlsParams?,
   ): Boolean {
-    if (isLoopbackGatewayHost(endpoint.host)) {
-      return true
-    }
+    if (isLocalCleartextGatewayHost(endpoint.host)) return true
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }

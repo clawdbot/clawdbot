@@ -6,7 +6,7 @@ import type {
 import { getActivePluginRegistry } from "./runtime.js";
 
 export const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
-  "pi",
+  "openclaw",
   "codex",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];
 
@@ -14,12 +14,20 @@ const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET = new Set<string>(
   AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES,
 );
 
+const LEGACY_AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = {
+  "codex-app-server": "codex",
+} as const satisfies Record<string, AgentToolResultMiddlewareRuntime>;
+
 function normalizeAgentToolResultMiddlewareRuntime(
   runtime: string,
 ): AgentToolResultMiddlewareRuntime | undefined {
   const normalized = runtime.trim().toLowerCase();
-  if (normalized === "codex-app-server") {
-    return "codex";
+  const legacyRuntime =
+    LEGACY_AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES[
+      normalized as keyof typeof LEGACY_AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES
+    ];
+  if (legacyRuntime) {
+    return legacyRuntime;
   }
   return AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET.has(normalized)
     ? (normalized as AgentToolResultMiddlewareRuntime)

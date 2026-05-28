@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import JSON5 from "json5";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { INCLUDE_KEY, MAX_INCLUDE_DEPTH } from "./includes.js";
 
 function listDirectIncludes(parsed: unknown): string[] {
@@ -70,7 +70,7 @@ export async function collectIncludePathsRecursive(params: {
       }
       const nestedParsed = (() => {
         try {
-          return JSON5.parse(rawText);
+          return parseJsonWithJson5Fallback(rawText);
         } catch {
           return null;
         }

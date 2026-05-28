@@ -32,6 +32,7 @@ export type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
 };
@@ -50,6 +51,7 @@ type RawAgentWaitResponse = {
   stopReason?: unknown;
   livenessState?: unknown;
   yielded?: unknown;
+  pendingError?: unknown;
   timeoutPhase?: unknown;
   providerStarted?: unknown;
 };
@@ -75,6 +77,7 @@ function normalizeAgentWaitResult(
     stopReason,
     livenessState: typeof wait?.livenessState === "string" ? wait.livenessState : undefined,
     yielded: wait?.yielded === true ? true : undefined,
+    pendingError: wait?.pendingError === true ? true : undefined,
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
   };

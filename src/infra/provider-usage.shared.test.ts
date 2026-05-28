@@ -1,24 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import {
-  clampPercent,
-  resolveLegacyPiAgentAccessToken,
-  resolveUsageProviderId,
-  withTimeout,
-} from "./provider-usage.shared.js";
-
-async function withLegacyPiAuthFile(
-  contents: string,
-  run: (home: string) => Promise<void> | void,
-): Promise<void> {
-  await withTempDir({ prefix: "openclaw-provider-usage-" }, async (home) => {
-    await fs.mkdir(path.join(home, ".pi", "agent"), { recursive: true });
-    await fs.writeFile(path.join(home, ".pi", "agent", "auth.json"), contents, "utf8");
-    await run(home);
-  });
-}
+import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-usage.shared.js";
 
 describe("provider-usage.shared", () => {
   afterEach(() => {
@@ -27,7 +8,8 @@ describe("provider-usage.shared", () => {
   });
 
   it.each([
-    { value: "z-ai", expected: "zai" },
+    { value: "zai", expected: "zai" },
+    { value: "z-ai", expected: undefined },
     { value: " GOOGLE-GEMINI-CLI ", expected: "google-gemini-cli" },
     { value: "minimax-portal", expected: "minimax" },
     { value: "minimax-cn", expected: "minimax" },
@@ -82,22 +64,5 @@ describe("provider-usage.shared", () => {
     await expect(withTimeout(Promise.resolve("ok"), 100, "fallback")).resolves.toBe("ok");
 
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([
-    {
-      name: "reads legacy pi auth tokens for known provider aliases",
-      contents: `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
-      expected: "legacy-zai-key",
-    },
-    {
-      name: "returns undefined for invalid legacy pi auth files",
-      contents: "{not-json",
-      expected: undefined,
-    },
-  ])("$name", async ({ contents, expected }) => {
-    await withLegacyPiAuthFile(contents, async (home) => {
-      expect(resolveLegacyPiAgentAccessToken({ HOME: home }, ["z-ai", "zai"])).toBe(expected);
-    });
   });
 });

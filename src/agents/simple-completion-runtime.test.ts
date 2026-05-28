@@ -1,6 +1,6 @@
-import type { Model } from "@earendil-works/pi-ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 
 const hoisted = vi.hoisted(() => ({
   resolveModelMock: vi.fn(),
@@ -14,11 +14,11 @@ const hoisted = vi.hoisted(() => ({
   completeMock: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-ai", () => ({
+vi.mock("../llm/stream.js", () => ({
   completeSimple: hoisted.completeMock,
 }));
 
-vi.mock("./pi-embedded-runner/model.js", () => ({
+vi.mock("./embedded-agent-runner/model.js", () => ({
   resolveModel: hoisted.resolveModelMock,
   resolveModelAsync: hoisted.resolveModelAsyncMock,
 }));
@@ -433,7 +433,7 @@ describe("prepareSimpleCompletionModel", () => {
     expect(result.auth.apiKey).toBe("bedrock-runtime-token");
   });
 
-  it("can skip Pi model/auth discovery for config-scoped one-shot completions", async () => {
+  it("can skip agent model/auth discovery for config-scoped one-shot completions", async () => {
     hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
         provider: "ollama",
@@ -454,7 +454,7 @@ describe("prepareSimpleCompletionModel", () => {
       cfg: undefined,
       provider: "ollama",
       modelId: "llama3.2:latest",
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
       modelResolver: hoisted.resolveModelAsyncMock,
     });
 
@@ -466,7 +466,7 @@ describe("prepareSimpleCompletionModel", () => {
       undefined,
       undefined,
       {
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
   });
@@ -488,7 +488,7 @@ describe("prepareSimpleCompletionModel", () => {
       provider: "mistral",
       modelId: "mistral-medium-3-5",
       allowBundledStaticCatalogFallback: true,
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
       modelResolver: hoisted.resolveModelAsyncMock,
     });
 
@@ -500,7 +500,7 @@ describe("prepareSimpleCompletionModel", () => {
       undefined,
       {
         allowBundledStaticCatalogFallback: true,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
   });
@@ -532,7 +532,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     const result = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
-      skipPiDiscovery: true,
+      skipAgentDiscovery: true,
       modelResolver: hoisted.resolveModelAsyncMock,
     });
 
@@ -546,7 +546,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
       expect.any(String),
       cfg,
       {
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       },
     );
     expect(
@@ -603,7 +603,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
-  it("normalizes OpenClaw-only thinking levels before using pi-ai simple completion", async () => {
+  it("normalizes OpenClaw-only thinking levels before using shared model runtime simple completion", async () => {
     const model = {
       provider: "openai",
       id: "gpt-5.4",

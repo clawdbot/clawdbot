@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { createMSTeamsPollStoreMemory } from "./polls-store-memory.js";
-import { buildMSTeamsPollCard, createMSTeamsPollStoreFs, extractMSTeamsPollVote } from "./polls.js";
+import {
+  buildMSTeamsPollCard,
+  createMSTeamsPollStoreFs,
+  extractMSTeamsPollVote,
+  normalizeMSTeamsPollSelections,
+} from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-runtime.js";
 
@@ -59,6 +64,22 @@ describe("msteams polls", () => {
       throw new Error("expected stored poll after recordVote");
     }
     expect(stored.votes["user-1"]).toEqual(["0"]);
+  });
+
+  it("does not coerce partial poll selections", () => {
+    expect(
+      normalizeMSTeamsPollSelections(
+        {
+          id: "poll-1",
+          question: "Lunch?",
+          options: ["Pizza", "Sushi"],
+          maxSelections: 2,
+          votes: {},
+          createdAt: "2026-03-22T00:00:00.000Z",
+        },
+        ["0", "1x"],
+      ),
+    ).toEqual(["0"]);
   });
 });
 

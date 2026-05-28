@@ -123,6 +123,7 @@ describe("oxlint config", () => {
     expect(ignorePatterns).toContain("**/.cache/**");
     expect(ignorePatterns).toContain("**/.openclaw-runtime-deps-copy-*/**");
     expect(ignorePatterns).toContain("extensions/diffs/assets/viewer-runtime.js");
+    expect(ignorePatterns).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
   });
 
   it("enables strict empty object type lint with named single-extends interfaces allowed", () => {

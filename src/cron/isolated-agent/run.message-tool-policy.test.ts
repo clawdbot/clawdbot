@@ -18,7 +18,7 @@ import {
   resolveCronDeliveryPlanMock,
   resolveDeliveryTargetMock,
   restoreFastTestEnv,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -144,7 +144,7 @@ function getMockCallArg(
 
 function expectEmbeddedRunFields(expected: Record<string, unknown>): Record<string, unknown> {
   return expectRecordFields(
-    getMockCallArg(runEmbeddedPiAgentMock, 0, 0, "embedded run"),
+    getMockCallArg(runEmbeddedAgentMock, 0, 0, "embedded run"),
     expected,
     "embedded run params",
   );
@@ -185,7 +185,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(plan);
     await runCronIsolatedAgentTurn(makeParams());
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: true,
       forceMessageTool: false,
@@ -201,7 +201,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(plan);
     await runCronIsolatedAgentTurn(makeParams());
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: false,
@@ -226,7 +226,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     expect(resolveDeliveryTargetMock).toHaveBeenCalledTimes(1);
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: false,
@@ -242,7 +242,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   }) {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedPiAgentMock.mockResolvedValue(makeMessageToolRunResult(options.sentTargets));
+    runEmbeddedAgentMock.mockResolvedValue(makeMessageToolRunResult(options.sentTargets));
 
     const result = await runCronIsolatedAgentTurn({
       ...makeParams(),
@@ -385,7 +385,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const embeddedRun = expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: false,
@@ -422,7 +422,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       }),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: false,
@@ -466,7 +466,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       } as never,
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
       messageChannel: "topicchat",
@@ -503,7 +503,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       accountId: undefined,
       error: undefined,
     });
-    runEmbeddedPiAgentMock.mockResolvedValue(
+    runEmbeddedAgentMock.mockResolvedValue(
       makeMessageToolRunResult([
         { tool: "message", provider: "topicchat", to: "room#42", threadId: "42" },
       ]),
@@ -565,7 +565,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
 
     expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const embeddedRun = expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: false,
@@ -601,7 +601,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     await executor.runPrompt("send a message");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       messageChannel: "topicchat",
       agentAccountId: "ops",
@@ -624,7 +624,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     await executor.runPrompt("send a message");
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       messageChannel: "topicchat",
       agentAccountId: "ops",
@@ -652,7 +652,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: makeAnnounceMessageToolJob(),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       sourceReplyDeliveryMode: undefined,
       forceMessageTool: false,
@@ -671,7 +671,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       job: makeAnnounceMessageToolJob(),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(expectEmbeddedRunFields({}).execOverrides).toBeUndefined();
   });
 
@@ -691,7 +691,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       }),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(expectEmbeddedRunFields({}).execOverrides).toBeUndefined();
   });
 
@@ -712,7 +712,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
 
     await runCronIsolatedAgentTurn(makeParams());
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({ disableMessageTool: false });
   });
 
@@ -780,7 +780,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("does not dispatch announce delivery for fatal error payloads", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [
         {
           text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
@@ -820,7 +820,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("cleans up deleteAfterRun sessions when suppressing fatal error announces", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "provider failed", isError: true }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
@@ -866,7 +866,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
   it("rewrites generic message provider to resolved channel in delivery trace", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedPiAgentMock.mockResolvedValue(
+    runEmbeddedAgentMock.mockResolvedValue(
       makeMessageToolRunResult([{ tool: "message", provider: "message", to: "123" }]),
     );
 
@@ -888,7 +888,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan({ accountId: "bot-a" }));
     resolveDeliveryTargetMock.mockResolvedValue(makeResolvedAnnounceTarget({ accountId: "bot-a" }));
-    runEmbeddedPiAgentMock.mockResolvedValue(
+    runEmbeddedAgentMock.mockResolvedValue(
       makeMessageToolRunResult([
         { tool: "message", provider: "message", to: "123", accountId: "bot-a" },
       ]),
@@ -912,7 +912,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan({ accountId: "bot-a" }));
     resolveDeliveryTargetMock.mockResolvedValue(makeResolvedAnnounceTarget({ accountId: "bot-a" }));
-    runEmbeddedPiAgentMock.mockResolvedValue(
+    runEmbeddedAgentMock.mockResolvedValue(
       makeMessageToolRunResult([{ tool: "message", provider: "message", to: "123" }]),
     );
 
@@ -934,7 +934,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan({ accountId: "bot-a" }));
     resolveDeliveryTargetMock.mockResolvedValue(makeResolvedAnnounceTarget({ accountId: "bot-a" }));
-    runEmbeddedPiAgentMock.mockResolvedValue(
+    runEmbeddedAgentMock.mockResolvedValue(
       makeMessageToolRunResult([
         { tool: "message", provider: "message", to: "123", accountId: "bot-b" },
       ]),
@@ -970,7 +970,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       mode: "implicit",
       error: new Error("sessionKey is required to resolve delivery.channel=last"),
     });
-    runEmbeddedPiAgentMock.mockResolvedValue(
+    runEmbeddedAgentMock.mockResolvedValue(
       makeMessageToolRunResult([{ tool: "message", provider: "messagechat", to: "123" }]),
     );
 
@@ -1016,7 +1016,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       mode: "none",
       channel: "last",
     });
-    runEmbeddedPiAgentMock.mockResolvedValue(
+    runEmbeddedAgentMock.mockResolvedValue(
       makeMessageToolRunResult([{ tool: "message", provider: "messagechat", to: "123" }]),
     );
 
@@ -1053,7 +1053,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     mockPendingMessagePresentationWarningOutcome();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "Final cron report" }, { text: "⚠️ ✉️ Message failed", isError: true }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
@@ -1077,7 +1077,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     mockRunCronFallbackPassthrough();
     mockPendingMessagePresentationWarningOutcome();
     resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "Final cron report" }, { text: "⚠️ ✉️ Message failed", isError: true }],
       meta: { agentMeta: { usage: { input: 10, output: 20 } } },
     });
@@ -1127,7 +1127,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
 
     await runCronIsolatedAgentTurn(makeParams());
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
@@ -1151,7 +1151,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toContain("Use the message tool");
     expect(prompt).toContain("Return your response as plain text");
@@ -1174,7 +1174,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expectEmbeddedRunFields({
       disableMessageTool: false,
       forceMessageTool: false,
@@ -1202,7 +1202,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
@@ -1225,7 +1225,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
@@ -1248,7 +1248,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
       ),
     });
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).toContain("Use the message tool");
     expect(prompt).toContain("will be delivered automatically");
@@ -1260,7 +1260,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
 
     await runCronIsolatedAgentTurn(makeParams());
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toContain("Return your response as plain text");
     expect(prompt).not.toContain("it will be delivered automatically");
@@ -1280,7 +1280,7 @@ describe("runCronIsolatedAgentTurn delivery instruction", () => {
 
     await runCronIsolatedAgentTurn(makeParams());
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     const prompt = expectEmbeddedRunPrompt();
     expect(prompt).not.toMatch(/\bsummary\b/i);
   });

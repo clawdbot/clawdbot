@@ -319,7 +319,7 @@ export function registerQaLabCli(program: Command) {
     .option("--cpus <count>", "Multipass vCPU count", (value: string) => Number(value))
     .option("--memory <size>", "Multipass memory size")
     .option("--disk <size>", "Multipass disk size")
-    .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. pi,codex")
+    .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. openclaw,codex")
     .option(
       "--runtime-parity-tier <tier>",
       "Add scenarios tagged with runtimeParityTier (standard, optional, live-only, soak; repeatable or comma-separated)",
@@ -486,7 +486,7 @@ export function registerQaLabCli(program: Command) {
       "Directory of curated JSONL transcripts",
       "qa/scenarios/jsonl-replay",
     )
-    .option("--runtime-pair <pair>", "Runtime pair label, e.g. pi,codex", "pi,codex")
+    .option("--runtime-pair <pair>", "Runtime pair label, e.g. openclaw,codex", "openclaw,codex")
     .option(
       "--provider-mode <mode>",
       `Provider mode (${formatQaProviderModeHelp()})`,

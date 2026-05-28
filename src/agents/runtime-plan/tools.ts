@@ -1,11 +1,11 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
-} from "../pi-embedded-runner/tool-schema-runtime.js";
+} from "../embedded-agent-runner/tool-schema-runtime.js";
+import type { AgentTool } from "../runtime/index.js";
 import type { AgentRuntimePlan } from "./types.js";
 
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {

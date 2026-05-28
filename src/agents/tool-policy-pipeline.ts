@@ -1,5 +1,5 @@
-import { filterToolsByPolicy } from "./pi-tools.policy.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
+import { filterToolsByPolicy } from "./agent-tools.policy.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import {

@@ -1,10 +1,12 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { getRuntimeConfig } from "../config/config.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import { sanitizeSessionHistory } from "./embedded-agent-runner/replay-history.js";
 import {
   completeSimpleWithTimeout,
   type CompleteSimpleContent,
@@ -16,8 +18,6 @@ import {
 } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
 const LIVE = isLiveTestEnabled();
@@ -73,14 +73,14 @@ function createNoopTools() {
   ];
 }
 
-function replayValidationTools(model: Model<Api>) {
+function replayValidationTools(model: Model) {
   // Responses-family providers may force or reject fresh tool-choice policy
   // when tools are present. These probes validate repaired historical transcript
   // shape, not new tool invocation.
   return isOpenAIResponsesFamily(model.api) ? undefined : createNoopTools();
 }
 
-function buildReplayMessages(model: Model<Api>): AgentMessage[] {
+function buildReplayMessages(model: Model): AgentMessage[] {
   const now = Date.now();
   // Gemini source metadata deliberately simulates a model switch from a
   // provider-owned transcript. That forces the same id sanitization and replay
@@ -134,7 +134,7 @@ function buildReplayMessages(model: Model<Api>): AgentMessage[] {
   ] as unknown as AgentMessage[];
 }
 
-function buildAbortedTransportMessages(model: Model<Api>): Context["messages"] {
+function buildAbortedTransportMessages(model: Model): Context["messages"] {
   const now = Date.now();
   return [
     {
@@ -203,7 +203,7 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
@@ -314,7 +314,7 @@ describeLive("tool replay repair live", () => {
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
         const modelRegistry = discoverModels(authStorage, agentDir);
-        const model = modelRegistry.find(target.provider, target.modelId) as Model<Api> | null;
+        const model = modelRegistry.find(target.provider, target.modelId) as Model | null;
 
         if (!model) {
           logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);

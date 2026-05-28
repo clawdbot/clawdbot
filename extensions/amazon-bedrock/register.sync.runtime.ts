@@ -1,6 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { registerApiProvider, streamSimple } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -9,8 +9,10 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { mergeImplicitBedrockProvider, resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
+import { streamBedrock, streamSimpleBedrock } from "./stream.runtime.js";
 import { isOpus47BedrockModelRef, resolveBedrockClaudeThinkingProfile } from "./thinking-policy.js";
 
 type GuardrailConfig = {
@@ -120,39 +122,15 @@ function createGuardrailWrapStreamFn(
   };
 }
 
-/**
- * Mirrors the shipped pi-ai Bedrock `supportsPromptCaching` matcher.
- * Keep this in sync with node_modules/@earendil-works/pi-ai/dist/providers/amazon-bedrock.js.
- */
-function matchesPiAiPromptCachingModelId(modelId: string): boolean {
-  const id = modelId.toLowerCase();
-  if (!id.includes("claude")) {
-    return false;
-  }
-  // Claude 4.x
-  if (id.includes("-4-") || id.includes("-4.")) {
-    return true;
-  }
-  // Claude 3.7 Sonnet
-  if (id.includes("claude-3-7-sonnet")) {
-    return true;
-  }
-  // Claude 3.5 Haiku
-  if (id.includes("claude-3-5-haiku")) {
-    return true;
-  }
-  return false;
-}
-
-function piAiWouldInjectCachePoints(modelId: string): boolean {
-  return matchesPiAiPromptCachingModelId(modelId);
+function sharedRuntimeWouldInjectCachePoints(modelId: string): boolean {
+  return supportsBedrockPromptCaching(modelId);
 }
 
 /**
  * Detect Bedrock application inference profile ARNs — these are the only IDs
- * where pi-ai's model-name-based checks fail because the ARN is opaque.
+ * where model-name-based checks fail because the ARN is opaque.
  * System-defined profiles (us., eu., global.) and base model IDs always
- * contain the model name and are handled by pi-ai natively.
+ * contain the model name and are handled by the shared model runtime natively.
  */
 const BEDROCK_APP_INFERENCE_PROFILE_RE =
   /^arn:aws(-cn|-us-gov)?:bedrock:.*:application-inference-profile\//i;
@@ -162,21 +140,21 @@ function isBedrockAppInferenceProfile(modelId: string): boolean {
 }
 
 /**
- * pi-ai's internal `supportsPromptCaching` checks `model.id` for specific Claude
+ * The shared runtime's `supportsPromptCaching` checks `model.id` for specific Claude
  * model name patterns, which fails for application inference profile ARNs (opaque
  * IDs that may not contain the model name). When OpenClaw's `isAnthropicBedrockModel`
- * identifies the model but pi-ai won't inject cache points, we do it via onPayload.
+ * identifies the model but the shared runtime won't inject cache points, we do it via onPayload.
  *
  * Gated to application inference profile ARNs only — regular Claude model IDs and
- * system-defined inference profiles (us.anthropic.claude-*) are left to pi-ai.
+ * system-defined inference profiles (us.anthropic.claude-*) are left to the shared runtime.
  */
 function needsCachePointInjection(modelId: string): boolean {
   // Only target application inference profile ARNs.
   if (!isBedrockAppInferenceProfile(modelId)) {
     return false;
   }
-  // If pi-ai would already inject cache points, skip.
-  if (piAiWouldInjectCachePoints(modelId)) {
+  // If the shared runtime would already inject cache points, skip.
+  if (sharedRuntimeWouldInjectCachePoints(modelId)) {
     return false;
   }
   // Check if OpenClaw identifies this as an Anthropic model via the ARN heuristic.
@@ -198,10 +176,10 @@ function extractRegionFromArn(arn: string): string | undefined {
 
 /**
  * Check if a resolved foundation model ARN supports prompt caching using the
- * same matcher pi-ai uses for direct model IDs.
+ * same matcher OpenClaw uses for direct model IDs.
  */
 function resolvedModelSupportsCaching(modelArn: string): boolean {
-  return matchesPiAiPromptCachingModelId(modelArn);
+  return supportsBedrockPromptCaching(modelArn);
 }
 
 /**
@@ -306,7 +284,7 @@ function makeCachePoint(cacheRetention: string | undefined): BedrockCachePoint {
 }
 
 /**
- * Inject Bedrock Converse cache points into the payload when pi-ai skipped them
+ * Inject Bedrock Converse cache points into the payload when the shared runtime skipped them
  * because it didn't recognize the model ID (application inference profiles).
  */
 function injectBedrockCachePoints(
@@ -372,6 +350,15 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     /ValidationException[\s\S]*(?:invalid_request_error[\s\S]*)?temperature[\s\S]*deprecated|ValidationException[\s\S]*deprecated[\s\S]*temperature/i;
   const anthropicByModelReplayHooks = ANTHROPIC_BY_MODEL_REPLAY_HOOKS;
   const startupPluginConfig = (api.pluginConfig ?? {}) as AmazonBedrockPluginConfig;
+
+  registerApiProvider(
+    {
+      api: "bedrock-converse-stream",
+      stream: streamBedrock,
+      streamSimple: streamSimpleBedrock,
+    },
+    `plugin:${providerId}`,
+  );
 
   function resolveCurrentPluginConfig(
     config: OpenClawConfig | undefined,
@@ -450,15 +437,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     return bedrockRegionRe.exec(baseUrl)?.[1];
   }
 
-  /**
-   * Resolve the AWS region for Bedrock API calls.
-   * Provider-specific baseUrl wins over global bedrockDiscovery to avoid signing
-   * with the wrong region when discovery and provider target different regions.
-   */
+  /** Resolve the AWS region for Bedrock API calls from provider-specific baseUrl. */
   function resolveBedrockRegion(
-    config:
-      | { models?: { bedrockDiscovery?: { region?: string }; providers?: Record<string, unknown> } }
-      | undefined,
+    config: { models?: { providers?: Record<string, unknown> } } | undefined,
   ): string | undefined {
     // Try provider-specific baseUrl first.
     const providers = config?.models?.providers;
@@ -481,7 +462,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         }
       }
     }
-    return config?.models?.bedrockDiscovery?.region;
+    return undefined;
   }
 
   api.registerProvider({
@@ -495,7 +476,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         const { resolveImplicitBedrockProvider } = await import("./discovery.js");
         const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
         const implicit = await resolveImplicitBedrockProvider({
-          config: ctx.config,
           pluginConfig: currentPluginConfig,
           env: ctx.env,
         });
@@ -513,7 +493,8 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
     ...anthropicByModelReplayHooks,
     wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
-      const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;
+      const currentPluginConfig = resolveCurrentPluginConfig(config);
+      const currentGuardrail = currentPluginConfig?.guardrail;
       let wrapped =
         (currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
           ? createGuardrailWrapStreamFn(baseWrapStreamFn, currentGuardrail)({ modelId, streamFn })
@@ -526,9 +507,12 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         wrapped = createBedrockServiceTierWrapper(wrapped, serviceTier);
       }
 
-      const region = resolveBedrockRegion(config) ?? extractRegionFromBaseUrl(model?.baseUrl);
+      const region =
+        resolveBedrockRegion(config) ??
+        extractRegionFromBaseUrl(model?.baseUrl) ??
+        currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
-        isBedrockAppInferenceProfile(modelId) && !piAiWouldInjectCachePoints(modelId);
+        isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
       const shouldOmitTemperature = isOpus47BedrockModelRef(modelId);
       const shouldPatchMaxThinking = shouldOmitTemperature && thinkingLevel === "max";
 
@@ -575,7 +559,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         }
 
         // Use the cacheRetention from options if explicitly set.
-        // When undefined, default to "short" to match pi-ai's internal default.
+        // When undefined, default to "short" to match the shared runtime default.
         // Note: if the user set cacheRetention: "none" but the opaque ARN wasn't
         // recognized by resolveAnthropicCacheRetentionFamily, the value may have
         // been dropped upstream. This is a known limitation — the proper fix is
@@ -614,7 +598,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         }
 
         // Slow path: opaque profile ID — resolve underlying model via API (cached).
-        // pi-ai's onPayload supports async, so we await the resolution inline.
+        // onPayload supports async, so we await the resolution inline.
         return underlying(
           streamModel,
           context,

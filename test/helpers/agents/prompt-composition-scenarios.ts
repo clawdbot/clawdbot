@@ -7,10 +7,10 @@ import {
   buildBootstrapPromptWarning,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
-import { buildCurrentInboundPrompt } from "../../../src/agents/pi-embedded-runner/run/runtime-context-prompt.js";
-import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
+import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
+import { buildEmbeddedSystemPrompt } from "../../../src/agents/embedded-agent-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
-import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
+import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
 import {
   buildDirectChatContext,
   buildGroupChatContext,

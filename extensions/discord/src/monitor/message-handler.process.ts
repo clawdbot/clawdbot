@@ -37,6 +37,7 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
+  isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -102,6 +103,13 @@ function formatDiscordReplyDeliveryFailure(params: {
     .filter(Boolean)
     .join(" ");
   return `discord ${params.kind} reply failed (${context}): ${String(params.err)}`;
+}
+
+function isFallbackOnlyToolWarningFinal(payload: ReplyPayload): boolean {
+  if (payload.isError !== true || !isReplyPayloadNonTerminalToolErrorWarning(payload)) {
+    return false;
+  }
+  return !resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
 type DiscordReplySkipReason = "aborted before delivery" | "reasoning payload";
@@ -537,6 +545,18 @@ export async function processDiscordMessage(
     draftPreview.markFinalReplyStarted();
     observer?.onFinalReplyStart?.();
   };
+  let userFacingFinalDelivered = false;
+  let userFacingFinalDeliveryFailed = false;
+  let pendingToolWarningFinal:
+    | { payload: ReplyPayload; info: { kind: ReplyDispatchKind } }
+    | undefined;
+  const markUserFacingFinalDelivered = () => {
+    userFacingFinalDelivered = true;
+    userFacingFinalDeliveryFailed = false;
+    pendingToolWarningFinal = undefined;
+    draftPreview.markFinalReplyDelivered();
+    observer?.onFinalReplyDelivered?.();
+  };
   const beforeDiscordPayloadDelivery = (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
@@ -570,7 +590,7 @@ export async function processDiscordMessage(
         return null;
       }
     }
-    if (info.kind === "final") {
+    if (info.kind === "final" && !isFallbackOnlyToolWarningFinal(payload)) {
       draftPreview.markFinalReplyStarted();
     }
     return payload;
@@ -579,6 +599,7 @@ export async function processDiscordMessage(
   const deliverDiscordPayload = async (
     payload: ReplyPayload,
     info: { kind: ReplyDispatchKind },
+    options?: { allowFallbackOnlyToolWarning?: boolean },
   ) => {
     if (isProcessAborted(abortSignal)) {
       // Surface so operators don't chase missing replies when an abort
@@ -604,6 +625,19 @@ export async function processDiscordMessage(
           sessionKey: ctxPayload.SessionKey,
         }),
       );
+      return { visibleReplySent: false };
+    }
+    if (
+      isFinal &&
+      !options?.allowFallbackOnlyToolWarning &&
+      isFallbackOnlyToolWarningFinal(payload)
+    ) {
+      if (
+        !userFacingFinalDelivered &&
+        (!finalReplyStartNotified || userFacingFinalDeliveryFailed)
+      ) {
+        pendingToolWarningFinal = { payload, info };
+      }
       return { visibleReplySent: false };
     }
     if (isFinal) {
@@ -679,10 +713,9 @@ export async function processDiscordMessage(
             });
           },
           onPreviewFinalized: () => {
-            draftPreview.markFinalReplyDelivered();
+            markUserFacingFinalDelivered();
             draftPreview.markPreviewFinalized();
             replyReference.markSent();
-            observer?.onFinalReplyDelivered?.();
           },
           buildSupplementalPayload: () =>
             ttsSupplement ? buildTtsSupplementMediaPayload(effectivePayload) : undefined,
@@ -759,9 +792,8 @@ export async function processDiscordMessage(
           return true;
         },
         onNormalDelivered: () => {
-          draftPreview.markFinalReplyDelivered();
+          markUserFacingFinalDelivered();
           replyReference.markSent();
-          observer?.onFinalReplyDelivered?.();
         },
       });
       if (result.kind !== "normal-skipped") {
@@ -807,12 +839,14 @@ export async function processDiscordMessage(
     });
     replyReference.markSent();
     if (isFinal && payload.isError !== true) {
-      draftPreview.markFinalReplyDelivered();
-      observer?.onFinalReplyDelivered?.();
+      markUserFacingFinalDelivered();
     }
     return { visibleReplySent: true };
   };
   const onDiscordDeliveryError = (err: unknown, info: { kind: string }) => {
+    if (info.kind === "final" && finalReplyStartNotified && !userFacingFinalDelivered) {
+      userFacingFinalDeliveryFailed = true;
+    }
     runtime.error(
       danger(
         formatDiscordReplyDeliveryFailure({
@@ -837,6 +871,22 @@ export async function processDiscordMessage(
     null;
   let dispatchError = false;
   let dispatchAborted = false;
+  const deliverPendingToolWarningFinalIfNeeded = async () => {
+    if (!pendingToolWarningFinal || userFacingFinalDelivered || isProcessAborted(abortSignal)) {
+      return undefined;
+    }
+    const pending = pendingToolWarningFinal;
+    pendingToolWarningFinal = undefined;
+    try {
+      return await deliverDiscordPayload(pending.payload, pending.info, {
+        allowFallbackOnlyToolWarning: true,
+      });
+    } catch (err) {
+      dispatchError = true;
+      onDiscordDeliveryError(err, pending.info);
+      return { visibleReplySent: false };
+    }
+  };
   try {
     if (isProcessAborted(abortSignal)) {
       dispatchAborted = true;
@@ -857,6 +907,7 @@ export async function processDiscordMessage(
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
         beforeDeliver: beforeDiscordPayloadDelivery,
         onReplyStart: onDiscordReplyStart,
+        onFreshSettledDelivery: deliverPendingToolWarningFinalIfNeeded,
       },
       delivery: {
         deliver: deliverDiscordPayload,

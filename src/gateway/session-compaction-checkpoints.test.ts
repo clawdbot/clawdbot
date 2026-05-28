@@ -2,8 +2,8 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {

@@ -31,4 +31,11 @@ describe("callBrowserRequest", () => {
     const extra = call?.[3];
     expect(extra).toEqual({ progress: true, scopes: ["operator.admin"] });
   });
+
+  it("rejects partial parent timeout values before gateway dispatch", async () => {
+    await expect(
+      callBrowserRequest({ json: true, timeout: "60000ms" }, { method: "GET", path: "/status" }),
+    ).rejects.toThrow("--timeout must be a positive integer.");
+    expect(gatewayMocks.callGatewayFromCli).not.toHaveBeenCalled();
+  });
 });

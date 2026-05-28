@@ -1,5 +1,4 @@
 import { cancel, multiselect as clackMultiselect, isCancel } from "@clack/prompts";
-import { getEnvApiKey } from "@earendil-works/pi-ai";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import { type ModelScanResult, scanOpenRouterModels } from "../../agents/model-scan.js";
 import { formatCliCommand } from "../../cli/command-format.js";
@@ -10,6 +9,7 @@ import {
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "../../infra/parse-finite-number.js";
+import { getEnvApiKey } from "../../llm/env-api-keys.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import {
   stylePromptHint,

@@ -588,13 +588,13 @@ export async function visitSessionMessagesAsync(
   storePath: string | undefined,
   sessionFile: string | undefined,
   visit: (message: unknown, seq: number) => void,
-  _opts: { mode: "full"; reason: string },
+  opts: { mode: "full"; reason: string; cache?: "reuse" | "skip" },
 ): Promise<number> {
   const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
   if (!filePath) {
     return 0;
   }
-  const index = await readSessionTranscriptIndex(filePath);
+  const index = await readSessionTranscriptIndex(filePath, { cache: opts.cache });
   if (!index) {
     return 0;
   }

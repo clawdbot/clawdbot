@@ -23,7 +23,7 @@ docsRefs:
 codeRefs:
   - src/auto-reply/reply/directives.ts
   - src/auto-reply/thinking.shared.ts
-  - src/agents/pi-embedded-runner/run/payloads.ts
+  - src/agents/embedded-agent-runner/run/payloads.ts
   - extensions/openai/openai-provider.ts
   - extensions/qa-lab/src/providers/mock-openai/server.ts
 execution:

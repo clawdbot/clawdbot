@@ -29,7 +29,6 @@ export function resolvePluginWebContentExtractors(params?: {
     onlyPluginIds: params?.onlyPluginIds,
     contract: "webContentExtractors",
     compatMode: {
-      allowlist: true,
       enablement: "always",
       vitest: true,
     },

@@ -232,6 +232,37 @@ describe("normalizeReplyPayload", () => {
     expect(reasons).toEqual(["silent"]);
   });
 
+  it("suppresses leaked reasoning when the final answer is NO_REPLY (#66701)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "think",
+          "Cav is talking about a follow-up conversation.",
+          "I will stay quiet here.NO_REPLY",
+        ].join("\n"),
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
+  it("suppresses tagged leaked reasoning when silence narration ends in NO_REPLY (#66701)", () => {
+    const reasons: string[] = [];
+    const result = normalizeReplyPayload(
+      {
+        text: [
+          "<think>Cav is talking about a follow-up conversation.</think>",
+          "I will stay quiet here.NO_REPLY",
+        ].join("\n"),
+      },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+    expect(result).toBeNull();
+    expect(reasons).toEqual(["silent"]);
+  });
+
   it("does not suppress JSON NO_REPLY objects with extra fields", () => {
     const result = normalizeReplyPayload({
       text: '{"action":"NO_REPLY","note":"example"}',

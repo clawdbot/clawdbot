@@ -90,6 +90,7 @@ const respawnSignals =
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalExitGraceMs = 1_000;
 const respawnSignalForceKillGraceMs = 1_000;
+const respawnSignalHardExitGraceMs = 1_000;
 
 const runRespawnedChild = (command, args, env) => {
   const child = spawn(command, args, {
@@ -103,6 +104,7 @@ const runRespawnedChild = (command, args, env) => {
   // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
+  let signalHardExitTimer = null;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -115,6 +117,10 @@ const runRespawnedChild = (command, args, env) => {
     if (signalForceKillTimer) {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = null;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = null;
     }
   };
   const forceKillChild = () => {
@@ -132,7 +138,10 @@ const runRespawnedChild = (command, args, env) => {
     }
     signalForceKillTimer = setTimeout(() => {
       forceKillChild();
-      process.exit(1);
+      signalHardExitTimer = setTimeout(() => {
+        process.exit(1);
+      }, respawnSignalHardExitGraceMs);
+      signalHardExitTimer.unref?.();
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };

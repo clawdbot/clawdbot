@@ -8,9 +8,9 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
-  formatEmbeddedPiQueueFailureSummary,
-  isEmbeddedPiRunActive,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  formatEmbeddedAgentQueueFailureSummary,
+  isEmbeddedAgentRunActive,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 } from "./commands-steer.runtime.js";
 import type {
@@ -67,7 +67,7 @@ function resolveSteerSessionId(params: {
 
   const entry = resolveStoredSessionEntry(params.commandParams, params.targetSessionKey);
   const sessionId = normalizeOptionalString(entry?.sessionId);
-  if (!sessionId || !isEmbeddedPiRunActive(sessionId)) {
+  if (!sessionId || !isEmbeddedAgentRunActive(sessionId)) {
     return undefined;
   }
   return sessionId;
@@ -139,7 +139,7 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
     );
   }
 
-  const queueOutcome = await queueEmbeddedPiMessageWithOutcomeAsync(sessionId, message, {
+  const queueOutcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, message, {
     steeringMode: "all",
     debounceMs: 0,
   }).catch((err: unknown): CommandHandlerResult => {
@@ -153,7 +153,7 @@ export const handleSteerCommand: CommandHandler = async (params, allowTextComman
     return queueOutcome;
   }
   if (!queueOutcome.queued) {
-    const summary = formatEmbeddedPiQueueFailureSummary(queueOutcome);
+    const summary = formatEmbeddedAgentQueueFailureSummary(queueOutcome);
     return continueWithSteerFallback(
       params,
       message,

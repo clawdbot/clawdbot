@@ -4,8 +4,43 @@ import path from "node:path";
 
 const command = process.argv[2];
 const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
+const CLAWHUB_PREFLIGHT_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+  30_000,
+);
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
+
+function readPositiveInt(raw, fallback) {
+  const parsed = Number.parseInt(String(raw || ""), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function createTimeoutError(label, timeoutMs) {
+  const error = new Error(`${label} timed out after ${timeoutMs}ms`);
+  error.code = "ETIMEDOUT";
+  return error;
+}
+
+async function withTimeout(label, timeoutMs, run) {
+  const controller = new AbortController();
+  const timeoutError = createTimeoutError(label, timeoutMs);
+  let timeout;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+  try {
+    return await Promise.race([run(controller.signal), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
 
 function resolveHomePath(value) {
   if (value === "~") {
@@ -420,12 +455,18 @@ function assertGitPlugin() {
   }
   assertRealPathInside(installPath, dependencyPackagePath, "git plugin installed dependency");
   fs.writeFileSync(scratchFile("plugins-git-install-path.txt"), installPath, "utf8");
-  fs.writeFileSync(scratchFile("plugins-git-install-parent.txt"), path.dirname(installPath), "utf8");
+  fs.writeFileSync(
+    scratchFile("plugins-git-install-parent.txt"),
+    path.dirname(installPath),
+    "utf8",
+  );
 }
 
 function assertGitPluginRemoved() {
   const installPath = fs.readFileSync(scratchFile("plugins-git-install-path.txt"), "utf8").trim();
-  const installParent = fs.readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8").trim();
+  const installParent = fs
+    .readFileSync(scratchFile("plugins-git-install-parent.txt"), "utf8")
+    .trim();
   assertPluginRemoved({
     pluginId: "demo-plugin-git",
     listFile: scratchFile("plugins-git-uninstalled.json"),
@@ -597,7 +638,10 @@ function assertNpmPlugin() {
 }
 
 function assertNpmPluginUpdateUnchanged() {
-  assertUpdateOutput(scratchFile("plugins-npm-update.log"), "demo-plugin-npm is up to date (0.0.1).");
+  assertUpdateOutput(
+    scratchFile("plugins-npm-update.log"),
+    "demo-plugin-npm is up to date (0.0.1).",
+  );
   assertNpmPlugin();
 }
 
@@ -748,16 +792,31 @@ async function assertClawHubPreflight() {
     process.env.CLAWHUB_TOKEN ||
     process.env.CLAWHUB_AUTH_TOKEN ||
     "";
-  const response = await fetch(`${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-  });
+  const preflightUrl = `${baseUrl}/api/v1/packages/${encodeURIComponent(packageName)}`;
+  const response = await withTimeout(
+    `ClawHub package preflight for ${packageName}`,
+    CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+    (signal) =>
+      fetch(preflightUrl, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        signal,
+      }),
+  );
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
+    const body = await withTimeout(
+      `ClawHub package preflight response for ${packageName}`,
+      CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+      () => response.text().catch(() => ""),
+    );
     throw new Error(
       `ClawHub package preflight failed for ${packageName}: ${response.status} ${body}`,
     );
   }
-  const detail = await response.json();
+  const detail = await withTimeout(
+    `ClawHub package preflight response for ${packageName}`,
+    CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+    () => response.json(),
+  );
   const family = detail.package?.family;
   if (family !== "code-plugin" && family !== "bundle-plugin") {
     throw new Error(`ClawHub package ${packageName} is not installable as a plugin: ${family}`);
@@ -834,7 +893,9 @@ function assertClawHubInstalled() {
 
 function assertClawHubRemoved() {
   const pluginId = process.env.CLAWHUB_PLUGIN_ID;
-  const installPath = fs.readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8").trim();
+  const installPath = fs
+    .readFileSync(scratchFile("plugins-clawhub-install-path.txt"), "utf8")
+    .trim();
   const list = readJson(scratchFile("plugins-clawhub-uninstalled.json"));
   if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
     throw new Error(`ClawHub plugin still listed after uninstall: ${pluginId}`);

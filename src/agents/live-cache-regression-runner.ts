@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import type { AssistantMessage, Message, Tool } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import type { AssistantMessage, Message, Tool } from "../llm/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   LIVE_CACHE_REGRESSION_BASELINE,
@@ -24,8 +24,8 @@ const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
 const LIVE_CACHE_LANE_RETRIES = 1;
 const LIVE_CACHE_RESPONSE_RETRIES = 2;
-const OPENAI_CACHE_REASONING = "low" as unknown as never;
-const OPENAI_CACHE_PROBE_MIN_MAX_TOKENS = 256;
+const OPENAI_CACHE_REASONING = "none" as unknown as never;
+const OPENAI_CACHE_PROBE_MIN_MAX_TOKENS = 1024;
 const ANTHROPIC_CACHE_PROBE_MIN_MAX_TOKENS = 1024;
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
@@ -306,7 +306,7 @@ async function completeCacheProbe(params: {
     }
     if (shouldRetryCacheProbeText({ attempt, suffix: params.suffix, text })) {
       logLiveCache(
-        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying: ${JSON.stringify(text)} stop=${response.stopReason} ${formatUsage(usage)}`,
+        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying: ${JSON.stringify(text)} stop=${response.stopReason} error=${response.errorMessage ?? ""} ${formatUsage(usage)}`,
       );
       continue;
     }

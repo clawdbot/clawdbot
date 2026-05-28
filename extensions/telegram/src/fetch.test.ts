@@ -281,6 +281,11 @@ function expectStickyAutoSelectDispatcher(
   expect(options?.autoSelectFamilyAttemptTimeout).toBe(300);
 }
 
+function expectTelegramKeepAliveOptions(options: Record<string, unknown> | undefined): void {
+  expect(options?.keepAlive).toBe(true);
+  expect(options?.keepAliveInitialDelay).toBe(30_000);
+}
+
 function expectHttp1OnlyDispatcher(
   dispatcher:
     | {
@@ -424,6 +429,7 @@ describe("resolveTelegramFetch", () => {
     expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(true);
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.connect);
     expect(typeof dispatcher?.options?.connect?.lookup).toBe("function");
   });
 
@@ -460,8 +466,10 @@ describe("resolveTelegramFetch", () => {
     expectHttp1OnlyDispatcher(dispatcher);
     expect(dispatcher?.options?.connect?.autoSelectFamily).toBe(false);
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.connect);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamily).toBe(false);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expectTelegramKeepAliveOptions(dispatcher?.options?.proxyTls);
   });
 
   it("adds managed proxy CA trust to Telegram env proxy dispatchers", async () => {

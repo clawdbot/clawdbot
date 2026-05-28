@@ -54,8 +54,8 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
 
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  vi.mocked(loadManifestModelCatalog).mockReset();
   vi.mocked(loadManifestModelCatalog).mockReturnValue([]);
-  vi.mocked(loadManifestModelCatalog).mockClear();
   authProfileStoreMock.reset();
 });
 
@@ -63,7 +63,7 @@ const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
   id: "gpt-5.4",
   name: "GPT-5.4",
   reasoning: true,
-  input: ["text"],
+  input: ["text"] as Array<"text">,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 128_000,
   maxTokens: 16_384,
@@ -213,6 +213,115 @@ describe("createModelSelectionState catalog loading", () => {
       fallbackToMetadataScan: false,
     });
     expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("keeps configured compat when manifest thinking metadata is used", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
+      { provider: "vllm", id: "Qwen/Qwen3-8B", name: "Qwen3", reasoning: true },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000/v1",
+            models: [
+              makeConfiguredModel({
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen3",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              }),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "vllm",
+      defaultModel: "Qwen/Qwen3-8B",
+      provider: "vllm",
+      model: "Qwen/Qwen3-8B",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      }),
+    ]);
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("keeps configured compat when runtime thinking catalog is already loaded", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      {
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        name: "Qwen3",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: ["xhigh"] },
+      },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/Qwen/Qwen3-8B": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            baseUrl: "http://localhost:9000/v1",
+            models: [
+              makeConfiguredModel({
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen3",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              }),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "vllm",
+      defaultModel: "Qwen/Qwen3-8B",
+      provider: "vllm",
+      model: "Qwen/Qwen3-8B",
+      hasModelDirective: true,
+    });
+
+    await expect(state.resolveThinkingCatalog()).resolves.toEqual([
+      expect.objectContaining({
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: {
+          supportedReasoningEfforts: ["xhigh"],
+          thinkingFormat: "qwen-chat-template",
+        },
+      }),
+    ]);
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
   it("prefers per-agent thinkingDefault over model and global defaults", async () => {
@@ -381,7 +490,7 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
-  it("preserves OpenAI API-key session auth when model policy explicitly pins PI", async () => {
+  it("preserves OpenAI API-key session auth when model policy explicitly pins OpenClaw", async () => {
     authProfileStoreMock.store = {
       version: 1,
       profiles: {
@@ -401,7 +510,7 @@ describe("createModelSelectionState catalog loading", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
+              agentRuntime: { id: "openclaw" },
               models: [],
             },
           },
@@ -679,7 +788,7 @@ describe("createModelSelectionState respects session model override", () => {
       }),
     );
 
-    expect(state.provider).toBe("kimi");
+    expect(state.provider).toBe("kimi-coding");
     expect(state.model).toBe("kimi-code");
   });
 
@@ -947,6 +1056,164 @@ describe("createModelSelectionState auto-failover overrides", () => {
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
     expect(state.resetModelOverride).toBe(false);
+  });
+
+  it("clears stale auto-created legacy openai-codex route pins when primary is canonical openai", async () => {
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      modelProvider: "openai-codex",
+      model: "gpt-5.5",
+      contextTokens: 350_000,
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openai-codex/gpt-5.5");
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+    expect(sessionStore[sessionKey]?.model).toBeUndefined();
+    expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBeUndefined();
+  });
+
+  it("preserves usable Codex auth while clearing stale legacy openai-codex route pins", async () => {
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "test-key",
+        },
+      },
+    };
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+      authProfileOverride: "openai-codex:default",
+      authProfileOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(true);
+    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("openai-codex:default");
+    expect(sessionStore[sessionKey]?.authProfileOverrideSource).toBe("auto");
+  });
+
+  it("keeps auto openai-codex pins when canonical openai uses a custom API route", async () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.test/v1",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "auto",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.5");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
+  });
+
+  it("keeps explicit user openai-codex route overrides", async () => {
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      primaryProvider: "openai",
+      primaryModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-5.5");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("user");
   });
 
   it("still clears disallowed auto-failover overrides through allowlist validation", async () => {
@@ -1257,6 +1524,30 @@ describe("createModelSelectionState auto-failover overrides", () => {
 });
 
 describe("createModelSelectionState resolveDefaultReasoningLevel", () => {
+  it("uses manifest metadata before hydrating the runtime reasoning catalog", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockClear();
+    vi.mocked(loadManifestModelCatalog).mockReturnValueOnce([
+      { provider: "local", id: "fast-reasoner", name: "Fast Reasoner", reasoning: true },
+    ]);
+    const state = await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      defaultProvider: "local",
+      defaultModel: "fast-reasoner",
+      provider: "local",
+      model: "fast-reasoner",
+      hasModelDirective: false,
+    });
+
+    await expect(state.resolveDefaultReasoningLevel()).resolves.toBe("on");
+    expect(loadManifestModelCatalog).toHaveBeenCalledWith({
+      config: {},
+      fallbackToMetadataScan: false,
+    });
+    expect(loadModelCatalog).not.toHaveBeenCalled();
+  });
+
   it("returns on when catalog model has reasoning true", async () => {
     const { loadModelCatalog } = await import("../../agents/model-catalog.runtime.js");
     vi.mocked(loadModelCatalog).mockResolvedValueOnce([

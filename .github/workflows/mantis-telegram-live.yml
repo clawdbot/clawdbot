@@ -44,6 +44,8 @@ env:
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
   CRABBOX_REF: main
+  CRABBOX_AWS_REGION: us-east-1
+  CRABBOX_CAPACITY_REGIONS: us-east-1
 
 jobs:
   authorize_actor:
@@ -383,6 +385,8 @@ jobs:
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
+          CRABBOX_AWS_REGION: ${{ env.CRABBOX_AWS_REGION }}
+          CRABBOX_CAPACITY_REGIONS: ${{ env.CRABBOX_CAPACITY_REGIONS }}
           CRABBOX_LEASE_ID: ${{ needs.resolve_request.outputs.lease_id }}
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           SCENARIO_INPUT: ${{ needs.resolve_request.outputs.scenario }}

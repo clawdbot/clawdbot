@@ -146,16 +146,6 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts agents.defaults.agentRuntime", () => {
-    expect(() =>
-      AgentDefaultsSchema.parse({
-        agentRuntime: {
-          id: "claude-cli",
-        },
-      }),
-    ).not.toThrow();
-  });
-
   it("accepts experimental.localModelLean", () => {
     const result = AgentDefaultsSchema.parse({
       experimental: {
@@ -238,13 +228,37 @@ describe("agent defaults schema", () => {
     );
   });
 
-  it("accepts embeddedPi.executionContract", () => {
+  it("accepts embeddedAgent.executionContract", () => {
     const result = AgentDefaultsSchema.parse({
-      embeddedPi: {
+      embeddedAgent: {
         executionContract: "strict-agentic",
       },
     })!;
-    expect(result.embeddedPi?.executionContract).toBe("strict-agentic");
+    expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
+  });
+
+  it("rejects legacy whole-agent runtime pins outside doctor migration", () => {
+    expect(AgentDefaultsSchema.safeParse({ agentRuntime: { id: "codex" } }).success).toBe(false);
+    expect(AgentDefaultsSchema.safeParse({ embeddedHarness: { runtime: "codex" } }).success).toBe(
+      false,
+    );
+    expect(
+      AgentEntrySchema.safeParse({ id: "legacy", agentRuntime: { id: "codex" } }).success,
+    ).toBe(false);
+    expect(
+      AgentEntrySchema.safeParse({ id: "legacy", embeddedHarness: { runtime: "codex" } }).success,
+    ).toBe(false);
+  });
+
+  it("accepts embeddedAgent project settings policy", () => {
+    const result = AgentDefaultsSchema.parse({
+      embeddedAgent: {
+        executionContract: "strict-agentic",
+        projectSettingsPolicy: "sanitize",
+      },
+    })!;
+    expect(result.embeddedAgent?.executionContract).toBe("strict-agentic");
+    expect(result.embeddedAgent?.projectSettingsPolicy).toBe("sanitize");
   });
 
   it("accepts runRetries configuration on defaults and agent entries", () => {

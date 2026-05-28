@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../runtime/index.js";
 
 export type AgentAttemptLifecycleState = {
   currentTurnUserMessagePersisted: boolean;

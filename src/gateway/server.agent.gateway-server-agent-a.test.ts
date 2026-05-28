@@ -12,7 +12,7 @@ import {
   agentCommand,
   connectOk,
   installGatewayTestHooks,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   startServerWithClient,
   testState,
@@ -43,6 +43,20 @@ afterAll(async () => {
 
 const BASE_IMAGE_PNG =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X3mIAAAAASUVORK5CYII=";
+
+const TEXT_ONLY_AGENT_MODEL = {
+  id: "deepseek-v4-flash",
+  name: "DeepSeek V4 Flash",
+  provider: "ollama-cloud",
+  input: ["text"],
+};
+
+const VISION_AGENT_MODEL = {
+  id: "gemma4:31b",
+  name: "Gemma 4 31B",
+  provider: "ollama-cloud",
+  input: ["text", "image"],
+};
 
 function expectChannels(call: Record<string, unknown>, channel: string) {
   expect(call.channel).toBe(channel);
@@ -89,6 +103,14 @@ async function runMainAgentDeliveryWithSession(params: {
   } finally {
     testState.allowFrom = undefined;
   }
+}
+
+async function setGatewayModelCatalogForTest(
+  models: typeof agentDiscoveryMock.models,
+): Promise<void> {
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = models;
+  await resetGatewayModelCatalogCacheForTest();
 }
 
 const createStubChannelPlugin = (params: {
@@ -406,6 +428,8 @@ describe("gateway server agent", () => {
   });
 
   test("agent forwards image attachments as images[]", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+    await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
     await setTestSessionStore({
       entries: {
         main: {
@@ -451,22 +475,7 @@ describe("gateway server agent", () => {
         { id: "vision", model: "ollama-cloud/gemma4:31b" },
       ],
     };
-    piSdkMock.enabled = true;
-    piSdkMock.models = [
-      {
-        id: "deepseek-v4-flash",
-        name: "DeepSeek V4 Flash",
-        provider: "ollama-cloud",
-        input: ["text"],
-      },
-      {
-        id: "gemma4:31b",
-        name: "Gemma 4 31B",
-        provider: "ollama-cloud",
-        input: ["text", "image"],
-      },
-    ];
-    await resetGatewayModelCatalogCacheForTest();
+    await setGatewayModelCatalogForTest([TEXT_ONLY_AGENT_MODEL, VISION_AGENT_MODEL]);
 
     await setTestSessionStore({
       agentId: "vision",

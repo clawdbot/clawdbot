@@ -213,15 +213,18 @@ function isVisiblePartialDeliveryError(error: unknown): boolean {
   );
 }
 
-async function runForegroundReplyFenceSettledDelivery(
+async function runForegroundReplyFenceFreshSettledDelivery(
   snapshot: ForegroundReplyFenceSnapshot | undefined,
-  onSettled: (() => unknown) | undefined,
+  onFreshSettledDelivery: (() => unknown) | undefined,
 ): Promise<void> {
-  if (!onSettled) {
+  if (!onFreshSettledDelivery) {
+    return;
+  }
+  if (await shouldCancelForegroundReplyDelivery(snapshot)) {
     return;
   }
   try {
-    const deliveryResult = await onSettled();
+    const deliveryResult = await onFreshSettledDelivery();
     if (isExplicitlyVisibleDelivery(deliveryResult)) {
       markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
     }
@@ -488,9 +491,13 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
     });
   } finally {
     try {
-      await runForegroundReplyFenceSettledDelivery(
+      const settledResult = await params.dispatcherOptions.onSettled?.();
+      if (isExplicitlyVisibleDelivery(settledResult)) {
+        markForegroundReplyFenceVisibleDeliveryGeneration(foregroundReplyFence);
+      }
+      await runForegroundReplyFenceFreshSettledDelivery(
         foregroundReplyFence,
-        params.dispatcherOptions.onSettled,
+        params.dispatcherOptions.onFreshSettledDelivery,
       );
     } finally {
       if (foregroundReplyFence) {

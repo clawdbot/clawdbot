@@ -200,7 +200,7 @@ describe("entry compile cache", () => {
     expect(exit).toHaveBeenCalledWith(1);
   });
 
-  it("terminates before force-killing a signaled compile-cache respawn child", () => {
+  it("waits for a signaled compile-cache respawn child after force-killing it", () => {
     vi.useFakeTimers();
     const child = new EventEmitter() as ChildProcess;
     const kill = vi.fn<(signal?: NodeJS.Signals) => boolean>(() => true);
@@ -236,6 +236,10 @@ describe("entry compile cache", () => {
       vi.advanceTimersByTime(1_000);
 
       expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+      expect(exit).not.toHaveBeenCalled();
+
+      child.emit("exit", null, "SIGKILL");
+
       expect(exit).toHaveBeenCalledWith(1);
     } finally {
       vi.useRealTimers();

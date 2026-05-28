@@ -420,7 +420,7 @@ describe("openai codex provider", () => {
     });
   });
 
-  it("keeps Pi cost metadata but applies Codex context metadata for gpt-5.5", () => {
+  it("keeps OpenClaw cost metadata but applies Codex context metadata for gpt-5.5", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     const model = provider.resolveDynamicModel?.({

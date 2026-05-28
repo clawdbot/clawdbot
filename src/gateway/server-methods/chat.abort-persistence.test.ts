@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createActiveRun,
@@ -221,6 +221,117 @@ describe("chat abort transcript persistence", () => {
     expect(persisted).toHaveLength(1);
     expectPersistedAbortMessage(persisted[0], {
       idempotencyKey: `${runId}:assistant`,
+      origin: "rpc",
+      runId,
+      stopReason: "stop",
+    });
+  });
+
+  it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-idempotency-collision-",
+    );
+    const runId = "idem-abort-collision";
+    const idempotencyKey = `${runId}:assistant`;
+    await fs.appendFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        id: "user-message-with-colliding-key",
+        parentId: null,
+        timestamp: new Date(0).toISOString(),
+        message: {
+          role: "user",
+          content: "colliding user key",
+          timestamp: 1,
+          idempotencyKey,
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunBuffers: new Map([[runId, "Partial after collision"]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const assistantMessages = collectMessagesWithIdempotencyKey(lines, idempotencyKey).filter(
+      (message) => message.role === "assistant",
+    );
+
+    expect(assistantMessages).toHaveLength(1);
+    expectPersistedAbortMessage(assistantMessages[0], {
+      idempotencyKey,
+      origin: "rpc",
+      runId,
+      stopReason: "stop",
+    });
+  });
+
+  it("dedupes legacy assistant transcript entries without top-level ids", async () => {
+    const { transcriptPath, sessionId } = await createTranscriptFixture(
+      "openclaw-chat-abort-legacy-idempotency-",
+    );
+    const runId = "idem-abort-legacy";
+    const idempotencyKey = `${runId}:assistant`;
+    await fs.appendFile(
+      transcriptPath,
+      `${JSON.stringify({
+        type: "message",
+        timestamp: new Date(0).toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "legacy partial" }],
+          timestamp: 1,
+          stopReason: "stop",
+          api: "openai-responses",
+          provider: "openclaw",
+          model: "gateway-injected",
+          idempotencyKey,
+          openclawAbort: {
+            aborted: true,
+            origin: "rpc",
+            runId,
+          },
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    const respond = vi.fn();
+    const context = createChatAbortContext({
+      chatAbortControllers: new Map([[runId, createActiveRun("main", { sessionId })]]),
+      chatRunBuffers: new Map([[runId, "Duplicate partial"]]),
+      chatDeltaSentAt: new Map([[runId, Date.now()]]),
+      logGateway: { warn: vi.fn() },
+    });
+
+    await invokeChatAbortHandler({
+      handler: chatHandlers["chat.abort"],
+      context,
+      request: { sessionKey: "main", runId },
+      respond,
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const assistantMessages = collectMessagesWithIdempotencyKey(lines, idempotencyKey).filter(
+      (message) => message.role === "assistant",
+    );
+
+    expect(assistantMessages).toHaveLength(1);
+    expectPersistedAbortMessage(assistantMessages[0], {
+      idempotencyKey,
       origin: "rpc",
       runId,
       stopReason: "stop",

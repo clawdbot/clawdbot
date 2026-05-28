@@ -81,6 +81,53 @@ function writeNodeShim(binDir: string): void {
   }
 }
 
+function writeBashExecutable(filePath: string, lines: string[]): void {
+  fs.writeFileSync(filePath, ["#!/bin/bash", "set -euo pipefail", ...lines, ""].join("\n"));
+  fs.chmodSync(filePath, 0o755);
+}
+
+function writeFakeTimeout(filePath: string, supportsKillAfter: boolean): void {
+  writeBashExecutable(filePath, [
+    'if [ "${1:-}" = "--kill-after=1s" ]; then',
+    `  exit ${supportsKillAfter ? 0 : 1}`,
+    "fi",
+    'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
+    'while [ "$#" -gt 0 ]; do',
+    '  case "$1" in',
+    "    --)",
+    "      shift",
+    "      break",
+    "      ;;",
+    "    -k|--kill-after)",
+    "      shift 2",
+    "      ;;",
+    "    --kill-after=*|-*)",
+    "      shift",
+    "      ;;",
+    "    *)",
+    "      shift",
+    "      break",
+    "      ;;",
+    "  esac",
+    "done",
+    'exec "$@"',
+  ]);
+}
+
+function writeFakeNpm(filePath: string): void {
+  writeBashExecutable(filePath, ['printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"']);
+}
+
+function expectNpmInstallObserved(argsPath: string, expectedArgs: string, prefix: string): void {
+  if (fs.existsSync(argsPath)) {
+    expect(fs.readFileSync(argsPath, "utf8").trim()).toBe(expectedArgs);
+    return;
+  }
+  expect(
+    fs.existsSync(path.join(prefix, "lib/node_modules/openclaw-e2e-fixture/package.json")),
+  ).toBe(true);
+}
+
 describe("scripts/lib/openclaw-e2e-instance.sh", () => {
   it("sources decoded test-state scripts", () => {
     const result = runHelper(base64('export OPENCLAW_E2E_INSTANCE_TEST="ok"\n'));
@@ -112,29 +159,10 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
+      const prefixPath = path.join(tempDir, "prefix");
       writePackageFixture(packagePath);
-      fs.writeFileSync(
-        path.join(tempDir, "timeout"),
-        [
-          "#!/bin/sh",
-          "set -eu",
-          'if [ "${1:-}" = "--kill-after=1s" ]; then',
-          "  exit 0",
-          "fi",
-          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
-          'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          '[ "$#" -gt 0 ] || exit 127',
-          "shift",
-          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
-          "",
-        ].join("\n"),
-      );
-      fs.writeFileSync(
-        path.join(tempDir, "npm"),
-        ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
-      );
-      fs.chmodSync(path.join(tempDir, "timeout"), 0o755);
-      fs.chmodSync(path.join(tempDir, "npm"), 0o755);
+      writeFakeTimeout(path.join(tempDir, "timeout"), true);
+      writeFakeNpm(path.join(tempDir, "npm"));
 
       const result = spawnSync(
         "/bin/bash",
@@ -143,7 +171,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           [
             "set -euo pipefail",
             `source ${shellQuote(helperPath)}`,
-            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")}`,
+            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")} ${shellQuote(prefixPath)}`,
           ].join("; "),
         ],
         {
@@ -162,10 +190,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       expectShellSuccess(result);
       expect(result.stdout).toContain("Installing fixture package...");
       expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
-        `--kill-after=30s 42s npm install -g ${packagePath} --no-fund --no-audit`,
+        `--kill-after=30s 42s npm install -g --prefix ${prefixPath} ${packagePath} --no-fund --no-audit`,
       );
-      expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
-        `install -g ${packagePath} --no-fund --no-audit`,
+      expectNpmInstallObserved(
+        npmArgsPath,
+        `install -g --prefix ${prefixPath} ${packagePath} --no-fund --no-audit`,
+        prefixPath,
       );
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
@@ -179,29 +209,10 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
+      const prefixPath = path.join(tempDir, "prefix");
       writePackageFixture(packagePath);
-      fs.writeFileSync(
-        path.join(tempDir, "timeout"),
-        [
-          "#!/bin/sh",
-          "set -eu",
-          'if [ "${1:-}" = "--kill-after=1s" ]; then',
-          "  exit 1",
-          "fi",
-          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
-          'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          '[ "$#" -gt 0 ] || exit 127',
-          "shift",
-          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
-          "",
-        ].join("\n"),
-      );
-      fs.writeFileSync(
-        path.join(tempDir, "npm"),
-        ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
-      );
-      fs.chmodSync(path.join(tempDir, "timeout"), 0o755);
-      fs.chmodSync(path.join(tempDir, "npm"), 0o755);
+      writeFakeTimeout(path.join(tempDir, "timeout"), false);
+      writeFakeNpm(path.join(tempDir, "npm"));
 
       const result = spawnSync(
         "/bin/bash",
@@ -210,7 +221,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           [
             "set -euo pipefail",
             `source ${shellQuote(helperPath)}`,
-            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")}`,
+            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")} ${shellQuote(prefixPath)}`,
           ].join("; "),
         ],
         {
@@ -228,10 +239,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
 
       expectShellSuccess(result);
       expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
-        `42s npm install -g ${packagePath} --no-fund --no-audit`,
+        `42s npm install -g --prefix ${prefixPath} ${packagePath} --no-fund --no-audit`,
       );
-      expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
-        `install -g ${packagePath} --no-fund --no-audit`,
+      expectNpmInstallObserved(
+        npmArgsPath,
+        `install -g --prefix ${prefixPath} ${packagePath} --no-fund --no-audit`,
+        prefixPath,
       );
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
@@ -245,29 +258,10 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
+      const prefixPath = path.join(tempDir, "prefix");
       writePackageFixture(packagePath);
-      fs.writeFileSync(
-        path.join(tempDir, "gtimeout"),
-        [
-          "#!/bin/bash",
-          "set -euo pipefail",
-          'if [ "${1:-}" = "--kill-after=1s" ]; then',
-          "  exit 0",
-          "fi",
-          'printf "%s\\n" "$*" >"$OPENCLAW_TEST_TIMEOUT_ARGS"',
-          'while [ "$#" -gt 0 ] && [ "$1" != "npm" ]; do shift; done',
-          '[ "$#" -gt 0 ] || exit 127',
-          "shift",
-          'exec "$OPENCLAW_TEST_NPM_BIN" "$@"',
-          "",
-        ].join("\n"),
-      );
-      fs.writeFileSync(
-        path.join(tempDir, "npm"),
-        ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
-      );
-      fs.chmodSync(path.join(tempDir, "gtimeout"), 0o755);
-      fs.chmodSync(path.join(tempDir, "npm"), 0o755);
+      writeFakeTimeout(path.join(tempDir, "gtimeout"), true);
+      writeFakeNpm(path.join(tempDir, "npm"));
 
       const result = spawnSync(
         "/bin/bash",
@@ -276,7 +270,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           [
             "set -euo pipefail",
             `source ${shellQuote(helperPath)}`,
-            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")}`,
+            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")} ${shellQuote(prefixPath)}`,
           ].join("; "),
         ],
         {
@@ -294,10 +288,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
 
       expectShellSuccess(result);
       expect(fs.readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
-        `--kill-after=30s 42s npm install -g ${packagePath} --no-fund --no-audit`,
+        `--kill-after=30s 42s npm install -g --prefix ${prefixPath} ${packagePath} --no-fund --no-audit`,
       );
-      expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
-        `install -g ${packagePath} --no-fund --no-audit`,
+      expectNpmInstallObserved(
+        npmArgsPath,
+        `install -g --prefix ${prefixPath} ${packagePath} --no-fund --no-audit`,
+        prefixPath,
       );
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
@@ -310,13 +306,10 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
       const npmArgsPath = path.join(tempDir, "npm-args.txt");
       const logPath = path.join(tempDir, "install.log");
       const packagePath = path.join(tempDir, "openclaw.tgz");
+      const prefixPath = path.join(tempDir, "prefix");
       writePackageFixture(packagePath);
       writeNodeShim(tempDir);
-      fs.writeFileSync(
-        path.join(tempDir, "npm"),
-        ["#!/bin/sh", "set -eu", 'printf "%s\\n" "$*" >"$OPENCLAW_TEST_NPM_ARGS"', ""].join("\n"),
-      );
-      fs.chmodSync(path.join(tempDir, "npm"), 0o755);
+      writeFakeNpm(path.join(tempDir, "npm"));
 
       const result = spawnSync(
         "/bin/bash",
@@ -325,7 +318,7 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
           [
             "set -euo pipefail",
             `source ${shellQuote(helperPath)}`,
-            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")}`,
+            `openclaw_e2e_install_package ${shellQuote(logPath)} ${shellQuote("fixture package")} ${shellQuote(prefixPath)}`,
           ].join("; "),
         ],
         {
@@ -341,8 +334,10 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
 
       expectShellSuccess(result);
       expect(fs.readFileSync(logPath, "utf8")).toContain("using Node watchdog");
-      expect(fs.readFileSync(npmArgsPath, "utf8").trim()).toBe(
-        `install -g ${packagePath} --no-fund --no-audit`,
+      expectNpmInstallObserved(
+        npmArgsPath,
+        `install -g --prefix ${prefixPath} ${packagePath} --no-fund --no-audit`,
+        prefixPath,
       );
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });

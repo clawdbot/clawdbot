@@ -281,22 +281,27 @@ async function assertMediaResponseOk(params: {
   );
 }
 
-function assertMediaContentLength(params: {
+async function assertMediaContentLength(params: {
   res: Response;
   sourceUrl: string;
   maxBytes: number;
-}): void {
+}): Promise<void> {
   const contentLength = params.res.headers.get("content-length");
   if (!contentLength) {
     return;
   }
   const length = Number(contentLength);
   if (Number.isFinite(length) && length > params.maxBytes) {
+    await discardIgnoredResponseBody(params.res);
     throw new MediaFetchError(
       "max_bytes",
       `Failed to fetch media from ${params.sourceUrl}: content length ${length} exceeds maxBytes ${params.maxBytes}`,
     );
   }
+}
+
+async function discardIgnoredResponseBody(res: Response): Promise<void> {
+  await res.body?.cancel().catch(() => undefined);
 }
 
 function resolveRemoteFileName(params: {
@@ -434,7 +439,7 @@ async function saveOkMediaResponse(params: {
   subdir?: string;
   originalFilename?: string;
 }): Promise<SavedRemoteMedia> {
-  assertMediaContentLength({
+  await assertMediaContentLength({
     res: params.res,
     sourceUrl: params.sourceUrl,
     maxBytes: params.maxBytes,
@@ -603,7 +608,7 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
     });
 
     const effectiveMaxBytes = options.maxBytes ?? DEFAULT_FETCH_MEDIA_MAX_BYTES;
-    assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
+    await assertMediaContentLength({ res, sourceUrl, maxBytes: effectiveMaxBytes });
     let buffer: Buffer;
     try {
       buffer = await readResponseWithLimit(res, effectiveMaxBytes, {

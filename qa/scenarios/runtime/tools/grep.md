@@ -10,13 +10,13 @@ coverage:
     - tools.grep
 objective: Verify grep-style search behavior is tracked through command execution while Codex owns exec/process natively.
 successCriteria:
-  - Pi may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
+  - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
   - Mock provider exec plans are reported as fixture intent, not as actual runtime tool calls.
   - The row stays report-only until the fixture validates native Codex search/command behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
-  - src/agents/pi-tools.ts
+  - src/agents/agent-tools.ts
   - extensions/qa-lab/src/runtime-tool-fixture.ts
 execution:
   kind: flow

@@ -117,6 +117,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(script).toContain("OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB");
     expect(script).toContain(
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
@@ -538,11 +539,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
       "inputs.rerun_group == 'all'",
     );
-    expect(
-      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
-        (step) => step.name === "Verify Docker runtime-assets prune path",
-      ).run,
-    ).toContain("--target runtime-assets");
+    const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
+      (step) => step.name === "Build and smoke test final Docker runtime image",
+    );
+    expect(dockerPreflightStep).toBeDefined();
+    expect(dockerPreflightStep?.run).toContain("docker build");
+    expect(dockerPreflightStep?.run).toContain("node /app/openclaw.mjs agent");
+    expect(dockerPreflightStep?.run).toContain(
+      '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
+    );
+    expect(dockerPreflightStep?.run).toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
       "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
     );

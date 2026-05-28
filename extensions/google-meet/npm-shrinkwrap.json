@@ -1,18 +1,18 @@
 {
   "name": "@openclaw/google-meet",
-  "version": "2026.5.26",
+  "version": "2026.5.28",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/google-meet",
-      "version": "2026.5.26",
+      "version": "2026.5.28",
       "dependencies": {
         "commander": "14.0.3",
         "typebox": "1.1.38"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.26"
+        "openclaw": ">=2026.5.28"
       },
       "peerDependenciesMeta": {
         "openclaw": {

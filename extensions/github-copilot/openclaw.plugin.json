@@ -146,8 +146,13 @@
   "contracts": {
     "memoryEmbeddingProviders": ["github-copilot"]
   },
-  "providerAuthEnvVars": {
-    "github-copilot": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+  "setup": {
+    "providers": [
+      {
+        "id": "github-copilot",
+        "envVars": ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

@@ -132,6 +132,47 @@ describe("session store key normalization", () => {
     expect(store[MIXED_CASE_KEY]).toBeUndefined();
   });
 
+  it("preserves ACP metadata when inbound metadata normalizes a legacy key", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "canonical-session",
+            updatedAt: 2,
+          },
+          [MIXED_CASE_KEY]: {
+            sessionId: "legacy-session",
+            updatedAt: 1,
+            acp: {
+              backend: "codex",
+              agent: "main",
+              runtimeSessionName: "runtime-1",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 1,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: CANONICAL_KEY,
+      ctx: {},
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
+    expect(store[CANONICAL_KEY]?.sessionId).toBe("canonical-session");
+    expect(store[CANONICAL_KEY]?.acp?.runtimeSessionName).toBe("runtime-1");
+  });
+
   it("preserves updatedAt when recording inbound metadata for an existing session", async () => {
     const existingUpdatedAt = Date.now();
     await fs.writeFile(

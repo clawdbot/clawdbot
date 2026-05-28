@@ -1,6 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,

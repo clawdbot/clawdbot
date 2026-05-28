@@ -1,20 +1,20 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as piCodingAgent from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+import * as agentSessions from "openclaw/plugin-sdk/agent-sessions";
+import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { retryAsync } from "../infra/retry.js";
 
 // Mock the external generateSummary function
-vi.mock("@earendil-works/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof piCodingAgent>("@earendil-works/pi-coding-agent");
+vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
+  const actual = await vi.importActual<typeof agentSessions>("openclaw/plugin-sdk/agent-sessions");
   return {
     ...actual,
     generateSummary: vi.fn(),
   };
 });
 
-const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+const mockGenerateSummary = vi.mocked(agentSessions.generateSummary);
 type MockGenerateSummaryCompat = (
   currentMessages: AgentMessage[],
   model: NonNullable<ExtensionContext["model"]>,

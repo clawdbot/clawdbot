@@ -1,13 +1,11 @@
-import {
-  getOAuthApiKey as getOAuthApiKeyFromPi,
-  refreshOpenAICodexToken as refreshOpenAICodexTokenFromPi,
-} from "@earendil-works/pi-ai/oauth";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
+import { refreshOpenAICodexToken as refreshOpenAICodexTokenFromFlow } from "./openai-codex-oauth-flow.runtime.js";
+import type { OAuthCredentials } from "./openai-codex-oauth-types.runtime.js";
 
 type OpenAICodexProviderRuntimeDeps = {
   ensureGlobalUndiciEnvProxyDispatcher: typeof ensureGlobalUndiciEnvProxyDispatcher;
-  getOAuthApiKey: typeof getOAuthApiKeyFromPi;
-  refreshOpenAICodexToken: typeof refreshOpenAICodexTokenFromPi;
+  getOAuthApiKey: typeof getOpenAICodexOAuthApiKey;
+  refreshOpenAICodexToken: typeof refreshOpenAICodexTokenFromFlow;
 };
 
 export function createOpenAICodexProviderRuntime(deps: OpenAICodexProviderRuntimeDeps): {
@@ -28,18 +26,35 @@ export function createOpenAICodexProviderRuntime(deps: OpenAICodexProviderRuntim
 
 const runtime = createOpenAICodexProviderRuntime({
   ensureGlobalUndiciEnvProxyDispatcher,
-  getOAuthApiKey: getOAuthApiKeyFromPi,
-  refreshOpenAICodexToken: refreshOpenAICodexTokenFromPi,
+  getOAuthApiKey: getOpenAICodexOAuthApiKey,
+  refreshOpenAICodexToken: refreshOpenAICodexTokenFromFlow,
 });
 
 export async function getOAuthApiKey(
-  ...args: Parameters<typeof getOAuthApiKeyFromPi>
-): Promise<Awaited<ReturnType<typeof getOAuthApiKeyFromPi>>> {
+  ...args: Parameters<typeof getOpenAICodexOAuthApiKey>
+): Promise<Awaited<ReturnType<typeof getOpenAICodexOAuthApiKey>>> {
   return await runtime.getOAuthApiKey(...args);
 }
 
 export async function refreshOpenAICodexToken(
-  ...args: Parameters<typeof refreshOpenAICodexTokenFromPi>
-): Promise<Awaited<ReturnType<typeof refreshOpenAICodexTokenFromPi>>> {
+  ...args: Parameters<typeof refreshOpenAICodexTokenFromFlow>
+): Promise<Awaited<ReturnType<typeof refreshOpenAICodexTokenFromFlow>>> {
   return await runtime.refreshOpenAICodexToken(...args);
+}
+
+async function getOpenAICodexOAuthApiKey(
+  providerId: string,
+  credentials: Record<string, OAuthCredentials>,
+): Promise<{ newCredentials: OAuthCredentials; apiKey: string } | null> {
+  if (providerId !== "openai-codex") {
+    throw new Error(`Unknown OAuth provider: ${providerId}`);
+  }
+  let creds = credentials[providerId];
+  if (!creds) {
+    return null;
+  }
+  if (Date.now() >= creds.expires) {
+    creds = await refreshOpenAICodexTokenFromFlow(creds.refresh);
+  }
+  return { newCredentials: creds, apiKey: creds.access };
 }

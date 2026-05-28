@@ -2,6 +2,10 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import type { AgentRouteBinding } from "../config/types.agents.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
+  testing as bundleMcpRuntimeTesting,
+  getOrCreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-tools.js";
+import {
   getCallGatewayMock,
   getSessionsSpawnTool,
   resetSessionsSpawnAnnounceFlowOverride,
@@ -13,10 +17,6 @@ import {
   setSessionsSpawnConfigOverride,
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
-import {
-  testing as bundleMcpRuntimeTesting,
-  getOrCreateSessionMcpRuntime,
-} from "./pi-bundle-mcp-tools.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,

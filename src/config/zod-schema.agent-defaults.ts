@@ -4,8 +4,7 @@ import {
   HeartbeatSchema,
   AgentSandboxSchema,
   AgentContextLimitsSchema,
-  AgentEmbeddedHarnessSchema,
-  AgentRuntimePolicySchema,
+  AgentModelRuntimeEntrySchema,
   AgentModelSchema,
   AgentToolModelSchema,
   MemorySearchSchema,
@@ -33,6 +32,15 @@ const OptionalBootstrapFileNameSchema = z.enum([
   "IDENTITY.md",
 ]);
 
+const EmbeddedAgentConfigSchema = z
+  .object({
+    projectSettingsPolicy: z
+      .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
+      .optional(),
+    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+  })
+  .strict();
+
 export const SilentReplyPolicyConfigSchema = z
   .object({
     group: SilentReplyPolicySchema.optional(),
@@ -44,8 +52,6 @@ export const AgentDefaultsSchema = z
   .object({
     /** Global default provider params applied to all models before per-model and per-agent overrides. */
     params: z.record(z.string(), z.unknown()).optional(),
-    agentRuntime: AgentRuntimePolicySchema,
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
     imageModel: AgentToolModelSchema.optional(),
     imageGenerationModel: AgentToolModelSchema.optional(),
@@ -55,21 +61,7 @@ export const AgentDefaultsSchema = z
     pdfModel: AgentToolModelSchema.optional(),
     pdfMaxBytesMb: z.number().positive().optional(),
     pdfMaxPages: z.number().int().positive().optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
-            params: z.record(z.string(), z.unknown()).optional(),
-            agentRuntime: AgentRuntimePolicySchema,
-            /** Enable streaming for this model (default: true, false for Ollama to avoid SDK issue #1205). */
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
+    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     workspace: z.string().optional(),
     skills: z.array(z.string()).optional(),
     silentReply: SilentReplyPolicyConfigSchema.optional(),
@@ -211,15 +203,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
-    embeddedPi: z
-      .object({
-        projectSettingsPolicy: z
-          .union([z.literal("trusted"), z.literal("sanitize"), z.literal("ignore")])
-          .optional(),
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-      })
-      .strict()
-      .optional(),
+    embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),

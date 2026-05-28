@@ -419,7 +419,7 @@ describe("Discord model picker interactions", () => {
         "openai",
         [
           { id: "codex", label: "Codex", description: "Use Codex." },
-          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+          { id: "openclaw", label: "OpenClaw Default", description: "Use OpenClaw." },
         ],
       ],
     ]);
@@ -467,7 +467,7 @@ describe("Discord model picker interactions", () => {
         "openai",
         [
           { id: "codex", label: "Codex", description: "Use Codex." },
-          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+          { id: "openclaw", label: "OpenClaw Default", description: "Use OpenClaw." },
         ],
       ],
     ]);
@@ -512,7 +512,7 @@ describe("Discord model picker interactions", () => {
       [
         "anthropic",
         [
-          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+          { id: "openclaw", label: "OpenClaw Default", description: "Use OpenClaw." },
           { id: "claude-cli", label: "Claude CLI", description: "Use Claude CLI." },
         ],
       ],

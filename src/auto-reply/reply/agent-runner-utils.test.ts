@@ -125,7 +125,7 @@ describe("agent-runner-utils", () => {
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {
-    const run = makeRun({ enforceFinalTag: true });
+    const run = makeRun({ enforceFinalTag: true, cwd: "/tmp/task-repo" });
     const authProfile = resolveProviderScopedAuthProfile({
       provider: "openai",
       primaryProvider: "openai",
@@ -143,6 +143,7 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.sessionFile).toBe(run.sessionFile);
     expect(resolved.workspaceDir).toBe(run.workspaceDir);
+    expect(resolved.cwd).toBe("/tmp/task-repo");
     expect(resolved.agentDir).toBe(run.agentDir);
     expect(resolved.config).toBe(run.config);
     expect(resolved.skillsSnapshot).toBe(run.skillsSnapshot);

@@ -62,7 +62,7 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
     browserLifecycleCleanupMocks.cleanupBrowserSessionsForLifecycleEnd,
 }));
 
-vi.mock("./pi-bundle-mcp-tools.js", () => ({
+vi.mock("./agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
 }));
 

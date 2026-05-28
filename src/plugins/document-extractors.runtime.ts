@@ -57,8 +57,7 @@ export function resolvePluginDocumentExtractors(params?: {
       onlyPluginIds: params?.onlyPluginIds,
       contract: "documentExtractors",
       compatMode: {
-        allowlist: false,
-        enablement: "allowlist",
+        enablement: "always",
         vitest: true,
       },
     }).map((plugin) => plugin.id);

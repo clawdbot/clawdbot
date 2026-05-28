@@ -9,6 +9,7 @@ import {
   parseArgs,
   readArtifactPackageCandidateMetadata,
   readPackageBuildSourceSha,
+  resolveNpmPackageCandidatePackRunner,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
@@ -97,6 +98,35 @@ describe("resolve-openclaw-package-candidate", () => {
       source: "npm",
       trustedSourceId: "",
       trustedSourcePolicy: ".github/package-trusted-sources.json",
+    });
+  });
+
+  it("resolves npm package candidates through the Windows npm.cmd toolchain shim", () => {
+    const execPath = "C:\\nodejs\\node.exe";
+    const npmCmdPath = path.win32.resolve(path.win32.dirname(execPath), "npm.cmd");
+
+    const runner = resolveNpmPackageCandidatePackRunner(
+      "openclaw@2026.5.26-beta.1",
+      "C:\\openclaw\\.artifacts\\docker-e2e-package",
+      {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: {},
+        execPath,
+        existsSync: (candidate) => candidate === npmCmdPath,
+        platform: "win32",
+      },
+    );
+
+    expect(runner).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        `${npmCmdPath} pack openclaw@2026.5.26-beta.1 --ignore-scripts --json --pack-destination C:\\openclaw\\.artifacts\\docker-e2e-package`,
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
     });
   });
 

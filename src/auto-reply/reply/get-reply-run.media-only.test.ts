@@ -6,7 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
-} from "../../agents/pi-embedded-runner/runs.js";
+} from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 
@@ -14,14 +14,14 @@ vi.mock("../../agents/auth-profiles/session-override.js", () => ({
   resolveSessionAuthProfileOverride: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../agents/pi-embedded.runtime.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+vi.mock("../../agents/embedded-agent.runtime.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: vi.fn().mockReturnValue("session:session-key"),
-  waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
+  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../../config/sessions/group.js", () => ({
@@ -551,18 +551,18 @@ describe("runPreparedReply media-only handling", () => {
     "webchat",
   ] as const)("enables default same-turn steering for active %s runs", async (channel) => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "steer",
       debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",
     });
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
 
     const params = baseParams({
       sessionKey: `agent:main:${channel}:direct:steer-smoke`,
@@ -1272,12 +1272,14 @@ describe("runPreparedReply media-only handling", () => {
   });
   it("treats reset-triggered followup mode as interrupt when the session lane is empty", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const commandQueue = await import("../../process/command-queue.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-active");
-    vi.mocked(piRuntime.abortEmbeddedPiRun).mockReturnValue(true);
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+      "session-active",
+    );
+    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockReturnValue(true);
     const activeOperation = createReplyOperation({
       sessionId: "session-active",
       sessionKey: "session-key",
@@ -1295,7 +1297,7 @@ describe("runPreparedReply media-only handling", () => {
 
       expect(result).toEqual({ text: "ok" });
       expect(commandQueue.clearCommandLane).toHaveBeenCalledWith("session:session-key");
-      expect(piRuntime.abortEmbeddedPiRun).toHaveBeenCalledWith("session-active");
+      expect(embeddedAgentRuntime.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-active");
       expect(activeOperation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
       expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
       const call = requireRunReplyAgentCall();
@@ -1308,18 +1310,18 @@ describe("runPreparedReply media-only handling", () => {
   });
   it("does not enable steering for active heartbeat runs", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "followup",
       debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",
     });
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
 
     await runPreparedReply(
       baseParams({
@@ -1379,16 +1381,16 @@ describe("runPreparedReply media-only handling", () => {
   });
 
   it("does not queue a run behind its provided pre-dispatch reply operation", async () => {
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const operation = createReplyOperation({
       sessionId: "session-pre-dispatch-owner",
       sessionKey: "session-key",
       resetTriggered: false,
     });
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
       "session-pre-dispatch-owner",
     );
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValue(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValue(true);
 
     try {
       await expect(
@@ -1403,17 +1405,19 @@ describe("runPreparedReply media-only handling", () => {
 
       const call = requireLastRunReplyAgentCall();
       expect(call.replyOperation).toBe(operation);
-      expect(vi.mocked(piRuntime.isEmbeddedPiRunActive)).not.toHaveBeenCalled();
+      expect(vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive)).not.toHaveBeenCalled();
     } finally {
       operation.complete();
-      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
-      vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReset().mockReturnValue(false);
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
+      vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReset().mockReturnValue(false);
     }
   });
 
   it("does not interrupt its provided pre-dispatch reply operation for reset turns", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const commandQueue = await import("../../process/command-queue.js");
     const operation = createReplyOperation({
       sessionId: "session-reset-owner",
@@ -1422,7 +1426,9 @@ describe("runPreparedReply media-only handling", () => {
     });
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({ mode: "followup" });
     vi.mocked(commandQueue.getQueueSize).mockReturnValueOnce(0);
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue("session-reset-owner");
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId).mockReturnValue(
+      "session-reset-owner",
+    );
 
     try {
       await expect(
@@ -1439,10 +1445,12 @@ describe("runPreparedReply media-only handling", () => {
       const call = requireLastRunReplyAgentCall();
       expect(call.replyOperation).toBe(operation);
       expect(commandQueue.clearCommandLane).not.toHaveBeenCalled();
-      expect(piRuntime.abortEmbeddedPiRun).not.toHaveBeenCalled();
+      expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
     } finally {
       operation.complete();
-      vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId).mockReset().mockReturnValue(undefined);
+      vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
+        .mockReset()
+        .mockReturnValue(undefined);
     }
   });
 
@@ -1784,7 +1792,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("queues active room events as followups instead of steering fake prompts", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const abortController = new AbortController();
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "steer",
@@ -1792,13 +1800,13 @@ describe("runPreparedReply media-only handling", () => {
       cap: 20,
       dropPolicy: "summarize",
     });
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.abortEmbeddedPiRun).mockClear();
-    vi.mocked(piRuntime.waitForEmbeddedPiRunEnd).mockClear();
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.abortEmbeddedAgentRun).mockClear();
+    vi.mocked(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).mockClear();
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
 
     await runPreparedReply(
@@ -1838,7 +1846,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("uses queued followup abort ownership instead of borrowed active-lane abort ownership", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const activeLaneAbortController = new AbortController();
     const sourceAbortController = new AbortController();
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
@@ -1847,11 +1855,11 @@ describe("runPreparedReply media-only handling", () => {
       cap: 20,
       dropPolicy: "summarize",
     });
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
 
     await runPreparedReply(
@@ -1892,7 +1900,7 @@ describe("runPreparedReply media-only handling", () => {
 
   it("detaches queued user requests from superseded source abort signals", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const abortController = new AbortController();
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "collect",
@@ -1900,11 +1908,11 @@ describe("runPreparedReply media-only handling", () => {
       cap: 20,
       dropPolicy: "summarize",
     });
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("user request context");
 
     await runPreparedReply(
@@ -1940,18 +1948,18 @@ describe("runPreparedReply media-only handling", () => {
 
   it("queues active room events instead of interrupting active user requests", async () => {
     const queueSettings = await import("./queue/settings-runtime.js");
-    const piRuntime = await import("../../agents/pi-embedded.runtime.js");
+    const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "interrupt",
       debounceMs: 500,
       cap: 20,
       dropPolicy: "summarize",
     });
-    vi.mocked(piRuntime.resolveActiveEmbeddedRunSessionId)
+    vi.mocked(embeddedAgentRuntime.resolveActiveEmbeddedRunSessionId)
       .mockReturnValueOnce("active-session")
       .mockReturnValueOnce("active-session");
-    vi.mocked(piRuntime.isEmbeddedPiRunActive).mockReturnValueOnce(true);
-    vi.mocked(piRuntime.isEmbeddedPiRunStreaming).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunActive).mockReturnValueOnce(true);
+    vi.mocked(embeddedAgentRuntime.isEmbeddedAgentRunStreaming).mockReturnValueOnce(true);
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("room context");
 
     await runPreparedReply(
@@ -1982,8 +1990,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.shouldFollowup).toBe(true);
     expect(call.isActive).toBe(true);
     expect(call.resolvedQueue.mode).toBe("interrupt");
-    expect(piRuntime.abortEmbeddedPiRun).not.toHaveBeenCalled();
-    expect(piRuntime.waitForEmbeddedPiRunEnd).not.toHaveBeenCalled();
+    expect(embeddedAgentRuntime.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(embeddedAgentRuntime.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
   });
 
   it("keeps room events tool-only when group replies are automatic", async () => {

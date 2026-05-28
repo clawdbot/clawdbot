@@ -126,6 +126,14 @@ by package contract guardrails.
     | `plugin-sdk/channel-secret-runtime` | Narrow secret-contract helpers such as `collectSimpleChannelFieldAssignments`, `getChannelSurface`, `pushAssignment`, and secret target types |
   </Accordion>
 
+Deprecated channel helper families stay available only for published-plugin
+compatibility. The removal plan is: keep them through the external plugin
+migration window, keep repo/bundled plugins on `channel-inbound` and
+`channel-outbound`, then remove the compatibility subpaths in the next major
+SDK cleanup. This applies to the old channel message/runtime, channel
+streaming, direct-DM access, inbound helper splinter, reply-options,
+and pairing-path families.
+
   <Accordion title="Provider subpaths">
     | Subpath | Key exports |
     | --- | --- |
@@ -246,6 +254,7 @@ by package contract guardrails.
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |
     | `plugin-sdk/talk-config-runtime` | Talk provider config resolution helpers |
     | `plugin-sdk/json-store` | Small JSON state read/write helpers |
+    | `plugin-sdk/json-unsafe-integers` | JSON parsing helpers that preserve unsafe integer literals as strings |
     | `plugin-sdk/file-lock` | Re-entrant file-lock helpers |
     | `plugin-sdk/persistent-dedupe` | Disk-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
@@ -334,7 +343,7 @@ by package contract guardrails.
     | `plugin-sdk/memory-core` | Bundled memory-core helper surface for manager/config/file/CLI helpers |
     | `plugin-sdk/memory-core-engine-runtime` | Memory index/search runtime facade |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
-    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers |
+    | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers. `registerMemoryEmbeddingProvider` on this surface is deprecated; use the generic embedding provider API for new providers. |
     | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
     | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |

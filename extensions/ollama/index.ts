@@ -46,26 +46,10 @@ import { readProviderBaseUrl } from "./src/provider-base-url.js";
 import {
   createConfiguredOllamaCompatStreamWrapper,
   createConfiguredOllamaStreamFn,
-  isOllamaCompatProvider,
   resolveConfiguredOllamaProviderConfig,
 } from "./src/stream.js";
 import { createOllamaWebSearchProvider } from "./src/web-search-provider.js";
 import { checkWsl2CrashLoopRisk } from "./src/wsl2-crash-loop-check.js";
-
-function usesOllamaOpenAICompatTransport(model: {
-  api?: unknown;
-  provider?: unknown;
-  baseUrl?: unknown;
-}): boolean {
-  return (
-    model.api === "openai-completions" &&
-    isOllamaCompatProvider({
-      provider: typeof model.provider === "string" ? model.provider : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
-      api: "openai-completions",
-    })
-  );
-}
 
 function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
   return {
@@ -257,8 +241,6 @@ export default definePluginEntry({
         ctx.modelApi === "ollama"
           ? buildNativeOllamaReplayPolicy()
           : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
-      contributeResolvedModelCompat: ({ model }) =>
-        usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,
       resolveReasoningOutputMode: () => "native",
       resolveThinkingProfile: resolveOllamaThinkingProfile,
       wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,

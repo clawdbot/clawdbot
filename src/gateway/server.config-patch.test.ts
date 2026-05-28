@@ -212,7 +212,7 @@ describe("gateway config methods", () => {
             models: {
               providers: {
                 openai: {
-                  agentRuntime: { id: "pi" },
+                  agentRuntime: { id: "openclaw" },
                 },
               },
             },

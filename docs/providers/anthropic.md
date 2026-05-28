@@ -97,6 +97,14 @@ Anthropic's current public docs:
     Setup and runtime details for the Claude CLI backend are in [CLI Backends](/gateway/cli-backends).
     </Note>
 
+    <Warning>
+    Claude CLI reuse expects the OpenClaw process to run on the same host as the
+    Claude CLI login. Container installs such as [Podman](/install/podman) do
+    not mount host `~/.claude` into setup or runtime; use an Anthropic API key
+    there, or choose a provider with OpenClaw-managed OAuth such as
+    [OpenAI Codex](/providers/openai).
+    </Warning>
+
     ### Config example
 
     Prefer the canonical Anthropic model ref plus a CLI runtime override:

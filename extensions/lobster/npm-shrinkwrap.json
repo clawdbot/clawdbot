@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/lobster",
-  "version": "2026.5.26",
+  "version": "2026.5.28",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/lobster",
-      "version": "2026.5.26",
+      "version": "2026.5.28",
       "dependencies": {
         "@clawdbot/lobster": "2026.5.22",
         "typebox": "1.1.38"

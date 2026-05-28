@@ -1,14 +1,14 @@
-import { resetModelCatalogCache } from "../agents/model-catalog.js";
-import {
-  clearCurrentProviderAuthState,
-  warmCurrentProviderAuthState,
-} from "../agents/model-provider-auth.js";
-import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "../agents/pi-embedded-runner/run-state.js";
+} from "../agents/embedded-agent-runner/run-state.js";
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
+} from "../agents/model-provider-auth.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -500,7 +500,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
-    void warmCurrentProviderAuthState(nextConfig).catch((err) => {
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
     });
 

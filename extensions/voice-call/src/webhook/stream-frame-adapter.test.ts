@@ -44,6 +44,19 @@ describe("TwilioStreamFrameAdapter", () => {
     ).toEqual({ kind: "ignored" });
   });
 
+  it("ignores partial numeric media timestamps", () => {
+    const adapter = new TwilioStreamFrameAdapter();
+
+    expect(
+      adapter.parseInbound(
+        JSON.stringify({
+          event: "media",
+          media: { payload: "AAA=", timestamp: "20ms" },
+        }),
+      ),
+    ).toEqual({ kind: "media", payloadBase64: "AAA=" });
+  });
+
   it("serializes outbound frames with the streamSid captured at start", () => {
     const adapter = new TwilioStreamFrameAdapter();
     adapter.parseInbound(

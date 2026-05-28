@@ -2,12 +2,18 @@ import {
   resolveSessionStoreAgentId,
   resolveSessionStoreKey,
 } from "../../gateway/session-store-key.js";
+import { requiresFoldedSessionKeyAliasProof } from "../../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
-import { normalizeStoreSessionKey } from "./store-entry.js";
+import {
+  foldedSessionKeyAliasCandidates,
+  hasMismatchedCaseSensitiveDeliveryProof,
+  isConfirmedLowercasedLegacyAlias,
+  normalizeStoreSessionKey,
+} from "./store-entry.js";
 import { readSessionStoreSnapshot } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
@@ -91,7 +97,11 @@ function findSessionEntryInStore(
   let bestEntry: SessionEntry | undefined;
   let bestUpdatedAt = 0;
   let bestRoutable = false;
-  const acceptCandidate = (candidate: unknown) => {
+  let bestExact = false;
+  // Preference order: routable delivery context first; then Matrix/tail-preserved
+  // exact keys over folded aliases; then freshness. Ordinary lowercase-canonical
+  // channels keep the previous freshest-routable alias behavior.
+  const acceptCandidate = (candidate: unknown, isExact = false) => {
     if (!candidate) {
       return;
     }
@@ -101,34 +111,50 @@ function findSessionEntryInStore(
     if (
       !bestEntry ||
       (candidateRoutable && !bestRoutable) ||
-      (candidateRoutable === bestRoutable && candidateUpdatedAt > bestUpdatedAt)
+      (candidateRoutable === bestRoutable && isExact && !bestExact) ||
+      (candidateRoutable === bestRoutable &&
+        isExact === bestExact &&
+        candidateUpdatedAt > bestUpdatedAt)
     ) {
       bestEntry = entry;
       bestUpdatedAt = candidateUpdatedAt;
       bestRoutable = candidateRoutable;
+      bestExact = isExact;
     }
   };
   for (const key of keys) {
     const trimmed = key.trim();
     const normalized = normalizeStoreSessionKey(key);
-    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    const foldedLegacyKeys = foldedSessionKeyAliasCandidates(normalized);
+    const exactKeyWins = requiresFoldedSessionKeyAliasProof(normalized);
     let foundRoutableCandidate = false;
-    if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+    if (
+      Object.prototype.hasOwnProperty.call(store, normalized) &&
+      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[normalized]), normalized)
+    ) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(asSessionEntry(store[normalized])),
       );
-      acceptCandidate(store[normalized]);
+      acceptCandidate(store[normalized], exactKeyWins);
+    }
+    for (const foldedLegacyKey of foldedLegacyKeys) {
+      if (
+        !Object.prototype.hasOwnProperty.call(store, foldedLegacyKey) ||
+        !isConfirmedLowercasedLegacyAlias(asSessionEntry(store[foldedLegacyKey]), normalized)
+      ) {
+        continue;
+      }
+      const foldedLegacyEntry = asSessionEntry(store[foldedLegacyKey]);
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(foldedLegacyEntry),
+      );
+      acceptCandidate(foldedLegacyEntry);
     }
     if (
-      foldedLegacyKey !== normalized &&
-      Object.prototype.hasOwnProperty.call(store, foldedLegacyKey)
+      trimmed !== normalized &&
+      Object.prototype.hasOwnProperty.call(store, trimmed) &&
+      !hasMismatchedCaseSensitiveDeliveryProof(asSessionEntry(store[trimmed]), normalized)
     ) {
-      foundRoutableCandidate ||= hasRoutableDeliveryContext(
-        deliveryContextFromSession(asSessionEntry(store[foldedLegacyKey])),
-      );
-      acceptCandidate(store[foldedLegacyKey]);
-    }
-    if (trimmed !== normalized && Object.prototype.hasOwnProperty.call(store, trimmed)) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(asSessionEntry(store[trimmed])),
       );
@@ -137,9 +163,14 @@ function findSessionEntryInStore(
     if (trimmed !== normalized || !foundRoutableCandidate) {
       normalizedIndex ??= buildFreshestSessionEntryIndex(store);
       const freshest = normalizedIndex.get(normalized);
-      acceptCandidate(freshest);
-      if (foldedLegacyKey !== normalized) {
-        acceptCandidate(normalizedIndex.get(foldedLegacyKey));
+      if (!hasMismatchedCaseSensitiveDeliveryProof(freshest, normalized)) {
+        acceptCandidate(freshest);
+      }
+      for (const foldedLegacyKey of foldedLegacyKeys) {
+        const foldedFreshest = normalizedIndex.get(foldedLegacyKey);
+        if (isConfirmedLowercasedLegacyAlias(foldedFreshest, normalized)) {
+          acceptCandidate(foldedFreshest);
+        }
       }
     }
   }
@@ -167,7 +198,7 @@ function buildFreshestSessionEntryIndex(
       index.set(normalized, entry);
     }
     const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
-    if (foldedLegacyKey === normalized) {
+    if (foldedLegacyKey === normalized || requiresFoldedSessionKeyAliasProof(normalized)) {
       continue;
     }
     const foldedExisting = index.get(foldedLegacyKey);

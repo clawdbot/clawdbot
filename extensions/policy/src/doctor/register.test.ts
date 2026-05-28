@@ -1512,7 +1512,7 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("normalizes model provider refs before deny policy comparison", async () => {
+  it("compares canonical model provider refs for deny policy checks", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
@@ -1544,19 +1544,13 @@ describe("registerPolicyDoctorChecks", () => {
       expect.objectContaining({
         checkId: "policy/models-denied-provider",
         severity: "error",
-        ocPath: "oc://openclaw.config/models/providers/aws-bedrock",
-        requirement: "oc://policy.jsonc/models/providers/deny",
-      }),
-      expect.objectContaining({
-        checkId: "policy/models-denied-provider",
-        severity: "error",
         ocPath: "oc://openclaw.config/agents/defaults/model",
         requirement: "oc://policy.jsonc/models/providers/deny",
       }),
     ]);
   });
 
-  it("normalizes model provider refs before allow policy comparison", async () => {
+  it("compares canonical model provider refs for allow policy checks", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     const cfg = {
       ...cfgWithPolicy(),
@@ -1584,7 +1578,14 @@ describe("registerPolicyDoctorChecks", () => {
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
-    expect(result.findings).toEqual([]);
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/models-unapproved-provider",
+        severity: "error",
+        ocPath: "oc://openclaw.config/models/providers/aws-bedrock",
+        requirement: "oc://policy.jsonc/models/providers/allow",
+      }),
+    ]);
   });
 
   it("reports model refs outside the policy allowlist", async () => {

@@ -1,5 +1,5 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
-import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/run-state.js";
+import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { ChannelRuntimeSurface } from "../channels/plugins/channel-runtime-surface.types.js";
 import {
@@ -18,7 +18,6 @@ import {
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { isNixMode, normalizeStateDirEnv } from "../config/paths.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,10 +38,7 @@ import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
-import {
-  getCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "../plugins/current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -85,6 +81,7 @@ import {
   resumeGatewayRestartTraceFromEnv,
   resumeGatewayRestartTraceFromHandoff,
 } from "./restart-trace.js";
+import { resolveGatewayPluginConfig } from "./runtime-plugin-config.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -842,16 +839,9 @@ export async function startGatewayServer(
   const channelManager = createChannelManager({
     getRuntimeConfig: () => {
       const runtimeConfig = getRuntimeConfig();
-      const currentSnapshot = getCurrentPluginMetadataSnapshot({
+      return resolveGatewayPluginConfig({
         config: runtimeConfig,
-        env: process.env,
       });
-      return applyPluginAutoEnable({
-        config: runtimeConfig,
-        env: process.env,
-        manifestRegistry: currentSnapshot?.manifestRegistry,
-        discovery: currentSnapshot?.discovery,
-      }).config;
     },
     channelLogs,
     channelRuntimeEnvs,

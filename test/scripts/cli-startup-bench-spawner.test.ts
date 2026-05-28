@@ -19,6 +19,20 @@ describe("CLI startup benchmark script spawners", () => {
     }
   });
 
+  it("builds the source CLI before generating a startup budget report", () => {
+    const source = fs.readFileSync(
+      path.resolve(process.cwd(), "scripts/test-cli-startup-bench-budget.mjs"),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      'spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"]',
+    );
+    expect(source.indexOf("scripts/ensure-cli-startup-build.mjs")).toBeLessThan(
+      source.indexOf("scripts/bench-cli-startup.ts"),
+    );
+  });
+
   it("does not require unrelated fixture cases for a narrowed preset", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-budget-test-"));
     try {

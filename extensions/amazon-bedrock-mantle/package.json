@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/amazon-bedrock-mantle-provider",
-  "version": "2026.5.26",
-  "description": "OpenClaw Amazon Bedrock Mantle (OpenAI-compatible) provider plugin",
+  "version": "2026.5.28",
+  "description": "OpenClaw Amazon Bedrock Mantle provider plugin for OpenAI-compatible model routing.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
@@ -9,8 +9,7 @@
   "type": "module",
   "dependencies": {
     "@anthropic-ai/sdk": "0.98.0",
-    "@aws/bedrock-token-generator": "1.1.0",
-    "@earendil-works/pi-ai": "0.75.5"
+    "@aws/bedrock-token-generator": "1.1.0"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -25,10 +24,10 @@
       "minHostVersion": ">=2026.5.12-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.5.26"
+      "pluginApi": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.5.26",
+      "openclawVersion": "2026.5.28",
       "bundledDist": false
     },
     "release": {

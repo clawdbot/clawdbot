@@ -4,6 +4,7 @@ import { MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION } from "./app-server/version.j
 
 type CodexPackageManifest = {
   dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
 };
 
 describe("codex package manifest", () => {
@@ -12,7 +13,7 @@ describe("codex package manifest", () => {
       fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
     ) as CodexPackageManifest;
 
-    expect(packageJson.dependencies).toHaveProperty("@earendil-works/pi-coding-agent");
+    expect(packageJson.devDependencies).toHaveProperty("@openclaw/plugin-sdk");
     expect(packageJson.dependencies?.["@openai/codex"]).toBe(
       MANAGED_CODEX_APP_SERVER_PACKAGE_VERSION,
     );

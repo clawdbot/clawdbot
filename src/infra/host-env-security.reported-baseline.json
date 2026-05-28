@@ -67,6 +67,10 @@
     "MYVIMRC",
     "NODE_OPTIONS",
     "NODE_PATH",
+    "NODE_REDIRECT_WARNINGS",
+    "NODE_REPL_EXTERNAL_MODULE",
+    "NODE_REPL_HISTORY",
+    "NODE_V8_COVERAGE",
     "PACKER_PLUGIN_PATH",
     "PERL5LIB",
     "PERL5OPT",
@@ -244,5 +248,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 239
+  "expectedTotalReportedEntries": 243
 }

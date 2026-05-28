@@ -112,16 +112,14 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
     ).toEqual(["anthropic"]);
   });
 
-  it("normalizes provider aliases through plugin metadata owners", () => {
+  it("does not resolve provider aliases through plugin metadata owners", () => {
     const snapshot = {
       owners: metadataOwners({
         providers: new Map([["volcengine", ["volcengine"]]]),
       }),
     };
 
-    expect(resolvePluginMetadataProviderOwnersForTest(snapshot, "bytedance")).toEqual([
-      "volcengine",
-    ]);
+    expect(resolvePluginMetadataProviderOwnersForTest(snapshot, "bytedance")).toBeUndefined();
     expect(
       resolveProviderDiscoveryFilterForTest({
         env: liveFilterEnv({
@@ -130,7 +128,7 @@ describe("resolveProviderDiscoveryFilterForTest", () => {
         }),
         resolveOwners: (provider) => resolvePluginMetadataProviderOwnersForTest(snapshot, provider),
       }),
-    ).toEqual(["volcengine"]);
+    ).toEqual(["bytedance"]);
   });
 
   it("scopes normal startup discovery to requested provider owners", () => {

@@ -1,11 +1,11 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import { providerSupportsNativePdfDocument } from "../../media-understanding/defaults.js";
-import { extractAssistantText } from "../pi-embedded-utils.js";
+import { extractAssistantText } from "../embedded-agent-utils.js";
 
 export type PdfModelConfig = { primary?: string; fallbacks?: string[] };
 

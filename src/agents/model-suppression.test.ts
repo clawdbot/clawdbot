@@ -55,7 +55,7 @@ describe("model suppression", () => {
       mocks.buildManifestBuiltInModelSuppressionResolver.mockReset();
     });
 
-    it("creates a reusable manifest resolver with normalized provider and model ids", () => {
+    it("creates a reusable manifest resolver with lowercase provider and model ids", () => {
       const resolver = vi
         .fn()
         .mockReturnValueOnce({ suppress: true, errorMessage: "manifest suppression" })
@@ -73,11 +73,11 @@ describe("model suppression", () => {
         env: process.env,
       });
       expect(resolver).toHaveBeenNthCalledWith(1, {
-        provider: "amazon-bedrock",
+        provider: "bedrock",
         id: "claude-3",
       });
       expect(resolver).toHaveBeenNthCalledWith(2, {
-        provider: "amazon-bedrock",
+        provider: "aws-bedrock",
         id: "claude-4",
       });
     });

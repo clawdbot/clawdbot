@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -52,7 +52,7 @@ vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
 }));
 
-vi.mock("../../agents/pi-tools.js", () => ({
+vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 

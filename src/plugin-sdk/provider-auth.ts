@@ -152,8 +152,9 @@ function parseCopilotTokenResponse(value: unknown): {
   if (typeof expiresAt === "number" && Number.isFinite(expiresAt)) {
     expiresAtMs = expiresAt < 100_000_000_000 ? expiresAt * 1000 : expiresAt;
   } else if (typeof expiresAt === "string" && expiresAt.trim().length > 0) {
-    const parsed = Number.parseInt(expiresAt, 10);
-    if (!Number.isFinite(parsed)) {
+    const trimmed = expiresAt.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isSafeInteger(parsed)) {
       throw new Error("Copilot token response has invalid expires_at");
     }
     expiresAtMs = parsed < 100_000_000_000 ? parsed * 1000 : parsed;

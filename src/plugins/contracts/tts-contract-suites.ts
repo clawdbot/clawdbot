@@ -1,4 +1,3 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createEmptyPluginRegistry,
@@ -8,6 +7,7 @@ import {
 import type { ResolvedTtsConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech-core";
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMessage } from "../../llm/types.js";
 import { resolveWorkspacePackagePublicModuleUrl } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 
 type TtsRuntimeModule = typeof import("openclaw/plugin-sdk/tts-runtime");
@@ -23,7 +23,7 @@ let ttsRuntime: TtsRuntimeModule;
 let ttsRuntimePromise: Promise<TtsRuntimeModule> | null = null;
 let ttsRuntimeInitialized = false;
 let ttsCorePromise: Promise<TtsCoreModule> | null = null;
-let completeSimple: typeof import("@earendil-works/pi-ai").completeSimple;
+let completeSimple: typeof import("openclaw/plugin-sdk/llm").completeSimple;
 let getApiKeyForModelMock: SummarizeTextDeps["getApiKeyForModel"];
 let requireApiKeyMock: SummarizeTextDeps["requireApiKey"];
 let resolveModelAsyncMock: SummarizeTextDeps["resolveModelAsync"];
@@ -42,7 +42,7 @@ let sanitizeTtsErrorForLog: TtsRuntimeModule["testApi"]["sanitizeTtsErrorForLog"
 const SPEECH_PROVIDER_ENV_KEYS = [
   ...new Set(
     pluginRegistrationContractRegistry.flatMap((entry) =>
-      entry.speechProviderIds.flatMap((providerId) => entry.providerAuthEnvVars[providerId] ?? []),
+      entry.speechProviderIds.flatMap((providerId) => entry.providerEnvVars[providerId] ?? []),
     ),
   ),
 ].toSorted((left, right) => left.localeCompare(right));
@@ -70,28 +70,15 @@ async function withIsolatedSpeechProviderEnvAsync<T>(
   return await withEnvAsync(isolatedSpeechProviderEnv(overrides), fn);
 }
 
-vi.mock("@earendil-works/pi-ai", async () => {
-  const actual =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("openclaw/plugin-sdk/llm", () => {
   const getApiProvider = vi.fn(() => undefined);
   return {
-    ...actual,
     completeSimple: vi.fn(),
     createAssistantMessageEventStream: vi.fn(),
     getApiProvider,
     getModel: vi.fn(),
     registerApiProvider: vi.fn(),
-    streamAnthropic: vi.fn(),
     streamSimple: vi.fn(),
-    streamSimpleOpenAICompletions: vi.fn(),
-  };
-});
-
-vi.mock("@earendil-works/pi-ai/oauth", () => {
-  return {
-    getOAuthProviders: () => [],
-    getOAuthApiKey: vi.fn(async () => null),
-    loginOpenAICodex: vi.fn(),
   };
 });
 
@@ -507,7 +494,7 @@ function createResolvedSummarizationConfig(cfg: OpenClawConfig): ResolvedTtsConf
 
 async function setupSummarizationMocks() {
   ({ summarizeText: summarizeTextCore } = await loadTtsCore());
-  ({ completeSimple } = await import("@earendil-works/pi-ai"));
+  ({ completeSimple } = await import("openclaw/plugin-sdk/llm"));
   getApiKeyForModelMock = vi.fn() as SummarizeTextDeps["getApiKeyForModel"];
   requireApiKeyMock = vi.fn() as SummarizeTextDeps["requireApiKey"];
   resolveModelAsyncMock = vi.fn() as SummarizeTextDeps["resolveModelAsync"];

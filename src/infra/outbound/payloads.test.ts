@@ -78,6 +78,9 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       normalizeReplyPayloadsForDelivery([
         { text: "NO_REPLY" },
         { text: "NO_REPLY\n\nNO_REPLY" },
+        {
+          text: "<think>Cav is talking about a follow-up conversation.</think>\nI will stay quiet here.NO_REPLY",
+        },
         { text: "Reasoning:\n_step_", isReasoning: true },
         { text: "final answer" },
       ]),

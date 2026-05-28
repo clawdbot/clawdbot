@@ -117,7 +117,6 @@ describe("channelsHandlers channels.start", () => {
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
-      env: process.env,
     });
     expect(startChannel).toHaveBeenCalledWith("whatsapp", "default-account");
     expect(respond).toHaveBeenCalledWith(

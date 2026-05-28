@@ -120,7 +120,11 @@ async function applyLocalStatusRpcFallback(params: {
   };
   timeoutMs: number;
   timeoutMsExplicit: boolean;
+  enabled?: boolean;
 }): Promise<GatewayProbeResult | null> {
+  if (params.enabled === false) {
+    return params.gatewayProbe;
+  }
   if (!shouldTryLocalStatusRpcFallback(params)) {
     return params.gatewayProbe;
   }
@@ -148,13 +152,17 @@ async function applyLocalStatusRpcFallback(params: {
     ...params.gatewayProbe,
     ok: true,
     status,
-    auth:
-      auth.capability === "unknown"
-        ? {
-            ...auth,
-            capability: "read_only",
-          }
-        : auth,
+    ...(auth
+      ? {
+          auth:
+            auth.capability === "unknown"
+              ? {
+                  ...auth,
+                  capability: "read_only",
+                }
+              : auth,
+        }
+      : {}),
   };
 }
 
@@ -193,6 +201,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     probeWhenRemoteUrlMissing?: boolean;
     resolveAuthWhenRemoteUrlMissing?: boolean;
     mergeAuthWarningIntoProbeError?: boolean;
+    localStatusRpcFallback?: boolean;
   };
 }): Promise<GatewayProbeSnapshot> {
   const gatewayConnection = buildGatewayConnectionDetailsWithResolvers({ config: params.cfg });
@@ -236,6 +245,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuth: gatewayProbeAuthResolution.auth,
     timeoutMs: probeTimeoutMs,
     timeoutMsExplicit,
+    enabled: params.opts.localStatusRpcFallback !== false,
   });
   if (
     (params.opts.mergeAuthWarningIntoProbeError ?? true) &&

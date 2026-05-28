@@ -578,16 +578,12 @@ export async function discoverBedrockModels(params: {
 }
 
 export async function resolveImplicitBedrockProvider(params: {
-  config?: { models?: { bedrockDiscovery?: BedrockDiscoveryConfig } };
   pluginConfig?: { discovery?: BedrockDiscoveryConfig };
   env?: NodeJS.ProcessEnv;
   clientFactory?: (region: string) => BedrockClient;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
-  const discoveryConfig = {
-    ...params.config?.models?.bedrockDiscovery,
-    ...params.pluginConfig?.discovery,
-  };
+  const discoveryConfig = params.pluginConfig?.discovery;
   const enabled = discoveryConfig?.enabled;
   const hasAwsCreds = resolveBedrockConfigApiKey(env) !== undefined;
   if (enabled === false) {

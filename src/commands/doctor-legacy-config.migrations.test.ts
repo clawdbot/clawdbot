@@ -6,6 +6,14 @@ import type { OpenClawConfig } from "../config/config.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
 vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupCliBackend: () => undefined,
+  resolvePluginSetupRegistry: () => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  }),
   runPluginSetupConfigMigrations: ({ config }: { config: OpenClawConfig }) => ({
     config,
     changes: [],
@@ -176,6 +184,55 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes.some((change) => change.includes("messages.groupChat.visibleReplies"))).toBe(
       false,
     );
+  });
+
+  it("removes bindings for missing configured agents", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        list: [{ id: "Team Ops" }],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "team-ops",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-2" } },
+        },
+      ],
+    });
+
+    expect(res.config.bindings).toEqual([
+      {
+        type: "route",
+        agentId: "team-ops",
+        match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+      },
+    ]);
+    expect(res.changes).toContain("Removed 1 binding that referenced missing agents.list ids.");
+  });
+
+  it("does not prune bindings from malformed agent entries", () => {
+    const config = {
+      agents: {
+        list: [null],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "ghost",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    } as unknown as OpenClawConfig;
+
+    const res = normalizeCompatibilityConfigValues(config);
+
+    expect(res.config.bindings).toEqual(config.bindings);
+    expect(res.changes).not.toContain("Removed 1 binding that referenced missing agents.list ids.");
   });
 
   it("does not set group visible replies without channels or when already explicit", () => {
@@ -680,7 +737,7 @@ describe("normalizeCompatibilityConfigValues", () => {
             agentRuntime: { id: "claude-cli" },
             model: "anthropic/claude-opus-4-7",
             models: {
-              "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
             },
           },
         ],
@@ -689,7 +746,7 @@ describe("normalizeCompatibilityConfigValues", () => {
 
     expect(res.config.agents?.list?.[0]?.agentRuntime).toEqual({ id: "claude-cli" });
     expect(res.config.agents?.list?.[0]?.models).toEqual({
-      "anthropic/claude-opus-4-7": { agentRuntime: { id: "pi" } },
+      "anthropic/claude-opus-4-7": { agentRuntime: { id: "openclaw" } },
     });
     expect(res.changes).toStrictEqual([]);
   });

@@ -6,11 +6,20 @@
   "enabledByDefault": true,
   "legacyPluginIds": ["minimax-portal-auth"],
   "providers": ["minimax", "minimax-portal"],
+  "providerCatalogEntry": "./provider-discovery.ts",
   "autoEnableWhenConfiguredProviders": ["minimax", "minimax-portal"],
   "nonSecretAuthMarkers": ["minimax-oauth"],
-  "providerAuthEnvVars": {
-    "minimax": ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"],
-    "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "minimax",
+        "envVars": ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"]
+      },
+      {
+        "id": "minimax-portal",
+        "envVars": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"]
+      }
+    ]
   },
   "providerAuthAliases": {
     "minimax-cn": "minimax",

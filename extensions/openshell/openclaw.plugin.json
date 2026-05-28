@@ -4,7 +4,7 @@
     "onStartup": true
   },
   "name": "OpenShell Sandbox",
-  "description": "Sandbox backend powered by the NVIDIA OpenShell CLI with mirrored local workspaces and SSH-based command execution.",
+  "description": "OpenClaw sandbox backend for the NVIDIA OpenShell CLI with mirrored local workspaces and SSH command execution.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

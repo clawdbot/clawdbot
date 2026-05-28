@@ -2,8 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
-import type { ImageContent } from "@earendil-works/pi-ai";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
@@ -13,6 +11,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import type { ImageContent } from "../../llm/types.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
@@ -20,9 +19,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
+import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
+import { detectImageReferences, loadImageFromRef } from "../embedded-agent-runner/run/images.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
-import type { EmbeddedContextFile } from "../pi-embedded-helpers.js";
-import { detectImageReferences, loadImageFromRef } from "../pi-embedded-runner/run/images.js";
+import type { AgentTool } from "../runtime/index.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { stripSystemPromptCacheBoundary } from "../system-prompt-cache-boundary.js";
@@ -68,6 +68,7 @@ export function resolveCliRunQueueKey(params: {
 
 export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
+  cwd?: string;
   config?: OpenClawConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
@@ -83,6 +84,7 @@ export function buildCliAgentSystemPrompt(params: {
   modelDisplay: string;
   agentId?: string;
 }) {
+  const runtimeWorkspaceDir = params.cwd?.trim() || params.workspaceDir;
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.config ?? {},
     agentId: params.agentId,
@@ -91,8 +93,8 @@ export function buildCliAgentSystemPrompt(params: {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
-    cwd: process.cwd(),
+    workspaceDir: runtimeWorkspaceDir,
+    cwd: runtimeWorkspaceDir,
     runtime: {
       host: "openclaw",
       os: `${os.type()} ${os.release()}`,
@@ -106,7 +108,7 @@ export function buildCliAgentSystemPrompt(params: {
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
     agentId: params.agentId,
-    workspaceDir: params.workspaceDir,
+    workspaceDir: runtimeWorkspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -398,7 +400,11 @@ export function buildCliArgs(params: {
         params.systemPromptFilePath,
       ),
     );
-  } else if ((!params.useResume || params.backend.systemPromptWhen === "always") && params.systemPrompt && params.backend.systemPromptArg) {
+  } else if (
+    (!params.useResume || params.backend.systemPromptWhen === "always") &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, stripSystemPromptCacheBoundary(params.systemPrompt));
   }
   if (!params.useResume && params.sessionId) {

@@ -139,7 +139,7 @@ export {
   hasVisibleInboundReplyDispatch,
   recordChannelBotPairLoopAndCheckSuppression,
   resolveInboundReplyDispatchCounts,
-} from "./inbound-reply-dispatch.js";
+} from "../channels/message/inbound-reply-dispatch.js";
 export type {
   AssembledInboundReply,
   ChannelBotLoopProtectionFacts,
@@ -148,7 +148,7 @@ export type {
   PreparedInboundReply,
   InboundReplyDispatchResult,
   InboundReplyRecordOptions,
-} from "./inbound-reply-dispatch.js";
+} from "../channels/message/inbound-reply-dispatch.js";
 
 export {
   toHistoryMediaEntries,

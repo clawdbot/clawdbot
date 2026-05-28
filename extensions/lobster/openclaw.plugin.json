@@ -4,7 +4,7 @@
     "onStartup": true
   },
   "name": "Lobster",
-  "description": "Typed workflow tool with resumable approvals.",
+  "description": "Lobster workflow tool plugin for typed pipelines and resumable approvals.",
   "contracts": {
     "tools": ["lobster"]
   },

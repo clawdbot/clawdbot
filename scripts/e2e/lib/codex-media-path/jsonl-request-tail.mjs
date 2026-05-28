@@ -13,7 +13,7 @@ function readSlice(filePath, start, length) {
   }
   const fd = fs.openSync(filePath, "r");
   try {
-    const buffer = Buffer.allocUnsafe(length);
+    const buffer = Buffer.alloc(length);
     const bytesRead = fs.readSync(fd, buffer, 0, length, start);
     return buffer.subarray(0, bytesRead).toString("utf8");
   } finally {

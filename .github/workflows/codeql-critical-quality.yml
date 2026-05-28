@@ -71,7 +71,9 @@ on:
       - "src/acp/control-plane/**"
       - "src/agents/cli-runner/**"
       - "src/agents/command/**"
-      - "src/agents/pi-embedded-runner/**"
+      - "src/agents/embedded-agent-runner/**"
+      - "src/agents/sessions/**"
+      - "src/agents/sessions/tools/**"
       - "src/agents/tools/**"
       - "src/agents/*completion*.ts"
       - "src/agents/*transport*.ts"
@@ -222,7 +224,15 @@ jobs:
                   network_runtime=true
                   session_diagnostics=true
                   ;;
-                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
+                src/agents/sessions/tools/*)
+                  agent=true
+                  mcp_process=true
+                  ;;
+                src/agents/sessions/*auth*.ts|src/agents/sessions/**/*auth*.ts)
+                  agent=true
+                  core_auth_secrets=true
+                  ;;
+                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/embedded-agent-runner/*|src/agents/sessions/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
                   agent=true
                   ;;
                 src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)

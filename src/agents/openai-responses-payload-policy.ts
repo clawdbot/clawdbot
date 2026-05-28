@@ -268,8 +268,9 @@ function parsePositiveInteger(value: unknown): number | undefined {
     return Math.floor(value);
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed) && parsed > 0) {
+    const trimmed = value.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
       return parsed;
     }
   }

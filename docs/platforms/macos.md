@@ -47,6 +47,8 @@ Replace the label with `ai.openclaw.<profile>` when running a named profile.
 If the LaunchAgent isn't installed, enable it from the app or run
 `openclaw gateway install`.
 
+If the gateway repeatedly disappears for minutes to hours and only resumes when you touch the Control UI or SSH into the host, see the troubleshooting note for macOS Maintenance Sleep / `ENETDOWN` crashes and launchd's respawn-protection gate in [Gateway troubleshooting](/gateway/troubleshooting#macos-gateway-silently-stops-responding-then-resumes-when-you-touch-the-dashboard).
+
 ## Node capabilities (mac)
 
 The macOS app presents itself as a node. Common commands:
@@ -105,7 +107,7 @@ Notes:
 - `allowlist` entries are glob patterns for resolved binary paths, or bare command names for PATH-invoked commands.
 - Raw shell command text that contains shell control or expansion syntax (`&&`, `||`, `;`, `|`, `` ` ``, `$`, `<`, `>`, `(`, `)`) is treated as an allowlist miss and requires explicit approval (or allowlisting the shell binary).
 - Choosing "Always Allow" in the prompt adds that command to the allowlist.
-- `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`) and then merged with the app's environment.
+- `system.run` environment overrides are filtered (drops `PATH`, `DYLD_*`, `LD_*`, `NODE_OPTIONS`, `NODE_REDIRECT_WARNINGS`, `NODE_REPL_EXTERNAL_MODULE`, `NODE_REPL_HISTORY`, `NODE_V8_COVERAGE`, `PYTHON*`, `PERL*`, `RUBYOPT`, `SHELLOPTS`, `PS4`) and then merged with the app's environment.
 - For shell wrappers (`bash|sh|zsh ... -c/-lc`), request-scoped environment overrides are reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`, `NO_COLOR`, `FORCE_COLOR`).
 - For allow-always decisions in allowlist mode, known dispatch wrappers (`env`, `nice`, `nohup`, `stdbuf`, `timeout`) persist inner executable paths instead of wrapper paths. If unwrapping is not safe, no allowlist entry is persisted automatically.
 

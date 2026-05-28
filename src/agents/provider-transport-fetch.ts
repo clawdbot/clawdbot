@@ -1,4 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -10,6 +9,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
@@ -192,7 +192,7 @@ function sanitizeOpenAISdkSseResponse(
   });
 }
 
-function shouldSanitizeOpenAISdkSseResponse(model: Model<Api>): boolean {
+function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
   if (model.provider !== "openai") {
     return true;
   }
@@ -234,8 +234,9 @@ async function requestBodyHasStreamTrue(
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
-    const milliseconds = Number.parseFloat(retryAfterMs);
-    if (Number.isFinite(milliseconds) && milliseconds >= 0) {
+    const trimmedRetryAfterMs = retryAfterMs.trim();
+    const milliseconds = Number(trimmedRetryAfterMs);
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs) && Number.isFinite(milliseconds)) {
       return milliseconds / 1000;
     }
   }
@@ -245,8 +246,8 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
+  const seconds = Number(retryAfter.trim());
+  if (/^\d+$/.test(retryAfter.trim()) && Number.isFinite(seconds) && seconds >= 0) {
     return seconds;
   }
 
@@ -268,7 +269,7 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(raw);
+  const seconds = Number(raw);
   if (Number.isFinite(seconds) && seconds > 0) {
     return seconds;
   }
@@ -357,7 +358,7 @@ function buildManagedResponse(
   });
 }
 
-function resolveModelRequestPolicy(model: Model<Api>) {
+function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
   let explicitDebugProxyUrl: string | undefined;
   if (debugProxy.enabled && debugProxy.proxyUrl) {
@@ -388,7 +389,7 @@ function resolveModelRequestPolicy(model: Model<Api>) {
 }
 
 export function resolveModelRequestTimeoutMs(
-  model: Model<Api>,
+  model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
@@ -398,6 +399,20 @@ export function resolveModelRequestTimeoutMs(
   return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
     ? Math.floor(modelTimeoutMs)
     : undefined;
+}
+
+function buildModelRequestSignal(
+  baseSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  if (timeoutMs === undefined) {
+    return baseSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!baseSignal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([baseSignal, timeoutSignal]);
 }
 
 function resolveHttpOrigin(value: unknown): string | undefined {
@@ -463,7 +478,7 @@ function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
 }
 
 function resolveModelTransportSsrFPolicy(params: {
-  model: Model<Api>;
+  model: Model;
   url: string;
   allowPrivateNetwork?: boolean;
   trustConfiguredBaseUrlOrigin?: boolean;
@@ -493,7 +508,7 @@ function resolveModelTransportSsrFPolicy(params: {
 }
 
 export function buildGuardedModelFetch(
-  model: Model<Api>,
+  model: Model,
   timeoutMs?: number,
   options?: { sanitizeSse?: boolean },
 ): typeof fetch {
@@ -551,10 +566,13 @@ export function buildGuardedModelFetch(
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, requestInit ?? init);
+    const baseInit = requestInit ?? init;
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
+    const baseSignal = baseInit?.signal ?? undefined;
+    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
-      init: requestInit ?? init,
+      init: baseInit,
       capture: {
         meta: {
           provider: model.provider,
@@ -564,6 +582,7 @@ export function buildGuardedModelFetch(
       },
       dispatcherPolicy,
       timeoutMs: requestTimeoutMs,
+      ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
@@ -575,15 +594,15 @@ export function buildGuardedModelFetch(
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${(requestInit ?? init)?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        (requestInit ?? init)?.headers,
-        (requestInit ?? init)?.signal,
+        baseInit?.headers,
+        localServiceSignal,
       );
       result = await fetchWithSsrFGuard(
         useEnvProxy

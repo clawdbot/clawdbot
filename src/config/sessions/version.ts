@@ -1,0 +1,1 @@
+export const CURRENT_SESSION_VERSION = 3;

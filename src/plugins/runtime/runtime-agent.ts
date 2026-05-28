@@ -24,8 +24,8 @@ import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/l
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
-const loadEmbeddedPiRuntime = createLazyRuntimeModule(
-  () => import("./runtime-embedded-pi.runtime.js"),
+const loadEmbeddedAgentRuntime = createLazyRuntimeModule(
+  () => import("./runtime-embedded-agent.runtime.js"),
 );
 
 function resolveRuntimeThinkingCatalog(
@@ -68,10 +68,12 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     Partial<Pick<PluginRuntime["agent"], "runEmbeddedAgent" | "runEmbeddedPiAgent" | "session">>;
 
   defineCachedValue(agentRuntime, "runEmbeddedAgent", () =>
-    createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedAgent),
+    createLazyRuntimeMethod(loadEmbeddedAgentRuntime, (runtime) => runtime.runEmbeddedAgent),
   );
-  defineCachedValue(agentRuntime, "runEmbeddedPiAgent", () =>
-    createLazyRuntimeMethod(loadEmbeddedPiRuntime, (runtime) => runtime.runEmbeddedPiAgent),
+  defineCachedValue(
+    agentRuntime,
+    "runEmbeddedPiAgent",
+    () => (agentRuntime as PluginRuntime["agent"]).runEmbeddedAgent,
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath,

@@ -210,6 +210,12 @@ export const doctorHealthConversionRules = [
     rule: "Return oversized bootstrap files as path findings.",
   },
   {
+    contributionId: "doctor:heartbeat-template-repair",
+    conversion: "repair-backed-detect",
+    target: ["core/doctor/heartbeat-template-repair"],
+    rule: "Detect legacy docs-wrapped heartbeat templates; repair only pure template wrappers and preserve user-authored heartbeat content.",
+  },
+  {
     contributionId: "doctor:shell-completion",
     conversion: "interactive-maintenance",
     target: ["core/doctor/shell-completion"],

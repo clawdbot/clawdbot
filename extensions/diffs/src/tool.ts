@@ -159,6 +159,7 @@ export function createDiffsTool(params: {
   store: DiffArtifactStore;
   defaults: DiffToolDefaults;
   viewerBaseUrl?: string;
+  languagePackAvailable?: boolean;
   screenshotter?: DiffScreenshotter;
   context?: OpenClawPluginToolContext;
 }): AnyAgentTool {
@@ -198,6 +199,7 @@ export function createDiffsTool(params: {
           },
           image,
           expandUnchanged,
+          languagePackAvailable: params.languagePackAvailable,
         },
         renderTarget,
       );

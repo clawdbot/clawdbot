@@ -12,11 +12,10 @@ export type MediaGenerationCatalogSource = Extract<
   "static" | "live" | "cache" | "configured"
 >;
 
-export type MediaGenerationCatalogEntry<TCapabilities = unknown> =
-  UnifiedModelCatalogEntry<TCapabilities> & {
-    kind: MediaGenerationCatalogKind;
-    source: MediaGenerationCatalogSource;
-  };
+export type MediaGenerationCatalogEntry<TCapabilities> = UnifiedModelCatalogEntry<TCapabilities> & {
+  kind: MediaGenerationCatalogKind;
+  source: MediaGenerationCatalogSource;
+};
 
 export type MediaGenerationCatalogProvider<TCapabilities = unknown> = {
   id: string;

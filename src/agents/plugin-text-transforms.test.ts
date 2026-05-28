@@ -1,10 +1,10 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
   type Context,
   type Model,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   applyPluginTextReplacements,

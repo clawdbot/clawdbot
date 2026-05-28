@@ -60,8 +60,13 @@
       "tencent-tokenhub": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "tencent-tokenhub": ["TOKENHUB_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "tencent-tokenhub",
+        "envVars": ["TOKENHUB_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

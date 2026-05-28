@@ -1,6 +1,6 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readNumberParam,
   readStringArrayParam,

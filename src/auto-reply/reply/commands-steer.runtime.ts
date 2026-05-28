@@ -1,7 +1,7 @@
 export {
-  formatEmbeddedPiQueueFailureSummary,
-  isEmbeddedPiRunActive,
-  queueEmbeddedPiMessage,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  formatEmbeddedAgentQueueFailureSummary,
+  isEmbeddedAgentRunActive,
+  queueEmbeddedAgentMessage,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-} from "../../agents/pi-embedded-runner/runs.js";
+} from "../../agents/embedded-agent-runner/runs.js";

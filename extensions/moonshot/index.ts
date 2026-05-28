@@ -20,6 +20,7 @@ export default defineSingleProviderPluginEntry({
   provider: {
     label: "Moonshot",
     docsPath: "/providers/moonshot",
+    aliases: ["moonshotai", "moonshot-ai"],
     auth: [
       {
         methodId: "api-key",

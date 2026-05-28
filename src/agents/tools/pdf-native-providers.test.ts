@@ -112,6 +112,69 @@ describe("native PDF provider API calls", () => {
     ).rejects.toThrow("Anthropic PDF request failed");
   });
 
+  it("bounds large Anthropic API error bodies", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mockFetchResponse(
+      new Response(body, {
+        status: 400,
+        statusText: "Bad Request",
+      }),
+    );
+
+    const error = await pdfNativeProviders
+      .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
+      .catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Anthropic PDF request to throw an Error");
+    }
+    expect(error.message).toContain("Anthropic PDF request failed");
+    expect(error.message).not.toContain("tail-marker");
+    expect(error.message.length).toBeLessThan(500);
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels Anthropic API error bodies that exactly fill the byte cap", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("x".repeat(8 * 1024)));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mockFetchResponse(
+      new Response(body, {
+        status: 400,
+        statusText: "Bad Request",
+      }),
+    );
+
+    const error = await Promise.race([
+      pdfNativeProviders
+        .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
+        .catch((caught: unknown) => caught),
+      new Promise<Error>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("timed out waiting for bounded error body")), 500);
+      }),
+    ]);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Anthropic PDF request to throw an Error");
+    }
+    expect(error.message).toContain("Anthropic PDF request failed");
+    expect(canceled).toBe(true);
+  });
+
   it("anthropicAnalyzePdf throws when response has no text", async () => {
     mockFetchResponse({
       ok: true,

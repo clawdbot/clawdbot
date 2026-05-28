@@ -416,21 +416,18 @@ describe("exec approval reply helpers", () => {
       }),
     ).toEqual([
       {
-        kind: "decision",
         decision: "allow-once",
         label: "Allow Once",
         style: "success",
         command: "/approve req-1 allow-once",
       },
       {
-        kind: "decision",
         decision: "allow-always",
         label: "Allow Always",
         style: "primary",
         command: "/approve req-1 allow-always",
       },
       {
-        kind: "decision",
         decision: "deny",
         label: "Deny",
         style: "danger",

@@ -184,17 +184,6 @@ export type PluginRuntimeChannel = {
     runPreparedReply: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
     dispatchReply: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
   };
-  /** @deprecated Use `inbound`. */
-  turn: {
-    run: typeof import("../../channels/turn/kernel.js").runChannelInboundEvent;
-    runAssembled: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
-    /** @deprecated Prefer `inbound.run(...)`. */
-    runResolved: typeof import("../../channels/turn/kernel.js").runResolvedChannelTurn;
-    buildContext: typeof import("../../channels/inbound-event/context.js").buildChannelInboundEventContext;
-    runPrepared: typeof import("../../channels/turn/kernel.js").runPreparedInboundReply;
-    /** @deprecated Prefer `inbound.dispatchReply(...)`. */
-    dispatchAssembled: typeof import("../../channels/turn/kernel.js").dispatchChannelInboundReply;
-  };
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;

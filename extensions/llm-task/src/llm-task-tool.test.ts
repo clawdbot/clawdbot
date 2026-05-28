@@ -15,7 +15,7 @@ afterAll(() => {
 
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
-const runEmbeddedPiAgent = vi.fn(async () => ({
+const runEmbeddedAgent = vi.fn(async () => ({
   meta: { startedAt: Date.now() },
   payloads: [{ text: "{}" }],
 }));
@@ -57,7 +57,7 @@ function fakeApi(overrides: any = {}) {
       version: "test",
       agent: {
         defaults: { provider: "openai-codex", model: "gpt-5.2" },
-        runEmbeddedPiAgent,
+        runEmbeddedAgent,
         resolveThinkingPolicy,
         normalizeThinkingLevel,
       },
@@ -69,15 +69,15 @@ function fakeApi(overrides: any = {}) {
 }
 
 function mockEmbeddedRunJson(payload: unknown) {
-  (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+  (runEmbeddedAgent as any).mockResolvedValueOnce({
     meta: {},
     payloads: [{ text: JSON.stringify(payload) }],
   });
 }
 
 function resetRunnerMocks() {
-  runEmbeddedPiAgent.mockReset();
-  runEmbeddedPiAgent.mockImplementation(async () => ({
+  runEmbeddedAgent.mockReset();
+  runEmbeddedAgent.mockImplementation(async () => ({
     meta: { startedAt: Date.now() },
     payloads: [{ text: "{}" }],
   }));
@@ -88,7 +88,7 @@ function resetRunnerMocks() {
 async function executeEmbeddedRun(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
-  return (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+  return (runEmbeddedAgent as any).mock.calls[0]?.[0];
 }
 
 describe("llm-task tool (json-only)", () => {
@@ -97,7 +97,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("returns parsed json", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
@@ -107,7 +107,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("strips fenced json", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: '```json\n{"ok":true}\n```' }],
     });
@@ -117,7 +117,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("validates schema", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
     });
@@ -134,7 +134,7 @@ describe("llm-task tool (json-only)", () => {
 
   it("validates caller schemas with repeated $id independently across calls", async () => {
     const tool = createLlmTaskTool(fakeApi());
-    (runEmbeddedPiAgent as any)
+    (runEmbeddedAgent as any)
       .mockResolvedValueOnce({
         meta: {},
         payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
@@ -178,7 +178,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on invalid json", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: "not-json" }],
     });
@@ -187,7 +187,7 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on schema mismatch", async () => {
-    (runEmbeddedPiAgent as any).mockResolvedValueOnce({
+    (runEmbeddedAgent as any).mockResolvedValueOnce({
       meta: {},
       payloads: [{ text: JSON.stringify({ foo: 1 }) }],
     });
@@ -238,7 +238,7 @@ describe("llm-task tool (json-only)", () => {
 
     await tool.execute("id", { prompt: "x", model: "gemini-flash" });
 
-    const call = (runEmbeddedPiAgent as any).mock.calls[0]?.[0];
+    const call = (runEmbeddedAgent as any).mock.calls[0]?.[0];
     expect(call.provider).toBe("google");
     expect(call.model).toBe("gemini-3-flash-preview");
   });
@@ -264,7 +264,7 @@ describe("llm-task tool (json-only)", () => {
     await expect(tool.execute("id", { prompt: "x", thinking: "banana" })).rejects.toThrow(
       /invalid thinking level/i,
     );
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("throws on unsupported xhigh thinking level", async () => {

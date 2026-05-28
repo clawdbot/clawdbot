@@ -1,6 +1,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
   hasGenerationToolAvailability,
   isCapabilityProviderConfigured,
@@ -9,6 +10,31 @@ import {
   resolveMediaToolLocalRoots,
   resolveModelFromRegistry,
 } from "./media-tool-shared.js";
+
+// Keep media-tool-shared tests focused on root separation; channel-inbound
+// tests cover the real bundled contract loader.
+vi.mock("../../media/channel-inbound-roots.js", () => ({
+  resolveChannelInboundAttachmentRootsForChannel: (params: {
+    cfg?: OpenClawConfig;
+    channelId?: string | null;
+    accountId?: string | null;
+  }) => {
+    const channelId = params.channelId?.trim();
+    if (!channelId) {
+      return undefined;
+    }
+
+    const channelConfig = params.cfg?.channels?.[channelId];
+    const accountConfig = params.accountId
+      ? channelConfig?.accounts?.[params.accountId]
+      : undefined;
+    const roots = [
+      ...(accountConfig?.attachmentRoots ?? []),
+      ...(channelConfig?.attachmentRoots ?? []),
+    ];
+    return channelId === "imessage" ? [...roots, "/Users/*/Library/Messages/Attachments"] : roots;
+  },
+}));
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));

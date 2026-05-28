@@ -1,4 +1,3 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
@@ -6,6 +5,7 @@ import {
   redactSensitiveFieldValue,
   redactSensitiveText,
 } from "../logging/redact.js";
+import type { AgentMessage } from "./runtime/index.js";
 
 function resolveTranscriptRedactPatterns(patterns?: string[]) {
   return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;

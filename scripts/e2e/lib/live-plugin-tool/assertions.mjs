@@ -7,6 +7,10 @@ const agentTurnTimeoutSeconds = Number.parseInt(
   process.env.OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS ?? "300",
   10,
 );
+const SCAN_CHUNK_BYTES = 64 * 1024;
+const SCAN_CARRY_CHARS = 256;
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+const SESSION_FILE_LIST_LIMIT = 20;
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -22,6 +26,124 @@ function stateDir() {
 
 function configPath() {
   return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir(), "openclaw.json");
+}
+
+function agentOutputPath() {
+  return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_PATH || "/tmp/openclaw-agent.json";
+}
+
+function agentErrorPath() {
+  return process.env.OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH || "/tmp/openclaw-agent.err";
+}
+
+function tailText(text, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return text;
+  }
+  return Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
+}
+
+function readTextFileTail(file, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return "";
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return "";
+  }
+
+  const length = Math.min(maxBytes, stat.size);
+  const start = stat.size - length;
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function scanFileForNeedles(file, pendingNeedles) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return;
+  }
+  if (!stat.isFile() || stat.size <= 0 || pendingNeedles.size === 0) {
+    return;
+  }
+
+  const maxNeedleLength = Math.max(...Array.from(pendingNeedles, (needle) => needle.length));
+  const carryChars = Math.max(SCAN_CARRY_CHARS, maxNeedleLength - 1);
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size && pendingNeedles.size > 0) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      for (const needle of Array.from(pendingNeedles)) {
+        if (text.includes(needle)) {
+          pendingNeedles.delete(needle);
+        }
+      }
+      carry = text.slice(-carryChars);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function scanSessionTranscripts(sessionsDir, needles) {
+  const pendingNeedles = new Set(needles);
+  const checkedFiles = [];
+  let filesChecked = 0;
+  let stat;
+  try {
+    stat = fs.statSync(sessionsDir);
+  } catch {
+    return { checkedFiles, filesChecked, missingDir: true, pendingNeedles };
+  }
+  if (!stat.isDirectory()) {
+    return { checkedFiles, filesChecked, missingDir: true, pendingNeedles };
+  }
+
+  const pendingDirs = [sessionsDir];
+  while (pendingDirs.length > 0 && pendingNeedles.size > 0) {
+    const dir = pendingDirs.pop();
+    const entries = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .toSorted((left, right) => left.name.localeCompare(right.name));
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        pendingDirs.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
+        continue;
+      }
+      filesChecked += 1;
+      if (checkedFiles.length < SESSION_FILE_LIST_LIMIT) {
+        checkedFiles.push(path.relative(sessionsDir, entryPath));
+      }
+      scanFileForNeedles(entryPath, pendingNeedles);
+      if (pendingNeedles.size === 0) {
+        break;
+      }
+    }
+  }
+  return { checkedFiles, filesChecked, missingDir: false, pendingNeedles };
 }
 
 function realPathMaybe(filePath) {
@@ -149,7 +271,7 @@ function configure() {
         api: "openai-responses",
         baseUrl: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
         apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        agentRuntime: { id: "pi" },
+        agentRuntime: { id: "openclaw" },
         timeoutSeconds: agentTurnTimeoutSeconds,
         models: [
           {
@@ -176,7 +298,7 @@ function configure() {
         ...cfg.agents?.defaults?.models,
         [modelRef]: {
           ...cfg.agents?.defaults?.models?.[modelRef],
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
           params: { transport: "sse", openaiWsWarmup: false },
         },
       },
@@ -235,26 +357,24 @@ function assertInstalled() {
 function assertAgentTurn() {
   const expected = requireEnv("EXPECTED_SLUG");
   const toolName = requireEnv("TOOL_NAME");
-  const stdout = fs.readFileSync("/tmp/openclaw-agent.json", "utf8");
-  const stderr = fs.existsSync("/tmp/openclaw-agent.err")
-    ? fs.readFileSync("/tmp/openclaw-agent.err", "utf8")
-    : "";
+  const outputPath = agentOutputPath();
+  const errorPath = agentErrorPath();
+  const stdout = fs.readFileSync(outputPath, "utf8");
   const response = JSON.parse(stdout);
   const text = (response.payloads || []).map((payload) => payload?.text || "").join("\n");
   if (!text.includes(expected)) {
+    const stderrTail = readTextFileTail(errorPath);
     throw new Error(
-      `live agent reply did not contain tool slug ${expected}:\nstdout=${stdout}\nstderr=${stderr}`,
+      `live agent reply did not contain tool slug ${expected}:\nstdout tail=${tailText(stdout)}\nstderr tail=${stderrTail}`,
     );
   }
   const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
-  const sessionFiles = fs
-    .readdirSync(sessionsDir, { recursive: true })
-    .map((entry) => path.join(sessionsDir, String(entry)))
-    .filter((entry) => entry.endsWith(".jsonl") && fs.existsSync(entry));
-  const transcript = sessionFiles.map((file) => fs.readFileSync(file, "utf8")).join("\n");
-  if (!transcript.includes(toolName) || !transcript.includes(expected)) {
+  const scan = scanSessionTranscripts(sessionsDir, [toolName, expected]);
+  if (scan.pendingNeedles.size > 0) {
+    const checkedFiles = scan.checkedFiles.length > 0 ? scan.checkedFiles.join(", ") : "<none>";
+    const missingDir = scan.missingDir ? " sessions directory was missing." : "";
     throw new Error(
-      `session transcript did not show ${toolName} returning ${expected}; checked ${sessionFiles.join(", ")}`,
+      `session transcript did not show ${toolName} returning ${expected}; missing ${Array.from(scan.pendingNeedles).join(", ")} after checking ${scan.filesChecked} jsonl file(s): ${checkedFiles}.${missingDir}`,
     );
   }
 }

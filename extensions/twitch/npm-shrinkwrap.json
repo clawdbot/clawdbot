@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/twitch",
-  "version": "2026.5.26",
+  "version": "2026.5.28",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/twitch",
-      "version": "2026.5.26",
+      "version": "2026.5.28",
       "dependencies": {
         "@twurple/api": "8.1.4",
         "@twurple/auth": "8.1.4",
@@ -234,6 +234,21 @@
       "dependencies": {
         "@types/node": "*"
       }
+    },
+    "node_modules/@types/ws/node_modules/@types/node": {
+      "version": "25.9.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.1.tgz",
+      "integrity": "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg==",
+      "license": "MIT",
+      "dependencies": {
+        "undici-types": ">=7.24.0 <7.24.7"
+      }
+    },
+    "node_modules/@types/ws/node_modules/undici-types": {
+      "version": "7.24.6",
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.24.6.tgz",
+      "integrity": "sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==",
+      "license": "MIT"
     },
     "node_modules/ircv3": {
       "version": "0.33.1",

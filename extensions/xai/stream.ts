@@ -1,5 +1,9 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  streamSimple,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
@@ -13,6 +17,10 @@ const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-4", "grok-4-fast"],
   ["grok-4-0709", "grok-4-fast"],
 ]);
+
+interface MutableAssistantMessageEventStream extends AsyncIterable<AssistantMessageEvent> {
+  result: () => Promise<AssistantMessage>;
+}
 
 function resolveXaiFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -299,9 +307,9 @@ function transformXaiStreamEvent(
 }
 
 function wrapStreamMessageObjects(
-  stream: ReturnType<typeof streamSimple>,
+  stream: MutableAssistantMessageEventStream,
   transformMessage: (message: unknown) => void,
-): ReturnType<typeof streamSimple> {
+): MutableAssistantMessageEventStream {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();

@@ -1,9 +1,10 @@
 import path from "node:path";
-import { loginOpenAICodex, type OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { loginOpenAICodex } from "./openai-codex-oauth-flow.runtime.js";
+import type { OAuthCredentials } from "./openai-codex-oauth-types.runtime.js";
 
 const manualInputPromptMessage = "Paste the authorization code (or full redirect URL):";
 const openAICodexOAuthOriginator = "openclaw";
@@ -256,6 +257,8 @@ export async function loginOpenAICodexOAuth(params: {
   oauth: ProviderAuthContext["oauth"];
   isRemote: boolean;
   openUrl: (url: string) => Promise<void>;
+  signal?: AbortSignal;
+  onManualCodeInput?: () => Promise<string>;
   localBrowserMessage?: string;
 }): Promise<OAuthCredentials | null> {
   const { prompter, runtime, isRemote, openUrl, localBrowserMessage } = params;
@@ -323,16 +326,19 @@ export async function loginOpenAICodexOAuth(params: {
       onAuth,
       onPrompt,
       originator: openAICodexOAuthOriginator,
-      onManualCodeInput: createManualCodeInputHandler({
-        isRemote,
-        onPrompt,
-        runtime,
-        updateProgress,
-        stopProgress,
-        waitForLoginToSettle,
-        hasBrowserAuthStarted: () => browserAuthStarted,
-      }),
+      onManualCodeInput:
+        params.onManualCodeInput ??
+        createManualCodeInputHandler({
+          isRemote,
+          onPrompt,
+          runtime,
+          updateProgress,
+          stopProgress,
+          waitForLoginToSettle,
+          hasBrowserAuthStarted: () => browserAuthStarted,
+        }),
       onProgress: (msg: string) => updateProgress(msg),
+      signal: params.signal,
     });
     stopProgress("OpenAI OAuth complete");
     return creds ?? null;

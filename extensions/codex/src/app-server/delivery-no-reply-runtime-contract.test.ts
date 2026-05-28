@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { DELIVERY_NO_REPLY_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 import { afterEach, describe, expect, it } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";

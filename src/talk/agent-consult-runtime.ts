@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import {
   forkSessionFromParent,
   resolveParentForkDecision,
@@ -207,10 +207,10 @@ export async function consultRealtimeVoiceAgent(params: {
   agentId?: string;
   spawnedBy?: string | null;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
-  provider?: RunEmbeddedPiAgentParams["provider"];
-  model?: RunEmbeddedPiAgentParams["model"];
-  thinkLevel?: RunEmbeddedPiAgentParams["thinkLevel"];
-  fastMode?: RunEmbeddedPiAgentParams["fastMode"];
+  provider?: RunEmbeddedAgentParams["provider"];
+  model?: RunEmbeddedAgentParams["model"];
+  thinkLevel?: RunEmbeddedAgentParams["thinkLevel"];
+  fastMode?: RunEmbeddedAgentParams["fastMode"];
   timeoutMs?: number;
   toolsAllow?: string[];
   extraSystemPrompt?: string;
@@ -247,7 +247,7 @@ export async function consultRealtimeVoiceAgent(params: {
   const sessionFile = params.agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
     agentId,
   });
-  const result = await params.agentRuntime.runEmbeddedPiAgent({
+  const result = await params.agentRuntime.runEmbeddedAgent({
     sessionId,
     sessionKey: params.sessionKey,
     sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),

@@ -1,12 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Api, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { streamAnthropic } from "@earendil-works/pi-ai/anthropic";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
-type AnthropicStreamOptions = NonNullable<Parameters<typeof streamAnthropic>[2]>;
-type AnthropicStreamClient = NonNullable<AnthropicStreamOptions["client"]>;
+type MantleAnthropicStream = typeof stream;
+type AnthropicStreamClient = Anthropic;
 
 export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   const trimmed = baseUrl.replace(/\/+$/, "");
@@ -36,7 +35,7 @@ function mergeHeaders(
 }
 
 function buildMantleAnthropicBaseOptions(
-  model: Model<Api>,
+  model: Model,
   options: SimpleStreamOptions | undefined,
   apiKey: string,
 ) {
@@ -78,12 +77,12 @@ function adjustMaxTokensForThinking(
 
 export function createMantleAnthropicStreamFn(deps?: {
   createClient?: (options: AnthropicOptions) => Anthropic;
-  stream?: typeof streamAnthropic;
+  stream?: MantleAnthropicStream;
 }): StreamFn {
   return (model, context, options) => {
     const apiKey = options?.apiKey ?? "";
     const createClient = deps?.createClient ?? ((clientOptions) => new Anthropic(clientOptions));
-    const stream = deps?.stream ?? streamAnthropic;
+    const streamFn = deps?.stream ?? stream;
     const client = createClient({
       apiKey: null,
       authToken: apiKey,
@@ -104,7 +103,7 @@ export function createMantleAnthropicStreamFn(deps?: {
     // The client API is the same, but the SDK class private field makes types nominal.
     const streamClient = client as unknown as AnthropicStreamClient;
     if (!options?.reasoning || requiresDefaultSampling(model.id)) {
-      return stream(model as Model<"anthropic-messages">, context, {
+      return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
         client: streamClient,
         thinkingEnabled: false,
@@ -117,7 +116,7 @@ export function createMantleAnthropicStreamFn(deps?: {
       options.reasoning,
       options.thinkingBudgets,
     );
-    return stream(model as Model<"anthropic-messages">, context, {
+    return streamFn(model as Model<"anthropic-messages">, context, {
       ...base,
       client: streamClient,
       maxTokens: adjusted.maxTokens,

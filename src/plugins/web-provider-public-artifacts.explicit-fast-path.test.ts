@@ -95,7 +95,6 @@ describe("web provider public artifacts explicit fast path", () => {
   it("resolves bundled web search providers by explicit plugin id without manifest scans", () => {
     const provider = expectSingleProvider(
       resolveBundledWebSearchProvidersFromPublicArtifacts({
-        bundledAllowlistCompat: true,
         onlyPluginIds: ["brave"],
       }),
     );
@@ -131,7 +130,6 @@ describe("web provider public artifacts explicit fast path", () => {
   it("resolves bundled web fetch providers by explicit plugin id without manifest scans", () => {
     const provider = expectSingleProvider(
       resolveBundledWebFetchProvidersFromPublicArtifacts({
-        bundledAllowlistCompat: true,
         onlyPluginIds: ["firecrawl"],
       }),
     );

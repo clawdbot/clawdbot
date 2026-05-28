@@ -350,6 +350,7 @@ export function createAgentEventHandler({
       origin: row?.origin,
       spawnedBy: row?.spawnedBy,
       spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
+      spawnedCwd: row?.spawnedCwd,
       forkedFromParent: row?.forkedFromParent,
       spawnDepth: row?.spawnDepth,
       subagentRole: row?.subagentRole,

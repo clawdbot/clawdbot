@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import { constants, accessSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import os from "node:os";
+import path from "node:path";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
@@ -14,6 +18,7 @@ import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-ch
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import {
   appendIMessageApprovalReactionHintForOutboundMessage,
+  extractIMessageApprovalPromptBinding,
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
@@ -27,6 +32,9 @@ import {
   normalizeIMessageHandle,
   parseIMessageTarget,
 } from "./targets.js";
+
+const require = createRequire(import.meta.url);
+type ParsedIMessageTarget = ReturnType<typeof parseIMessageTarget>;
 
 type IMessageSendOpts = {
   cliPath?: string;
@@ -54,6 +62,16 @@ type IMessageSendOpts = {
   ) => Promise<{ path: string; contentType?: string }>;
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
   runCliJson?: (args: readonly string[]) => Promise<Record<string, unknown>>;
+  resolveMessageGuidImpl?: (params: {
+    dbPath?: string;
+    messageId: string;
+  }) => Promise<string | null> | string | null;
+  resolveSentMessageGuidImpl?: (params: {
+    dbPath?: string;
+    target: ParsedIMessageTarget;
+    text: string;
+    sentAfterMs?: number;
+  }) => Promise<string | null> | string | null;
 };
 
 export type IMessageSendResult = {
@@ -78,6 +96,72 @@ export type IMessageSendResult = {
 };
 
 const MAX_REPLY_TO_ID_LENGTH = 256;
+const sshWrapperCliPathCache = new Map<string, boolean>();
+
+function safeHomeDir(): string | undefined {
+  const home = process.env.HOME?.trim();
+  if (home) {
+    return home;
+  }
+  try {
+    return os.homedir().trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function expandCliPathForInspection(cliPath: string): string {
+  if (!cliPath.startsWith("~")) {
+    return cliPath;
+  }
+  const home = safeHomeDir();
+  return home ? cliPath.replace(/^~(?=$|[\\/])/, home) : cliPath;
+}
+
+function isSshIMessageCliWrapper(cliPath: string): boolean {
+  if (cliPath === "imsg") {
+    return false;
+  }
+  const cached = sshWrapperCliPathCache.get(cliPath);
+  if (cached !== undefined) {
+    return cached;
+  }
+  let detected = false;
+  try {
+    const content = readFileSync(expandCliPathForInspection(cliPath), "utf8");
+    detected = /\bssh\b[\s\S]*\bimsg\b/u.test(content);
+  } catch {
+    detected = false;
+  }
+  // cliPath scripts are process-stable channel metadata; cache inspection so
+  // repeated sends do not poll wrapper files on the hot path.
+  sshWrapperCliPathCache.set(cliPath, detected);
+  return detected;
+}
+
+function isLocalIMessageCliPath(params: { cliPath: string; remoteHost?: string }): boolean {
+  const cliPath = params.cliPath.trim();
+  if (params.remoteHost?.trim() || isSshIMessageCliWrapper(cliPath)) {
+    return false;
+  }
+  return cliPath === "imsg" || path.basename(cliPath) === "imsg";
+}
+
+function resolveChatDbLookupPath(params: {
+  cliPath: string;
+  dbPath?: string;
+  remoteHost?: string;
+}): string | undefined {
+  const configured = params.dbPath?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (!isLocalIMessageCliPath({ cliPath: params.cliPath, remoteHost: params.remoteHost })) {
+    return undefined;
+  }
+  const home = safeHomeDir();
+  return home ? path.join(home, "Library", "Messages", "chat.db") : undefined;
+}
 
 function stripUnsafeReplyTagChars(value: string): string {
   let next = "";
@@ -145,6 +229,227 @@ function resolveOutboundMessageGuid(
     }
   }
   return null;
+}
+
+function isNumericMessageRowId(value: string | null | undefined): value is string {
+  return typeof value === "string" && /^\d+$/.test(value.trim());
+}
+
+function normalizeResolvedMessageGuid(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed && !isNumericMessageRowId(trimmed) ? trimmed : null;
+}
+
+function loadNodeSqlite(): typeof import("node:sqlite") | null {
+  try {
+    return require("node:sqlite") as typeof import("node:sqlite");
+  } catch {
+    return null;
+  }
+}
+
+function resolveMessageGuidFromChatDb(params: {
+  dbPath?: string;
+  messageId: string;
+}): string | null {
+  const dbPath = params.dbPath?.trim();
+  const messageId = params.messageId.trim();
+  if (!dbPath || !isNumericMessageRowId(messageId)) {
+    return null;
+  }
+  const sqlite = loadNodeSqlite();
+  if (!sqlite) {
+    return null;
+  }
+  let db: import("node:sqlite").DatabaseSync | null = null;
+  try {
+    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    const row = db.prepare("SELECT guid FROM message WHERE ROWID = ?").get(messageId) as
+      | { guid?: unknown }
+      | undefined;
+    return normalizeResolvedMessageGuid(row?.guid);
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // best-effort cleanup
+    }
+  }
+}
+
+function getStringRowValue(row: Record<string, unknown> | undefined, key: string): string | null {
+  return normalizeResolvedMessageGuid(row?.[key]);
+}
+
+function appleMessageDateLowerBoundMs(sentAfterMs: number | undefined): number | null {
+  if (!Number.isFinite(sentAfterMs)) {
+    return null;
+  }
+  // chat.db stores message.date as nanoseconds since 2001-01-01. Give the
+  // bridge a small amount of clock/write skew so a just-sent row is included.
+  return Math.max(0, Math.floor(((sentAfterMs as number) - 978_307_200_000 - 5_000) * 1_000_000));
+}
+
+function resolveLatestSentMessageGuidFromChatDb(params: {
+  dbPath?: string;
+  target: ParsedIMessageTarget;
+  text: string;
+  sentAfterMs?: number;
+}): string | null {
+  const dbPath = params.dbPath?.trim();
+  if (!dbPath) {
+    return null;
+  }
+  const sqlite = loadNodeSqlite();
+  if (!sqlite) {
+    return null;
+  }
+  let db: import("node:sqlite").DatabaseSync | null = null;
+  try {
+    db = new sqlite.DatabaseSync(dbPath, { readOnly: true });
+    const targetClauses: string[] = [];
+    const targetParams: Array<string | number> = [];
+    const lowerBound = appleMessageDateLowerBoundMs(params.sentAfterMs);
+    if (params.text) {
+      targetClauses.push("m.text = ?");
+      targetParams.push(params.text);
+    }
+    if (lowerBound !== null) {
+      targetClauses.push("m.date >= ?");
+      targetParams.push(lowerBound);
+    }
+    if (params.target.kind === "chat_id") {
+      targetClauses.push("cmj.chat_id = ?");
+      targetParams.push(params.target.chatId);
+    } else if (params.target.kind === "chat_guid") {
+      targetClauses.push("c.guid = ?");
+      targetParams.push(params.target.chatGuid);
+    } else if (params.target.kind === "chat_identifier") {
+      targetClauses.push("c.chat_identifier = ?");
+      targetParams.push(params.target.chatIdentifier);
+    } else {
+      const normalizedHandle = normalizeIMessageHandle(params.target.to);
+      targetClauses.push("(h.id = ? OR h.uncanonicalized_id = ?)");
+      targetParams.push(normalizedHandle, params.target.to);
+    }
+    const targetWhere = targetClauses.length ? `AND ${targetClauses.join(" AND ")}` : "";
+    const selectSql = `
+      SELECT m.guid
+      FROM message m
+      LEFT JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
+      LEFT JOIN chat c ON c.ROWID = cmj.chat_id
+      LEFT JOIN handle h ON h.ROWID = m.handle_id
+      WHERE m.is_from_me = 1
+      ${targetWhere}
+      ORDER BY m.date DESC, m.ROWID DESC
+      LIMIT 10
+    `;
+    const rows = db.prepare(selectSql).all(...targetParams) as Array<Record<string, unknown>>;
+    return getStringRowValue(rows[0], "guid");
+  } catch {
+    return null;
+  } finally {
+    try {
+      db?.close();
+    } catch {
+      // best-effort cleanup
+    }
+  }
+}
+
+function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
+  const normalizedDbPath = dbPath?.trim();
+  if (!normalizedDbPath || !loadNodeSqlite()) {
+    return false;
+  }
+  try {
+    accessSync(normalizedDbPath, constants.R_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function resolveApprovalBindingMessageGuid(params: {
+  dbPath?: string;
+  messageId: string | null;
+  result: Record<string, unknown> | null | undefined;
+  resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
+}): Promise<string | null> {
+  const immediateGuid = resolveOutboundMessageGuid(params.result);
+  if (immediateGuid) {
+    return immediateGuid;
+  }
+  const messageId = params.messageId?.trim();
+  if (!messageId || !isNumericMessageRowId(messageId)) {
+    return null;
+  }
+  const resolver = params.resolveMessageGuidImpl ?? resolveMessageGuidFromChatDb;
+  return normalizeResolvedMessageGuid(
+    await resolver({
+      dbPath: params.dbPath,
+      messageId,
+    }),
+  );
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function resolveFallbackSentMessageGuid(params: {
+  dbPath?: string;
+  target: ParsedIMessageTarget;
+  text: string;
+  sentAfterMs?: number;
+  resolveSentMessageGuidImpl?: IMessageSendOpts["resolveSentMessageGuidImpl"];
+}): Promise<string | null> {
+  const resolver = params.resolveSentMessageGuidImpl ?? resolveLatestSentMessageGuidFromChatDb;
+  if (
+    !params.resolveSentMessageGuidImpl &&
+    !canResolveLatestSentMessageGuidFromChatDb(params.dbPath)
+  ) {
+    return null;
+  }
+  const deadlineMs = Date.now() + 5_000;
+  while (Date.now() <= deadlineMs) {
+    const resolved = normalizeResolvedMessageGuid(
+      await resolver({
+        dbPath: params.dbPath,
+        target: params.target,
+        text: params.text,
+        sentAfterMs: params.sentAfterMs,
+      }),
+    );
+    if (resolved) {
+      return resolved;
+    }
+    if (Date.now() >= deadlineMs) {
+      return null;
+    }
+    await delay(250);
+  }
+  return null;
+}
+
+function shouldRecoverApprovalPromptGuid(params: {
+  message: string;
+  filePath?: string;
+  replyToId?: string | null;
+}): boolean {
+  return (
+    !params.filePath &&
+    !params.replyToId &&
+    Boolean(params.message.trim()) &&
+    Boolean(extractIMessageApprovalPromptBinding(params.message))
+  );
 }
 
 function resolveOutboundEchoText(text: string, mediaContentType?: string): string | undefined {
@@ -224,6 +529,11 @@ function resolveIMessageCliFailure(result: Record<string, unknown>): string | nu
   return typeof result.error === "string" && result.error.trim()
     ? result.error.trim()
     : "iMessage action failed";
+}
+
+function isIMessageRpcSendTimeout(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /imsg rpc timeout \(send\)/i.test(message);
 }
 
 async function runIMessageCliJson(
@@ -339,10 +649,12 @@ async function resolveAttachmentChatGuid(params: {
 
 async function trySendAttachmentForExplicitChat(params: {
   accountId: string;
+  dbPath?: string;
   target: ReturnType<typeof parseIMessageTarget>;
   filePath: string;
   echoText?: string;
   runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
+  resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<IMessageSendResult | null> {
   let attachmentChatGuid: string | null = null;
   try {
@@ -387,7 +699,12 @@ async function trySendAttachmentForExplicitChat(params: {
   }
 
   const resolvedId = resolveMessageId(result);
-  const approvalBindingMessageId = resolveOutboundMessageGuid(result);
+  const approvalBindingMessageId = await resolveApprovalBindingMessageGuid({
+    dbPath: params.dbPath,
+    messageId: resolvedId,
+    result,
+    resolveMessageGuidImpl: params.resolveMessageGuidImpl,
+  });
   const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
   const echoScope = resolveOutboundEchoScope({
     accountId: params.accountId,
@@ -437,6 +754,11 @@ export async function sendMessageIMessage(
     });
   const cliPath = opts.cliPath?.trim() || account.config.cliPath?.trim() || "imsg";
   const dbPath = opts.dbPath?.trim() || account.config.dbPath?.trim();
+  const chatDbLookupPath = resolveChatDbLookupPath({
+    cliPath,
+    dbPath,
+    remoteHost: account.config.remoteHost,
+  });
   const target = parseIMessageTarget(opts.chatId ? formatIMessageChatTarget(opts.chatId) : to);
   const service =
     opts.service ??
@@ -498,10 +820,12 @@ export async function sendMessageIMessage(
   if (filePath && !message.trim() && !resolvedReplyToId) {
     const attachmentResult = await trySendAttachmentForExplicitChat({
       accountId: account.accountId,
+      dbPath: chatDbLookupPath,
       target,
       filePath,
       echoText,
       runCliJson,
+      resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
     });
     if (attachmentResult) {
       return attachmentResult;
@@ -537,17 +861,69 @@ export async function sendMessageIMessage(
     (opts.createClient
       ? await opts.createClient({ cliPath, dbPath })
       : await createIMessageRpcClient({ cliPath, dbPath }));
-  const shouldClose = !opts.client;
+  let shouldClose = !opts.client;
+  let result: Record<string, unknown>;
+  let sendStartedAtMs = Date.now();
   try {
-    const result = await client.request<{ ok?: string }>("send", params, {
-      timeoutMs: opts.timeoutMs,
-    });
+    try {
+      result = await client.request<Record<string, unknown>>("send", params, {
+        timeoutMs: opts.timeoutMs,
+      });
+    } catch (error) {
+      if (filePath || resolvedReplyToId || !isIMessageRpcSendTimeout(error)) {
+        throw error;
+      }
+      if (
+        !shouldRecoverApprovalPromptGuid({
+          message,
+          filePath,
+          replyToId: resolvedReplyToId,
+        })
+      ) {
+        throw error;
+      }
+      const recoveredGuid = await resolveFallbackSentMessageGuid({
+        dbPath: chatDbLookupPath,
+        target,
+        text: message,
+        sentAfterMs: sendStartedAtMs,
+        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+      });
+      if (!recoveredGuid) {
+        throw error;
+      }
+      result = { guid: recoveredGuid, status: "sent" };
+    }
     const resolvedId = resolveMessageId(result);
-    const messageId = resolvedId ?? (result?.ok ? "ok" : "unknown");
+    const messageId =
+      resolvedId ?? (result?.ok || result?.success || result?.status === "sent" ? "ok" : "unknown");
     // GUID-only id for approval-reaction binding (inbound `reacted_to_guid`
     // never carries a numeric ROWID, so the bind key must match). Undefined
-    // when the bridge only returned a numeric or placeholder id.
-    const approvalBindingMessageId = resolveOutboundMessageGuid(result);
+    // when the bridge only returned a placeholder id. Numeric ROWIDs are
+    // resolved through chat.db when available so chat_id sends can still bind
+    // to the stable GUID surfaced by inbound tapbacks.
+    let approvalBindingMessageId = await resolveApprovalBindingMessageGuid({
+      dbPath: chatDbLookupPath,
+      messageId: resolvedId,
+      result,
+      resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
+    });
+    if (
+      !approvalBindingMessageId &&
+      shouldRecoverApprovalPromptGuid({
+        message,
+        filePath,
+        replyToId: resolvedReplyToId,
+      })
+    ) {
+      approvalBindingMessageId = await resolveFallbackSentMessageGuid({
+        dbPath: chatDbLookupPath,
+        target,
+        text: message,
+        sentAfterMs: sendStartedAtMs,
+        resolveSentMessageGuidImpl: opts.resolveSentMessageGuidImpl,
+      });
+    }
     const echoScope = resolveOutboundEchoScope({ accountId: account.accountId, target });
     if (echoScope) {
       rememberPersistedIMessageEcho({
@@ -575,24 +951,22 @@ export async function sendMessageIMessage(
         timestamp: Date.now(),
         isFromMe: true,
       });
-      if (message) {
-        if (approvalBindingMessageId) {
-          const handleForKey =
-            target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
-          const conversation: IMessageApprovalConversationKey = {
-            ...(target.kind === "chat_guid" ? { chatGuid: target.chatGuid } : {}),
-            ...(target.kind === "chat_identifier" ? { chatIdentifier: target.chatIdentifier } : {}),
-            ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
-            ...(handleForKey ? { handle: handleForKey } : {}),
-          };
-          registerIMessageApprovalReactionTargetForOutboundMessage({
-            accountId: account.accountId,
-            conversation,
-            messageId: approvalBindingMessageId,
-            text: message,
-          });
-        }
-      }
+    }
+    if (message && approvalBindingMessageId) {
+      const handleForKey =
+        target.kind === "handle" ? normalizeIMessageHandle(target.to) : undefined;
+      const conversation: IMessageApprovalConversationKey = {
+        ...(target.kind === "chat_guid" ? { chatGuid: target.chatGuid } : {}),
+        ...(target.kind === "chat_identifier" ? { chatIdentifier: target.chatIdentifier } : {}),
+        ...(target.kind === "chat_id" ? { chatId: target.chatId } : {}),
+        ...(handleForKey ? { handle: handleForKey } : {}),
+      };
+      registerIMessageApprovalReactionTargetForOutboundMessage({
+        accountId: account.accountId,
+        conversation,
+        messageId: approvalBindingMessageId,
+        text: message,
+      });
     }
     return {
       messageId,

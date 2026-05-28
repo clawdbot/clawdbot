@@ -1,16 +1,17 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  completeSimple,
+  type Api,
+  type AssistantMessage,
+  type Model,
+} from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
-import { resolveNpmRunner } from "./npm-runner.mjs";
-import { resolvePnpmRunner } from "./pnpm-runner.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -88,8 +89,6 @@ const CONTROL_UI_I18N_WORKFLOW = 1;
 const DEFAULT_OPENAI_MODEL = "gpt-5.5";
 const DEFAULT_ANTHROPIC_MODEL = "claude-opus-4-6";
 const DEFAULT_PROVIDER = "openai";
-export const DEFAULT_PI_PACKAGE_VERSION = "0.75.5";
-const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const LOCALES_DIR = path.join(ROOT, "ui", "src", "i18n", "locales");
@@ -108,12 +107,34 @@ const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
 const ENV_THINKING = "OPENCLAW_CONTROL_UI_I18N_THINKING";
-const ENV_PI_EXECUTABLE = "OPENCLAW_CONTROL_UI_I18N_PI_EXECUTABLE";
-const ENV_PI_ARGS = "OPENCLAW_CONTROL_UI_I18N_PI_ARGS";
-const ENV_PI_PACKAGE_VERSION = "OPENCLAW_CONTROL_UI_I18N_PI_PACKAGE_VERSION";
 const ENV_BATCH_CHAR_BUDGET = "OPENCLAW_CONTROL_UI_I18N_BATCH_CHAR_BUDGET";
 const ENV_PROMPT_TIMEOUT = "OPENCLAW_CONTROL_UI_I18N_PROMPT_TIMEOUT";
 const ENV_AUTH_OPTIONAL = "OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL";
+
+type TranslationProvider = "openai" | "anthropic";
+
+const TRANSLATION_PROVIDER_DEFAULTS: Record<TranslationProvider, Omit<Model, "id" | "name">> = {
+  openai: {
+    api: "openai-responses",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 400_000,
+    maxTokens: 32_000,
+  },
+  anthropic: {
+    api: "anthropic-messages",
+    provider: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 32_000,
+  },
+};
 
 const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "zh-CN", fileName: "zh-CN.ts", exportName: "zh_CN", languageKey: "zhCN" },
@@ -273,6 +294,14 @@ function hasTranslationProvider(): boolean {
   return Boolean(process.env.OPENAI_API_KEY?.trim() || process.env.ANTHROPIC_API_KEY?.trim());
 }
 
+function resolveKnownTranslationProvider(): TranslationProvider {
+  const provider = resolveConfiguredProvider();
+  if (provider === "openai" || provider === "anthropic") {
+    return provider;
+  }
+  throw new Error(`Unsupported translation provider: ${provider}`);
+}
+
 function normalizeText(text: string): string {
   return text.trim().split(/\s+/).join(" ");
 }
@@ -288,7 +317,7 @@ function hashText(text: string): string {
 function cacheNamespace(): string {
   return [
     `wf=${CONTROL_UI_I18N_WORKFLOW}`,
-    "engine=pi",
+    "engine=openclaw-llm",
     `provider=${resolveConfiguredProvider()}`,
     `model=${resolveConfiguredModel()}`,
   ].join("|");
@@ -918,236 +947,22 @@ function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
   return items.reduce((total, item) => total + item.key.length + item.text.length + 8, 2);
 }
 
-type PiCommand = {
-  args: string[];
-  executable: string;
-};
-
-type ProcessCommand = {
-  args: string[];
-  env?: NodeJS.ProcessEnv;
-  executable: string;
-  shell: boolean;
-  windowsVerbatimArguments?: boolean;
-};
-
-type ResolveProcessCommandOptions = {
-  comSpec?: string;
-  env?: NodeJS.ProcessEnv;
-  execPath?: string;
-  existsSync?: (path: string) => boolean;
-  npmExecPath?: string;
-  platform?: NodeJS.Platform;
-};
-
-function portableExtension(value: string): string {
-  return path.posix.extname(value.split(/[/\\]/u).at(-1) ?? value).toLowerCase();
-}
-
-function isWindowsCommandShim(value: string, platform = process.platform): boolean {
-  const extension = portableExtension(value);
-  return platform === "win32" && (extension === ".cmd" || extension === ".bat");
-}
-
-function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
-  return key === undefined ? undefined : env[key];
-}
-
-function commandFromRunner(runner: {
-  args: string[];
-  command: string;
-  env?: NodeJS.ProcessEnv;
-  shell: boolean;
-  windowsVerbatimArguments?: boolean;
-}): ProcessCommand {
-  const command: ProcessCommand = {
-    args: runner.args,
-    executable: runner.command,
-    shell: runner.shell,
-    windowsVerbatimArguments: runner.windowsVerbatimArguments,
-  };
-  if (runner.env !== undefined) {
-    command.env = runner.env;
-  }
-  return command;
-}
-
-export function resolveControlUiI18nProcessCommand(
-  executable: string,
-  args: string[],
-  options: ResolveProcessCommandOptions = {},
-): ProcessCommand {
-  const env = options.env ?? process.env;
-  const platform = options.platform ?? process.platform;
-  const comSpec = options.comSpec ?? resolveEnvValue(env, "ComSpec") ?? "cmd.exe";
-  if (isWindowsCommandShim(executable, platform)) {
-    return {
-      args: ["/d", "/s", "/c", buildCmdExeCommandLine(executable, args)],
-      executable: comSpec,
-      shell: false,
-      windowsVerbatimArguments: true,
-    };
-  }
-  return { args, executable, shell: false };
-}
-
-export function resolveControlUiI18nNpmInstallCommand(
-  packageSpec: string,
-  options: ResolveProcessCommandOptions = {},
-): ProcessCommand {
-  return commandFromRunner(
-    resolveNpmRunner({
-      comSpec: options.comSpec,
-      env: options.env,
-      execPath: options.execPath,
-      existsSync: options.existsSync,
-      npmArgs: ["install", "--silent", "--no-audit", "--no-fund", packageSpec],
-      platform: options.platform,
-    }),
-  );
-}
-
-export function resolveControlUiI18nPnpmCommand(
-  args: string[],
-  options: ResolveProcessCommandOptions = {},
-): ProcessCommand {
-  return commandFromRunner(
-    resolvePnpmRunner({
-      comSpec: options.comSpec,
-      npmExecPath: options.npmExecPath ?? process.env.npm_execpath,
-      nodeExecPath: options.execPath ?? process.execPath,
-      platform: options.platform,
-      pnpmArgs: args,
-    }),
-  );
-}
-
-export function resolvePiShimNodeCommand(
-  shimPath: string,
-  options: Pick<ResolveProcessCommandOptions, "existsSync" | "platform"> = {},
-): PiCommand | null {
-  const platform = options.platform ?? process.platform;
-  if (!isWindowsCommandShim(shimPath, platform)) {
-    return null;
-  }
-  const cliPath = path.win32.join(
-    path.win32.dirname(shimPath),
-    "node_modules",
-    ...PI_PACKAGE_NAME.split("/"),
-    "dist",
-    "cli.js",
-  );
-  const exists = options.existsSync ?? existsSync;
-  if (!exists(cliPath)) {
-    return null;
-  }
-  return { executable: "node", args: [cliPath] };
-}
-
-function resolvePiPackageVersion(): string {
-  return process.env[ENV_PI_PACKAGE_VERSION]?.trim() || DEFAULT_PI_PACKAGE_VERSION;
-}
-
-function getPiRuntimeDir() {
-  return path.join(
-    homedir(),
-    ".cache",
-    "openclaw",
-    "control-ui-i18n",
-    "pi-runtime",
-    resolvePiPackageVersion(),
-  );
-}
-
-export function resolveLocalPiCommand(root = ROOT): PiCommand | null {
-  const cliPath = path.join(root, "node_modules", ...PI_PACKAGE_NAME.split("/"), "dist", "cli.js");
-  if (!existsSync(cliPath)) {
-    return null;
-  }
-  return { executable: "node", args: [cliPath] };
-}
-
-async function resolvePiCommand(): Promise<PiCommand> {
-  const explicitExecutable = process.env[ENV_PI_EXECUTABLE]?.trim();
-  if (explicitExecutable) {
-    const explicitArgs = process.env[ENV_PI_ARGS]?.trim().split(/\s+/).filter(Boolean) ?? [];
-    const shimCommand = resolvePiShimNodeCommand(explicitExecutable);
-    if (shimCommand) {
-      return {
-        executable: shimCommand.executable,
-        args: [...shimCommand.args, ...explicitArgs],
-      };
-    }
-    if (isWindowsCommandShim(explicitExecutable)) {
-      throw new Error(
-        `${ENV_PI_EXECUTABLE} points to a Windows command shim that cannot safely carry the multiline i18n system prompt. Point it at node with ${ENV_PI_ARGS} set to the Pi package dist/cli.js path, or unset it so OpenClaw uses the managed Pi runtime.`,
-      );
-    }
-    return {
-      executable: explicitExecutable,
-      args: explicitArgs,
-    };
-  }
-
-  const pathEntries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
-  for (const entry of pathEntries) {
-    const candidate = path.join(entry, process.platform === "win32" ? "pi.cmd" : "pi");
-    if (existsSync(candidate)) {
-      const shimCommand = resolvePiShimNodeCommand(candidate);
-      if (shimCommand) {
-        return shimCommand;
-      }
-      if (process.platform === "win32") {
-        continue;
-      }
-      return { executable: candidate, args: [] };
-    }
-  }
-
-  const localCommand = resolveLocalPiCommand();
-  if (localCommand) {
-    return localCommand;
-  }
-
-  const runtimeDir = getPiRuntimeDir();
-  const cliPath = path.join(
-    runtimeDir,
-    "node_modules",
-    ...PI_PACKAGE_NAME.split("/"),
-    "dist",
-    "cli.js",
-  );
-  if (!existsSync(cliPath)) {
-    await mkdir(runtimeDir, { recursive: true });
-    await runProcessCommand(
-      resolveControlUiI18nNpmInstallCommand(`${PI_PACKAGE_NAME}@${resolvePiPackageVersion()}`),
-      {
-        cwd: runtimeDir,
-        rejectOnFailure: true,
-      },
-    );
-  }
-  return { executable: "node", args: [cliPath] };
-}
-
 type RunProcessOptions = {
   cwd?: string;
   input?: string;
   rejectOnFailure?: boolean;
 };
 
-async function runProcessCommand(
-  command: ProcessCommand,
+async function runProcess(
+  executable: string,
+  args: string[],
   options: RunProcessOptions = {},
 ): Promise<{ code: number; stderr: string; stdout: string }> {
   return await new Promise((resolve, reject) => {
-    const child = spawn(command.executable, command.args, {
+    const child = spawn(executable, args, {
       cwd: options.cwd ?? ROOT,
-      env: command.env ?? process.env,
-      shell: command.shell,
+      env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
-      windowsVerbatimArguments: command.windowsVerbatimArguments,
     });
 
     let stdout = "";
@@ -1167,11 +982,7 @@ async function runProcessCommand(
     child.once("close", (code) => {
       if ((code ?? 1) !== 0 && options.rejectOnFailure) {
         reject(
-          new Error(
-            `${command.executable} ${command.args.join(" ")} failed: ${
-              stderr.trim() || stdout.trim()
-            }`,
-          ),
+          new Error(`${executable} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`),
         );
         return;
       }
@@ -1181,13 +992,9 @@ async function runProcessCommand(
 }
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const result = await runProcessCommand(
-    resolveControlUiI18nPnpmCommand([
-      "exec",
-      "oxfmt",
-      "--stdin-filepath",
-      path.relative(ROOT, filePath),
-    ]),
+  const result = await runProcess(
+    "pnpm",
+    ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)],
     {
       input: source,
       rejectOnFailure: true,
@@ -1224,13 +1031,6 @@ function restoreReplacementCorruptedStringLiterals(source: string, formatted: st
   return `${output}${formatted.slice(cursor)}`;
 }
 
-type PendingPrompt = {
-  id: string;
-  reject: (reason?: unknown) => void;
-  resolve: (value: string) => void;
-  responseReceived: boolean;
-};
-
 type LocaleRunContext = {
   localeCount: number;
   localeIndex: number;
@@ -1245,7 +1045,7 @@ type TranslationBatchContext = LocaleRunContext & {
 };
 
 type ClientAccess = {
-  getClient: () => Promise<PiRpcClient>;
+  getClient: () => Promise<TranslationClient>;
   resetClient: () => Promise<void>;
 };
 
@@ -1284,198 +1084,74 @@ function buildTranslationBatches(items: readonly TranslationBatchItem[]): Transl
   return batches;
 }
 
-class PiRpcClient {
-  private readonly stderrChunks: string[] = [];
+export function resolveTranslationModel(): Model {
+  const provider = resolveKnownTranslationProvider();
+  const modelId = resolveConfiguredModel();
+  return {
+    ...TRANSLATION_PROVIDER_DEFAULTS[provider],
+    id: modelId,
+    name: modelId,
+  };
+}
+
+class TranslationClient {
   private closed = false;
-  private pending: PendingPrompt | null = null;
-  private readonly process: ChildProcessWithoutNullStreams;
-  private readonly stdin: ChildProcessWithoutNullStreams["stdin"];
-  private requestCount = 0;
   private sequence: Promise<unknown> = Promise.resolve();
+  private readonly model: Model;
 
-  private constructor(processHandle: ChildProcessWithoutNullStreams) {
-    this.process = processHandle;
-    this.stdin = processHandle.stdin;
+  private constructor(private readonly systemPrompt: string) {
+    this.model = resolveTranslationModel();
   }
 
-  static async create(systemPrompt: string): Promise<PiRpcClient> {
-    const command = await resolvePiCommand();
-    const args = [
-      ...command.args,
-      "--mode",
-      "rpc",
-      "--provider",
-      resolveConfiguredProvider(),
-      "--model",
-      resolveConfiguredModel(),
-      "--thinking",
-      resolveThinkingLevel(),
-      "--no-session",
-      "--system-prompt",
-      systemPrompt,
-    ];
-    const invocation = resolveControlUiI18nProcessCommand(command.executable, args);
-    const child = spawn(invocation.executable, invocation.args, {
-      cwd: ROOT,
-      env: invocation.env ?? process.env,
-      shell: invocation.shell,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    });
-
-    const client = new PiRpcClient(child);
-    client.bindProcess();
-    await client.waitForBoot();
-    return client;
-  }
-
-  private bindProcess() {
-    const stderr = createInterface({ input: this.process.stderr });
-    stderr.on("line", (line) => {
-      this.stderrChunks.push(line);
-    });
-
-    const stdout = createInterface({ input: this.process.stdout });
-    stdout.on("line", (line) => {
-      void this.handleStdoutLine(line);
-    });
-
-    this.process.once("error", (error) => {
-      this.rejectPending(error);
-    });
-
-    this.process.once("close", () => {
-      this.closed = true;
-      this.rejectPending(
-        new Error(`pi process closed${this.stderr() ? ` (${this.stderr()})` : ""}`),
-      );
-    });
-  }
-
-  private async waitForBoot() {
-    await sleep(150);
-  }
-
-  private stderr() {
-    return this.stderrChunks.join("\n").trim();
-  }
-
-  private rejectPending(error: Error) {
-    const pending = this.pending;
-    this.pending = null;
-    if (pending) {
-      pending.reject(error);
-    }
-  }
-
-  private async handleStdoutLine(line: string) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(trimmed) as Record<string, unknown>;
-    } catch {
-      return;
-    }
-
-    const pending = this.pending;
-    if (!pending) {
-      return;
-    }
-
-    switch (parsed.type) {
-      case "response": {
-        if (parsed.id !== pending.id) {
-          return;
-        }
-        const success = parsed.success === true;
-        if (!success) {
-          const errorText =
-            typeof parsed.error === "string" && parsed.error.trim()
-              ? parsed.error.trim()
-              : "pi prompt failed";
-          this.pending = null;
-          pending.reject(new Error(errorText));
-          return;
-        }
-        pending.responseReceived = true;
-        return;
-      }
-      case "agent_end": {
-        try {
-          const result = extractTranslationResult(parsed);
-          this.pending = null;
-          pending.resolve(result);
-        } catch (error) {
-          this.pending = null;
-          pending.reject(error);
-        }
-      }
-    }
+  static async create(systemPrompt: string): Promise<TranslationClient> {
+    return new TranslationClient(systemPrompt);
   }
 
   async prompt(message: string, label: string): Promise<string> {
     const result = this.sequence.then(async () => {
       if (this.closed) {
-        throw new Error(`pi process unavailable${this.stderr() ? ` (${this.stderr()})` : ""}`);
+        throw new Error("translation runtime unavailable");
       }
 
-      const id = `req-${++this.requestCount}`;
-      const payload = JSON.stringify({ type: "prompt", id, message });
       const timeoutMs = resolvePromptTimeoutMs();
       const startedAt = Date.now();
+      const controller = new AbortController();
 
       return await new Promise<string>((resolve, reject) => {
         const heartbeat = setInterval(() => {
-          const responseState = this.pending?.responseReceived
-            ? "response=received"
-            : "response=pending";
           logProgress(
-            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)}, ${responseState})`,
+            `${label}: still waiting (${formatDuration(Date.now() - startedAt)} / ${formatDuration(timeoutMs)})`,
           );
         }, PROGRESS_HEARTBEAT_MS);
         const timer = setTimeout(() => {
-          if (this.pending?.id === id) {
-            this.pending = null;
-            clearInterval(heartbeat);
-            void this.close();
-            const stderr = this.stderr();
-            reject(
-              new Error(
-                `${label}: translation prompt timed out after ${timeoutMs}ms${stderr ? ` (pi stderr: ${stderr})` : ""}`,
-              ),
-            );
-          }
+          clearInterval(heartbeat);
+          controller.abort();
+          reject(new Error(`${label}: translation prompt timed out after ${timeoutMs}ms`));
         }, timeoutMs);
 
-        this.pending = {
-          id,
-          reject: (reason) => {
+        completeSimple(
+          this.model,
+          {
+            systemPrompt: this.systemPrompt,
+            messages: [{ role: "user", content: message, timestamp: Date.now() }],
+          },
+          {
+            maxTokens: 4096,
+            reasoning: resolveThinkingLevel(),
+            signal: controller.signal,
+            timeoutMs,
+          },
+        )
+          .then((assistantMessage) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            reject(reason);
-          },
-          resolve: (value) => {
+            resolve(extractTranslationResult(assistantMessage));
+          })
+          .catch((error) => {
             clearTimeout(timer);
             clearInterval(heartbeat);
-            resolve(value);
-          },
-          responseReceived: false,
-        };
-
-        this.stdin.write(`${payload}\n`, (error) => {
-          if (!error) {
-            return;
-          }
-          clearTimeout(timer);
-          clearInterval(heartbeat);
-          if (this.pending?.id === id) {
-            this.pending = null;
-          }
-          reject(error);
-        });
+            reject(error);
+          });
       });
     });
 
@@ -1488,44 +1164,21 @@ class PiRpcClient {
       return;
     }
     this.closed = true;
-    this.stdin.end();
-    this.process.kill("SIGTERM");
-    await sleep(150);
-    if (!this.process.killed) {
-      this.process.kill("SIGKILL");
-    }
   }
 }
 
-function extractTranslationResult(payload: Record<string, unknown>): string {
-  const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    if ((message as { role?: string }).role !== "assistant") {
-      continue;
-    }
-    const errorMessage = (message as { errorMessage?: string }).errorMessage;
-    const stopReason = (message as { stopReason?: string }).stopReason;
-    if (errorMessage || stopReason === "error") {
-      throw new Error(errorMessage?.trim() || "pi error");
-    }
-    const content = (message as { content?: unknown }).content;
-    if (typeof content === "string") {
-      return content;
-    }
-    if (Array.isArray(content)) {
-      return content
-        .filter((block): block is { type?: string; text?: string } =>
-          Boolean(block && typeof block === "object"),
-        )
-        .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
-        .join("");
-    }
+function extractTranslationResult(message: AssistantMessage): string {
+  if (message.errorMessage || message.stopReason === "error") {
+    throw new Error(message.errorMessage?.trim() || "translation provider error");
   }
-  throw new Error("assistant translation not found");
+  const text = message.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("")
+    .trim();
+  if (!text) {
+    throw new Error("assistant translation not found");
+  }
+  return text;
 }
 
 async function translateBatch(
@@ -1674,11 +1327,11 @@ async function syncLocale(
     logProgress(
       `${localeLabel}: start keys=${sourceFlat.size} pending=${pending.length} batches=${batchCount} provider=${resolveConfiguredProvider()} model=${resolveConfiguredModel()} thinking=${resolveThinkingLevel()} timeout=${formatDuration(resolvePromptTimeoutMs())} batch_chars=${resolveBatchCharBudget()}`,
     );
-    let client: PiRpcClient | null = null;
+    let client: TranslationClient | null = null;
     const clientAccess: ClientAccess = {
       async getClient() {
         if (!client) {
-          client = await PiRpcClient.create(buildSystemPrompt(entry.locale, glossary));
+          client = await TranslationClient.create(buildSystemPrompt(entry.locale, glossary));
         }
         return client;
       },

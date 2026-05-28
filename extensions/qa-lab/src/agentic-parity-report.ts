@@ -58,11 +58,11 @@ type QaRuntimeParityScenarioReport = {
   status: "pass" | "fail";
   drift: RuntimeParityDrift | "missing";
   driftDetails?: string;
-  piStatus: "pass" | "fail" | "missing";
+  openclawStatus: "pass" | "fail" | "missing";
   codexStatus: "pass" | "fail" | "missing";
-  piTokens: number;
+  openclawTokens: number;
   codexTokens: number;
-  piToolCalls: number;
+  openclawToolCalls: number;
   codexToolCalls: number;
 };
 
@@ -253,7 +253,9 @@ function isLiveProviderMode(providerMode: string | undefined) {
 
 function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
   const missing = [
-    scenario.piTokens > 0 ? undefined : `${scenario.piStatus === "pass" ? "pi" : "pi failed"}=0`,
+    scenario.openclawTokens > 0
+      ? undefined
+      : `${scenario.openclawStatus === "pass" ? "openclaw" : "openclaw failed"}=0`,
     scenario.codexTokens > 0
       ? undefined
       : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
@@ -270,7 +272,7 @@ function normalizeRuntimePair(
   if (pair?.[0] && pair?.[1]) {
     return pair;
   }
-  return ["pi", "codex"];
+  return ["openclaw", "codex"];
 }
 
 function requiredCoverageStatus(
@@ -634,18 +636,18 @@ export function buildQaRuntimeParityReport(params: {
         status: scenario.status === "pass" ? "pass" : "fail",
         drift: "missing",
         driftDetails: scenario.details,
-        piStatus: "missing",
+        openclawStatus: "missing",
         codexStatus: "missing",
-        piTokens: 0,
+        openclawTokens: 0,
         codexTokens: 0,
-        piToolCalls: 0,
+        openclawToolCalls: 0,
         codexToolCalls: 0,
       } satisfies QaRuntimeParityScenarioReport;
     }
     driftCounts[parity.drift] += 1;
-    const piCell = parity.cells.pi;
+    const openclawCell = parity.cells.openclaw;
     const codexCell = parity.cells.codex;
-    const piStatus = runtimeParityCellStatus(piCell);
+    const openclawStatus = runtimeParityCellStatus(openclawCell);
     const codexStatus = runtimeParityCellStatus(codexCell);
     const parityStatus = isRuntimeParityResultPass(parity) ? "pass" : "fail";
     const reportScenario = {
@@ -653,11 +655,11 @@ export function buildQaRuntimeParityReport(params: {
       status: parityStatus,
       drift: parity.drift,
       driftDetails: parity.driftDetails,
-      piStatus,
+      openclawStatus,
       codexStatus,
-      piTokens: piCell.usage.totalTokens,
+      openclawTokens: openclawCell.usage.totalTokens,
       codexTokens: codexCell.usage.totalTokens,
-      piToolCalls: piCell.toolCalls.length,
+      openclawToolCalls: openclawCell.toolCalls.length,
       codexToolCalls: codexCell.toolCalls.length,
     } satisfies QaRuntimeParityScenarioReport;
     if (parityStatus === "fail") {
@@ -737,7 +739,7 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     lines.push(`- status: ${scenario.status}`);
     lines.push(`- drift: ${scenario.drift}`);
     lines.push(
-      `- pi: ${scenario.piStatus} (${scenario.piToolCalls} tool calls, ${scenario.piTokens} tokens)`,
+      `- openclaw: ${scenario.openclawStatus} (${scenario.openclawToolCalls} tool calls, ${scenario.openclawTokens} tokens)`,
     );
     lines.push(
       `- codex: ${scenario.codexStatus} (${scenario.codexToolCalls} tool calls, ${scenario.codexTokens} tokens)`,

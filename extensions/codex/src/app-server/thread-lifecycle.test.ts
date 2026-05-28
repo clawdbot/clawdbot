@@ -1,7 +1,9 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
+import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import {
   buildDeveloperInstructions,
+  buildTurnCollaborationMode,
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
@@ -388,6 +390,134 @@ describe("Codex app-server turn input image sanitizing", () => {
         text_elements: [],
       },
     ]);
+  });
+});
+
+describe("Codex app-server turn params", () => {
+  it("builds resume and turn params from the currently selected OpenClaw model", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.modelId = "gpt-5.4-codex";
+    params.thinkLevel = "medium";
+    const appServer = {
+      start: {
+        transport: "stdio" as const,
+        command: "codex",
+        args: ["app-server", "--listen", "stdio://"],
+        headers: {},
+      },
+      codeModeOnly: false,
+      requestTimeoutMs: 60_000,
+      turnCompletionIdleTimeoutMs: 60_000,
+      approvalPolicy: "on-request" as const,
+      approvalsReviewer: "guardian_subagent" as const,
+      sandbox: "danger-full-access" as const,
+      serviceTier: "flex" as const,
+    };
+
+    const resumeParams = buildThreadResumeParams(params, { threadId: "thread-1", appServer });
+    expect(resumeParams).toEqual({
+      threadId: "thread-1",
+      model: "gpt-5.4-codex",
+      approvalPolicy: "on-request",
+      approvalsReviewer: "guardian_subagent",
+      config: {
+        "features.code_mode": true,
+        "features.code_mode_only": false,
+      },
+      sandbox: "danger-full-access",
+      serviceTier: "flex",
+      personality: "none",
+      developerInstructions: resumeParams.developerInstructions,
+      persistExtendedHistory: true,
+    });
+    expect(resumeParams.developerInstructions).not.toContain(CODEX_GPT5_BEHAVIOR_CONTRACT);
+    const turnParams = buildTurnStartParams(params, {
+      threadId: "thread-1",
+      cwd: "/tmp/workspace",
+      appServer,
+    });
+    expect(turnParams.threadId).toBe("thread-1");
+    expect(turnParams.cwd).toBe("/tmp/workspace");
+    expect(turnParams.model).toBe("gpt-5.4-codex");
+    expect(turnParams.approvalPolicy).toBe("on-request");
+    expect(turnParams.approvalsReviewer).toBe("guardian_subagent");
+    expect(turnParams.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
+    expect(turnParams.serviceTier).toBe("flex");
+    expect(turnParams.collaborationMode).toEqual({
+      mode: "default",
+      settings: {
+        model: "gpt-5.4-codex",
+        reasoning_effort: "medium",
+        developer_instructions: null,
+      },
+    });
+  });
+
+  it("uses turn-scoped collaboration instructions for heartbeat Codex turns", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.modelId = "gpt-5.4-codex";
+    params.thinkLevel = "medium";
+    params.trigger = "heartbeat";
+
+    const heartbeatCollaborationMode = buildTurnCollaborationMode(params, {
+      heartbeatCollaborationInstructions:
+        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+    });
+    expect(heartbeatCollaborationMode.mode).toBe("default");
+    expect(heartbeatCollaborationMode.settings.model).toBe("gpt-5.4-codex");
+    expect(heartbeatCollaborationMode.settings.reasoning_effort).toBe("medium");
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "This is an OpenClaw heartbeat turn. Apply these instructions only to this heartbeat wake",
+    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "Use heartbeats to create useful proactive progress",
+    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "If `heartbeat_respond` is not already available and `tool_search` is available",
+    );
+    expect(heartbeatCollaborationMode.settings.developer_instructions).toContain(
+      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
+    );
+
+    params.trigger = "user";
+    expect(
+      buildTurnCollaborationMode(params, {
+        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+        heartbeatCollaborationInstructions:
+          "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+      }).settings.developer_instructions,
+    ).toContain("Turn-only workspace instructions.");
+    expect(
+      buildTurnCollaborationMode(params, {
+        turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+      }).settings.developer_instructions,
+    ).toContain("# Collaboration Mode: Default");
+  });
+
+  it("uses turn-scoped collaboration instructions for cron Codex turns", () => {
+    const params = createAttemptParams({ provider: "codex" });
+    params.modelId = "gpt-5.4-codex";
+    params.thinkLevel = "medium";
+    params.trigger = "cron";
+
+    const cronCollaborationMode = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+    });
+    expect(cronCollaborationMode.mode).toBe("default");
+    expect(cronCollaborationMode.settings.model).toBe("gpt-5.4-codex");
+    expect(cronCollaborationMode.settings.reasoning_effort).toBe("medium");
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "This is an OpenClaw cron automation turn",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "If it asks you to run an exact command, run that command before doing any investigation",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "Use context already provided by the runtime",
+    );
+    expect(cronCollaborationMode.settings.developer_instructions).toContain(
+      "Turn-only workspace instructions.",
+    );
   });
 });
 

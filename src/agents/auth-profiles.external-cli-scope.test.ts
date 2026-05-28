@@ -81,7 +81,6 @@ describe("external CLI auth scope", () => {
       "openai-codex",
       "opencode-go",
       "z.ai",
-      "zai",
     ]);
     expect(scope?.providerIds).not.toContain("claude-cli");
     expect(scope?.profileIds).toContain("openai-codex:default");

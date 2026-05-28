@@ -139,7 +139,18 @@ async function listTarPaths(
     child.on("error", (e) => {
       clearTimeout(watchdog);
       if (!aborted) {
+        aborted = true;
         resolve({ ok: false, reason: `tar -tzf error: ${String(e)}` });
+      }
+    });
+    child.stdin.on("error", (e: NodeJS.ErrnoException) => {
+      if (aborted && e.code === "EPIPE") {
+        return;
+      }
+      clearTimeout(watchdog);
+      if (!aborted) {
+        aborted = true;
+        resolve({ ok: false, reason: `tar -tzf input error: ${String(e)}` });
       }
     });
     child.stdin.end(tarBuffer);
@@ -201,7 +212,18 @@ async function listTarTypeChars(
     child.on("error", (e) => {
       clearTimeout(watchdog);
       if (!aborted) {
+        aborted = true;
         resolve({ ok: false, reason: `tar -tzvf error: ${String(e)}` });
+      }
+    });
+    child.stdin.on("error", (e: NodeJS.ErrnoException) => {
+      if (aborted && e.code === "EPIPE") {
+        return;
+      }
+      clearTimeout(watchdog);
+      if (!aborted) {
+        aborted = true;
+        resolve({ ok: false, reason: `tar -tzvf input error: ${String(e)}` });
       }
     });
     child.stdin.end(tarBuffer);
@@ -386,28 +408,50 @@ async function unpackTar(tarBuffer: Buffer, destDir: string): Promise<void> {
       },
     );
     let stderrOut = "";
-    const watchdog = setTimeout(() => {
+    let settled = false;
+    let watchdog: ReturnType<typeof setTimeout>;
+    const fail = (error: Error): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(watchdog);
+      reject(error);
+    };
+    const succeed = (): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(watchdog);
+      resolve();
+    };
+    watchdog = setTimeout(() => {
       try {
         child.kill("SIGKILL");
       } catch {
         /* already gone */
       }
-      reject(new Error(`tar unpack timed out after ${TAR_UNPACK_TIMEOUT_MS}ms`));
+      fail(new Error(`tar unpack timed out after ${TAR_UNPACK_TIMEOUT_MS}ms`));
     }, TAR_UNPACK_TIMEOUT_MS);
     child.stderr.on("data", (chunk: Buffer) => {
       stderrOut += chunk.toString();
     });
     child.on("close", (code) => {
-      clearTimeout(watchdog);
       if (code !== 0) {
-        reject(new Error(`tar unpack exited ${code}: ${stderrOut.slice(0, 300)}`));
+        fail(new Error(`tar unpack exited ${code}: ${stderrOut.slice(0, 300)}`));
         return;
       }
-      resolve();
+      succeed();
     });
     child.on("error", (e) => {
-      clearTimeout(watchdog);
-      reject(e);
+      fail(e);
+    });
+    child.stdin.on("error", (e: NodeJS.ErrnoException) => {
+      if (settled && e.code === "EPIPE") {
+        return;
+      }
+      fail(e);
     });
     child.stdin.end(tarBuffer);
   });
@@ -677,3 +721,8 @@ export function createDirFetchTool(): AnyAgentTool {
     },
   };
 }
+
+export const testing = {
+  preValidateTarball,
+  validateTarUncompressedBudget,
+};

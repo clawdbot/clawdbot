@@ -3,11 +3,14 @@ import fs from "node:fs/promises";
 import {
   acquireSessionWriteLock,
   appendSessionTranscriptMessage,
+  embeddedAgentLog,
   emitSessionTranscriptUpdate,
+  formatErrorMessage,
   resolveSessionWriteLockOptions,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptResult,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -94,6 +97,128 @@ export async function buildResolvedCodexUserPromptMessage(
   );
 }
 
+export async function mirrorTranscriptBestEffort(params: {
+  params: EmbeddedRunAttemptParams;
+  agentId?: string;
+  notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  result: EmbeddedRunAttemptResult;
+  sessionKey?: string;
+  cwd: string;
+  threadId: string;
+  turnId: string;
+}): Promise<void> {
+  try {
+    const messages = await resolveFinalCodexMirrorMessages({
+      params: params.params,
+      messagesSnapshot: params.result.messagesSnapshot,
+      turnId: params.turnId,
+    });
+    const mirrorResult = await mirrorCodexAppServerTranscript({
+      sessionFile: params.params.sessionFile,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.params.sessionId,
+      cwd: params.cwd,
+      messages,
+      // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
+      // with a per-turn `attachCodexMirrorIdentity` value carrying its own
+      // turnId, so distinct turns produce distinct dedupe keys via the
+      // identity (not via the scope). Dropping `turnId` from the scope here is
+      // what lets a re-emitted prior-turn entry collide with its existing key.
+      idempotencyScope: `codex-app-server:${params.threadId}`,
+      config: params.params.config,
+    });
+    for (const message of mirrorResult.userMessagesPresent) {
+      params.notifyUserMessagePersisted(message);
+    }
+  } catch (error) {
+    embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
+  }
+}
+
+export async function resolveFinalCodexMirrorMessages(params: {
+  params: EmbeddedRunAttemptParams;
+  messagesSnapshot: AgentMessage[];
+  turnId: string;
+}): Promise<AgentMessage[]> {
+  if (
+    params.params.suppressNextUserMessagePersistence ||
+    !params.params.userTurnTranscriptRecorder
+  ) {
+    return params.messagesSnapshot;
+  }
+  const resolvedPrompt = attachCodexMirrorIdentity(
+    await buildResolvedCodexUserPromptMessage(params.params),
+    `${params.turnId}:prompt`,
+  );
+  const firstUserIndex = params.messagesSnapshot.findIndex((message) => message.role === "user");
+  if (firstUserIndex === -1) {
+    return [resolvedPrompt, ...params.messagesSnapshot];
+  }
+  const messages = params.messagesSnapshot.slice();
+  messages[firstUserIndex] = resolvedPrompt;
+  return messages;
+}
+
+export function createCodexAppServerUserMessagePersistenceNotifier(
+  runParams: EmbeddedRunAttemptParams,
+): (message: Extract<AgentMessage, { role: "user" }>) => void {
+  let notified = false;
+  return (message) => {
+    if (notified) {
+      return;
+    }
+    notified = true;
+    runParams.userTurnTranscriptRecorder?.markRuntimePersisted(message);
+    try {
+      runParams.onUserMessagePersisted?.(message);
+    } catch (error) {
+      embeddedAgentLog.warn("codex app-server user persistence notification failed", {
+        error: formatErrorMessage(error),
+      });
+    }
+  };
+}
+
+export async function mirrorPromptAtTurnStartBestEffort(params: {
+  params: EmbeddedRunAttemptParams;
+  agentId?: string;
+  notifyUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  sessionKey?: string;
+  cwd: string;
+  threadId: string;
+  turnId: string;
+}): Promise<void> {
+  if (params.params.suppressNextUserMessagePersistence) {
+    return;
+  }
+  try {
+    const mirrorPromise = (async () => {
+      const userPromptMessage = attachCodexMirrorIdentity(
+        await buildResolvedCodexUserPromptMessage(params.params),
+        `${params.turnId}:prompt`,
+      );
+      const mirrorResult = await mirrorCodexAppServerTranscript({
+        sessionFile: params.params.sessionFile,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.params.sessionId,
+        cwd: params.cwd,
+        messages: [userPromptMessage],
+        idempotencyScope: `codex-app-server:${params.threadId}`,
+        config: params.params.config,
+      });
+      for (const message of mirrorResult.userMessagesPresent) {
+        params.notifyUserMessagePersisted(message);
+      }
+    })();
+    params.params.userTurnTranscriptRecorder?.markRuntimePersistencePending(mirrorPromise);
+    await mirrorPromise;
+  } catch (error) {
+    embeddedAgentLog.warn("failed to mirror codex app-server prompt at turn start", { error });
+  }
+}
+
 /**
  * Tag a message with a stable logical identity for mirror dedupe. Callers
  * should use a value that is invariant for the same logical message across
@@ -147,6 +272,8 @@ function buildMirrorDedupeIdentity(message: MirroredAgentMessage): string {
 
 export async function mirrorCodexAppServerTranscript(params: {
   sessionFile: string;
+  sessionId?: string;
+  cwd?: string;
   sessionKey?: string;
   agentId?: string;
   messages: AgentMessage[];
@@ -207,6 +334,8 @@ export async function mirrorCodexAppServerTranscript(params: {
         transcriptPath: params.sessionFile,
         message: messageToAppend,
         idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
+        sessionId: params.sessionId,
+        cwd: params.cwd,
         config: params.config,
       });
       if (appendedMessage.role === "user") {

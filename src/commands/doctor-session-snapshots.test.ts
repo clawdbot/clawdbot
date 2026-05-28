@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { saveSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -293,6 +294,43 @@ describe("doctor session snapshot stale runtime metadata", () => {
     const [message] = note.mock.calls[0] as [string, string];
     expect(message).toContain("agent:main");
     expect(message).toContain("skillsSnapshot.resolvedSkills");
+    expect(message).toContain(stalePath);
+  });
+
+  it("hydrates blobbed skills prompts before scanning raw session stores", async () => {
+    const stalePath = path.join(
+      root,
+      "old-runtime",
+      "node_modules",
+      "openclaw",
+      "skills",
+      "doctor",
+      "SKILL.md",
+    );
+    const storePath = path.join(root, "state", "agents", "main", "sessions", "sessions.json");
+    const prompt = `${skillPrompt(stalePath)}\n${"padding\n".repeat(200)}`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main": sessionEntry({
+          skillsSnapshot: {
+            prompt,
+            skills: [{ name: "doctor" }],
+          },
+        }),
+      },
+      { skipMaintenance: true },
+    );
+    const raw = await fs.readFile(storePath, "utf-8");
+    expect(raw).not.toContain(stalePath);
+    expect(raw).toContain("promptRef");
+
+    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = note.mock.calls[0] as [string, string];
+    expect(message).toContain("agent:main");
+    expect(message).toContain("skillsSnapshot.prompt");
     expect(message).toContain(stalePath);
   });
 

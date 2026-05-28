@@ -1,4 +1,4 @@
-import type { CurrentInboundPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
+import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";

@@ -5,6 +5,10 @@
   },
   "enabledByDefault": true,
   "providers": ["deepinfra"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "providerAuthEnvVars": {
+    "deepinfra": ["DEEPINFRA_API_KEY"]
+  },
   "providerEndpoints": [
     {
       "endpointClass": "deepinfra-native",
@@ -33,6 +37,23 @@
         "baseUrl": "https://api.deepinfra.com/v1/openai",
         "api": "openai-completions",
         "models": [
+          {
+            "id": "deepseek-ai/DeepSeek-V4-Flash",
+            "name": "DeepSeek V4 Flash",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
+            "cost": {
+              "input": 0.1,
+              "output": 0.2,
+              "cacheRead": 0.02,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true
+            }
+          },
           {
             "id": "deepseek-ai/DeepSeek-V3.2",
             "name": "DeepSeek V3.2",

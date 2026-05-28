@@ -5,7 +5,7 @@ export {
   embeddedRunMock,
   getReplyFromConfig,
   mockGetReplyFromConfigOnce,
-  piSdkMock,
+  agentDiscoveryMock,
   testState,
   testTailnetIPv4,
   testTailscaleWhois,

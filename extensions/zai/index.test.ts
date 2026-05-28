@@ -1,5 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
@@ -399,5 +402,28 @@ describe("zai provider plugin", () => {
         extraParams: explicit,
       } as never),
     ).toBe(explicit);
+  });
+
+  it("uses deprecated pi agent auth.json for usage auth when modern sources are empty", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-zai-legacy-auth-"));
+    try {
+      const authDir = path.join(home, ".pi", "agent");
+      await fs.mkdir(authDir, { recursive: true });
+      await fs.writeFile(
+        path.join(authDir, "auth.json"),
+        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const provider = await registerSingleProviderPlugin(plugin);
+
+      await expect(
+        provider.resolveUsageAuth?.({
+          env: { HOME: home },
+          resolveApiKeyFromConfigAndStore: () => undefined,
+        } as never),
+      ).resolves.toEqual({ token: "legacy-zai-token" });
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
   });
 });

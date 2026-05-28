@@ -1,6 +1,6 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { vi } from "vitest";
-import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/pi-tools.before-tool-call.state.js";
+import { resetAdjustedParamsByToolCallIdForTests } from "../../../agents/agent-tools.before-tool-call.state.js";
+import type { AgentToolResult } from "../../../agents/runtime/index.js";
 import type {
   CodexAppServerExtensionFactory,
   CodexAppServerToolResultEvent,

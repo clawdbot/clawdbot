@@ -652,7 +652,6 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
-      env: process.env,
     });
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
       cfg: autoEnabledConfig,

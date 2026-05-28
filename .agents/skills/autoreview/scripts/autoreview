@@ -238,6 +238,7 @@ def is_dirty(repo: Path) -> bool:
 
 
 def choose_target(repo: Path, mode: str, base_ref: str | None) -> tuple[str, str | None]:
+    mode = "local" if mode == "uncommitted" else mode
     branch = current_branch(repo)
     if mode == "local" or (mode == "auto" and is_dirty(repo)):
         return "local", None
@@ -889,7 +890,7 @@ def finish_parallel_tests(proc: subprocess.Popen, started: float) -> int:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bundle-driven AI code review.")
-    parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
+    parser.add_argument("--mode", choices=["auto", "local", "uncommitted", "branch", "commit"], default="auto")
     parser.add_argument("--base")
     parser.add_argument("--commit", default="HEAD")
     parser.add_argument("--engine", choices=ENGINES, default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))

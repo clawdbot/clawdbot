@@ -158,7 +158,7 @@ function buildCliEnv(root: string): NodeJS.ProcessEnv {
 }
 
 describe.skipIf(!LIVE)("ollama live", () => {
-  it("runs infer model run through the local CLI path without PI model discovery", async () => {
+  it("runs infer model run through the local CLI path without static model discovery", async () => {
     await withTempOpenClawState(async ({ root }) => {
       const result = await runOpenClawCli(
         [

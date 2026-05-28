@@ -4,7 +4,7 @@ import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 // Unit tests: don't pay the runtime cost of loading/parsing the real skills loader.
-vi.mock("@earendil-works/pi-coding-agent", () => ({
+vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   loadSkillsFromDir: () => ({ skills: [] }),
   formatSkillsForPrompt: () => "",
 }));

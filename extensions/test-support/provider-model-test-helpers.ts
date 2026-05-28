@@ -1,4 +1,4 @@
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type {
   ProviderCatalogContext,
   ProviderResolveDynamicModelContext,

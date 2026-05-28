@@ -4,7 +4,7 @@ import {
   buildGenericCliContextEngineHostSupport,
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   evaluateContextEngineHostSupport,
-  PI_EMBEDDED_CONTEXT_ENGINE_HOST,
+  OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
 } from "./host-compat.js";
 import type { ContextEngine, ContextEngineHostCapability } from "./types.js";
 
@@ -17,7 +17,7 @@ function createEngine(requiredCapabilities: ContextEngineHostCapability[]): Cont
         "agent-run": {
           requiredCapabilities,
           unsupportedMessage:
-            "Use the native Codex or Pi embedded runtime, or switch contextEngine to legacy.",
+            "Use the native Codex or OpenClaw embedded runtime, or switch contextEngine to legacy.",
         },
       },
     },
@@ -67,7 +67,7 @@ describe("context engine host compatibility", () => {
     });
   });
 
-  it("allows native Codex and Pi embedded hosts to satisfy pre-prompt assembly", () => {
+  it("allows native Codex and OpenClaw embedded hosts to satisfy pre-prompt assembly", () => {
     const engine = createEngine(["assemble-before-prompt"]);
 
     assertContextEngineHostSupport({
@@ -78,7 +78,7 @@ describe("context engine host compatibility", () => {
     assertContextEngineHostSupport({
       contextEngine: engine,
       operation: "agent-run",
-      host: PI_EMBEDDED_CONTEXT_ENGINE_HOST,
+      host: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
     });
   });
 

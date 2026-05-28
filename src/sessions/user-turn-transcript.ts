@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 import { mimeTypeFromFilePath } from "../media/mime.js";
 import {

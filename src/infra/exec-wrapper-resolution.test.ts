@@ -366,6 +366,33 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     });
   });
 
+  test("blocks script transcript wrappers even when the inner command is parseable", () => {
+    expect(
+      resolveDispatchWrapperTrustPlan(
+        ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
+        undefined,
+        "darwin",
+      ),
+    ).toEqual({
+      argv: ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
+      wrappers: ["script"],
+      policyBlocked: true,
+      blockedWrapper: "script",
+    });
+  });
+
+  test.each([
+    ["short output option", ["time", "-o", "/tmp/time.log", "bash", "-lc", "echo hi"]],
+    ["long output option", ["time", "--output=/tmp/time.log", "bash", "-lc", "echo hi"]],
+  ])("blocks GNU time file-output wrappers for %s", (_name, argv) => {
+    expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
+      argv,
+      wrappers: ["time"],
+      policyBlocked: true,
+      blockedWrapper: "time",
+    });
+  });
+
   test("blocks wrapper overflow beyond the configured depth", () => {
     expect(
       resolveDispatchWrapperTrustPlan(["nohup", "timeout", "5s", "bash", "-lc", "echo hi"], 1),

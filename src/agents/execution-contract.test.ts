@@ -137,7 +137,7 @@ describe("resolveEffectiveExecutionContract", () => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "strict-agentic",
             },
           },
@@ -156,7 +156,7 @@ describe("resolveEffectiveExecutionContract", () => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "default",
             },
           },
@@ -175,7 +175,7 @@ describe("resolveEffectiveExecutionContract", () => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
-            embeddedPi: {
+            embeddedAgent: {
               executionContract: "strict-agentic",
             },
           },

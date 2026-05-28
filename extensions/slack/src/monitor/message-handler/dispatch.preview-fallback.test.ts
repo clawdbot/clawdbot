@@ -1238,6 +1238,42 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
+  it("does not reuse draft cleanup after a normally delivered final reply", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "answer", mediaUrl: "https://example.com/final.png" },
+      },
+      { kind: "final", payload: { text: "late cleanup failed", isError: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    const firstDelivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(firstDelivered.replies).toEqual([
+      { text: "answer", mediaUrl: "https://example.com/final.png" },
+    ]);
+    const lateDelivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 1, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(lateDelivered.replies).toEqual([{ text: "late cleanup failed", isError: true }]);
+  });
+
   it("suppresses block streaming when Slack draft preview streaming is active", async () => {
     mockedBlockStreamingEnabled = true;
 

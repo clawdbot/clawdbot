@@ -21,7 +21,7 @@ docsRefs:
 codeRefs:
   - extensions/qa-lab/src/suite-runtime-agent-process.ts
   - extensions/qa-lab/src/suite-runtime-transport.ts
-  - src/agents/pi-embedded-runner/run/incomplete-turn.ts
+  - src/agents/embedded-agent-runner/run/incomplete-turn.ts
 execution:
   kind: flow
   summary: Verify fake secret fixtures are not echoed into channel-visible output.

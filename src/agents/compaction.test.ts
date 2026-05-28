@@ -1,8 +1,8 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { AssistantMessage, ToolResultMessage } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import "./test-helpers/pi-coding-agent-token-mock.js";
+import "./test-helpers/agent-session-token-mock.js";
 
 let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
 let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;

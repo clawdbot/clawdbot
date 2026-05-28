@@ -37,13 +37,13 @@ function makeCell(
 
 function makeRuntimeParity(
   scenarioId: string,
-  pi: RuntimeParityCell,
+  openclaw: RuntimeParityCell,
   codex: RuntimeParityCell,
 ): RuntimeParityResult {
   return {
     scenarioId,
     drift: "none",
-    cells: { pi, codex },
+    cells: { openclaw, codex },
   };
 }
 
@@ -56,7 +56,7 @@ function makeLiveSummary(runtimeParity: RuntimeParityResult[]): TokenEfficiencyS
     })),
     run: {
       providerMode: "live-frontier",
-      runtimePair: ["pi", "codex"],
+      runtimePair: ["openclaw", "codex"],
     },
   };
 }
@@ -68,7 +68,7 @@ describe("token efficiency report", () => {
       summary: makeLiveSummary([
         makeRuntimeParity(
           "codex-savings",
-          makeCell("pi", { inputTokens: 120, outputTokens: 80, totalTokens: 200 }),
+          makeCell("openclaw", { inputTokens: 120, outputTokens: 80, totalTokens: 200 }),
           makeCell("codex", { inputTokens: 60, outputTokens: 40, totalTokens: 100 }),
         ),
       ]),
@@ -90,7 +90,7 @@ describe("token efficiency report", () => {
       summary: makeLiveSummary([
         makeRuntimeParity(
           "runtime-tool-fs-read",
-          makeCell("pi", { inputTokens: 72_000, outputTokens: 381, totalTokens: 72_381 }, [
+          makeCell("openclaw", { inputTokens: 72_000, outputTokens: 381, totalTokens: 72_381 }, [
             makeToolCall("fs.read"),
             makeToolCall("fs.read"),
           ]),
@@ -120,7 +120,7 @@ describe("token efficiency report", () => {
       summary: makeLiveSummary([
         makeRuntimeParity(
           "missing-live-usage",
-          makeCell("pi", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
+          makeCell("openclaw", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
           makeCell("codex", { inputTokens: 0, outputTokens: 0, totalTokens: 0 }),
         ),
       ]),
@@ -128,7 +128,7 @@ describe("token efficiency report", () => {
 
     expect(report.pass).toBe(false);
     expect(report.failures).toEqual([
-      "missing-live-usage pi live usage totalTokens=0",
+      "missing-live-usage openclaw live usage totalTokens=0",
       "missing-live-usage codex live usage totalTokens=0",
     ]);
   });
@@ -142,14 +142,14 @@ describe("token efficiency report", () => {
             status: "pass",
             runtimeParity: makeRuntimeParity(
               "mock-regression",
-              makeCell("pi", { inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
+              makeCell("openclaw", { inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
               makeCell("codex", { inputTokens: 130, outputTokens: 0, totalTokens: 130 }),
             ),
           },
         ],
         run: {
           providerMode: "mock-openai",
-          runtimePair: ["pi", "codex"],
+          runtimePair: ["openclaw", "codex"],
         },
       },
     });
@@ -170,12 +170,12 @@ describe("token efficiency report", () => {
       summary: makeLiveSummary([
         makeRuntimeParity(
           "codex-savings",
-          makeCell("pi", { inputTokens: 100, outputTokens: 100, totalTokens: 200 }),
+          makeCell("openclaw", { inputTokens: 100, outputTokens: 100, totalTokens: 200 }),
           makeCell("codex", { inputTokens: 50, outputTokens: 50, totalTokens: 100 }),
         ),
         makeRuntimeParity(
           "codex-regression",
-          makeCell("pi", { inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
+          makeCell("openclaw", { inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
           makeCell("codex", { inputTokens: 130, outputTokens: 0, totalTokens: 130 }),
         ),
       ]),

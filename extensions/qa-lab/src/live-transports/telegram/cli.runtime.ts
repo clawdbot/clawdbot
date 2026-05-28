@@ -1,8 +1,6 @@
+import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import type { LiveTransportQaCommandOptions } from "../shared/live-transport-cli.js";
-import {
-  printLiveTransportQaArtifacts,
-  resolveLiveTransportQaRunOptions,
-} from "../shared/live-transport-cli.runtime.js";
+import { resolveLiveTransportQaRunOptions } from "../shared/live-transport-cli.runtime.js";
 import { listTelegramQaScenarioCatalog, runTelegramQaLive } from "./telegram-live.runtime.js";
 
 export async function runQaTelegramCommand(opts: LiveTransportQaCommandOptions) {

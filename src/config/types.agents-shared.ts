@@ -26,12 +26,12 @@ export type AgentToolModelConfig =
     };
 
 export type AgentEmbeddedHarnessConfig = {
-  /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */
+  /** Agent runtime id. Omitted uses "openclaw"; "auto" opts into plugin harness auto-selection. */
   runtime?: string;
 };
 
 export type AgentRuntimePolicyConfig = {
-  /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */
+  /** Agent runtime id. Omitted uses "openclaw"; "auto" opts into plugin harness auto-selection. */
   id?: string;
 };
 

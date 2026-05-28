@@ -3,7 +3,6 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -21,9 +20,11 @@ import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.j
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { normalizePollInput } from "../../polls.js";
-import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
+import {
+  normalizeSessionKeyPreservingOpaquePeerIds,
+  parseThreadSessionSuffix,
+} from "../../sessions/session-key-utils.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -38,6 +39,7 @@ import {
   validatePollParams,
   validateSendParams,
 } from "../protocol/index.js";
+import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -133,16 +135,9 @@ async function resolveRequestedChannel(params: {
     };
   }
   const runtimeConfig = params.context.getRuntimeConfig();
-  const currentSnapshot = getCurrentPluginMetadataSnapshot({
+  const cfg = resolveGatewayPluginConfig({
     config: runtimeConfig,
-    env: process.env,
   });
-  const cfg = applyPluginAutoEnable({
-    config: runtimeConfig,
-    env: process.env,
-    manifestRegistry: currentSnapshot?.manifestRegistry,
-    discovery: currentSnapshot?.discovery,
-  }).config;
   let channel = normalizedChannel;
   if (!channel) {
     try {
@@ -573,7 +568,11 @@ export const sendHandlers: GatewayRequestHandlers = {
         const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
         const mirrorText = mirrorProjection.text;
         const mirrorMediaUrls = mirrorProjection.mediaUrls;
-        const providedSessionKey = normalizeOptionalLowercaseString(request.sessionKey);
+        // Preserve opaque, case-sensitive peer IDs (e.g. Matrix room ids) on an
+        // explicit session key instead of raw-lowercasing it (openclaw#75670).
+        // Non-enrolled channels still canonicalize to lowercase via the registry.
+        const providedSessionKey =
+          normalizeSessionKeyPreservingOpaquePeerIds(request.sessionKey) || undefined;
         const explicitAgentId = normalizeOptionalString(request.agentId);
         const sessionAgentId = providedSessionKey
           ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })

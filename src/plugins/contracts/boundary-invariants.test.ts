@@ -78,7 +78,8 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "resolvePluginConfigObject(",
     "const startupPluginConfig = (api.pluginConfig ?? {})",
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-    "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
+    "const currentPluginConfig = resolveCurrentPluginConfig(config);",
+    "const currentGuardrail = currentPluginConfig?.guardrail;",
   ],
   "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
     "resolvePluginConfigObject(",
@@ -270,7 +271,7 @@ function collectBundledExtensionImports(source: string): string[] {
   }
 
   visit(sourceFile);
-  return specifiers.filter((specifier) => specifier.includes("extensions/"));
+  return specifiers.filter((specifier) => /(?:^|\/)extensions\/[^/]+\//u.test(specifier));
 }
 
 function isBundledExtensionImportHelperCall(expression: ts.Expression): boolean {

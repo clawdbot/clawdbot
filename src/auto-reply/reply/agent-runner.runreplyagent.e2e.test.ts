@@ -29,9 +29,9 @@ type AgentRunParams = {
 };
 
 const state = vi.hoisted(() => ({
-  compactEmbeddedPiSessionMock: vi.fn(),
-  queueEmbeddedPiMessageMock: vi.fn(),
-  runEmbeddedPiAgentMock: vi.fn(),
+  compactEmbeddedAgentSessionMock: vi.fn(),
+  queueEmbeddedAgentMessageMock: vi.fn(),
+  runEmbeddedAgentMock: vi.fn(),
 }));
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
@@ -94,15 +94,15 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  compactEmbeddedPiSession: (params: unknown) => state.compactEmbeddedPiSessionMock(params),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
+vi.mock("../../agents/embedded-agent.js", () => ({
+  compactEmbeddedAgentSession: (params: unknown) => state.compactEmbeddedAgentSessionMock(params),
+  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: (params: unknown) => state.runEmbeddedAgentMock(params),
 }));
 
-vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
-  queueEmbeddedPiMessage: (sessionId: string, prompt: string, options: unknown) =>
-    state.queueEmbeddedPiMessageMock(sessionId, prompt, options),
+vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+  queueEmbeddedAgentMessage: (sessionId: string, prompt: string, options: unknown) =>
+    state.queueEmbeddedAgentMessageMock(sessionId, prompt, options),
 }));
 
 vi.mock("./queue.js", () => ({
@@ -120,19 +120,19 @@ beforeAll(async () => {
 
 beforeEach(() => {
   replyRunTesting.resetReplyRunRegistry();
-  state.compactEmbeddedPiSessionMock.mockReset();
-  state.compactEmbeddedPiSessionMock.mockResolvedValue({
+  state.compactEmbeddedAgentSessionMock.mockReset();
+  state.compactEmbeddedAgentSessionMock.mockResolvedValue({
     ok: true,
     compacted: false,
     reason: "test-default",
   });
-  state.runEmbeddedPiAgentMock.mockReset();
-  state.runEmbeddedPiAgentMock.mockResolvedValue({
+  state.runEmbeddedAgentMock.mockReset();
+  state.runEmbeddedAgentMock.mockResolvedValue({
     payloads: [{ text: "final" }],
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
-  state.queueEmbeddedPiMessageMock.mockReset();
-  state.queueEmbeddedPiMessageMock.mockReturnValue(false);
+  state.queueEmbeddedAgentMessageMock.mockReset();
+  state.queueEmbeddedAgentMessageMock.mockReturnValue(false);
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
@@ -247,7 +247,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
     active.complete();
   });
@@ -282,8 +282,8 @@ describe("runReplyAgent heartbeat followup guard", () => {
     active.complete();
     await pending;
 
-    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const [call] = mockCallArgs(state.runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
     expect((call as AgentRunParams).sessionId).toBe("post-compact-session");
     expect((call as AgentRunParams).sessionFile).toBe("/tmp/post-compact.jsonl");
   });
@@ -300,7 +300,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -316,12 +316,12 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
   it("drops heartbeat runs before steering active streams", async () => {
-    state.queueEmbeddedPiMessageMock.mockReturnValueOnce(true);
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const { run, typing } = createMinimalRun({
       opts: { isHeartbeat: true },
       isActive: true,
@@ -334,9 +334,9 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const result = await run();
 
     expect(result).toBeUndefined();
-    expect(state.queueEmbeddedPiMessageMock).not.toHaveBeenCalled();
+    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -352,7 +352,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
 
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("keeps typing alive when a followup is queued behind a live active run", async () => {
@@ -369,7 +369,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.startTypingLoop).toHaveBeenCalledTimes(1);
     expect(typing.refreshTypingTtl).toHaveBeenCalledTimes(1);
     expect(typing.cleanup).not.toHaveBeenCalled();
@@ -389,7 +389,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(result).toBeUndefined();
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledTimes(1);
-    expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -398,7 +398,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     const persistSpy = vi
       .spyOn(accounting, "persistRunSessionUsage")
       .mockRejectedValueOnce(new Error("persist exploded"));
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: { agentMeta: { usage: { input: 1, output: 1 } } },
     });
@@ -433,7 +433,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "private final" }],
       meta: {},
     });
@@ -461,7 +461,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "denied final" }],
       meta: {},
     });
@@ -487,7 +487,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hidden reasoning", isReasoning: true }, { text: "visible final" }],
       meta: {},
     });
@@ -513,7 +513,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     };
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "Sent daily summary to channel." }],
       meta: {},
     });
@@ -544,7 +544,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const sessionStore = { main: sessionEntry };
     const storePath = await createSessionStoreFile(sessionEntry);
     const longRemainder = "Sent daily digest to channel. ".repeat(12).trimEnd(); // ~360 chars, > 300
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: `HEARTBEAT_OK ${longRemainder}` }],
       meta: {},
     });
@@ -568,7 +568,7 @@ describe("runReplyAgent pending final delivery capture", () => {
 describe("runReplyAgent typing (heartbeat)", () => {
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -585,7 +585,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("never signals typing for heartbeat runs", async () => {
     const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -611,7 +611,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       "utf-8",
     );
     try {
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "HEARTBEAT_OK" }],
         meta: {},
       });
@@ -664,7 +664,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     for (const testCase of cases) {
       const onPartialReply = vi.fn();
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         for (const text of testCase.partials) {
           await params.onPartialReply?.({ text });
         }
@@ -700,7 +700,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("keeps final text blocks after partial preview streaming", async () => {
     const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "First block\n\nSecond block" });
       return {
         payloads: [{ text: "First block" }, { text: "Second block" }],
@@ -726,7 +726,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
     const onReasoningStream = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       expect(params.silentExpected).toBe(true);
       await params.onReasoningStream?.({ text: "Reasoning:\nI am trying to send NO_REPLY now." });
       await params.onPartialReply?.({ text: "I am trying to send NO_REPLY now." });
@@ -751,7 +751,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
     const onReasoningStream = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       expect(params.silentExpected).toBe(true);
       await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
       await params.onPartialReply?.({ text: "NO_REPLY" });
@@ -773,7 +773,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onAssistantMessageStart?.();
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -788,7 +788,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("starts typing from reasoning stream in thinking mode", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onReasoningStream?.({ text: "Reasoning:\n_step_" });
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
@@ -806,7 +806,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("keeps assistant partial streaming enabled when reasoning mode is stream", async () => {
     const onPartialReply = vi.fn();
     const onReasoningStream = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onReasoningStream?.({ text: "Reasoning:\n_step_" });
       await params.onPartialReply?.({ text: "answer chunk" });
       return { payloads: [{ text: "final" }], meta: {} };
@@ -823,7 +823,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("suppresses typing in never mode", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "hi" });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -839,7 +839,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("signals typing on normalized block replies", async () => {
     const onBlockReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onBlockReply?.({ text: "\n\nchunk", mediaUrls: [] });
       return { payloads: [{ text: "final" }], meta: {} };
     });
@@ -863,7 +863,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("strips workflow function response scaffolding from final delivery", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
       payloads: [
         {
           text: [
@@ -906,7 +906,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     for (const testCase of cases) {
       const onToolResult = vi.fn();
-      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         await params.onToolResult?.({ text: testCase.toolText, mediaUrls: [] });
         return { payloads: [{ text: "final" }], meta: {} };
       });
@@ -936,7 +936,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("preserves channelData on forwarded tool results", async () => {
     const onToolResult = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onToolResult?.({
         text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
         channelData: {
@@ -970,7 +970,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
   it("forwards media-only tool results without typing text", async () => {
     const onToolResult = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onToolResult?.({
         mediaUrls: ["/tmp/generated.png"],
       });
@@ -996,7 +996,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
     vi.useFakeTimers();
     let calls = 0;
-    state.runEmbeddedPiAgentMock.mockImplementation(async () => {
+    state.runEmbeddedAgentMock.mockImplementation(async () => {
       calls += 1;
       if (calls === 1) {
         throw new Error("502 Bad Gateway");
@@ -1028,7 +1028,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         updatedAt: Date.now(),
       };
       const sessionStore = { main: sessionEntry };
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "final" }],
         meta: {},
       });
@@ -1098,7 +1098,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const storePath = join(storeRoot, "sessions.json");
     await writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
     try {
-      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
         payloads: [{ text: "subagent timed out" }],
         meta: {
           agentMeta: {
@@ -1181,7 +1181,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       model: "gpt-5.5",
     };
     const sessionStore = { main: sessionEntry };
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1245,7 +1245,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     const onBlockReply = vi.fn();
 
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onBlockReply?.({ text: "streamed answer" });
       return { payloads: [], meta: {} };
     });
@@ -1293,7 +1293,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -1343,7 +1343,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces a configured backend failure when fallback produces no visible reply", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: {},
     });
@@ -1390,7 +1390,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces a configured backend failure when fallback returns no payloads", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: {},
     });
@@ -1447,7 +1447,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       modelOverrideFallbackOriginModel: "gemma-4-e4b-it",
     };
     const sessionStore = { main: sessionEntry };
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: {},
     });
@@ -1475,7 +1475,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces fallback without silence failure when fallback already replied through a messaging tool", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "already sent" }],
       messagingToolSentTexts: ["already sent"],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
@@ -1527,7 +1527,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("does not treat whitespace-only messaging evidence as fallback delivery", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTexts: ["  "],
       messagingToolSentMediaUrls: ["\t"],
@@ -1581,7 +1581,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces fallback without silence failure when fallback already completed a cron side effect", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       successfulCronAdds: 1,
       meta: {},
@@ -1632,7 +1632,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces fallback without silence failure when fallback committed target-only messaging delivery", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
       meta: {},
@@ -1683,7 +1683,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("announces fallback without silence failure when fallback already delivered an approval prompt", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
       didSendDeterministicApprovalPrompt: true,
       meta: {},
@@ -1731,7 +1731,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("preserves intentional fallback silence when the turn permits silent replies", async () => {
-    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       meta: {},
     });
@@ -1783,7 +1783,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -1839,7 +1839,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -1909,7 +1909,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -1989,7 +1989,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const sessionStore = { main: sessionEntry };
     let callCount = 0;
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {},
     });
@@ -2089,7 +2089,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       };
       const sessionStore = { main: sessionEntry };
 
-      state.runEmbeddedPiAgentMock.mockResolvedValue({
+      state.runEmbeddedAgentMock.mockResolvedValue({
         payloads: [{ text: "final" }],
         meta: {},
       });
@@ -2140,7 +2140,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const storePath = join(dir, "sessions.json");
     await writeFile(storePath, JSON.stringify({ main: sessionEntry }), "utf8");
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
+    state.runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "final" }],
       meta: {
         agentMeta: {
@@ -2184,7 +2184,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
       payloads: [],
       meta: {
         durationMs: 1,
@@ -2207,7 +2207,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
       payloads: [{ text: "   \n\t  ", isError: true }],
       meta: {
         durationMs: 1,
@@ -2230,7 +2230,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
       throw new Error("400 Incorrect role information");
     });
 
@@ -2243,7 +2243,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 
   it("rewrites Bun socket errors into friendly text", async () => {
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+    state.runEmbeddedAgentMock.mockImplementationOnce(async () => ({
       payloads: [
         {
           text: "TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",

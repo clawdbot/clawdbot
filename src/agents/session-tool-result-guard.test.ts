@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { castAgentMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -173,7 +173,7 @@ describe("installSessionToolResultGuard", () => {
     expectPersistedRoles(sm, ["assistant", "toolResult"]);
   });
 
-  it("applies pi-style count-based truncation wording when persisting oversized tool results", () => {
+  it("applies count-based truncation wording when persisting oversized tool results", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
 

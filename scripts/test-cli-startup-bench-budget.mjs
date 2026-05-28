@@ -86,6 +86,14 @@ function resolveCurrentReportPath() {
   if (opts.report) {
     return opts.report;
   }
+  const build = spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (build.status !== 0) {
+    process.exit(build.status ?? 1);
+  }
   const reportPath = `.artifacts/cli-startup-bench.current.json`;
   fs.mkdirSync(".artifacts", { recursive: true });
   const args = [

@@ -9,7 +9,7 @@ export {
 } from "../../../../src/agents/agent-scope.js";
 export { requireApiKey, resolveApiKeyForProvider } from "../../../../src/agents/model-auth.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../../../src/agents/pi-settings.js";
+export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../../../src/agents/agent-settings.js";
 export {
   asToolParamsRecord,
   jsonResult,

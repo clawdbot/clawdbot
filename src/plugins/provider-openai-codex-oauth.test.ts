@@ -2,45 +2,36 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
-const mocks = vi.hoisted(() => ({
-  loginOpenAICodex: vi.fn(),
-  runOpenAIOAuthTlsPreflight: vi.fn(),
-  formatOpenAIOAuthTlsPreflightFix: vi.fn(),
+const providerRuntimeMocks = vi.hoisted(() => ({
+  loadActivatedBundledPluginPublicSurfaceModuleSync: vi.fn(),
+  resolveProviderRuntimePlugin: vi.fn(),
+  runOAuth: vi.fn(),
+  runFacadeOAuth: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
-  );
-  return {
-    ...actual,
-    loginOpenAICodex: mocks.loginOpenAICodex,
-  };
-});
+vi.mock("./provider-hook-runtime.js", () => ({
+  resolveProviderRuntimePlugin: providerRuntimeMocks.resolveProviderRuntimePlugin,
+}));
 
-vi.mock("./provider-openai-codex-oauth-tls.js", () => ({
-  runOpenAIOAuthTlsPreflight: mocks.runOpenAIOAuthTlsPreflight,
-  formatOpenAIOAuthTlsPreflightFix: mocks.formatOpenAIOAuthTlsPreflightFix,
+vi.mock("../plugin-sdk/facade-runtime.js", () => ({
+  loadActivatedBundledPluginPublicSurfaceModuleSync:
+    providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
 }));
 
 import { loginOpenAICodexOAuth } from "./provider-openai-codex-oauth.js";
 
-const CODEX_AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize?state=abc";
-
-type CodexLoginOptions = {
-  onAuth: (event: { url: string }) => Promise<void>;
-  onManualCodeInput?: () => Promise<string>;
-};
-
-function createPrompter() {
+function createPrompter(): WizardPrompter {
   const spin = { update: vi.fn(), stop: vi.fn() };
-  const text = vi.fn(async () => "http://localhost:1455/auth/callback?code=test");
-  const prompter: Pick<WizardPrompter, "note" | "progress" | "text"> = {
+  return {
+    intro: vi.fn(async () => {}),
+    outro: vi.fn(async () => {}),
     note: vi.fn(async () => {}),
+    select: vi.fn(),
+    multiselect: vi.fn(),
+    text: vi.fn(async () => "http://localhost:1455/auth/callback?code=test"),
+    confirm: vi.fn(),
     progress: vi.fn(() => spin),
-    text,
-  };
-  return { prompter: prompter as unknown as WizardPrompter, spin, text };
+  } as unknown as WizardPrompter;
 }
 
 function createRuntime(): RuntimeEnv {
@@ -53,477 +44,151 @@ function createRuntime(): RuntimeEnv {
   };
 }
 
-function createCodexCredentials(extra: Record<string, unknown> = {}) {
+function createCredential() {
   return {
-    provider: "openai-codex" as const,
+    type: "oauth" as const,
+    provider: "openai-codex",
     access: "access-token",
     refresh: "refresh-token",
     expires: Date.now() + 60_000,
     email: "user@example.com",
-    ...extra,
   };
-}
-
-function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
-}
-
-function expectMockFirstArgFields(mock: unknown, expected: Record<string, unknown>): void {
-  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  const [arg] = calls[0] ?? [];
-  expectFields(arg, expected);
-}
-
-function expectRuntimeErrorContains(runtime: RuntimeEnv, fragment: string): void {
-  expect(
-    (runtime.error as unknown as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls?.some(
-      ([message]) => String(message).includes(fragment),
-    ),
-    `runtime.error contains ${fragment}`,
-  ).toBe(true);
-}
-
-function expectPromptTextCall(prompter: WizardPrompter): void {
-  const textMock = prompter.text as unknown as { mock?: { calls?: Array<Array<unknown>> } };
-  const [arg] = textMock.mock?.calls?.[0] ?? [];
-  expectFields(arg, { message: "Paste the authorization code (or full redirect URL):" });
-  expect(typeof (arg as { validate?: unknown }).validate).toBe("function");
-}
-
-async function startCodexAuth(opts: CodexLoginOptions) {
-  await opts.onAuth({ url: CODEX_AUTHORIZE_URL });
-  expect(opts.onManualCodeInput).toBeTypeOf("function");
-}
-
-async function runCodexOAuth(params: {
-  isRemote: boolean;
-  openUrl?: (url: string) => Promise<void>;
-}) {
-  const { prompter, spin } = createPrompter();
-  const runtime = createRuntime();
-  const result = await loginOpenAICodexOAuth({
-    prompter,
-    runtime,
-    isRemote: params.isRemote,
-    openUrl: params.openUrl ?? (async () => {}),
-  });
-  return { result, prompter, spin, runtime };
 }
 
 describe("loginOpenAICodexOAuth", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({ ok: true });
-    mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("tls fix");
-  });
-
-  it("returns credentials on successful oauth login", async () => {
-    const creds = createCodexCredentials();
-    mocks.loginOpenAICodex.mockResolvedValue(creds);
-
-    const { result, spin, runtime } = await runCodexOAuth({ isRemote: false });
-
-    expect(result).toEqual(creds);
-    expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
-    expectMockFirstArgFields(mocks.loginOpenAICodex, { originator: "openclaw" });
-    expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
-    expect(runtime.error).not.toHaveBeenCalled();
-  });
-
-  it("passes through Pi-provided authorize URLs without mutation", async () => {
-    const creds = createCodexCredentials();
-    mocks.loginOpenAICodex.mockImplementation(
-      async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
-        await opts.onAuth({
-          url: "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
-        });
-        return creds;
-      },
-    );
-
-    const openUrl = vi.fn(async () => {});
-    const { runtime } = await runCodexOAuth({ isRemote: false, openUrl });
-
-    expect(openUrl).toHaveBeenCalledWith(
-      "https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Open: https://auth.openai.com/oauth/authorize?scope=openid+profile+email+offline_access&state=abc",
-    );
-  });
-
-  it("preserves authorize urls that omit scope", async () => {
-    const creds = createCodexCredentials();
-    mocks.loginOpenAICodex.mockImplementation(
-      async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
-        await opts.onAuth({ url: CODEX_AUTHORIZE_URL });
-        return creds;
-      },
-    );
-
-    const openUrl = vi.fn(async () => {});
-    await runCodexOAuth({ isRemote: false, openUrl });
-
-    expect(openUrl).toHaveBeenCalledWith(CODEX_AUTHORIZE_URL);
-  });
-
-  it("preserves slash-terminated authorize paths too", async () => {
-    const creds = createCodexCredentials();
-    mocks.loginOpenAICodex.mockImplementation(
-      async (opts: { onAuth: (event: { url: string }) => Promise<void> }) => {
-        await opts.onAuth({
-          url: "https://auth.openai.com/oauth/authorize/?state=abc",
-        });
-        return creds;
-      },
-    );
-
-    const openUrl = vi.fn(async () => {});
-    await runCodexOAuth({ isRemote: false, openUrl });
-
-    expect(openUrl).toHaveBeenCalledWith("https://auth.openai.com/oauth/authorize/?state=abc");
-  });
-
-  it("reports oauth errors and rethrows", async () => {
-    mocks.loginOpenAICodex.mockRejectedValue(new Error("oauth failed"));
-
-    const { prompter, spin } = createPrompter();
-    const runtime = createRuntime();
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: true,
-        openUrl: async () => {},
-      }),
-    ).rejects.toThrow("oauth failed");
-
-    expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
-    expectRuntimeErrorContains(runtime, "oauth failed");
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
-      "OAuth help",
-    );
-  });
-
-  it("describes remote OAuth paste first while noting automatic callback completion", async () => {
-    const creds = createCodexCredentials();
-    mocks.loginOpenAICodex.mockResolvedValue(creds);
-
-    const { prompter } = await runCodexOAuth({ isRemote: true });
-    const noteCalls = (prompter.note as unknown as { mock?: { calls?: Array<Array<unknown>> } })
-      .mock?.calls;
-    const [message, title] = noteCalls?.[0] ?? [];
-
-    expect(title).toBe("OpenAI Codex OAuth");
-    expect(message).toContain("A URL will be shown for you to open in your LOCAL browser.");
-    expect(message).toContain("Open it, sign in, then paste the redirect URL here.");
-    expect(message).toContain(
-      "If this OpenClaw process can receive the browser callback, sign-in may finish automatically before you paste.",
-    );
-    expect(message).not.toContain("After signing in, paste");
-  });
-
-  it("explains OpenAI unsupported region token exchange failures", async () => {
-    mocks.loginOpenAICodex.mockRejectedValue(new Error("403 unsupported_country_region_territory"));
-
-    const { prompter, spin } = createPrompter();
-    const runtime = createRuntime();
-    await expect(
-      loginOpenAICodexOAuth({
-        prompter,
-        runtime,
-        isRemote: false,
-        openUrl: async () => {},
-      }),
-    ).rejects.toThrow(/unsupported_region/i);
-
-    expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
-    expectRuntimeErrorContains(runtime, "HTTPS_PROXY");
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Trouble with OAuth? See https://docs.openclaw.ai/start/faq",
-      "OAuth help",
-    );
-  });
-
-  it("passes manual code input hook for remote oauth flows", async () => {
-    const creds = createCodexCredentials();
-    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
-      await startCodexAuth(opts);
-      await expect(opts.onManualCodeInput?.()).resolves.toContain("code=test");
-      return creds;
+    for (const mock of Object.values(providerRuntimeMocks)) {
+      mock.mockReset();
+    }
+    providerRuntimeMocks.resolveProviderRuntimePlugin.mockReturnValue({
+      auth: [
+        {
+          id: "oauth",
+          run: providerRuntimeMocks.runOAuth,
+        },
+      ],
     });
-
-    const { result, prompter } = await runCodexOAuth({ isRemote: true });
-
-    expect(result).toEqual(creds);
-    expectPromptTextCall(prompter);
+    providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync.mockReturnValue({
+      loginOpenAICodexOAuth: providerRuntimeMocks.runFacadeOAuth,
+    });
   });
 
-  it("waits briefly before prompting for manual input after the local browser flow starts", async () => {
-    vi.useFakeTimers();
-    const { prompter, spin, text } = createPrompter();
+  it("delegates OAuth login to the OpenAI provider auth hook", async () => {
+    const credential = createCredential();
+    const prompter = createPrompter();
     const runtime = createRuntime();
-    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
-      await startCodexAuth(opts);
-      const manualPromise = opts.onManualCodeInput?.();
-      await vi.advanceTimersByTimeAsync(14_000);
-      if (manualPromise === undefined) {
-        throw new Error("expected manual code input promise");
-      }
-      expect(prompter.text).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(prompter.text).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1_000);
-      return createCodexCredentials({ manualCode: await manualPromise });
+    const openUrl = vi.fn(async () => {});
+    const controller = new AbortController();
+    const onManualCodeInput = vi.fn(async () => "manual-code");
+    providerRuntimeMocks.runOAuth.mockResolvedValueOnce({
+      profiles: [{ profileId: "openai-codex:user@example.com", credential }],
     });
 
     const result = await loginOpenAICodexOAuth({
       prompter,
       runtime,
-      isRemote: false,
-      openUrl: async () => {},
-    });
-    expectFields(result, {
-      access: "access-token",
-      refresh: "refresh-token",
-    });
-
-    expectPromptTextCall(prompter);
-    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
-    expect(spin.stop.mock.invocationCallOrder[0]).toBeLessThan(
-      text.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "OpenAI Codex OAuth callback did not arrive within 15000ms; switching to manual entry (callback_timeout).",
-    );
-    vi.useRealTimers();
-  });
-
-  it("reuses one local manual prompt when the oauth helper repeats fallback calls", async () => {
-    vi.useFakeTimers();
-    const { prompter, spin, text } = createPrompter();
-    const runtime = createRuntime();
-    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
-      await startCodexAuth(opts);
-      const firstManualPromise = opts.onManualCodeInput?.();
-      const secondManualPromise = opts.onManualCodeInput?.();
-      await vi.advanceTimersByTimeAsync(16_000);
-      const [firstManualCode, secondManualCode] = await Promise.all([
-        firstManualPromise,
-        secondManualPromise,
-      ]);
-      expect(secondManualCode).toBe(firstManualCode);
-      return createCodexCredentials({ manualCode: firstManualCode });
+      isRemote: true,
+      openUrl,
+      signal: controller.signal,
+      onManualCodeInput,
+      localBrowserMessage: "Complete sign-in in browser...",
     });
 
-    const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl: async () => {},
-    });
-    expectFields(result, {
-      access: "access-token",
-      refresh: "refresh-token",
-    });
-
-    expect(text).toHaveBeenCalledOnce();
-    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
+    expect(result).toEqual(credential);
+    expect(providerRuntimeMocks.runOAuth).toHaveBeenCalledOnce();
     expect(
-      spin.update.mock.calls.filter(
-        ([message]) =>
-          message === "Browser callback did not finish. Paste the redirect URL to continue…",
-      ),
-    ).toHaveLength(1);
-    expect(runtime.log).toHaveBeenCalledTimes(2);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "OpenAI Codex OAuth callback did not arrive within 15000ms; switching to manual entry (callback_timeout).",
-    );
-    vi.useRealTimers();
+      providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
+    ).not.toHaveBeenCalled();
+    expect(providerRuntimeMocks.runOAuth).toHaveBeenCalledWith({
+      config: {},
+      prompter,
+      runtime,
+      isRemote: true,
+      openUrl,
+      signal: controller.signal,
+      onManualCodeInput,
+      oauth: {
+        createVpsAwareHandlers: expect.any(Function),
+      },
+    });
   });
 
-  it("clears the local manual fallback timer when browser callback settles first", async () => {
-    vi.useFakeTimers();
-    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
-      await startCodexAuth(opts);
-      void opts.onManualCodeInput?.();
-      return createCodexCredentials();
-    });
-
-    const callbackResult = await runCodexOAuth({ isRemote: false });
-    expectFields(callbackResult.result, {
-      access: "access-token",
-      refresh: "refresh-token",
-    });
-
-    expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
-  });
-
-  it("continues OAuth flow on non-certificate preflight failures", async () => {
-    const creds = createCodexCredentials();
-    mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({
-      ok: false,
-      kind: "network",
-      message: "Client network socket disconnected before secure TLS connection was established",
-    });
-    mocks.loginOpenAICodex.mockResolvedValue(creds);
-
-    const { result, prompter, runtime } = await runCodexOAuth({ isRemote: false });
-
-    expect(result).toEqual(creds);
-    expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
-    expect(runtime.error).not.toHaveBeenCalledWith("tls fix");
-    expect(prompter.note).not.toHaveBeenCalledWith("tls fix", "OAuth prerequisites");
-  });
-
-  it("fails fast on TLS certificate preflight failures before starting OAuth login", async () => {
-    mocks.runOpenAIOAuthTlsPreflight.mockResolvedValue({
-      ok: false,
-      kind: "tls-cert",
-      code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-      message: "unable to get local issuer certificate",
-    });
-    mocks.formatOpenAIOAuthTlsPreflightFix.mockReturnValue("Run brew postinstall openssl@3");
-    const creds = createCodexCredentials();
-    mocks.loginOpenAICodex.mockResolvedValue(creds);
-
-    const { prompter } = createPrompter();
-    const runtime = createRuntime();
+  it("returns null when the provider hook does not create an OAuth credential", async () => {
+    providerRuntimeMocks.runOAuth.mockResolvedValueOnce({ profiles: [] });
 
     await expect(
       loginOpenAICodexOAuth({
-        prompter,
-        runtime,
+        prompter: createPrompter(),
+        runtime: createRuntime(),
         isRemote: false,
         openUrl: async () => {},
       }),
-    ).rejects.toThrow(/OAuth prerequisites/i);
-
-    expect(mocks.loginOpenAICodex).not.toHaveBeenCalled();
-    expect(prompter.note).toHaveBeenCalledWith(
-      "Run brew postinstall openssl@3",
-      "OAuth prerequisites",
-    );
+    ).resolves.toBeNull();
   });
 
-  it("prompts for manual input immediately when the local callback flow never starts", async () => {
-    vi.useFakeTimers();
-    const { prompter, spin, text } = createPrompter();
+  it("falls back to the OpenAI plugin facade when the provider hook is unavailable", async () => {
+    const credential = {
+      access: "facade-access-token",
+      refresh: "facade-refresh-token",
+      expires: Date.now() + 60_000,
+      accountId: "acct_facade",
+    };
+    const prompter = createPrompter();
     const runtime = createRuntime();
-    mocks.loginOpenAICodex.mockImplementation(
-      async (opts: { onManualCodeInput?: () => Promise<string> }) => {
-        expect(opts.onManualCodeInput).toBeTypeOf("function");
-        const manualCode = await opts.onManualCodeInput?.();
-        return createCodexCredentials({ manualCode });
+    const openUrl = vi.fn(async () => {});
+    const controller = new AbortController();
+    const onManualCodeInput = vi.fn(async () => "manual-code");
+    providerRuntimeMocks.resolveProviderRuntimePlugin.mockReturnValueOnce(undefined);
+    providerRuntimeMocks.runFacadeOAuth.mockResolvedValueOnce(credential);
+
+    const result = await loginOpenAICodexOAuth({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl,
+      signal: controller.signal,
+      onManualCodeInput,
+      localBrowserMessage: "Complete sign-in in browser...",
+    });
+
+    expect(result).toEqual(credential);
+    expect(providerRuntimeMocks.runOAuth).not.toHaveBeenCalled();
+    expect(
+      providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync,
+    ).toHaveBeenCalledWith({
+      dirName: "openai",
+      artifactBasename: "api.js",
+    });
+    expect(providerRuntimeMocks.runFacadeOAuth).toHaveBeenCalledWith({
+      prompter,
+      runtime,
+      isRemote: false,
+      openUrl,
+      signal: controller.signal,
+      onManualCodeInput,
+      localBrowserMessage: "Complete sign-in in browser...",
+      oauth: {
+        createVpsAwareHandlers: expect.any(Function),
+      },
+    });
+  });
+
+  it("preserves activated-facade failures when the OpenAI plugin is disabled", async () => {
+    providerRuntimeMocks.resolveProviderRuntimePlugin.mockReturnValueOnce(undefined);
+    providerRuntimeMocks.loadActivatedBundledPluginPublicSurfaceModuleSync.mockImplementationOnce(
+      () => {
+        throw new Error("plugin runtime is not activated");
       },
     );
 
-    const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl: async () => {},
-    });
-    expectFields(result, {
-      access: "access-token",
-      refresh: "refresh-token",
-    });
-
-    expectPromptTextCall(prompter);
-    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
-    expect(spin.stop.mock.invocationCallOrder[0]).toBeLessThan(
-      text.mock.invocationCallOrder[0] ?? 0,
-    );
-    expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
-  });
-
-  it("reuses one immediate manual prompt when the local callback flow never starts", async () => {
-    vi.useFakeTimers();
-    const { prompter, spin, text } = createPrompter();
-    const runtime = createRuntime();
-    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
-      expect(opts.onManualCodeInput).toBeTypeOf("function");
-      const [firstManualCode, secondManualCode] = await Promise.all([
-        opts.onManualCodeInput?.(),
-        opts.onManualCodeInput?.(),
-      ]);
-      expect(secondManualCode).toBe(firstManualCode);
-      return createCodexCredentials({ manualCode: firstManualCode });
-    });
-
-    const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl: async () => {},
-    });
-    expectFields(result, {
-      access: "access-token",
-      refresh: "refresh-token",
-    });
-
-    expect(text).toHaveBeenCalledOnce();
-    expect(spin.stop).toHaveBeenCalledWith("Manual OAuth entry required");
-    expect(
-      spin.update.mock.calls.filter(
-        ([message]) =>
-          message === "Local OAuth callback was unavailable. Paste the redirect URL to continue…",
-      ),
-    ).toHaveLength(1);
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
-    vi.useRealTimers();
-  });
-
-  it("suppresses the local manual prompt when oauth settles just after the fallback deadline", async () => {
-    vi.useFakeTimers();
-    const { prompter } = createPrompter();
-    const runtime = createRuntime();
-    mocks.loginOpenAICodex.mockImplementation(async (opts: CodexLoginOptions) => {
-      await startCodexAuth(opts);
-      void opts.onManualCodeInput?.();
-      await vi.advanceTimersByTimeAsync(15_500);
-      return createCodexCredentials();
-    });
-
-    const result = await loginOpenAICodexOAuth({
-      prompter,
-      runtime,
-      isRemote: false,
-      openUrl: async () => {},
-    });
-    expectFields(result, {
-      access: "access-token",
-      refresh: "refresh-token",
-    });
-
-    expect(prompter.text).not.toHaveBeenCalled();
-    vi.useRealTimers();
-  });
-
-  it("rewrites callback validation failures with a stable internal code", async () => {
-    mocks.loginOpenAICodex.mockRejectedValue(new Error("State mismatch"));
-
-    const { prompter, spin } = createPrompter();
-    const runtime = createRuntime();
     await expect(
       loginOpenAICodexOAuth({
-        prompter,
-        runtime,
+        prompter: createPrompter(),
+        runtime: createRuntime(),
         isRemote: false,
         openUrl: async () => {},
       }),
-    ).rejects.toThrow(/callback_validation_failed/i);
-
-    expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth failed");
+    ).rejects.toThrow("plugin runtime is not activated");
+    expect(providerRuntimeMocks.runFacadeOAuth).not.toHaveBeenCalled();
   });
 });

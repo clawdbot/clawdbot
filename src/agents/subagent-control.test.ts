@@ -112,7 +112,7 @@ function setSubagentControlDepsForTest(
   overrides: Parameters<typeof testing.setDepsForTest>[0] = {},
 ) {
   testing.setDepsForTest({
-    abortEmbeddedPiRun: () => false,
+    abortEmbeddedAgentRun: () => false,
     clearSessionQueues: () => ({ followupCleared: 0, laneCleared: 0, keys: [] }),
     updateSessionStore: async <T>(
       storePath: string,
@@ -1352,6 +1352,71 @@ describe("steerControlledSubagentRun", () => {
       mode: "restart",
       label: "current ended steer task",
       text: "steered current ended steer task.",
+    });
+  });
+
+  it("steers a yielded run even though the paused attempt has ended", async () => {
+    const childSessionKey = "agent:main:subagent:yield-steer-worker";
+    addSubagentRunForTests({
+      runId: "run-yielded-steer",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "yielded steer task",
+      cleanup: "keep",
+      createdAt: Date.now() - 5_000,
+      startedAt: Date.now() - 4_000,
+      endedAt: Date.now() - 1_000,
+      pauseReason: "sessions_yield",
+    });
+
+    setSubagentControlDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        request: CallGatewayOptions,
+      ) => {
+        if (request.method === "agent.wait") {
+          return {} as T;
+        }
+        if (request.method === "agent") {
+          return { runId: "run-yielded-followup" } as T;
+        }
+        throw new Error(`unexpected method: ${request.method}`);
+      },
+    });
+
+    const result = await steerControlledSubagentRun({
+      cfg: cfgWithSessionStore(),
+      controller: {
+        controllerSessionKey: "agent:main:main",
+        callerSessionKey: "agent:main:main",
+        callerIsSubagent: false,
+        controlScope: "children",
+      },
+      entry: {
+        runId: "run-yielded-steer",
+        childSessionKey,
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        controllerSessionKey: "agent:main:main",
+        task: "yielded steer task",
+        cleanup: "keep",
+        createdAt: Date.now() - 5_000,
+        startedAt: Date.now() - 4_000,
+        endedAt: Date.now() - 1_000,
+        pauseReason: "sessions_yield",
+      },
+      message: "continue now",
+    });
+
+    expect(result).toEqual({
+      status: "accepted",
+      runId: "run-yielded-followup",
+      sessionKey: childSessionKey,
+      sessionId: undefined,
+      mode: "restart",
+      label: "yielded steer task",
+      text: "steered yielded steer task.",
     });
   });
 });

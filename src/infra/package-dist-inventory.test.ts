@@ -85,6 +85,20 @@ describe("package dist inventory", () => {
         "qa-lab",
         "cli.d.ts",
       );
+      const omittedDeepPluginSdkDeclaration = path.join(
+        packageRoot,
+        "dist",
+        "plugin-sdk",
+        "src",
+        "plugin-sdk",
+        "provider-entry.d.ts",
+      );
+      const flatPluginSdkDeclaration = path.join(
+        packageRoot,
+        "dist",
+        "plugin-sdk",
+        "provider-entry.d.ts",
+      );
       const omittedQaRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-B9LDtssJ.js");
       const [omittedBuildStamp, omittedRuntimePostBuildStamp] = LOCAL_BUILD_METADATA_DIST_PATHS.map(
         (relativePath) => path.join(packageRoot, relativePath),
@@ -95,6 +109,7 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(omittedQaMatrixChunk), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaLabTypes), { recursive: true });
       await fs.mkdir(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
+      await fs.mkdir(path.dirname(omittedDeepPluginSdkDeclaration), { recursive: true });
       await fs.writeFile(packagedQaChannelRuntime, "export {};\n", "utf8");
       await fs.writeFile(packagedQaLabRuntime, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChunk, "export {};\n", "utf8");
@@ -104,13 +119,80 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedQaChannelPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChannelProtocolPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabTypes, "export {};\n", "utf8");
+      await fs.writeFile(omittedDeepPluginSdkDeclaration, "export {};\n", "utf8");
+      await fs.writeFile(flatPluginSdkDeclaration, "export {};\n", "utf8");
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
       await fs.writeFile(omittedBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedMap, "{}", "utf8");
 
-      await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([]);
+      await expect(writePackageDistInventory(packageRoot)).resolves.toStrictEqual([
+        "dist/plugin-sdk/provider-entry.d.ts",
+      ]);
     });
+  });
+
+  it("honors package files exclusions when writing the dist inventory", async () => {
+    await withTempDir(
+      { prefix: "openclaw-dist-inventory-package-files-" },
+      async (packageRoot) => {
+        const packagedRuntime = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js");
+        const omittedTestRuntime = path.join(
+          packageRoot,
+          "dist",
+          "plugin-sdk",
+          "plugin-test-runtime.js",
+        );
+        const omittedTestTypes = path.join(
+          packageRoot,
+          "dist",
+          "plugin-sdk",
+          "plugin-test-runtime.d.ts",
+        );
+        const omittedNestedHelper = path.join(
+          packageRoot,
+          "dist",
+          "plugin-sdk",
+          "src",
+          "test-utils",
+          "helpers.d.ts",
+        );
+        const omittedQaCompat = path.join(packageRoot, "dist", "plugin-sdk", "qa-channel.js");
+        const omittedRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-AbC123.js");
+        const omittedTopLevelMap = path.join(packageRoot, "dist", "runtime.js.map");
+        const omittedMap = path.join(packageRoot, "dist", "plugin-sdk", "runtime.js.map");
+
+        await fs.mkdir(path.dirname(packagedRuntime), { recursive: true });
+        await fs.mkdir(path.dirname(omittedNestedHelper), { recursive: true });
+        await fs.writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({
+            files: [
+              "dist/",
+              "!dist/plugin-sdk/plugin-test-runtime.js",
+              "!dist/plugin-sdk/plugin-test-runtime.d.ts",
+              "!dist/plugin-sdk/src/test-utils/**",
+              "!dist/plugin-sdk/qa-channel.*",
+              "!dist/qa-runtime-*.js",
+              "!dist/**/*.map",
+            ],
+          }),
+          "utf8",
+        );
+        await fs.writeFile(packagedRuntime, "export {};\n", "utf8");
+        await fs.writeFile(omittedTestRuntime, "export {};\n", "utf8");
+        await fs.writeFile(omittedTestTypes, "export {};\n", "utf8");
+        await fs.writeFile(omittedNestedHelper, "export {};\n", "utf8");
+        await fs.writeFile(omittedQaCompat, "export {};\n", "utf8");
+        await fs.writeFile(omittedRuntimeChunk, "export {};\n", "utf8");
+        await fs.writeFile(omittedTopLevelMap, "{}", "utf8");
+        await fs.writeFile(omittedMap, "{}", "utf8");
+
+        await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+          "dist/plugin-sdk/runtime.js",
+        ]);
+      },
+    );
   });
 
   it("keeps transient plugin dependency trees out of the inventory", async () => {

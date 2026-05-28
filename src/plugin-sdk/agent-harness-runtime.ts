@@ -6,22 +6,22 @@ import type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
+import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import {
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
-  queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedAgentMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
-  type EmbeddedPiQueueMessageOptions,
-} from "../agents/pi-embedded-runner/runs.js";
+  type EmbeddedAgentQueueMessageOptions,
+} from "../agents/embedded-agent-runner/runs.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
-export type { AgentMessage } from "@earendil-works/pi-agent-core";
+export type { AgentMessage } from "../agents/runtime/index.js";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -39,20 +39,28 @@ export type {
 export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
-} from "../agents/pi-embedded-runner/run/types.js";
+} from "../agents/embedded-agent-runner/run/types.js";
 export type {
   ContextEngine as HarnessContextEngine,
   ContextEngineHostCapability,
   ContextEngineOperation,
   ContextEngineProjection,
 } from "../context-engine/types.js";
-export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
-export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
+export type {
+  CompactEmbeddedAgentSessionParams,
+  /** @deprecated Use CompactEmbeddedAgentSessionParams. */
+  CompactEmbeddedAgentSessionParams as CompactEmbeddedPiSessionParams,
+} from "../agents/embedded-agent-runner/compact.js";
+export type {
+  EmbeddedAgentCompactResult,
+  /** @deprecated Use EmbeddedAgentCompactResult. */
+  EmbeddedAgentCompactResult as EmbeddedPiCompactResult,
+} from "../agents/embedded-agent-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
-} from "../agents/pi-embedded-messaging.types.js";
+} from "../agents/embedded-agent-messaging.types.js";
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
@@ -87,10 +95,14 @@ export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
-export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
+export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
-export { classifyEmbeddedPiRunResultForModelFallback } from "../agents/pi-embedded-runner/result-fallback-classifier.js";
-export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
+export {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  /** @deprecated Use classifyEmbeddedAgentRunResultForModelFallback. */
+  classifyEmbeddedAgentRunResultForModelFallback as classifyEmbeddedPiRunResultForModelFallback,
+} from "../agents/embedded-agent-runner/result-fallback-classifier.js";
+export { resolveEmbeddedAgentRuntime } from "../agents/agent-runtime-id.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
@@ -104,11 +116,11 @@ export {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
+export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-} from "../agents/pi-embedded-subscribe.tools.js";
+} from "../agents/embedded-agent-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
@@ -118,10 +130,10 @@ export {
 } from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
-export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
-export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner/run/attempt.tool-run-context.js";
+export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
+export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
 export {
-  abortEmbeddedPiRun as abortAgentHarnessRun,
+  abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
@@ -136,9 +148,9 @@ export {
 export function queueAgentHarnessMessage(
   sessionId: string,
   text: string,
-  options?: EmbeddedPiQueueMessageOptions,
+  options?: EmbeddedAgentQueueMessageOptions,
 ): boolean {
-  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
 }
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
@@ -156,7 +168,7 @@ export type {
   CodexBundleMcpThreadConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "../agents/codex-mcp-config.types.js";
-export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
+export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
 
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
@@ -170,8 +182,12 @@ export {
   hasSandboxBindReadonlyHostShadows,
   resolveWritableSandboxBindHostRoots,
 } from "../agents/sandbox/fs-paths.js";
-export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
-export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
+export {
+  buildBootstrapContextForFiles,
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+} from "../agents/bootstrap-files.js";
+export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,
@@ -189,7 +205,7 @@ export {
   setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
   type BeforeToolCallPolicyDiagnosticState,
-} from "../agents/pi-tools.before-tool-call.js";
+} from "../agents/agent-tools.before-tool-call.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,
@@ -213,12 +229,12 @@ export {
 // Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
 // agent-harness-runtime surface so plugin harnesses such as Codex bound their
 // own `ContextEngine.compact()` calls with the exact same finite, host-resolved
-// timeout the built-in pi-embedded runner uses — one shared implementation, no
+// timeout the built-in embedded-agent runner uses — one shared implementation, no
 // copy-pasted watchdog.
 export {
   compactContextEngineWithSafetyTimeout,
   resolveCompactionTimeoutMs,
-} from "../agents/pi-embedded-runner/compaction-safety-timeout.js";
+} from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
 export {
   estimateRenderedLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
@@ -226,7 +242,7 @@ export {
   shouldPreemptivelyCompactBeforePrompt,
   type LlmBoundaryTokenPressure,
   type PreemptiveCompactionDecision,
-} from "../agents/pi-embedded-runner/run/preemptive-compaction.js";
+} from "../agents/embedded-agent-runner/run/preemptive-compaction.js";
 export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
@@ -234,6 +250,7 @@ export {
 } from "../agents/harness/hook-helpers.js";
 export {
   awaitAgentHarnessAgentEndHook,
+  getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
@@ -248,7 +265,7 @@ export {
 } from "../agents/harness/native-hook-relay.js";
 
 /**
- * Derive the same compact user-facing tool detail that Pi uses for progress logs.
+ * Derive the same compact user-facing tool detail that embedded OpenClaw uses for progress logs.
  */
 export type ToolProgressDetailMode = "explain" | "raw";
 
@@ -297,7 +314,7 @@ export type AgentHarnessTerminalOutcomeClassification = NonNullable<
  * should advance fallback. Deliberate silent replies such as NO_REPLY count as
  * intentional output, while whitespace-only text remains fallback-eligible.
  * This is intentionally SDK-level so plugin harness adapters such as Codex
- * preserve the same OpenClaw-owned fallback signals as the built-in PI path
+ * preserve the same OpenClaw-owned fallback signals as the built-in OpenClaw path
  * without re-implementing terminal-result policy.
  */
 export function classifyAgentHarnessTerminalOutcome(

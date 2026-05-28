@@ -1,5 +1,5 @@
-import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import { Type, type Static, type TSchema } from "typebox";
+import type { AgentToolResult, AgentToolUpdateCallback } from "../agents/runtime/index.js";
 import { jsonResult, textResult } from "../agents/tools/common.js";
 import type { PluginManifestActivation } from "../plugins/manifest.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
@@ -19,7 +19,7 @@ export type ToolPluginExecutionContext = {
   api: OpenClawPluginApi;
   signal?: AbortSignal;
   toolCallId: string;
-  onUpdate?: AgentToolUpdateCallback<unknown>;
+  onUpdate?: AgentToolUpdateCallback;
 };
 
 type ToolPluginConfig<TConfigSchema extends TSchema | undefined> = TConfigSchema extends TSchema

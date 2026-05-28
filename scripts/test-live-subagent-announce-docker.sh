@@ -76,11 +76,7 @@ if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" || -n "${GEMINI_API_
   DOCKER_EXTRA_ENV_FILES+=(--env-file "$docker_env_file")
 fi
 
-CONTAINER_NODE_OPTIONS="${OPENCLAW_DOCKER_NODE_OPTIONS:-${NODE_OPTIONS:-}}"
-if [[ -z "$(openclaw_live_trim "$CONTAINER_NODE_OPTIONS")" ]]; then
-  CONTAINER_NODE_OPTIONS="--max-old-space-size=4096"
-fi
-CONTAINER_NODE_OPTIONS="$CONTAINER_NODE_OPTIONS --disable-warning=ExperimentalWarning"
+CONTAINER_NODE_OPTIONS="$(openclaw_live_container_node_options)"
 
 read -r -d '' LIVE_TEST_CMD <<'EOF' || true
 set -euo pipefail

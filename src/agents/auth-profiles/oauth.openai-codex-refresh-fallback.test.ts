@@ -14,7 +14,7 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
 let resolveApiKeyForProvider: typeof import("../model-auth.js").resolveApiKeyForProvider;
 let markAuthProfileSuccess: typeof import("./profiles.js").markAuthProfileSuccess;
-type GetOAuthApiKey = typeof import("@earendil-works/pi-ai/oauth").getOAuthApiKey;
+type GetOAuthApiKey = typeof import("../../llm/oauth.js").getOAuthApiKey;
 
 const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   getOAuthApiKeyMock: vi.fn<GetOAuthApiKey>(async () => {
@@ -47,7 +47,7 @@ vi.mock("../cli-credentials.js", () => ({
   resetCliCredentialCachesForTest: () => undefined,
 }));
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [
     { id: "openai-codex", envApiKey: "OPENAI_API_KEY", oauthTokenEnv: "OPENAI_OAUTH_TOKEN" }, // pragma: allowlist secret
@@ -69,7 +69,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 afterAll(() => {
-  vi.doUnmock("@earendil-works/pi-ai/oauth");
+  vi.doUnmock("../../llm/oauth.js");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
@@ -163,7 +163,6 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     await fs.mkdir(agentDir, { recursive: true });
     process.env.OPENCLAW_STATE_DIR = caseRoot;
     process.env.OPENCLAW_AGENT_DIR = agentDir;
-    process.env.PI_CODING_AGENT_DIR = agentDir;
   });
 
   afterEach(async () => {

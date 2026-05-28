@@ -6,12 +6,6 @@ import {
 import { isRecord } from "./legacy-config-record-shared.js";
 import { migrateLegacyXSearchConfig } from "./legacy-x-search-migrate.js";
 
-const X_SEARCH_RULE: LegacyConfigRule = {
-  path: ["tools", "web", "x_search", "apiKey"],
-  message:
-    'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
-};
-
 const BUNDLED_DISCOVERY_COMPAT_RULE: LegacyConfigRule = {
   path: ["plugins", "allow"],
   message:
@@ -26,10 +20,16 @@ const BUNDLED_DISCOVERY_COMPAT_RULE: LegacyConfigRule = {
   },
 };
 
+const X_SEARCH_RULE: LegacyConfigRule = {
+  path: ["tools", "web", "x_search", "apiKey"],
+  message:
+    'tools.web.x_search.apiKey moved to the xAI plugin; use plugins.entries.xai.config.webSearch.apiKey instead. Run "openclaw doctor --fix".',
+};
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_PROVIDERS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "plugins.allow->plugins.bundledDiscovery.compat",
-    describe: "Preserve legacy bundled provider discovery for existing restrictive allowlists",
+    describe: "Preserve bundled provider discovery for existing restrictive allowlists",
     legacyRules: [BUNDLED_DISCOVERY_COMPAT_RULE],
     apply: (raw, changes) => {
       const plugins = isRecord(raw.plugins) ? raw.plugins : undefined;

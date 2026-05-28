@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { resolveEffectiveToolPolicy } from "./pi-tools.policy.js";
+import { resolveEffectiveToolPolicy } from "./agent-tools.policy.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "./tool-fs-policy.js";
 

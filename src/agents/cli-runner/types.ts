@@ -1,4 +1,3 @@
-import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
@@ -8,6 +7,7 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type {
@@ -17,11 +17,11 @@ import type {
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
-import type { EmbeddedAgentExecutionPhase } from "../pi-embedded-runner/execution-phase.js";
+import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
-} from "../pi-embedded-runner/run/params.js";
+} from "../embedded-agent-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
@@ -33,6 +33,8 @@ export type RunCliAgentParams = {
   trigger?: EmbeddedRunTrigger;
   sessionFile: string;
   workspaceDir: string;
+  /** Task working directory for CLI execution. Defaults to workspaceDir. */
+  cwd?: string;
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
@@ -113,6 +115,7 @@ export type CliReusableSession = {
     | "auth-profile"
     | "auth-epoch"
     | "system-prompt"
+    | "cwd"
     | "mcp"
     | "missing-transcript";
 };
@@ -122,6 +125,7 @@ export type PreparedCliRunContext = {
   effectiveAuthProfileId?: string;
   started: number;
   workspaceDir: string;
+  cwd?: string;
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
@@ -143,4 +147,5 @@ export type PreparedCliRunContext = {
   authEpochVersion: number;
   extraSystemPromptHash?: string;
   promptToolNamesHash?: string;
+  cwdHash?: string;
 };

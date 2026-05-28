@@ -1,5 +1,7 @@
 {
   "id": "qqbot",
+  "name": "QQ Bot",
+  "description": "OpenClaw QQ Bot channel plugin for group and direct-message workflows.",
   "activation": {
     "onStartup": false
   },

@@ -128,13 +128,19 @@ describe("live cache regression runner", () => {
         maxTokens: 32,
         providerTag: "openai",
       }),
-    ).toBe(256);
+    ).toBe(1024);
     expect(
       testing.resolveCacheProbeMaxTokens({
         maxTokens: 512,
         providerTag: "openai",
       }),
-    ).toBe(512);
+    ).toBe(1024);
+    expect(
+      testing.resolveCacheProbeMaxTokens({
+        maxTokens: 2048,
+        providerTag: "openai",
+      }),
+    ).toBe(2048);
     expect(
       testing.resolveCacheProbeMaxTokens({
         maxTokens: 32,

@@ -30,13 +30,13 @@ anything they needed from a single entry point:
   window.
 - **`openclaw/extension-api`** - a bridge that gave plugins direct access to
   host-side helpers like the embedded agent runner.
-- **`api.registerEmbeddedExtensionFactory(...)`** - a removed Pi-only bundled
+- **`api.registerEmbeddedExtensionFactory(...)`** - a removed embedded-runner-only bundled
   extension hook that could observe embedded-runner events such as
   `tool_result`.
 
 The broad import surfaces are now **deprecated**. They still work at runtime,
 but new plugins must not use them, and existing plugins should migrate before
-the next major release removes them. The Pi-only embedded extension factory
+the next major release removes them. The embedded-runner-only extension factory
 registration API has been removed; use tool-result middleware instead.
 
 OpenClaw does not remove or reinterpret documented plugin behavior in the same
@@ -48,7 +48,7 @@ registration behavior.
 <Warning>
   The backwards-compatibility layer will be removed in a future major release.
   Plugins that still import from these surfaces will break when that happens.
-  Pi-only embedded extension factory registrations already no longer load.
+  Legacy embedded extension factory registrations already no longer load.
 </Warning>
 
 ## Why this changed
@@ -294,17 +294,17 @@ releases.
 
   </Step>
 
-  <Step title="Migrate Pi tool-result extensions to middleware">
-    Bundled plugins must replace Pi-only
+  <Step title="Migrate embedded tool-result extensions to middleware">
+    Bundled plugins must replace embedded-runner-only
     `api.registerEmbeddedExtensionFactory(...)` tool-result handlers with
     runtime-neutral middleware.
 
     ```typescript
-    // Pi and Codex runtime dynamic tools
+    // OpenClaw and Codex runtime dynamic tools
     api.registerAgentToolResultMiddleware(async (event) => {
       return compactToolResult(event);
     }, {
-      runtimes: ["pi", "codex"],
+      runtimes: ["openclaw", "codex"],
     });
     ```
 
@@ -313,7 +313,7 @@ releases.
     ```json
     {
       "contracts": {
-        "agentToolResultMiddleware": ["pi", "codex"]
+        "agentToolResultMiddleware": ["openclaw", "codex"]
       }
     }
     ```
@@ -406,11 +406,11 @@ releases.
 
     ```typescript
     // Before (deprecated extension-api bridge)
-    import { runEmbeddedPiAgent } from "openclaw/extension-api";
-    const result = await runEmbeddedPiAgent({ sessionId, prompt });
+    import { runEmbeddedAgent } from "openclaw/extension-api";
+    const result = await runEmbeddedAgent({ sessionId, prompt });
 
     // After (injected runtime)
-    const result = await api.runtime.agent.runEmbeddedPiAgent({ sessionId, prompt });
+    const result = await api.runtime.agent.runEmbeddedAgent({ sessionId, prompt });
     ```
 
     The same pattern applies to other legacy bridge helpers:
@@ -818,18 +818,22 @@ canonical replacement.
     ranked level list. OpenClaw downgrades stale stored values by profile
     rank automatically.
 
+    The context includes `provider`, `modelId`, optional merged `reasoning`,
+    and optional merged model `compat` facts. Provider plugins can use those
+    catalog facts to expose a model-specific profile only when the configured
+    request contract supports it.
+
     Implement one hook instead of three. The legacy hooks keep working during
     the deprecation window but are not composed with the profile result.
 
   </Accordion>
 
-  <Accordion title="External OAuth provider fallback → contracts.externalAuthProviders">
-    **Old**: implementing `resolveExternalOAuthProfiles(...)` without
-    declaring the provider in the plugin manifest.
+  <Accordion title="External auth providers → contracts.externalAuthProviders">
+    **Old**: implementing external auth hooks without declaring the provider
+    in the plugin manifest.
 
     **New**: declare `contracts.externalAuthProviders` in the plugin manifest
-    **and** implement `resolveExternalAuthProfiles(...)`. The old "auth
-    fallback" path emits a warning at runtime and will be removed.
+    **and** implement `resolveExternalAuthProfiles(...)`.
 
     ```json
     {
@@ -863,9 +867,23 @@ canonical replacement.
     **New**: one call on the memory-state API -
     `registerMemoryCapability(pluginId, { promptBuilder, flushPlanResolver, runtime })`.
 
-    Same slots, single registration call. Additive memory helpers
-    (`registerMemoryPromptSupplement`, `registerMemoryCorpusSupplement`,
-    `registerMemoryEmbeddingProvider`) are not affected.
+    Same slots, single registration call. Additive prompt and corpus helpers
+    (`registerMemoryPromptSupplement`, `registerMemoryCorpusSupplement`) are
+    not affected.
+
+  </Accordion>
+
+  <Accordion title="Memory embedding provider API">
+    **Old**: `api.registerMemoryEmbeddingProvider(...)` plus
+    `contracts.memoryEmbeddingProviders`.
+
+    **New**: `api.registerEmbeddingProvider(...)` plus
+    `contracts.embeddingProviders`.
+
+    The generic embedding provider contract is reusable outside memory and is
+    the supported path for new providers. The memory-specific registration API
+    remains wired as deprecated compatibility while existing providers migrate.
+    Plugin inspection reports non-bundled usage as compatibility debt.
 
   </Accordion>
 
@@ -900,8 +918,8 @@ canonical replacement.
   </Accordion>
 
   <Accordion title="Embedded extension factories → agent tool-result middleware">
-    Covered in "How to migrate → Migrate Pi tool-result extensions to
-    middleware" above. Included here for completeness: the removed Pi-only
+    Covered in "How to migrate → Migrate embedded tool-result extensions to
+    middleware" above. Included here for completeness: the removed embedded-runner-only
     `api.registerEmbeddedExtensionFactory(...)` path is replaced by
     `api.registerAgentToolResultMiddleware(...)` with an explicit runtime
     list in `contracts.agentToolResultMiddleware`.

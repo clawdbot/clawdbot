@@ -3,6 +3,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
@@ -34,10 +35,25 @@ vi.mock("../plugins/commands.js", () => ({
 
 afterEach(() => {
   vi.restoreAllMocks();
+  cliBackendsTesting.resetDepsForTest();
   listPluginCommands.mockReset();
   listPluginCommands.mockImplementation(() => []);
   MODEL_CONTEXT_TOKEN_CACHE.clear();
 });
+
+function registerAnthropicCliBackendForTest(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
+}
 
 describe("buildStatusMessage", () => {
   it("summarizes agent readiness and context usage", () => {
@@ -49,7 +65,7 @@ describe("buildStatusMessage", () => {
               apiKey: "test-key",
               models: [
                 {
-                  id: "pi:opus",
+                  id: "test:opus",
                   cost: {
                     input: 1,
                     output: 1,
@@ -63,7 +79,7 @@ describe("buildStatusMessage", () => {
         },
       } as unknown as OpenClawConfig,
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/test:opus",
         contextTokens: 32_000,
       },
       sessionEntry: {
@@ -88,7 +104,7 @@ describe("buildStatusMessage", () => {
     const normalized = normalizeTestText(text);
 
     expect(normalized).toContain("OpenClaw");
-    expect(normalized).toContain("Model: anthropic/pi:opus");
+    expect(normalized).toContain("Model: anthropic/test:opus");
     expect(normalized).toContain("api-key");
     expect(normalized).toContain("Tokens: 1.2k in / 800 out");
     expect(normalized).toContain("Cost: $0.0020");
@@ -97,7 +113,7 @@ describe("buildStatusMessage", () => {
     expect(normalized).toContain("Session: agent:main:main");
     expect(normalized).toContain("updated 10m ago");
     expect(normalized).toContain("Execution: direct");
-    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
+    expect(normalized).toContain("Runtime: OpenClaw Default");
     expect(normalized).not.toContain("Runner:");
     expect(normalized).toContain("Think: medium");
     expect(normalized).not.toContain("verbose");
@@ -159,7 +175,7 @@ describe("buildStatusMessage", () => {
   it("does not render stale totalTokens as current context usage", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/test:opus",
         contextTokens: 1_000_000,
       },
       sessionEntry: {
@@ -186,7 +202,7 @@ describe("buildStatusMessage", () => {
   it("uses estimated context budget status when fresh totalTokens are unavailable", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/claude-sonnet-4.6",
         contextTokens: 1_000_000,
       },
       sessionEntry: {
@@ -202,7 +218,7 @@ describe("buildStatusMessage", () => {
           source: "pre-prompt-estimate",
           updatedAt: 1,
           provider: "anthropic",
-          model: "pi:opus",
+          model: "claude-sonnet-4.6",
           route: "fits",
           shouldCompact: false,
           estimatedPromptTokens: 640_000,
@@ -233,7 +249,7 @@ describe("buildStatusMessage", () => {
   it("prefers fresh totalTokens over estimated context budget status", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/claude-sonnet-4.6",
         contextTokens: 1_000_000,
       },
       sessionEntry: {
@@ -247,7 +263,7 @@ describe("buildStatusMessage", () => {
           source: "pre-prompt-estimate",
           updatedAt: 1,
           provider: "anthropic",
-          model: "pi:opus",
+          model: "claude-sonnet-4.6",
           route: "fits",
           shouldCompact: false,
           estimatedPromptTokens: 640_000,
@@ -277,7 +293,7 @@ describe("buildStatusMessage", () => {
   it("uses estimated context budget status when token usage is absent", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/claude-sonnet-4.6",
         contextTokens: 1_000_000,
       },
       sessionEntry: {
@@ -289,7 +305,7 @@ describe("buildStatusMessage", () => {
           source: "pre-prompt-estimate",
           updatedAt: 1,
           provider: "anthropic",
-          model: "pi:opus",
+          model: "claude-sonnet-4.6",
           route: "fits",
           shouldCompact: false,
           estimatedPromptTokens: 125_000,
@@ -454,7 +470,7 @@ describe("buildStatusMessage", () => {
   it("falls back to sessionEntry levels when resolved levels are not passed", () => {
     const text = buildStatusMessage({
       agent: {
-        model: "anthropic/pi:opus",
+        model: "anthropic/test:opus",
       },
       sessionEntry: {
         sessionId: "abc",
@@ -477,7 +493,7 @@ describe("buildStatusMessage", () => {
     const visible = normalizeTestText(
       buildStatusMessage({
         agent: {
-          model: "anthropic/pi:opus",
+          model: "anthropic/test:opus",
         },
         sessionEntry: {
           sessionId: "abc",
@@ -497,7 +513,7 @@ describe("buildStatusMessage", () => {
     const hidden = normalizeTestText(
       buildStatusMessage({
         agent: {
-          model: "anthropic/pi:opus",
+          model: "anthropic/test:opus",
         },
         sessionEntry: {
           sessionId: "abc",
@@ -523,7 +539,7 @@ describe("buildStatusMessage", () => {
     const visible = normalizeTestText(
       buildStatusMessage({
         agent: {
-          model: "anthropic/pi:opus",
+          model: "anthropic/test:opus",
         },
         sessionEntry: {
           sessionId: "abc",
@@ -550,7 +566,7 @@ describe("buildStatusMessage", () => {
     const hidden = normalizeTestText(
       buildStatusMessage({
         agent: {
-          model: "anthropic/pi:opus",
+          model: "anthropic/test:opus",
         },
         sessionEntry: {
           sessionId: "abc",
@@ -567,7 +583,7 @@ describe("buildStatusMessage", () => {
     const visible = normalizeTestText(
       buildStatusMessage({
         agent: {
-          model: "anthropic/pi:opus",
+          model: "anthropic/test:opus",
         },
         sessionEntry: {
           sessionId: "abc",
@@ -592,7 +608,7 @@ describe("buildStatusMessage", () => {
     const visible = normalizeTestText(
       buildStatusMessage({
         agent: {
-          model: "anthropic/pi:opus",
+          model: "anthropic/test:opus",
         },
         sessionEntry: {
           sessionId: "abc",
@@ -650,25 +666,25 @@ describe("buildStatusMessage", () => {
     expect(normalized).not.toContain("· codex");
   });
 
-  it("shows the default PI harness as the model runtime", () => {
+  it("shows the default OpenClaw harness as the model runtime", () => {
     const text = buildStatusMessage({
       agent: {
         model: "openai/gpt-5.4",
       },
       sessionEntry: {
-        sessionId: "pi-harness",
+        sessionId: "openclaw-harness",
         updatedAt: 0,
         fastMode: true,
       },
       sessionKey: "agent:main:main",
       queue: { mode: "collect", depth: 0 },
-      resolvedHarness: "pi",
+      resolvedHarness: "openclaw",
     });
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Fast");
-    expect(normalized).toContain("Runtime: OpenClaw Pi Default");
-    expect(normalized).not.toContain("· pi");
+    expect(normalized).toContain("Runtime: OpenClaw Default");
+    expect(normalized).not.toContain("· openclaw");
   });
 
   it("shows fast mode when disabled", () => {
@@ -959,6 +975,8 @@ describe("buildStatusMessage", () => {
   });
 
   it("renders CLI runtime aliases as the selected model route", () => {
+    registerAnthropicCliBackendForTest();
+
     const text = buildStatusMessage({
       agent: {
         model: "anthropic/claude-opus-4-7",

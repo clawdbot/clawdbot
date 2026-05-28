@@ -1,8 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 /**
- * Test: after_tool_call hook wiring (pi-embedded-subscribe.handlers.tools.ts)
+ * Test: after_tool_call hook wiring (embedded-agent-subscribe.handlers.tools.ts)
  */
-import { createBaseToolHandlerState } from "../agents/pi-tool-handler-state.test-helpers.js";
+import { createBaseToolHandlerState } from "../agents/agent-tool-handler-state.test-helpers.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -99,13 +99,13 @@ function expectAfterToolCallPayload(params: {
   expect(context).toEqual(params.expectedContext);
 }
 
-let handleToolExecutionStart: typeof import("../agents/pi-embedded-subscribe.handlers.tools.js").handleToolExecutionStart;
-let handleToolExecutionEnd: typeof import("../agents/pi-embedded-subscribe.handlers.tools.js").handleToolExecutionEnd;
+let handleToolExecutionStart: typeof import("../agents/embedded-agent-subscribe.handlers.tools.js").handleToolExecutionStart;
+let handleToolExecutionEnd: typeof import("../agents/embedded-agent-subscribe.handlers.tools.js").handleToolExecutionEnd;
 
 describe("after_tool_call hook wiring", () => {
   beforeAll(async () => {
     ({ handleToolExecutionStart, handleToolExecutionEnd } =
-      await import("../agents/pi-embedded-subscribe.handlers.tools.js"));
+      await import("../agents/embedded-agent-subscribe.handlers.tools.js"));
   });
 
   beforeEach(() => {

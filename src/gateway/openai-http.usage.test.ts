@@ -17,6 +17,7 @@ describe("resolveChatCompletionUsage", () => {
       prompt_tokens: 130,
       completion_tokens: 42,
       total_tokens: 172,
+      prompt_tokens_details: { cached_tokens: 10 },
     });
   });
 

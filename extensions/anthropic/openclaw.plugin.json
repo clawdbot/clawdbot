@@ -128,8 +128,13 @@
   },
   "cliBackends": ["claude-cli"],
   "syntheticAuthRefs": ["claude-cli"],
-  "providerAuthEnvVars": {
-    "anthropic": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "anthropic",
+        "envVars": ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

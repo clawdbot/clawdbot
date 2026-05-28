@@ -80,6 +80,52 @@ describe("inspectTelegramAccount SecretRef resolution", () => {
     });
   });
 
+  it("matches runtime token lookup for account keys that need full normalization", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          accounts: {
+            "Carey Notifications": {
+              botToken: "123:token",
+              reactionLevel: "ack",
+            },
+          },
+        },
+      },
+    };
+
+    const account = inspectTelegramAccount({
+      cfg,
+      accountId: "carey-notifications",
+    });
+
+    expect(account.accountId).toBe("carey-notifications");
+    expect(account.configured).toBe(true);
+    expect(account.tokenSource).toBe("config");
+    expect(account.tokenStatus).toBe("available");
+    expect(account.config.reactionLevel).toBe("ack");
+  });
+
+  it("blocks channel-token fallback for unknown scoped accounts in multi-account config", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          botToken: "123:channel",
+          accounts: {
+            work: { botToken: "123:work" },
+          },
+        },
+      },
+    };
+
+    const account = inspectTelegramAccount({ cfg, accountId: "unknown" });
+
+    expect(account.accountId).toBe("unknown");
+    expect(account.configured).toBe(false);
+    expect(account.tokenSource).toBe("none");
+    expect(account.tokenStatus).toBe("missing");
+  });
+
   it.runIf(process.platform !== "win32")(
     "treats symlinked token files as configured_unavailable",
     () => {

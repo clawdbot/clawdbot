@@ -20,6 +20,10 @@ const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
 type FinalizeRetryBudget = Map<string, Map<string, number>>;
 
+export function getAgentHarnessHookRunner(): AgentHarnessHookRunner {
+  return getGlobalHookRunner();
+}
+
 function getFinalizeRetryBudget(): FinalizeRetryBudget {
   return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
 }

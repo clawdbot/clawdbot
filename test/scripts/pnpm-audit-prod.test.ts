@@ -7,6 +7,7 @@ import {
   createBulkAdvisoryPayload,
   filterFindingsBySeverity,
   parseSnapshotKey,
+  readBoundedBulkAdvisoryErrorText,
   runPnpmAuditProd,
   stripVersionDecorators,
 } from "../../scripts/pre-commit/pnpm-audit-prod.mjs";
@@ -215,6 +216,19 @@ snapshots:
         vulnerableVersions: ">=0",
       },
     ]);
+  });
+
+  it("bounds bulk advisory error response bodies", async () => {
+    const tail = "tail-sentinel-should-not-appear";
+    const response = new Response(`${"x".repeat(5000)}${tail}`, {
+      status: 500,
+    });
+
+    const text = await readBoundedBulkAdvisoryErrorText(response);
+
+    expect(text).toContain("[truncated]");
+    expect(text).not.toContain(tail);
+    expect(text.length).toBeLessThan(4200);
   });
 
   it("returns a failing exit code when bulk advisories include high severity findings", async () => {

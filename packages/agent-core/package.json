@@ -1,0 +1,122 @@
+{
+  "name": "@openclaw/agent-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./agent": {
+      "types": "./dist/agent.d.ts",
+      "default": "./dist/agent.js"
+    },
+    "./agent-loop": {
+      "types": "./dist/agent-loop.d.ts",
+      "default": "./dist/agent-loop.js"
+    },
+    "./llm": {
+      "types": "./dist/llm.d.ts",
+      "default": "./dist/llm.js"
+    },
+    "./node": {
+      "types": "./dist/node.d.ts",
+      "default": "./dist/node.js"
+    },
+    "./runtime-deps": {
+      "types": "./dist/runtime-deps.d.ts",
+      "default": "./dist/runtime-deps.js"
+    },
+    "./validation": {
+      "types": "./dist/validation.d.ts",
+      "default": "./dist/validation.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "default": "./dist/types.js"
+    },
+    "./harness/agent-harness": {
+      "types": "./dist/harness/agent-harness.d.ts",
+      "default": "./dist/harness/agent-harness.js"
+    },
+    "./harness/types": {
+      "types": "./dist/harness/types.d.ts",
+      "default": "./dist/harness/types.js"
+    },
+    "./harness/messages": {
+      "types": "./dist/harness/messages.d.ts",
+      "default": "./dist/harness/messages.js"
+    },
+    "./harness/env/kill-tree": {
+      "types": "./dist/harness/env/kill-tree.d.ts",
+      "default": "./dist/harness/env/kill-tree.js"
+    },
+    "./harness/session": {
+      "types": "./dist/harness/session.d.ts",
+      "default": "./dist/harness/session.js"
+    },
+    "./harness/session/jsonl-repo": {
+      "types": "./dist/harness/session/jsonl-repo.d.ts",
+      "default": "./dist/harness/session/jsonl-repo.js"
+    },
+    "./harness/session/jsonl-storage": {
+      "types": "./dist/harness/session/jsonl-storage.d.ts",
+      "default": "./dist/harness/session/jsonl-storage.js"
+    },
+    "./harness/session/memory-repo": {
+      "types": "./dist/harness/session/memory-repo.d.ts",
+      "default": "./dist/harness/session/memory-repo.js"
+    },
+    "./harness/session/memory-storage": {
+      "types": "./dist/harness/session/memory-storage.d.ts",
+      "default": "./dist/harness/session/memory-storage.js"
+    },
+    "./harness/session/repo-utils": {
+      "types": "./dist/harness/session/repo-utils.d.ts",
+      "default": "./dist/harness/session/repo-utils.js"
+    },
+    "./harness/session/uuid": {
+      "types": "./dist/harness/session/uuid.d.ts",
+      "default": "./dist/harness/session/uuid.js"
+    },
+    "./harness/compaction": {
+      "types": "./dist/harness/compaction.d.ts",
+      "default": "./dist/harness/compaction.js"
+    },
+    "./harness/branch-summarization": {
+      "types": "./dist/harness/branch-summarization.d.ts",
+      "default": "./dist/harness/branch-summarization.js"
+    },
+    "./harness/prompt-templates": {
+      "types": "./dist/harness/prompt-templates.d.ts",
+      "default": "./dist/harness/prompt-templates.js"
+    },
+    "./harness/skills": {
+      "types": "./dist/harness/skills.d.ts",
+      "default": "./dist/harness/skills.js"
+    },
+    "./harness/system-prompt": {
+      "types": "./dist/harness/system-prompt.d.ts",
+      "default": "./dist/harness/system-prompt.js"
+    },
+    "./harness/utils/shell-output": {
+      "types": "./dist/harness/utils/shell-output.d.ts",
+      "default": "./dist/harness/utils/shell-output.js"
+    },
+    "./harness/utils/truncate": {
+      "types": "./dist/harness/utils/truncate.d.ts",
+      "default": "./dist/harness/utils/truncate.js"
+    }
+  },
+  "dependencies": {
+    "ignore": "7.0.5",
+    "typebox": "1.1.38",
+    "yaml": "2.9.0"
+  }
+}

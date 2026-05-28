@@ -269,7 +269,7 @@ describe("synthetic auth runtime refs", () => {
           {
             backend: {
               id: "runtime-cli",
-              resolveExternalOAuthProfiles: () => [],
+              resolveExternalAuthProfiles: () => [],
             },
           },
         ],

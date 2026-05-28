@@ -60,7 +60,7 @@ describe("gateway-hosted exec approvals", () => {
     clearSessionStoreCacheForTest();
   });
 
-  it("lets PI-style gateway tool calls request and wait for approval over separate connections", async () => {
+  it("lets OpenClaw-style gateway tool calls request and wait for approval over separate connections", async () => {
     const envSnapshot = captureEnv(TEST_ENV_KEYS);
     cleanup.push(() => envSnapshot.restore());
 

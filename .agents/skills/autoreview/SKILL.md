@@ -50,8 +50,9 @@ Dirty local work:
 ```
 
 Use this only when the patch is actually unstaged/staged/untracked in the
-current checkout. For committed, pushed, or PR work, point the helper at the commit
-or branch diff instead; do not force `--mode local` / `--uncommitted` just
+current checkout. `--mode uncommitted` is accepted as an alias for `--mode local`.
+For committed, pushed, or PR work, point the helper at the commit
+or branch diff instead; do not force dirty modes just
 because the helper docs mention dirty work first. A clean local review
 only proves there is no local patch.
 
@@ -164,6 +165,7 @@ If installed from `agent-scripts`, path is:
 The helper:
 
 - chooses dirty local changes first
+- accepts `--mode uncommitted` as an alias for `--mode local`
 - otherwise uses current PR base if `gh pr view` works
 - otherwise uses `origin/main` for non-main branches
 - supports `--engine codex`, `claude`, `droid`, and `copilot`; default is `AUTOREVIEW_ENGINE` or `codex`; Codex should remain the default when nothing is set

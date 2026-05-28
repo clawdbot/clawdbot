@@ -14,6 +14,12 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
+  it("advertises ClawHub skill trust methods", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("skills.securityVerdicts");
+    expect(methods).toContain("skills.skillCard");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");

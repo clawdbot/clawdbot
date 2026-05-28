@@ -20,7 +20,7 @@ docsRefs:
   - docs/channels/qa-channel.md
 codeRefs:
   - src/agents/system-prompt.ts
-  - src/agents/pi-embedded-runner/run/incomplete-turn.ts
+  - src/agents/embedded-agent-runner/run/incomplete-turn.ts
   - extensions/qa-lab/src/mock-openai-server.ts
 execution:
   kind: flow

@@ -1,8 +1,9 @@
 import type { ReplyPayload as InternalReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/outbound.types.js";
+import { normalizeOutboundReplyPayload as normalizeCoreOutboundReplyPayload } from "../infra/outbound/reply-payload-normalize.js";
 import { createReplyToFanout } from "../infra/outbound/reply-policy.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
-import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
@@ -12,6 +13,7 @@ export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
 export {
   buildTtsSupplementMediaPayload,
   getReplyPayloadTtsSupplement,
+  isReplyPayloadNonTerminalToolErrorWarning,
   isReplyPayloadTtsSupplement,
   markReplyPayloadAsTtsSupplement,
 } from "../auto-reply/reply-payload.js";
@@ -54,10 +56,6 @@ type SendPayloadAdapter = Pick<
 
 const REASONING_PREFIX_RE = /^(?:reasoning:|thinking\.{0,3}(?=\s*(?:>\s*)?_))/u;
 
-function readObjectValue(value: unknown): object | undefined {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined;
-}
-
 function trimLeadingMarkdownQuoteMarkers(text: string): string {
   let candidate = text.trimStart();
   while (candidate.startsWith(">")) {
@@ -86,30 +84,7 @@ export function isReasoningReplyPayload(payload: ReasoningReplyPayload): boolean
 export function normalizeOutboundReplyPayload(
   payload: Record<string, unknown>,
 ): OutboundReplyPayload {
-  const text = readStringValue(payload.text);
-  const mediaUrls = Array.isArray(payload.mediaUrls)
-    ? payload.mediaUrls.filter(
-        (entry): entry is string => typeof entry === "string" && entry.length > 0,
-      )
-    : undefined;
-  const mediaUrl = readStringValue(payload.mediaUrl);
-  const presentation = readObjectValue(
-    payload.presentation,
-  ) as OutboundReplyPayload["presentation"];
-  const interactive = readObjectValue(payload.interactive) as OutboundReplyPayload["interactive"];
-  const channelData = readObjectValue(payload.channelData) as OutboundReplyPayload["channelData"];
-  const sensitiveMedia = payload.sensitiveMedia === true ? true : undefined;
-  const replyToId = readStringValue(payload.replyToId);
-  return {
-    text,
-    mediaUrls,
-    mediaUrl,
-    presentation,
-    interactive,
-    channelData,
-    sensitiveMedia,
-    replyToId,
-  };
+  return normalizeCoreOutboundReplyPayload(payload);
 }
 
 /** Wrap a deliverer so callers can hand it arbitrary payloads while channels receive normalized data. */

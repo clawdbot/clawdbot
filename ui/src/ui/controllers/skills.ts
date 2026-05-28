@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway.ts";
-import type { SkillStatusReport } from "../types.ts";
+import type { SkillClawHubLink, SkillStatusEntry, SkillStatusReport } from "../types.ts";
 
 export type ClawHubSearchResult = {
   score: number;
@@ -35,6 +35,30 @@ export type ClawHubSkillDetail = {
   } | null;
 };
 
+export type ClawHubSkillSecurityVerdict = {
+  registry: string;
+  ok: boolean;
+  decision: string;
+  reasons: string[];
+  requestedSlug: string;
+  requestedVersion: string;
+  slug?: string | null;
+  version?: string | null;
+  displayName?: string | null;
+  publisherHandle?: string | null;
+  publisherDisplayName?: string | null;
+  createdAt?: number | null;
+  checkedAt?: number | null;
+  skillUrl?: string | null;
+  securityAuditUrl?: string | null;
+  securityStatus?: string | null;
+  securityPassed?: boolean | null;
+  error?: {
+    code?: string;
+    message?: string;
+  };
+};
+
 export type SkillsState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -54,6 +78,13 @@ export type SkillsState = {
   clawhubDetailError: string | null;
   clawhubInstallSlug: string | null;
   clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+  clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
+  clawhubVerdictsLoading: boolean;
+  clawhubVerdictsError: string | null;
+  skillCardContents: Record<string, string>;
+  skillCardContentKeys: Record<string, string>;
+  skillCardLoadingKey: string | null;
+  skillCardErrors: Record<string, string>;
 };
 
 export type SkillMessage = {
@@ -71,6 +102,38 @@ function setSkillMessage(state: SkillsState, key: string, message: SkillMessage)
 }
 
 const getErrorMessage = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+export function clawhubVerdictKey(target: {
+  registry: string;
+  slug: string;
+  version: string;
+}): string {
+  return `${target.registry}\0${target.slug}\0${target.version}`;
+}
+
+function isValidClawHubLink(
+  link: SkillClawHubLink | undefined,
+): link is Extract<SkillClawHubLink, { status: "linked"; valid: true }> {
+  return Boolean(link && link.status === "linked" && link.valid);
+}
+
+function reportHasLinkedClawHubSkills(report: SkillStatusReport): boolean {
+  return report.skills.some((skill) => isValidClawHubLink(skill.clawhub));
+}
+
+function skillCardCacheKey(skill: SkillStatusEntry): string | undefined {
+  if (!skill.skillCard?.present) {
+    return undefined;
+  }
+  const installedVersion =
+    skill.clawhub?.status === "linked" && skill.clawhub.valid ? skill.clawhub.installedVersion : "";
+  return `${skill.skillCard.path}\0${skill.skillCard.sizeBytes}\0${installedVersion}`;
+}
+
+function currentSkillCardCacheKey(state: SkillsState, skillKey: string): string | undefined {
+  const skill = state.skillsReport?.skills.find((entry) => entry.skillKey === skillKey);
+  return skill ? skillCardCacheKey(skill) : undefined;
+}
 
 async function runStaleAwareRequest<T>(
   isCurrent: () => boolean,
@@ -113,13 +176,114 @@ export async function loadSkills(state: SkillsState, options?: { clearMessages?:
   state.skillsError = null;
   try {
     const res = await state.client.request<SkillStatusReport | undefined>("skills.status", {});
-    if (res) {
+    if (res && Array.isArray(res.skills)) {
       state.skillsReport = res;
+      pruneSkillCardState(state, res);
+      void loadClawHubSecurityVerdicts(state, res);
     }
   } catch (err) {
     state.skillsError = getErrorMessage(err);
   } finally {
     state.skillsLoading = false;
+  }
+}
+
+function pruneSkillCardState(state: SkillsState, report: SkillStatusReport) {
+  const cacheKeys = new Map(
+    report.skills
+      .map((skill) => [skill.skillKey, skillCardCacheKey(skill)] as const)
+      .filter((entry): entry is readonly [string, string] => entry[1] !== undefined),
+  );
+  state.skillCardContents = Object.fromEntries(
+    Object.entries(state.skillCardContents).filter(
+      ([key]) => state.skillCardContentKeys[key] === cacheKeys.get(key),
+    ),
+  );
+  state.skillCardContentKeys = Object.fromEntries(
+    Object.entries(state.skillCardContentKeys).filter(
+      ([key, value]) => value === cacheKeys.get(key),
+    ),
+  );
+  state.skillCardErrors = Object.fromEntries(
+    Object.entries(state.skillCardErrors).filter(([key]) => cacheKeys.has(key)),
+  );
+  if (state.skillCardLoadingKey && !cacheKeys.has(state.skillCardLoadingKey)) {
+    state.skillCardLoadingKey = null;
+  }
+}
+
+export async function loadSkillCard(state: SkillsState, skillKey: string) {
+  if (
+    !state.client ||
+    !state.connected ||
+    state.skillCardLoadingKey === skillKey ||
+    (state.skillCardContents[skillKey] !== undefined &&
+      state.skillCardContentKeys[skillKey] === currentSkillCardCacheKey(state, skillKey))
+  ) {
+    return;
+  }
+  const cacheKey = currentSkillCardCacheKey(state, skillKey);
+  if (!cacheKey) {
+    return;
+  }
+  state.skillCardLoadingKey = skillKey;
+  const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
+  state.skillCardErrors = nextErrors;
+  try {
+    const response = await state.client.request<{
+      schema: "openclaw.skills.skill-card.v1";
+      skillKey: string;
+      path: string;
+      sizeBytes: number;
+      content: string;
+    }>("skills.skillCard", { skillKey });
+    if (
+      response?.skillKey === skillKey &&
+      typeof response.content === "string" &&
+      currentSkillCardCacheKey(state, skillKey) === cacheKey
+    ) {
+      state.skillCardContents = { ...state.skillCardContents, [skillKey]: response.content };
+      state.skillCardContentKeys = { ...state.skillCardContentKeys, [skillKey]: cacheKey };
+    }
+  } catch (err) {
+    state.skillCardErrors = { ...state.skillCardErrors, [skillKey]: getErrorMessage(err) };
+  } finally {
+    if (state.skillCardLoadingKey === skillKey) {
+      state.skillCardLoadingKey = null;
+    }
+  }
+}
+
+async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
+  const client = state.client;
+  if (!client || !state.connected || !reportHasLinkedClawHubSkills(report)) {
+    state.clawhubVerdicts = {};
+    state.clawhubVerdictsLoading = false;
+    state.clawhubVerdictsError = null;
+    return;
+  }
+  state.clawhubVerdictsLoading = true;
+  state.clawhubVerdictsError = null;
+  try {
+    const response = await client.request<{
+      schema: "openclaw.skills.security-verdicts.v1";
+      items: ClawHubSkillSecurityVerdict[];
+    }>("skills.securityVerdicts", {});
+    state.clawhubVerdicts = Object.fromEntries(
+      (response?.items ?? []).map((item) => [
+        clawhubVerdictKey({
+          registry: item.registry,
+          slug: item.requestedSlug,
+          version: item.requestedVersion,
+        }),
+        item,
+      ]),
+    );
+  } catch (err) {
+    state.clawhubVerdicts = {};
+    state.clawhubVerdictsError = getErrorMessage(err);
+  } finally {
+    state.clawhubVerdictsLoading = false;
   }
 }
 

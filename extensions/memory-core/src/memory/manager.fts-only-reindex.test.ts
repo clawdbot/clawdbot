@@ -138,6 +138,6 @@ describe("memory manager FTS-only reindex", () => {
     await expect(memoryManager.sync({ force: true })).rejects.toThrow(
       "Refusing to run sync in fts-only fallback mode to protect existing vector index (current model: mock-embed).",
     );
-    expect(memoryManager.status().provider).toBe("auto");
+    expect(memoryManager.status().provider).toBe("openai");
   });
 });

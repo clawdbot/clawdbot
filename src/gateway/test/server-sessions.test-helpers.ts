@@ -2,7 +2,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
@@ -12,19 +12,19 @@ import {
   connectOk,
   embeddedRunMock,
   installGatewayTestHooks,
-  piSdkMock,
+  agentDiscoveryMock,
   rpcReq,
   testState,
   writeSessionStore,
 } from "../test-helpers.js";
 
 let sessionManagerModulePromise:
-  | Promise<typeof import("@earendil-works/pi-coding-agent")>
+  | Promise<typeof import("../../agents/sessions/index.js")>
   | undefined;
 let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
 
 export async function getSessionManagerModule() {
-  sessionManagerModulePromise ??= import("@earendil-works/pi-coding-agent");
+  sessionManagerModulePromise ??= import("../../agents/sessions/index.js");
   return await sessionManagerModulePromise;
 }
 
@@ -231,7 +231,7 @@ vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   movePathToTrash: vi.fn(async () => {}),
 }));
 
-vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
   disposeSessionMcpRuntime: bundleMcpRuntimeMocks.disposeSessionMcpRuntime,
   disposeAllSessionMcpRuntimes: bundleMcpRuntimeMocks.disposeAllSessionMcpRuntimes,
   retireSessionMcpRuntime: ({ sessionId }: { sessionId?: string | null }) =>
@@ -495,7 +495,7 @@ export async function directSessionReq<TPayload = unknown>(
     context: {
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set<string>(),
-      loadGatewayModelCatalog: async () => piSdkMock.models,
+      loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
       getRuntimeConfig: getRuntimeConfig,
       ...opts?.context,
     } as never,

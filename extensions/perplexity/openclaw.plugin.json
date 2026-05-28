@@ -3,8 +3,13 @@
   "activation": {
     "onStartup": false
   },
-  "providerAuthEnvVars": {
-    "perplexity": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "perplexity",
+        "envVars": ["PERPLEXITY_API_KEY", "OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "uiHints": {
     "webSearch.apiKey": {

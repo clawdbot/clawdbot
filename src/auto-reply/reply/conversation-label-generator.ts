@@ -1,10 +1,11 @@
-import { completeSimple, type TextContent } from "@earendil-works/pi-ai";
+import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { requireApiKey } from "../../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
-import { resolveModelAsync } from "../../agents/pi-embedded-runner/model.js";
 import { prepareModelForSimpleCompletion } from "../../agents/simple-completion-transport.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { completeSimple } from "../../llm/stream.js";
+import type { TextContent } from "../../llm/types.js";
 import { getRuntimeAuthForModel } from "../../plugins/runtime/runtime-model-auth.runtime.js";
 
 const DEFAULT_MAX_LABEL_LENGTH = 128;

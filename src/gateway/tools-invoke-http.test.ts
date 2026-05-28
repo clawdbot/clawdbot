@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/pi-tools.before-tool-call.js";
+import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agents/agent-tools.before-tool-call.js";
 
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
@@ -203,11 +203,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
   };
 });
 
-vi.mock("../agents/pi-tools.js", () => ({
+vi.mock("../agents/agent-tools.js", () => ({
   resolveToolLoopDetectionConfig: hookMocks.resolveToolLoopDetectionConfig,
 }));
 
-vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
+vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 

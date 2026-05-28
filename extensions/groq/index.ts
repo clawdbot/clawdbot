@@ -1,5 +1,4 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { contributeGroqResolvedModelCompat } from "./api.js";
 import { groqMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 export default definePluginEntry({
@@ -13,8 +12,6 @@ export default definePluginEntry({
       docsPath: "/providers/groq",
       envVars: ["GROQ_API_KEY"],
       auth: [],
-      contributeResolvedModelCompat: ({ modelId, model }) =>
-        contributeGroqResolvedModelCompat({ modelId, model }),
     });
     api.registerMediaUnderstandingProvider(groqMediaUnderstandingProvider);
   },

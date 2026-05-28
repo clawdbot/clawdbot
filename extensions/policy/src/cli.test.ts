@@ -326,6 +326,42 @@ describe("policy commands", () => {
     });
   });
 
+  it("rejects partial policy watch intervals before evaluating policy", async () => {
+    const output: string[] = [];
+    const exitCode = await policyWatchCommand(
+      { cwd: workspaceDir, json: true, once: true, intervalMs: "500ms" },
+      {
+        writeStdout(value) {
+          output.push(value);
+        },
+        error(value) {
+          output.push(value);
+        },
+      },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(output.join("\n")).toContain("--interval-ms must be an integer >= 250.");
+  });
+
+  it("rejects sub-floor policy watch intervals before evaluating policy", async () => {
+    const output: string[] = [];
+    const exitCode = await policyWatchCommand(
+      { cwd: workspaceDir, json: true, once: true, intervalMs: "249" },
+      {
+        writeStdout(value) {
+          output.push(value);
+        },
+        error(value) {
+          output.push(value);
+        },
+      },
+    );
+
+    expect(exitCode).toBe(2);
+    expect(output.join("\n")).toContain("--interval-ms must be an integer >= 250.");
+  });
+
   it("reports findings instead of stale when policy watch has no attestation to compare", async () => {
     await fs.writeFile(join(workspaceDir, "policy.jsonc"), "{ channels: ", "utf-8");
 

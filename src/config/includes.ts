@@ -12,10 +12,10 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export const INCLUDE_KEY = "$include";
@@ -421,7 +421,7 @@ const defaultResolver: IncludeResolver = {
   readFile: (p) => fs.readFileSync(p, "utf-8"),
   readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
     readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
-  parseJson: (raw) => JSON5.parse(raw),
+  parseJson: parseJsonWithJson5Fallback,
 };
 
 /**

@@ -44,7 +44,7 @@ const hoisted = vi.hoisted(() => ({
   reloadEvents: [] as string[],
   resetModelCatalogCache: vi.fn(() => {}),
   clearCurrentProviderAuthState: vi.fn(() => {}),
-  warmCurrentProviderAuthState: vi.fn(async (_cfg: OpenClawConfig) => {}),
+  warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: OpenClawConfig) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
 }));
 
@@ -87,7 +87,7 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   };
 });
 
-vi.mock("../agents/pi-embedded-runner/run-state.js", () => ({
+vi.mock("../agents/embedded-agent-runner/run-state.js", () => ({
   getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
   listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,
@@ -113,13 +113,13 @@ vi.mock("../agents/model-provider-auth.js", () => ({
     hoisted.reloadEvents.push("clear-provider-auth");
     hoisted.clearCurrentProviderAuthState();
   },
-  warmCurrentProviderAuthState: async (cfg: OpenClawConfig) => {
+  warmCurrentProviderAuthStateOffMainThread: async (cfg: OpenClawConfig) => {
     hoisted.reloadEvents.push("warm-provider-auth");
-    await hoisted.warmCurrentProviderAuthState(cfg);
+    await hoisted.warmCurrentProviderAuthStateOffMainThread(cfg);
   },
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", () => ({
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
 }));
 
@@ -171,7 +171,7 @@ afterEach(() => {
   hoisted.reloadEvents.length = 0;
   hoisted.resetModelCatalogCache.mockClear();
   hoisted.clearCurrentProviderAuthState.mockClear();
-  hoisted.warmCurrentProviderAuthState.mockClear();
+  hoisted.warmCurrentProviderAuthStateOffMainThread.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockClear();
   hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
 });
@@ -240,7 +240,7 @@ describe("gateway hot reload model state", () => {
       "clear-provider-auth",
       "warm-provider-auth",
     ]);
-    expect(hoisted.warmCurrentProviderAuthState).toHaveBeenCalledWith(nextConfig);
+    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
@@ -267,7 +267,7 @@ describe("gateway hot reload model state", () => {
     );
 
     expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
-    expect(hoisted.warmCurrentProviderAuthState).toHaveBeenCalledWith(nextConfig);
+    expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
 });
 

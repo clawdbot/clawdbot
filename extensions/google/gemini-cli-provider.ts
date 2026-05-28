@@ -79,9 +79,8 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               configPatch: {
                 agents: {
                   defaults: {
-                    agentRuntime: { id: PROVIDER_ID },
                     models: {
-                      [DEFAULT_MODEL]: {},
+                      [DEFAULT_MODEL]: { agentRuntime: { id: PROVIDER_ID } },
                     },
                   },
                 },

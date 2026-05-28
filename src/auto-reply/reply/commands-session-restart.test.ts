@@ -16,7 +16,10 @@ const mocks = vi.hoisted(() => ({
     },
     threadId: "thread-1",
   })),
-  formatDoctorNonInteractiveHint: vi.fn(() => "Run: openclaw doctor --non-interactive"),
+  formatDoctorNonInteractiveHint: vi.fn(
+    () =>
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+  ),
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/sentinel.json"),
   scheduleGatewaySigusr1Restart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
     scheduled: true,
@@ -148,7 +151,9 @@ describe("handleRestartCommand", () => {
       kind: "agentTurn",
       message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
     });
-    expect(sentinelPayload?.doctorHint).toBe("Run: openclaw doctor --non-interactive");
+    expect(sentinelPayload?.doctorHint).toBe(
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+    );
     expect(sentinelPayload?.stats).toEqual({
       mode: "gateway.restart",
       reason: "/restart",

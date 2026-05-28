@@ -2,7 +2,7 @@ import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
   OpenAIResponsesCompat,
-} from "@earendil-works/pi-ai";
+} from "../llm/types.js";
 import type { AgentRuntimePolicyConfig } from "./types.agents-shared.js";
 import type { ConfiguredModelProviderRequest } from "./types.provider-request.js";
 import type { SecretInput } from "./types.secrets.js";
@@ -171,6 +171,8 @@ export type ModelProviderConfig = {
   contextTokens?: number;
   maxTokens?: number;
   timeoutSeconds?: number;
+  /** Optional provider deployment/API region used by provider plugins that expose regional endpoints. */
+  region?: string;
   injectNumCtxForOpenAICompat?: boolean;
   /** Provider-specific runtime parameters interpreted by provider plugins. */
   params?: Record<string, unknown>;
@@ -211,26 +213,6 @@ export type ModelsConfig = {
   mode?: "merge" | "replace";
   providers?: Record<string, ModelProviderConfig>;
   pricing?: ModelPricingConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  bedrockDiscovery?: BedrockDiscoveryConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  copilotDiscovery?: DiscoveryToggleConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  huggingfaceDiscovery?: DiscoveryToggleConfig;
-  /**
-   * @deprecated Legacy compat alias. Kept so doctor/runtime fallbacks can read
-   * older configs until migration completes.
-   */
-  ollamaDiscovery?: DiscoveryToggleConfig;
 };
 
 export type ModelsConfigInput = Omit<ModelsConfig, "providers"> & {

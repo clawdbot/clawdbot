@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeOptionalTrimmedStringList } from "../shared/string-normalization.js";
 import type { PluginCandidate } from "./discovery.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
+import type { InstalledPluginFileSignature } from "./installed-plugin-index-hash.js";
 import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./installed-plugin-index.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
@@ -24,6 +25,37 @@ import {
   normalizePluginDependencySpecs,
   type PluginDependencySpecMap,
 } from "./status-dependencies.js";
+
+const installedManifestRegistryIndexFingerprintCache = new WeakMap<InstalledPluginIndex, string>();
+
+function isDeepFrozenJsonLike(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (!value || typeof value !== "object") {
+    return true;
+  }
+  const object = value;
+  if (seen.has(object)) {
+    return true;
+  }
+  if (!Object.isFrozen(object)) {
+    return false;
+  }
+  seen.add(object);
+  return Object.values(value).every((entry) => isDeepFrozenJsonLike(entry, seen));
+}
+
+function hasPersistedFileSignatures(index: InstalledPluginIndex): boolean {
+  return index.plugins.every(
+    (record) =>
+      record.manifestFile !== undefined &&
+      (record.packageJson === undefined || record.packageJson.fileSignature !== undefined),
+  );
+}
+
+function isInstalledManifestRegistryIndexFingerprintCacheable(
+  index: InstalledPluginIndex,
+): boolean {
+  return hasPersistedFileSignatures(index) && isDeepFrozenJsonLike(index);
+}
 
 function isRelativePathInsideOrEqual(relativePath: string): boolean {
   return (
@@ -61,10 +93,17 @@ function safeFileSignature(filePath: string | undefined): string | undefined {
   }
   try {
     const stat = fs.statSync(filePath);
-    return `${filePath}:${stat.size}:${stat.mtimeMs}`;
+    return formatFileSignature(filePath, stat);
   } catch {
     return `${filePath}:missing`;
   }
+}
+
+function formatFileSignature(
+  filePath: string,
+  signature: Pick<InstalledPluginFileSignature, "size" | "mtimeMs">,
+): string {
+  return `${filePath}:${signature.size}:${signature.mtimeMs}`;
 }
 
 function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
@@ -78,9 +117,12 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
     plugins: index.plugins.map((record) => {
-      const packageJsonFile =
-        record.packageJson?.fileSignature ??
-        safeFileSignature(resolvePackageJsonPath(record, realpathCache));
+      const packageJsonPath = resolvePackageJsonPath(record, realpathCache);
+      const packageJsonFile = record.packageJson?.fileSignature
+        ? packageJsonPath
+          ? formatFileSignature(packageJsonPath, record.packageJson.fileSignature)
+          : undefined
+        : safeFileSignature(packageJsonPath);
       return {
         pluginId: record.pluginId,
         packageName: record.packageName,
@@ -91,7 +133,9 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
         packageChannel: record.packageChannel,
         manifestPath: record.manifestPath,
         manifestHash: record.manifestHash,
-        manifestFile: safeFileSignature(record.manifestPath),
+        manifestFile: record.manifestFile
+          ? formatFileSignature(record.manifestPath, record.manifestFile)
+          : safeFileSignature(record.manifestPath),
         format: record.format,
         bundleFormat: record.bundleFormat,
         source: record.source,
@@ -116,7 +160,15 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
 export function resolveInstalledManifestRegistryIndexFingerprint(
   index: InstalledPluginIndex,
 ): string {
-  return hashJson(buildInstalledManifestRegistryIndexKey(index));
+  const cached = installedManifestRegistryIndexFingerprintCache.get(index);
+  if (cached) {
+    return cached;
+  }
+  const fingerprint = hashJson(buildInstalledManifestRegistryIndexKey(index));
+  if (isInstalledManifestRegistryIndexFingerprintCacheable(index)) {
+    installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);
+  }
+  return fingerprint;
 }
 
 function resolveInstalledPluginRootDir(record: InstalledPluginIndexRecord): string {

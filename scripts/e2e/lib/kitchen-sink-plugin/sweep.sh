@@ -6,7 +6,12 @@ source scripts/lib/docker-e2e-logs.sh
 
 OPENCLAW_ENTRY="$(openclaw_e2e_resolve_entrypoint)"
 export OPENCLAW_ENTRY
-export KITCHEN_SINK_TMP_DIR="${KITCHEN_SINK_TMP_DIR:-/tmp}"
+if [[ -z "${KITCHEN_SINK_TMP_DIR:-}" ]]; then
+  KITCHEN_SINK_TMP_DIR="$(mktemp -d "/tmp/openclaw-kitchen-sink.XXXXXX")"
+else
+  mkdir -p "$KITCHEN_SINK_TMP_DIR"
+fi
+export KITCHEN_SINK_TMP_DIR
 KITCHEN_SINK_CLI_TIMEOUT="${KITCHEN_SINK_CLI_TIMEOUT:-180s}"
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -134,7 +139,7 @@ if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]]; then
       echo "Ignoring ambient ClawHub URL for fixture-mode kitchen-sink E2E; set OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB=1 for live ClawHub."
     fi
     unset OPENCLAW_CLAWHUB_URL CLAWHUB_URL
-    clawhub_fixture_dir="$(mktemp -d "/tmp/openclaw-kitchen-sink-clawhub.XXXXXX")"
+    clawhub_fixture_dir="$(mktemp -d "${KITCHEN_SINK_TMP_DIR}/clawhub.XXXXXX")"
     start_kitchen_sink_clawhub_fixture_server "$clawhub_fixture_dir"
   fi
 fi

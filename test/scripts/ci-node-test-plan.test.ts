@@ -353,7 +353,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       shardName: "agentic-agents",
       configs: [
         "test/vitest/vitest.agents-core.config.ts",
-        "test/vitest/vitest.agents-pi-embedded.config.ts",
+        "test/vitest/vitest.agents-embedded-agent.config.ts",
         "test/vitest/vitest.agents-support.config.ts",
         "test/vitest/vitest.agents-tools.config.ts",
       ],

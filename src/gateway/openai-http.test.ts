@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { FailoverError } from "../agents/failover-error.js";
+import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import {
   createStubSessionHarness,
   emitAssistantTextDelta,
-} from "../agents/pi-embedded-subscribe.e2e-harness.js";
-import { subscribeEmbeddedPiSession } from "../agents/pi-embedded-subscribe.js";
-import { createClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+} from "../agents/embedded-agent-subscribe.e2e-harness.js";
+import { subscribeEmbeddedAgentSession } from "../agents/embedded-agent-subscribe.js";
+import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -1066,7 +1066,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         agentCommand.mockImplementationOnce((async (opts: unknown) => {
           const runId = (opts as { runId?: string } | undefined)?.runId ?? "";
           const { session, emit } = createStubSessionHarness();
-          subscribeEmbeddedPiSession({ session, runId });
+          subscribeEmbeddedAgentSession({ session, runId });
           emit({ type: "message_start", message: { role: "assistant" } });
           for (const delta of ["<", "final>Title\n", "Line one\nLine two</", "final>"]) {
             emitAssistantTextDelta({ emit, delta });
@@ -1136,6 +1136,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           prompt_tokens: 30,
           completion_tokens: 5,
           total_tokens: 35,
+          prompt_tokens_details: { cached_tokens: 20 },
         });
       }
 
@@ -1202,6 +1203,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           prompt_tokens: 2,
           completion_tokens: 0,
           total_tokens: 2,
+          prompt_tokens_details: { cached_tokens: 2 },
         });
       }
 
@@ -2054,6 +2056,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       prompt_tokens: 15,
       completion_tokens: 5,
       total_tokens: 20,
+      prompt_tokens_details: { cached_tokens: 3 },
     });
     expect(usageChunk?.choices).toStrictEqual([]);
   });

@@ -39,7 +39,6 @@ const tempDirs: string[] = [];
 const envSnapshot = captureEnv([
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
   "OPENCLAW_OAUTH_DIR",
   "OPENCLAW_AUTH_PROFILE_SECRET_KEY",
 ]);
@@ -313,7 +312,6 @@ describe("createOAuthManager", () => {
     const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
     const agentDir = path.join(tempRoot, "agents", "sub", "agent");
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     await fs.mkdir(agentDir, { recursive: true });
     await fs.mkdir(mainAgentDir, { recursive: true });
 
@@ -400,7 +398,6 @@ describe("createOAuthManager", () => {
     const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
     const agentDir = path.join(tempRoot, "agents", "sub", "agent");
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     await fs.mkdir(agentDir, { recursive: true });
     await fs.mkdir(mainAgentDir, { recursive: true });
     const profileId = "minimax-portal:default";

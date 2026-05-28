@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import { buildBootstrapContextFiles } from "./pi-embedded-helpers.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,

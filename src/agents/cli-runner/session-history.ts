@@ -1,7 +1,5 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { migrateSessionEntries, parseSessionEntries } from "@earendil-works/pi-coding-agent";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -13,6 +11,8 @@ import {
   limitAgentHookHistoryMessages,
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
+import type { AgentMessage } from "../runtime/index.js";
+import { migrateSessionEntries, parseSessionEntries } from "../sessions/index.js";
 
 export const MAX_CLI_SESSION_HISTORY_FILE_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
@@ -45,6 +45,7 @@ type RawTranscriptReseedReason =
   | "auth-profile"
   | "auth-epoch"
   | "system-prompt"
+  | "cwd"
   | "mcp"
   | "missing-transcript"
   | "session-expired";
@@ -52,6 +53,7 @@ type RawTranscriptReseedReason =
 const RAW_TRANSCRIPT_RESEED_ALLOWED_REASONS = new Set<RawTranscriptReseedReason>([
   "missing-transcript",
   "system-prompt",
+  "cwd",
   "mcp",
   "session-expired",
 ]);

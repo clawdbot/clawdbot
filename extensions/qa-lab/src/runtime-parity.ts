@@ -13,7 +13,7 @@ import {
   type GatewayLogSentinelFinding,
 } from "./gateway-log-sentinel.js";
 
-export type RuntimeId = "pi" | "codex";
+export type RuntimeId = "openclaw" | "codex";
 
 export type RuntimeParityToolCall = {
   tool: string;
@@ -53,7 +53,10 @@ export type RuntimeParityDrift =
 
 export type RuntimeParityResult = {
   scenarioId: string;
-  cells: { pi: RuntimeParityCell; codex: RuntimeParityCell };
+  cells: {
+    openclaw: RuntimeParityCell;
+    codex: RuntimeParityCell;
+  };
   drift: RuntimeParityDrift;
   driftDetails?: string;
 };
@@ -76,7 +79,7 @@ export function runtimeParityCellStatus(
 export function isRuntimeParityResultPass(result: RuntimeParityResult) {
   return (
     result.drift !== "failure-mode" &&
-    runtimeParityCellStatus(result.cells.pi) === "pass" &&
+    runtimeParityCellStatus(result.cells.openclaw) === "pass" &&
     runtimeParityCellStatus(result.cells.codex) === "pass"
   );
 }
@@ -757,73 +760,77 @@ function summarizeSentinelErrorClass(findings: readonly GatewayLogSentinelFindin
 }
 
 function classifyRuntimeParityCells(params: {
-  pi: RuntimeParityCell;
+  openclaw: RuntimeParityCell;
   codex: RuntimeParityCell;
-  piScenarioStatus: "pass" | "fail";
+  openclawScenarioStatus: "pass" | "fail";
   codexScenarioStatus: "pass" | "fail";
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
   if (
-    isHardFailureRuntimeError(params.pi.runtimeErrorClass) ||
+    isHardFailureRuntimeError(params.openclaw.runtimeErrorClass) ||
     isHardFailureRuntimeError(params.codex.runtimeErrorClass) ||
-    params.pi.transportErrorClass ||
+    params.openclaw.transportErrorClass ||
     params.codex.transportErrorClass
   ) {
     return {
       drift: "failure-mode",
       driftDetails:
-        params.pi.transportErrorClass || params.codex.transportErrorClass
+        params.openclaw.transportErrorClass || params.codex.transportErrorClass
           ? "at least one runtime hit a transport failure"
           : "at least one runtime hit a hard runtime failure",
     };
   }
 
-  const toolCallShapeDetails = compareToolCallShape(params.pi.toolCalls, params.codex.toolCalls);
+  const toolCallShapeDetails = compareToolCallShape(
+    params.openclaw.toolCalls,
+    params.codex.toolCalls,
+  );
   if (toolCallShapeDetails) {
     return { drift: "tool-call-shape", driftDetails: toolCallShapeDetails };
   }
 
   const toolResultShapeDetails = compareToolResultShape(
-    params.pi.toolCalls,
+    params.openclaw.toolCalls,
     params.codex.toolCalls,
   );
   if (toolResultShapeDetails) {
     return { drift: "tool-result-shape", driftDetails: toolResultShapeDetails };
   }
 
-  const piTranscriptLines = params.pi.transcriptBytes.trim().length
-    ? params.pi.transcriptBytes.trim().split(/\r?\n/u).length
+  const openclawTranscriptLines = params.openclaw.transcriptBytes.trim().length
+    ? params.openclaw.transcriptBytes.trim().split(/\r?\n/u).length
     : 0;
   const codexTranscriptLines = params.codex.transcriptBytes.trim().length
     ? params.codex.transcriptBytes.trim().split(/\r?\n/u).length
     : 0;
   if (
-    piTranscriptLines !== codexTranscriptLines ||
-    (!params.pi.finalText && !!params.codex.finalText) ||
-    (!!params.pi.finalText && !params.codex.finalText)
+    openclawTranscriptLines !== codexTranscriptLines ||
+    (!params.openclaw.finalText && !!params.codex.finalText) ||
+    (!!params.openclaw.finalText && !params.codex.finalText)
   ) {
     return {
       drift: "structural",
-      driftDetails: `transcript/final-text structure differs (${piTranscriptLines} lines vs ${codexTranscriptLines})`,
+      driftDetails: `transcript/final-text structure differs (${openclawTranscriptLines} lines vs ${codexTranscriptLines})`,
     };
   }
 
   if (
-    params.piScenarioStatus === "fail" ||
+    params.openclawScenarioStatus === "fail" ||
     params.codexScenarioStatus === "fail" ||
-    params.pi.runtimeErrorClass ||
+    params.openclaw.runtimeErrorClass ||
     params.codex.runtimeErrorClass
   ) {
     return {
       drift: "failure-mode",
       driftDetails:
-        params.piScenarioStatus === params.codexScenarioStatus
+        params.openclawScenarioStatus === params.codexScenarioStatus
           ? "at least one runtime failed"
-          : `scenario status differs (${params.piScenarioStatus} vs ${params.codexScenarioStatus})`,
+          : `scenario status differs (${params.openclawScenarioStatus} vs ${params.codexScenarioStatus})`,
     };
   }
 
   if (
-    normalizeTextForParity(params.pi.finalText) === normalizeTextForParity(params.codex.finalText)
+    normalizeTextForParity(params.openclaw.finalText) ===
+    normalizeTextForParity(params.codex.finalText)
   ) {
     return { drift: "none" };
   }
@@ -999,18 +1006,18 @@ export async function runRuntimeParityScenario(params: {
   scenarioId: string;
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
-  const pi = await params.runCell("pi");
+  const openclaw = await params.runCell("openclaw");
   const codex = await params.runCell("codex");
   const drift = classifyRuntimeParityCells({
-    pi: pi.cell,
+    openclaw: openclaw.cell,
     codex: codex.cell,
-    piScenarioStatus: pi.scenarioStatus,
+    openclawScenarioStatus: openclaw.scenarioStatus,
     codexScenarioStatus: codex.scenarioStatus,
   });
   return {
     scenarioId: params.scenarioId,
     cells: {
-      pi: pi.cell,
+      openclaw: openclaw.cell,
       codex: codex.cell,
     },
     drift: drift.drift,

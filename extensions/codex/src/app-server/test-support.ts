@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 
-export function createCodexTestModel(provider = "openai-codex", input = ["text"]): Model<Api> {
+export function createCodexTestModel(provider = "openai-codex", input = ["text"]): Model {
   return {
     id: "gpt-5.4-codex",
     name: "gpt-5.4-codex",
@@ -15,7 +15,7 @@ export function createCodexTestModel(provider = "openai-codex", input = ["text"]
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 128_000,
     maxTokens: 8_000,
-  } as Model<Api>;
+  } as Model;
 }
 
 export function createClientHarness() {

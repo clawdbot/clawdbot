@@ -1,6 +1,7 @@
-import { type Context, complete } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { complete } from "../../llm/stream.js";
+import type { Context } from "../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,

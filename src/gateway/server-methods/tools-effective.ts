@@ -15,7 +15,9 @@ import {
   getActivePluginRegistryVersion,
   listAgentIds,
   loadSessionEntry,
+  resolveAgentDir,
   resolveEffectiveToolInventory,
+  resolveEffectiveToolInventoryRuntimeModelContext,
   resolveReplyToMode,
   resolveRuntimeConfigCacheKey,
   resolveSessionAgentId,
@@ -132,13 +134,24 @@ function scheduleToolsEffectiveRefresh(
   const task = new Promise<EffectiveToolInventoryResult>((resolve, reject) => {
     setImmediate(() => {
       try {
+        const agentDir = resolveAgentDir(context.cfg, context.agentId);
+        const runtimeModelContext = resolveEffectiveToolInventoryRuntimeModelContext({
+          cfg: context.cfg,
+          agentId: context.agentId,
+          agentDir,
+          modelProvider: context.modelProvider,
+          modelId: context.modelId,
+        });
         const value = resolveEffectiveToolInventory({
           cfg: context.cfg,
           agentId: context.agentId,
+          agentDir,
           sessionKey: context.sessionKey,
           messageProvider: context.messageProvider,
           modelProvider: context.modelProvider,
           modelId: context.modelId,
+          modelApi: runtimeModelContext.modelApi,
+          runtimeModel: runtimeModelContext.runtimeModel,
           currentChannelId: context.currentChannelId,
           currentThreadTs: context.currentThreadTs,
           accountId: context.accountId,

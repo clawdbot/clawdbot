@@ -718,6 +718,13 @@ describe("scripts/test-extension.mjs", () => {
     expect([...parseExactVitestExcludePaths(["--exclude=extensions/**/*.test.ts"])]).toEqual([]);
   });
 
+  it("accepts pnpm's leading argument separator before extension ids", () => {
+    expect(parseExtensionIds(["--", "telegram,slack", "--run"])).toEqual({
+      extensionIds: ["telegram", "slack"],
+      passthroughArgs: ["--run"],
+    });
+  });
+
   it("fails explicitly requested extensions without tests by default", () => {
     const extensionId = findExtensionWithoutTests();
     const result = runScriptResult([extensionId]);

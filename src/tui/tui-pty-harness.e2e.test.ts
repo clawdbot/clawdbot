@@ -220,7 +220,7 @@ async function writeTuiPtyFixtureScript(dir: string) {
   const scriptPath = path.join(dir, "run-tui-pty-fixture.ts");
   const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
   const payloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/agents/pi-embedded-runner/run/payloads.ts"),
+    path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),
   ).href;
   const replyPayloadModuleUrl = pathToFileURL(
     path.join(process.cwd(), "src/auto-reply/reply-payload.ts"),

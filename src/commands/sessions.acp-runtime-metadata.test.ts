@@ -4,9 +4,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 
 /**
- * Catalog #18 — `openclaw sessions --json` reports `agentRuntime.id: "pi"` for
+ * Catalog #18 — `openclaw sessions --json` reports `agentRuntime.id: "openclaw"` for
  * ACP sessions because `resolveAgentRuntimeMetadata` only consults agent-config
- * policies (env / agent / defaults / implicit fallback to "pi"). The session
+ * policies (env / agent / defaults / implicit fallback to "openclaw"). The session
  * key clearly carries the ACP runtime indicator (the `:acp:` segment), but
  * `sessions.ts:294` ignores it and just calls `resolveAgentRuntimeMetadata(cfg, agentId)`.
  *
@@ -16,20 +16,20 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
  *   {
  *     "key": "agent:copilot:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9",
  *     "agentId": "copilot",
- *     "agentRuntime": { "id": "pi", "source": "implicit" },
+ *     "agentRuntime": { "id": "openclaw", "source": "implicit" },
  *     "kind": "direct"
  *   }
  *
- * That is wrong: this session is plainly ACP, not PI. The runtime field is
+ * That is wrong: this session is plainly ACP, not the native runtime. The runtime field is
  * supposed to be a faithful classifier of how this session is actually being
- * run; instead, every ACP session in the JSON output is mislabelled as `pi`.
+ * run; instead, every ACP session in the JSON output is mislabelled as the native runtime.
  *
  * This test mirrors the exact computation `sessionsCommand` performs at
  * `src/commands/sessions.ts:294` and proves the bug in two parts:
  *
- *   - RED: ACP-keyed session resolves to `id: "pi"`, `source: "implicit"`.
+ *   - RED: ACP-keyed session resolves to `id: "openclaw"`, `source: "implicit"`.
  *   - GREEN control: a non-ACP `agent:main:main` session resolves to the
- *     same implicit-pi metadata, which IS correct in that case. The control
+ *     same implicit-native metadata, which IS correct in that case. The control
  *     proves the assertion infrastructure is not masking the RED case.
  *
  * Fix shape (see the third test): when the session key is ACP-style,
@@ -53,7 +53,7 @@ const NON_ACP_SESSION_KEY = "agent:main:main";
  * - no top-level `agents.defaults.agentRuntime` either
  *
  * Result: `resolveAgentRuntimeMetadata(cfg, "copilot")` falls through to the
- * implicit "pi" branch — which is the bug under test.
+ * implicit "openclaw" branch — which is the bug under test.
  */
 function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
   return {
@@ -112,12 +112,12 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
     });
 
     // The bug was: the session key plainly contains `:acp:` and yet the
-    // resolved metadata said id="pi", source="implicit".
+    // resolved metadata said id="openclaw", source="implicit".
     // After the fix (applyAcpRuntimeOverlay in resolveModelAgentRuntimeMetadata),
     // the ACP session key overrides the runtime to id="acpx", source="session-key".
     expect(
       agentRuntime.id,
-      `ACP session ${ACP_SESSION_KEY} should no longer be misclassified as "auto" or "pi". ` +
+      `ACP session ${ACP_SESSION_KEY} should no longer be misclassified as "auto" or "openclaw". ` +
         `Got "${agentRuntime.id}". resolveModelAgentRuntimeMetadata must pass sessionKey to ` +
         `applyAcpRuntimeOverlay so ACP sessions are classified as "acpx".`,
     ).not.toBe("auto");
@@ -153,7 +153,7 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
     //
     // Note: the exact id ("acpx" vs another label) is a design choice for
     // the fix author. What matters is that it is meaningfully different
-    // from "pi" and reflects the actual runtime driving the session.
+    // from "openclaw" and reflects the actual runtime driving the session.
     // If the fix picks a different label, update this assertion to match —
     // the structural point (session-key-aware classification) is the
     // load-bearing part.

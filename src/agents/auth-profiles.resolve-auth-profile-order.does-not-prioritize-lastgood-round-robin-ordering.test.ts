@@ -7,8 +7,7 @@ import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderIdForAuth: (provider: string) =>
-    provider.trim().toLowerCase() === "z.ai" ? "zai" : provider.trim().toLowerCase(),
+  resolveProviderIdForAuth: (provider: string) => provider.trim().toLowerCase(),
 }));
 
 function makeApiKeyStore(provider: string, profileIds: string[]): AuthProfileStore {
@@ -168,7 +167,7 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order[0]).toBe("anthropic:default");
   });
-  it("normalizes z.ai aliases in auth.order", () => {
+  it("does not match auth.order across provider id variants", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
@@ -182,7 +181,7 @@ describe("resolveAuthProfileOrder", () => {
       store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
       provider: "zai",
     });
-    expect(order).toEqual(["zai:work", "zai:default"]);
+    expect(order).toEqual(["zai:default", "zai:work"]);
   });
   it("normalizes provider casing in auth.order keys", () => {
     const order = resolveAuthProfileOrder({
@@ -200,7 +199,7 @@ describe("resolveAuthProfileOrder", () => {
     });
     expect(order).toEqual(["openai:work", "openai:default"]);
   });
-  it("normalizes z.ai aliases in auth.profiles", () => {
+  it("does not match provider id variants in auth.profiles", () => {
     const order = resolveAuthProfileOrder({
       cfg: {
         auth: {
@@ -213,7 +212,7 @@ describe("resolveAuthProfileOrder", () => {
       store: makeApiKeyStore("zai", ["zai:default", "zai:work"]),
       provider: "zai",
     });
-    expect(order).toEqual(["zai:default", "zai:work"]);
+    expect(order).toEqual([]);
   });
   it("prioritizes oauth profiles when order missing", () => {
     const mixedStore: AuthProfileStore = {

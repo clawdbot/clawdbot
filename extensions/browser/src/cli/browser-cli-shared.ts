@@ -31,6 +31,18 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
+function parsePositiveInteger(raw: string, flag: string): number {
+  const value = raw.trim();
+  if (!/^\+?\d+$/.test(value)) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 export async function callBrowserRequest<T>(
   opts: BrowserParentOpts,
   params: BrowserRequestParams,
@@ -40,7 +52,7 @@ export async function callBrowserRequest<T>(
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
       ? Math.max(1, Math.floor(extra.timeoutMs))
       : typeof opts.timeout === "string"
-        ? Number.parseInt(opts.timeout, 10)
+        ? parsePositiveInteger(opts.timeout, "--timeout")
         : undefined;
   const resolvedTimeout =
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)

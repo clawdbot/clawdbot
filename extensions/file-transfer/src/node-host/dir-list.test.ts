@@ -131,6 +131,19 @@ describe("handleDirList — happy path", () => {
     expect(page3.truncated).toBe(false);
     expect(page3.nextPageToken).toBeUndefined();
   });
+
+  it("does not coerce partial page tokens", async () => {
+    for (let i = 0; i < 3; i++) {
+      await fs.writeFile(path.join(tmpRoot, `f-${i}.txt`), "x");
+    }
+
+    const r = await handleDirList({ path: tmpRoot, maxEntries: 1, pageToken: "1next" });
+    if (!r.ok) {
+      throw new Error("expected ok");
+    }
+    expect(r.entries.map((e) => e.name)).toEqual(["f-0.txt"]);
+    expect(r.nextPageToken).toBe("1");
+  });
 });
 
 describe("handleDirList — limits", () => {

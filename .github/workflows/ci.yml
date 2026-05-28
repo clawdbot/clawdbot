@@ -490,9 +490,6 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
-      - name: Build Control UI
-        run: pnpm ui:build
-
       - name: Check Control UI i18n
         if: needs.preflight.outputs.run_control_ui_i18n == 'true'
         run: pnpm ui:i18n:check
@@ -585,6 +582,20 @@ jobs:
             pids+=("$!")
           }
 
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            gateway_watch_log="${RUNNER_TEMP}/gateway-watch.log"
+            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000"
+            if node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000 >"$gateway_watch_log" 2>&1; then
+              result="success"
+            else
+              result="failure"
+            fi
+            echo "::group::gateway-watch log"
+            cat "$gateway_watch_log"
+            echo "::endgroup::"
+            results["gateway-watch"]="$result"
+          fi
+
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -597,10 +608,6 @@ jobs:
               NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
-          fi
-
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            start_check "gateway-watch" node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
           fi
 
           for index in "${!pids[@]}"; do

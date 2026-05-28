@@ -1,9 +1,9 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   hasNonEmptyString as hasNonEmptyStringField,
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import type { AgentMessage } from "./runtime/index.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,

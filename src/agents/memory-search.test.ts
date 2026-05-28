@@ -184,7 +184,7 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
-  it("defaults provider to auto when unspecified", () => {
+  it("defaults provider to openai when unspecified", () => {
     const cfg = asConfig({
       agents: {
         defaults: {
@@ -195,8 +195,16 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.provider).toBe("auto");
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.fallback).toBe("none");
+  });
+
+  it("normalizes legacy auto provider config to openai", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("auto"), "main");
+
+    expect(resolved?.provider).toBe("openai");
+    expect(resolved?.model).toBe("text-embedding-3-small");
   });
 
   it("resolves custom provider ids through their configured api owner", () => {
@@ -421,6 +429,49 @@ describe("memory search config", () => {
           memorySearch: {
             provider: "openai",
             model: "text-embedding-3-small",
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+    );
+  });
+
+  it("rejects multimodal memory on generic OpenAI-compatible providers", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai-compatible",
+            model: "text-embedding-bge-m3",
+            remote: { baseUrl: "http://127.0.0.1:1234/v1" },
+            multimodal: { enabled: true, modalities: ["image"] },
+          },
+        },
+      },
+    });
+    expect(() => resolveMemorySearchConfig(cfg, "main")).toThrow(
+      /memorySearch\.multimodal requires a provider adapter that supports multimodal embeddings/,
+    );
+  });
+
+  it("rejects multimodal memory on baseUrl-only OpenAI-compatible custom providers", () => {
+    const cfg = asConfig({
+      models: {
+        providers: {
+          localEmbeddings: {
+            baseUrl: "http://127.0.0.1:1234/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "localEmbeddings",
+            model: "text-embedding-bge-m3",
             multimodal: { enabled: true, modalities: ["image"] },
           },
         },

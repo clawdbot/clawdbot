@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -44,7 +44,7 @@ async function expectVertexAdcEnvApiKey(params: {
   }
 }
 
-function testModelDefinition(id: string): Model<Api> {
+function testModelDefinition(id: string): Model {
   return {
     id,
     name: id,
@@ -235,6 +235,8 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("../plugins/providers.js", () => ({
   resolveOwningPluginIdsForProvider: ({ provider }: { provider: string }) =>
     provider === "openai" ? ["openai"] : [],
+  resolveOwningPluginIdsForProviderRef: ({ provider }: { provider: string }) =>
+    provider === "openai" ? ["openai"] : [],
 }));
 
 const cliCredentialMocks = vi.hoisted(() => ({
@@ -415,7 +417,7 @@ describe("getApiKeyForModel", () => {
           id: "codex-mini-latest",
           provider: "openai-codex",
           api: "openai-codex-responses",
-        } as Model<Api>;
+        } as Model;
 
         const store = ensureAuthProfileStore(process.env.OPENCLAW_AGENT_DIR, {
           allowKeychainPrompt: false,
@@ -809,7 +811,7 @@ describe("getApiKeyForModel", () => {
         env: {},
         store,
       }),
-    ).resolves.toBe(true);
+    ).resolves.toBe(false);
     await expect(
       hasAuthForModelProvider({
         provider: "vllm",

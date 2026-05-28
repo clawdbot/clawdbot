@@ -1,4 +1,4 @@
-import { completeSimple, getModel } from "@earendil-works/pi-ai";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
@@ -15,7 +15,18 @@ describeLive("gemini live switch", () => {
   for (const modelId of googleModels) {
     it(`handles unsigned tool calls from Antigravity when switching to ${modelId}`, async () => {
       const now = Date.now();
-      const model = getModel("google", modelId);
+      const model: Model<"google-generative-ai"> = {
+        id: modelId,
+        name: modelId,
+        api: "google-generative-ai",
+        provider: "google",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_000_000,
+        maxTokens: 65_536,
+      };
 
       const res = await completeSimple(
         model,

@@ -1043,6 +1043,12 @@ export function parseConfigJson5(
   json5: { parse: (value: string) => unknown } = JSON5,
 ): ParseConfigJson5Result {
   try {
+    return { ok: true, parsed: JSON.parse(raw) };
+  } catch {
+    // Keep JSON5 compatibility for authored config, but avoid the slower parser
+    // on the JSON files OpenClaw writes itself.
+  }
+  try {
     return { ok: true, parsed: json5.parse(raw) };
   } catch (err) {
     return { ok: false, error: String(err) };

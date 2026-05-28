@@ -91,7 +91,7 @@ describe("host env reported baseline coverage", () => {
       baseline.reportedDangerousEverywhereKeys.length +
         baseline.reportedDangerousOverrideOnlyKeys.length,
     ).toBe(baseline.expectedTotalReportedEntries);
-    expect(baseline.expectedTotalReportedEntries).toBe(239);
+    expect(baseline.expectedTotalReportedEntries).toBe(243);
     expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
       baseline.reportedDangerousEverywhereKeys,
     );

@@ -1,5 +1,6 @@
-import { completeSimple, type Api, type Model } from "@earendil-works/pi-ai";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { completeSimple } from "../llm/stream.js";
+import type { Api, Model } from "../llm/types.js";
 
 const LIVE_OK_PROMPT = "Reply with the word ok.";
 

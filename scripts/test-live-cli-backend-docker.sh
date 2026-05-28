@@ -435,7 +435,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
-  -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
+  -e NODE_OPTIONS="$(openclaw_live_container_node_options)" \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_VITEST_FS_MODULE_CACHE=0 \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \

@@ -150,7 +150,7 @@ export async function waitProviderOperationPollInterval(params: {
 export async function pollProviderOperationJson<TPayload>(
   params: {
     url: string;
-    headers: Headers;
+    headers: Headers | (() => Headers);
     deadline: ProviderOperationDeadline;
     defaultTimeoutMs: number;
     fetchFn: typeof fetch;
@@ -165,7 +165,7 @@ export async function pollProviderOperationJson<TPayload>(
   for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
     const init = {
       method: "GET",
-      headers: params.headers,
+      headers: typeof params.headers === "function" ? params.headers() : params.headers,
     };
     const timeoutMs = createProviderOperationTimeoutResolver({
       deadline: params.deadline,

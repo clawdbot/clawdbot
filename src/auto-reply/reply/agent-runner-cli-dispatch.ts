@@ -1,6 +1,6 @@
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import type { EmbeddedPiRunResult } from "../../agents/pi-embedded.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -66,8 +66,8 @@ export async function runCliAgentWithLifecycle(params: {
   onAssistantText?: (text: string) => Promise<void>;
   onReasoningText?: (text: string) => Promise<void>;
   onErrorBeforeLifecycle?: (err: unknown) => Promise<void>;
-  transformResult?: (result: EmbeddedPiRunResult) => EmbeddedPiRunResult;
-}): Promise<EmbeddedPiRunResult> {
+  transformResult?: (result: EmbeddedAgentRunResult) => EmbeddedAgentRunResult;
+}): Promise<EmbeddedAgentRunResult> {
   const startedAt = params.startedAt ?? Date.now();
   const emitLifecycleStart = params.emitLifecycleStart ?? true;
   const emitLifecycleTerminal = params.emitLifecycleTerminal ?? true;

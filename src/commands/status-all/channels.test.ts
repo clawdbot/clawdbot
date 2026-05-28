@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     pluginId: string;
     message: string;
   }>,
+  missingConfiguredChannelIds: [] as string[],
   missingOfficialExternalChannels: new Set<string>(),
 }));
 
@@ -28,9 +29,12 @@ vi.mock("../../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: () => ({
     plugins: mocks.listReadOnlyChannelPluginsForConfig(),
     configuredChannelIds: [],
-    missingConfiguredChannelIds: mocks.readOnlyChannelLoadFailures.map(
-      (failure) => failure.channelId,
-    ),
+    missingConfiguredChannelIds: [
+      ...new Set([
+        ...mocks.missingConfiguredChannelIds,
+        ...mocks.readOnlyChannelLoadFailures.map((failure) => failure.channelId),
+      ]),
+    ],
     loadFailures: mocks.readOnlyChannelLoadFailures,
   }),
 }));
@@ -55,6 +59,7 @@ describe("buildChannelsTable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.readOnlyChannelLoadFailures = [];
+    mocks.missingConfiguredChannelIds = [];
     mocks.missingOfficialExternalChannels.clear();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([discordPlugin]);
     mocks.resolveInspectedChannelAccount.mockResolvedValue({
@@ -100,6 +105,20 @@ describe("buildChannelsTable", () => {
     const row = table.rows.find((entry) => entry.id === "discord");
     expect(row?.state).toBe("warn");
     expect(row?.detail).toContain("unavailable");
+  });
+
+  it("does not warn on SecretRef credentials when credential resolution was skipped", async () => {
+    const table = await buildChannelsTable(
+      { channels: { discord: { enabled: true } } },
+      { credentialResolutionSkipped: true },
+    );
+
+    const row = table.rows.find((entry) => entry.id === "discord");
+    expect(row?.state).toBe("ok");
+    expect(row?.detail).toBe("configured");
+    const detailRow = table.details[0]?.rows[0];
+    expect(detailRow?.Status).toBe("UNKNOWN");
+    expect(detailRow?.Notes).toContain("credential not checked");
   });
 
   it("shows configured official external channels when the plugin is missing", async () => {
@@ -157,6 +176,27 @@ describe("buildChannelsTable", () => {
     const table = await buildChannelsTable({ channels: { feishu: { appId: "cli_xxx" } } });
 
     expect(table.rows).toStrictEqual([]);
+    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps configured channels visible when fast status skips setup fallback plugins", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.missingConfiguredChannelIds = ["telegram"];
+
+    const table = await buildChannelsTable(
+      { channels: { telegram: { botToken: "123:abc" } } },
+      { includeSetupFallbackPlugins: false },
+    );
+
+    expect(table.rows).toStrictEqual([
+      {
+        id: "telegram",
+        label: "telegram",
+        enabled: true,
+        state: "setup",
+        detail: "configured; status unavailable in fast mode",
+      },
+    ]);
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });
 });

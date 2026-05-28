@@ -1,4 +1,4 @@
-import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
+import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,

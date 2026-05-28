@@ -85,7 +85,7 @@ describe("bundled capability metadata", () => {
       pluginId: "migrate-hermes",
       cliBackendIds: [],
       providerIds: [],
-      providerAuthEnvVars: {},
+      providerEnvVars: {},
       embeddingProviderIds: [],
       speechProviderIds: [],
       realtimeTranscriptionProviderIds: [],

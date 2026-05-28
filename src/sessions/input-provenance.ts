@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "../agents/runtime/index.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export const INPUT_PROVENANCE_KIND_VALUES = [

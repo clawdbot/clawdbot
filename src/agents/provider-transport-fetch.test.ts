@@ -1,5 +1,5 @@
-import type { Model } from "@earendil-works/pi-ai";
 import { Stream } from "openai/streaming";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
 
@@ -193,6 +193,75 @@ describe("buildGuardedModelFetch", () => {
       undefined,
       controller.signal,
     );
+  });
+
+  it("passes model request timeouts to local service startup", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+
+    try {
+      const fetcher = buildGuardedModelFetch(model, 750);
+      const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+        method: "POST",
+      });
+      await response.text();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(750);
+      expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
+        model,
+        undefined,
+        timeoutController.signal,
+      );
+      const params = latestGuardedFetchParams();
+      expect(params.timeoutMs).toBe(750);
+      expect(params.signal).toBeUndefined();
+      expect((params.init as RequestInit | undefined)?.signal).toBeUndefined();
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("combines caller abort signals with model request timeouts", async () => {
+    const callerController = new AbortController();
+    const timeoutController = new AbortController();
+    const combinedController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const anySpy = vi.spyOn(AbortSignal, "any").mockReturnValue(combinedController.signal);
+    const model = {
+      id: "deepseek-v4-flash",
+      provider: "ds4",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:18000/v1",
+    } as unknown as Model<"openai-completions">;
+
+    try {
+      const fetcher = buildGuardedModelFetch(model, 750);
+      const response = await fetcher("http://127.0.0.1:18000/v1/chat/completions", {
+        method: "POST",
+        signal: callerController.signal,
+      });
+      await response.text();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(750);
+      expect(anySpy).toHaveBeenCalledWith([callerController.signal, timeoutController.signal]);
+      expect(ensureModelProviderLocalServiceMock).toHaveBeenCalledWith(
+        model,
+        undefined,
+        combinedController.signal,
+      );
+      const params = latestGuardedFetchParams();
+      expect(params.signal).toBe(callerController.signal);
+      expect((params.init as RequestInit | undefined)?.signal).toBe(callerController.signal);
+    } finally {
+      timeoutSpy.mockRestore();
+      anySpy.mockRestore();
+    }
   });
 
   it("releases local service leases when guarded fetch fails", async () => {
@@ -954,6 +1023,40 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
+    it("ignores partial retry-after numeric headers", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after-ms": "90000ms", "retry-after": "120 seconds" },
+        }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://api.openai.com/v1/responses",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
+    });
+
+    it("falls back to retry-after when retry-after-ms is blank", async () => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 503,
+          headers: { "retry-after-ms": "   ", "retry-after": "120" },
+        }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(openaiModel)(
+        "https://api.openai.com/v1/responses",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
     it("parses HTTP-date retry-after values", async () => {
       const future = new Date(Date.now() + 120_000).toUTCString();
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -988,6 +1091,24 @@ describe("buildGuardedModelFetch", () => {
       );
 
       expect(response.headers.get("x-should-retry")).toBe("false");
+    });
+
+    it("ignores partial OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS values", async () => {
+      process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "10s";
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(null, {
+          status: 429,
+          headers: { "retry-after": "30" },
+        }),
+        finalUrl: "https://api.anthropic.com/v1/messages",
+        release: vi.fn(async () => undefined),
+      });
+      const response = await buildGuardedModelFetch(anthropicModel)(
+        "https://api.anthropic.com/v1/messages",
+        { method: "POST" },
+      );
+
+      expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
     it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {

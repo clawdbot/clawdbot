@@ -163,6 +163,7 @@ type GatewaySessionPresentationRow = Pick<
   | "subagentRole"
   | "subagentControlScope"
   | "spawnedWorkspaceDir"
+  | "spawnedCwd"
   | "displayName"
   | "label"
   | "derivedTitle"
@@ -831,7 +832,10 @@ export class AcpGatewayAgent implements Agent {
           if (!requestedCwd) {
             return true;
           }
-          return normalizeOptionalString(session.spawnedWorkspaceDir) === requestedCwd;
+          return (
+            (normalizeOptionalString(session.spawnedCwd) ??
+              normalizeOptionalString(session.spawnedWorkspaceDir)) === requestedCwd
+          );
         })
         .map((session) => this.mapGatewaySessionToAcpSessionInfo(session, fallbackCwd));
       if (
@@ -1899,7 +1903,10 @@ export class AcpGatewayAgent implements Agent {
     session: GatewaySessionRow,
     fallbackCwd: string,
   ): SessionInfo {
-    const cwd = normalizeOptionalString(session.spawnedWorkspaceDir) ?? fallbackCwd;
+    const cwd =
+      normalizeOptionalString(session.spawnedCwd) ??
+      normalizeOptionalString(session.spawnedWorkspaceDir) ??
+      fallbackCwd;
     return {
       sessionId: session.key,
       cwd,
@@ -1966,6 +1973,7 @@ export class AcpGatewayAgent implements Agent {
       subagentRole: session.subagentRole,
       subagentControlScope: session.subagentControlScope,
       spawnedWorkspaceDir: session.spawnedWorkspaceDir,
+      spawnedCwd: session.spawnedCwd,
       displayName: session.displayName,
       label: session.label,
       derivedTitle: session.derivedTitle,

@@ -7,6 +7,7 @@ import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 
 const COMPILE_CACHE_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 const COMPILE_CACHE_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
+const COMPILE_CACHE_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 
 export function resolveEntryInstallRoot(entryFile: string): string {
   const entryDir = path.dirname(entryFile);
@@ -170,6 +171,7 @@ export function runOpenClawCompileCacheRespawnPlan(
   // a child that ignores SIGTERM cannot keep the compile-cache wrapper alive indefinitely.
   let signalExitTimer: NodeJS.Timeout | undefined;
   let signalForceKillTimer: NodeJS.Timeout | undefined;
+  let signalHardExitTimer: NodeJS.Timeout | undefined;
   const clearSignalExitTimer = (): void => {
     if (signalExitTimer) {
       clearTimeout(signalExitTimer);
@@ -178,6 +180,10 @@ export function runOpenClawCompileCacheRespawnPlan(
     if (signalForceKillTimer) {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = undefined;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = undefined;
     }
   };
   const forceKillChild = (): void => {
@@ -195,7 +201,10 @@ export function runOpenClawCompileCacheRespawnPlan(
     }
     signalForceKillTimer = setTimeout(() => {
       forceKillChild();
-      runtime.exit(1);
+      signalHardExitTimer = setTimeout(() => {
+        runtime.exit(1);
+      }, COMPILE_CACHE_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS);
+      signalHardExitTimer.unref?.();
     }, COMPILE_CACHE_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
     signalForceKillTimer.unref?.();
   };

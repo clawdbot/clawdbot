@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
 const MIN_SEVERITY = "high";
+export const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
 const SEVERITY_RANK = {
   info: 0,
   low: 1,
@@ -676,6 +677,45 @@ function resolveRegistryBaseUrl() {
   return configured.replace(/\/+$/u, "");
 }
 
+export async function readBoundedBulkAdvisoryErrorText(
+  response,
+  maxChars = BULK_ADVISORY_ERROR_BODY_MAX_CHARS,
+) {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
 export async function fetchBulkAdvisories({
   payload,
   fetchImpl = fetch,
@@ -692,7 +732,7 @@ export async function fetchBulkAdvisories({
   });
 
   if (!response.ok) {
-    const bodyText = await response.text();
+    const bodyText = await readBoundedBulkAdvisoryErrorText(response);
     throw new Error(
       `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
     );

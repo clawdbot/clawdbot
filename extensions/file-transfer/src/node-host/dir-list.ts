@@ -58,6 +58,18 @@ function clampMaxEntries(input: unknown): number {
   return Math.min(Math.floor(input), DIR_LIST_HARD_MAX_ENTRIES);
 }
 
+function parsePageOffset(input: unknown): number {
+  if (typeof input !== "string") {
+    return 0;
+  }
+  const trimmed = input.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return 0;
+  }
+  const offset = Number(trimmed);
+  return Number.isSafeInteger(offset) ? offset : 0;
+}
+
 function classifyFsError(err: unknown): DirListErrCode {
   if (err instanceof FsSafeError) {
     if (err.code === "not-found") {
@@ -93,10 +105,7 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
   }
 
   const maxEntries = clampMaxEntries(params.maxEntries);
-  const offset =
-    typeof params.pageToken === "string" && params.pageToken.length > 0
-      ? Math.max(0, Number.parseInt(params.pageToken, 10) || 0)
-      : 0;
+  const offset = parsePageOffset(params.pageToken);
 
   const followSymlinks = params.followSymlinks === true;
 

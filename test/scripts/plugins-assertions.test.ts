@@ -1,5 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,41 @@ const ASSERTIONS_SCRIPT = "scripts/e2e/lib/plugins/assertions.mjs";
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+}
+
+function runAssertionAsync(args: string[], env: NodeJS.ProcessEnv) {
+  return new Promise<{ status: number | null; stdout: string; stderr: string }>(
+    (resolve, reject) => {
+      const child = spawn(process.execPath, [ASSERTIONS_SCRIPT, ...args], {
+        env: { ...process.env, ...env },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      const timeout = setTimeout(() => {
+        child.kill("SIGKILL");
+        reject(new Error(`assertion helper did not exit: ${args.join(" ")}`));
+      }, 2_000);
+      timeout.unref();
+
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+      });
+      child.on("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.on("close", (status) => {
+        clearTimeout(timeout);
+        resolve({ status, stdout, stderr });
+      });
+    },
+  );
 }
 
 describe("plugins Docker assertions", () => {
@@ -136,6 +172,68 @@ describe("plugins Docker assertions", () => {
       expect(result.stderr).toContain("managed install path still exists after uninstall");
     } finally {
       rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("times out stalled ClawHub package metadata requests", async () => {
+    const server = createServer((_request, _response) => {});
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      const result = await runAssertionAsync(["clawhub-preflight"], {
+        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "25",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "ClawHub package preflight for @openclaw/kitchen-sink timed out after 25ms",
+      );
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
+
+  it("times out stalled ClawHub package metadata bodies", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.flushHeaders();
+      response.write("{");
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      const result = await runAssertionAsync(["clawhub-preflight"], {
+        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "75",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "ClawHub package preflight response for @openclaw/kitchen-sink timed out after 75ms",
+      );
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });

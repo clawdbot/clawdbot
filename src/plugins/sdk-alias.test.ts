@@ -2119,6 +2119,53 @@ describe("buildPluginLoaderJitiOptions", () => {
     expect(alias.beta).toBe("/repo/alpha/sub");
   });
 
+  it("follows chained source-transform alias targets", () => {
+    const aliasMap = {
+      alpha: "/repo/alpha",
+      gamma: "beta/gamma",
+      beta: "alpha/beta",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.gamma).toBe("/repo/alpha/beta/gamma");
+  });
+
+  it("does not rewrite concrete Windows drive alias targets", () => {
+    const aliasMap = {
+      "C:": "/wrong",
+      beta: "C:/repo/beta",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.beta).toBe("C:/repo/beta");
+  });
+
+  it("stops chained source-transform alias rewrites after reaching a Windows drive target", () => {
+    const aliasMap = {
+      beta: "C:/repo/beta",
+      "C:": "/wrong",
+      alpha: "beta/alpha",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.alpha).toBe("C:/repo/beta/alpha");
+  });
+
+  it("bounds cyclic source-transform alias targets", () => {
+    const aliasMap = {
+      alpha: "beta/a",
+      beta: "alpha/b",
+      gamma: "alpha/g",
+    };
+
+    const alias = buildPluginLoaderJitiOptions(aliasMap).alias as Record<string, string>;
+
+    expect(alias.gamma.length).toBeLessThan(32);
+  });
+
   it("does not attach an empty alias map", () => {
     expect(buildPluginLoaderJitiOptions({})).not.toHaveProperty("alias");
   });

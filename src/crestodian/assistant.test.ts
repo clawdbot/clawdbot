@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
-import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
-import type { EmbeddedPiRunResult } from "../agents/pi-embedded.js";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
 import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
 import {
   buildCrestodianAssistantUserPrompt,
@@ -116,12 +116,12 @@ describe("Crestodian assistant", () => {
 
   it("uses Claude CLI first for configless planning", async () => {
     const runCliAgent = vi.fn(
-      async (_params: RunCliAgentParams): Promise<EmbeddedPiRunResult> => ({
+      async (_params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> => ({
         payloads: [{ text: '{"reply":"Checking the shell.","command":"status"}' }],
         meta: { durationMs: 0 },
       }),
     );
-    const runEmbeddedPiAgent = vi.fn();
+    const runEmbeddedAgent = vi.fn();
 
     const result = await planCrestodianCommandWithLocalRuntime({
       input: "what is going on",
@@ -131,7 +131,7 @@ describe("Crestodian assistant", () => {
       }),
       deps: {
         runCliAgent,
-        runEmbeddedPiAgent,
+        runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
       },
@@ -154,7 +154,7 @@ describe("Crestodian assistant", () => {
     expect(firstCliDefaults.cliBackends).toBeUndefined();
     expect(firstCliCall.extraSystemPrompt).toBeTypeOf("string");
     expect(firstCliCall.extraSystemPrompt).toContain("Do not use tools, shell commands");
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("selects local planner backends without execution state", () => {
@@ -188,8 +188,8 @@ describe("Crestodian assistant", () => {
     const runCliAgent = vi.fn(async () => {
       throw new Error("claude unavailable");
     });
-    const runEmbeddedPiAgent = vi.fn(
-      async (_params: RunEmbeddedPiAgentParams): Promise<EmbeddedPiRunResult> => ({
+    const runEmbeddedAgent = vi.fn(
+      async (_params: RunEmbeddedAgentParams): Promise<EmbeddedAgentRunResult> => ({
         meta: {
           durationMs: 0,
           finalAssistantVisibleText: '{"reply":"Codex planner online.","command":"gateway status"}',
@@ -205,7 +205,7 @@ describe("Crestodian assistant", () => {
       }),
       deps: {
         runCliAgent,
-        runEmbeddedPiAgent,
+        runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
       },
@@ -217,8 +217,8 @@ describe("Crestodian assistant", () => {
     expect(result.reply).toBe("Codex planner online.");
     expect(result.modelLabel).toBe("openai/gpt-5.5 via codex");
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    const firstEmbeddedCall = firstMockArg(runEmbeddedPiAgent);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    const firstEmbeddedCall = firstMockArg(runEmbeddedAgent);
     expect(firstEmbeddedCall.provider).toBe("openai");
     expect(firstEmbeddedCall.model).toBe("gpt-5.5");
     expect(firstEmbeddedCall.agentHarnessId).toBe("codex");
@@ -236,10 +236,10 @@ describe("Crestodian assistant", () => {
   });
 
   it("does not fall back to Codex CLI if the app-server planner is not usable", async () => {
-    const runCliAgent = vi.fn(async (): Promise<EmbeddedPiRunResult> => {
+    const runCliAgent = vi.fn(async (): Promise<EmbeddedAgentRunResult> => {
       throw new Error("unexpected cli provider");
     });
-    const runEmbeddedPiAgent = vi.fn(async () => {
+    const runEmbeddedAgent = vi.fn(async () => {
       throw new Error("codex app-server unavailable");
     });
 
@@ -250,14 +250,14 @@ describe("Crestodian assistant", () => {
       }),
       deps: {
         runCliAgent,
-        runEmbeddedPiAgent,
+        runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
       },
     });
     expect(result).toBeNull();
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     expect(runCliAgent).not.toHaveBeenCalled();
   });
 });

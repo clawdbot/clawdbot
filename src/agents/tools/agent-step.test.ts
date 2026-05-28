@@ -15,7 +15,7 @@ vi.mock("../run-wait.js", () => ({
     runWaitMocks.waitForAgentRunAndReadUpdatedAssistantReply,
 }));
 
-vi.mock("../pi-bundle-mcp-tools.js", () => ({
+vi.mock("../agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntimeForSessionKey: bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey,
 }));
 

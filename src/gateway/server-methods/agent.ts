@@ -5,6 +5,7 @@ import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { resolveTrustedGroupId } from "../../agents/agent-tools.policy.js";
 import {
   consumeExecApprovalFollowupRuntimeHandoff,
   parseExecApprovalFollowupApprovalId,
@@ -16,7 +17,6 @@ import {
 } from "../../agents/identity-avatar.js";
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
-import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   normalizeAgentRunTimeoutPhase,
@@ -293,6 +293,13 @@ function resolveSessionRuntimeWorkspace(params: {
   };
 }
 
+function resolveSessionRuntimeCwd(params: {
+  sessionEntry?: SessionEntry;
+  spawnedBy?: string;
+}): string | undefined {
+  return normalizeOptionalString(params.sessionEntry?.spawnedCwd);
+}
+
 function shouldSkipStartupContextForSpawnedSandbox(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -404,6 +411,7 @@ function emitSessionsChanged(
             origin: sessionRow.origin,
             spawnedBy: sessionRow.spawnedBy,
             spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
+            spawnedCwd: sessionRow.spawnedCwd,
             forkedFromParent: sessionRow.forkedFromParent,
             spawnDepth: sessionRow.spawnDepth,
             subagentRole: sessionRow.subagentRole,
@@ -2096,6 +2104,10 @@ export const agentHandlers: GatewayRequestHandlers = {
                 spawnedBy: spawnedByValue,
                 workspaceDir: sessionEntry?.spawnedWorkspaceDir,
               }),
+              cwd: resolveSessionRuntimeCwd({
+                spawnedBy: spawnedByValue,
+                sessionEntry,
+              }),
               allowModelOverride,
             },
             runId,
@@ -2240,6 +2252,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         stopReason: cachedGatewaySnapshot.stopReason,
         livenessState: cachedGatewaySnapshot.livenessState,
         yielded: cachedGatewaySnapshot.yielded,
+        pendingError: cachedGatewaySnapshot.pendingError,
         timeoutPhase: cachedGatewaySnapshot.timeoutPhase,
         providerStarted: cachedGatewaySnapshot.providerStarted,
       });
@@ -2302,6 +2315,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       stopReason: snapshot.stopReason,
       livenessState: snapshot.livenessState,
       yielded: snapshot.yielded,
+      pendingError: snapshot.pendingError,
       timeoutPhase: snapshot.timeoutPhase,
       providerStarted: snapshot.providerStarted,
     });

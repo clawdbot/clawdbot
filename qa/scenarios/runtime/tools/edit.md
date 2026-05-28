@@ -8,15 +8,15 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.edit
-objective: Verify targeted edit behavior is tracked across Pi and Codex while Codex owns edit natively.
+objective: Verify targeted edit behavior is tracked across OpenClaw and Codex while Codex owns edit natively.
 successCriteria:
-  - Pi may expose OpenClaw edit while Codex app-server mode may omit duplicate OpenClaw dynamic edit.
+  - OpenClaw may expose OpenClaw edit while Codex app-server mode may omit duplicate OpenClaw dynamic edit.
   - Mock provider edit plans are reported as fixture intent, not as actual runtime tool calls.
   - The row stays report-only until the fixture validates native Codex edit behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
-  - src/agents/pi-tools.ts
+  - src/agents/agent-tools.ts
   - extensions/qa-lab/src/runtime-tool-fixture.ts
 execution:
   kind: flow

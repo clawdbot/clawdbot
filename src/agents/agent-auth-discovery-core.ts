@@ -1,0 +1,101 @@
+import fs from "node:fs";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { isRecord } from "../utils.js";
+import type { AgentCredentialMap } from "./agent-auth-credentials.js";
+import {
+  listProviderEnvAuthLookupKeys,
+  resolveProviderEnvAuthLookupMaps,
+} from "./model-auth-env-vars.js";
+import { resolveEnvApiKey } from "./model-auth-env.js";
+
+export type AgentDiscoveryAuthLookupOptions = {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
+export function addEnvBackedAgentCredentials(
+  credentials: AgentCredentialMap,
+  options: AgentDiscoveryAuthLookupOptions = {},
+): AgentCredentialMap {
+  const env = options.env ?? process.env;
+  const lookupParams = {
+    config: options.config,
+    workspaceDir: options.workspaceDir,
+    env,
+  };
+  const lookupMaps = resolveProviderEnvAuthLookupMaps(lookupParams);
+  const { aliasMap, envCandidateMap: candidateMap, authEvidenceMap } = lookupMaps;
+  const next = { ...credentials };
+  // session runtime hides providers from its registry when auth storage lacks
+  // a matching credential entry. Mirror env-backed provider auth here so
+  // live/model discovery sees the same providers runtime auth can use.
+  for (const provider of listProviderEnvAuthLookupKeys({
+    envCandidateMap: candidateMap,
+    authEvidenceMap,
+  })) {
+    if (next[provider]) {
+      continue;
+    }
+    const resolved = resolveEnvApiKey(provider, env, {
+      config: options.config,
+      workspaceDir: options.workspaceDir,
+      aliasMap,
+      candidateMap,
+      authEvidenceMap,
+    });
+    if (!resolved?.apiKey) {
+      continue;
+    }
+    next[provider] = {
+      type: "api_key",
+      key: resolved.apiKey,
+    };
+  }
+  return next;
+}
+
+export function scrubLegacyStaticAuthJsonEntriesForDiscovery(pathname: string): void {
+  if (process.env.OPENCLAW_AUTH_STORE_READONLY === "1") {
+    return;
+  }
+  if (!fs.existsSync(pathname)) {
+    return;
+  }
+
+  const parsed = tryReadJsonSync(pathname);
+  if (!isRecord(parsed)) {
+    return;
+  }
+
+  let changed = false;
+  for (const [provider, value] of Object.entries(parsed)) {
+    if (!isRecord(value)) {
+      continue;
+    }
+    if (value.type !== "api_key") {
+      continue;
+    }
+    delete parsed[provider];
+    changed = true;
+  }
+
+  if (!changed) {
+    return;
+  }
+
+  if (Object.keys(parsed).length === 0) {
+    fs.rmSync(pathname, { force: true });
+    return;
+  }
+
+  replaceFileAtomicSync({
+    filePath: pathname,
+    content: `${JSON.stringify(parsed, null, 2)}\n`,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: ".agent-auth",
+  });
+}

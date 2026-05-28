@@ -50,6 +50,7 @@ const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
+export { resolveMatrixMentionsForBody } from "./send/formatting.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
 export type MatrixPreparedSingleText = {

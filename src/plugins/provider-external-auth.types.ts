@@ -15,7 +15,7 @@ export type ProviderSyntheticAuthResult = {
   expiresAt?: number;
 };
 
-export type ProviderResolveExternalOAuthProfilesContext = {
+export type ProviderResolveExternalAuthProfilesContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -23,13 +23,13 @@ export type ProviderResolveExternalOAuthProfilesContext = {
   store: AuthProfileStore;
 };
 
-export type ProviderResolveExternalAuthProfilesContext =
-  ProviderResolveExternalOAuthProfilesContext;
+export type ProviderResolveExternalOAuthProfilesContext =
+  ProviderResolveExternalAuthProfilesContext;
 
-export type ProviderExternalOAuthProfile = {
+export type ProviderExternalAuthProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
 
-export type ProviderExternalAuthProfile = ProviderExternalOAuthProfile;
+export type ProviderExternalOAuthProfile = ProviderExternalAuthProfile;

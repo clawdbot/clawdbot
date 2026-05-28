@@ -178,7 +178,7 @@ cleanup timeout is 10,000 ms. On slow disks or large stores, set
 export OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS=30000
 ```
 
-This controls when OpenClaw logs a `pi-trajectory-flush` timeout and continues.
+This controls when OpenClaw logs an `openclaw-trajectory-flush` timeout and continues.
 It does not change the trajectory size caps. To tune all agent cleanup steps
 that do not pass an explicit timeout, set `OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS`.
 

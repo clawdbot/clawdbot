@@ -169,7 +169,7 @@ describe("compactMemoryForBudget — bounded MEMORY.md compaction (regression fo
 
   it("exposes a sane default budget below the bootstrap injection cap", () => {
     // Bootstrap injection is capped at 12_000 chars per file (see
-    // src/agents/pi-embedded-helpers/bootstrap.ts). The MEMORY.md budget
+    // src/agents/embedded-agent-helpers/bootstrap.ts). The MEMORY.md budget
     // must stay strictly below that to leave room for headers and so
     // promoted content keeps reaching new sessions.
     expect(DEFAULT_MEMORY_FILE_MAX_CHARS).toBeLessThan(12_000);

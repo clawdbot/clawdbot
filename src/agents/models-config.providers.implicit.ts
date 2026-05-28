@@ -9,7 +9,7 @@ import {
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "../plugins/provider-discovery.js";
-import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
+import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { normalizeStringEntries, uniqueStrings } from "../shared/string-normalization.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -71,8 +71,8 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   if (!raw) {
     return 15_000;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+  const parsed = Number(raw);
+  return /^[+]?\d+$/.test(raw) && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
 function resolveProviderDiscoveryFilter(params: {
@@ -136,7 +136,7 @@ function resolveProviderPluginScopeFromProviderIds(params: {
   for (const id of params.providerIds) {
     const owners =
       params.resolveOwners?.(id) ??
-      resolveOwningPluginIdsForProvider({
+      resolveOwningPluginIdsForProviderRef({
         provider: id,
         config: params.config,
         workspaceDir: params.workspaceDir,
@@ -319,6 +319,14 @@ function hasProviderWildcardVisibility(params: {
   );
 }
 
+function hasRuntimeProviderCatalog(
+  provider: import("../plugins/types.js").ProviderPlugin,
+): boolean {
+  return (
+    typeof provider.catalog?.run === "function" || typeof provider.discovery?.run === "function"
+  );
+}
+
 async function resolvePluginImplicitProviders(
   ctx: ImplicitProviderContext,
   providers: import("../plugins/types.js").ProviderPlugin[],
@@ -366,27 +374,37 @@ async function resolvePluginImplicitProviders(
       };
     };
 
-    const result =
-      ctx.providerDiscoveryEntriesOnly === true && provider.staticCatalog
-        ? await runProviderStaticCatalog({
-            provider,
-            config: catalogConfig,
-            agentDir: ctx.agentDir,
-            workspaceDir: ctx.workspaceDir,
-            env: ctx.env,
-          })
-        : await runProviderCatalogWithTimeout({
-            provider,
-            config: catalogConfig,
-            agentDir: ctx.agentDir,
-            workspaceDir: ctx.workspaceDir,
-            env: ctx.env,
-            resolveProviderApiKey: resolveCatalogProviderApiKey,
-            resolveProviderAuth: (providerId, options) =>
-              ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-            timeoutMs:
-              ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
-          });
+    const useStaticCatalog =
+      Boolean(provider.staticCatalog) &&
+      (ctx.providerDiscoveryEntriesOnly === true || !hasRuntimeProviderCatalog(provider));
+    let result = useStaticCatalog
+      ? await runProviderStaticCatalog({
+          provider,
+          config: catalogConfig,
+          agentDir: ctx.agentDir,
+          workspaceDir: ctx.workspaceDir,
+          env: ctx.env,
+        })
+      : await runProviderCatalogWithTimeout({
+          provider,
+          config: catalogConfig,
+          agentDir: ctx.agentDir,
+          workspaceDir: ctx.workspaceDir,
+          env: ctx.env,
+          resolveProviderApiKey: resolveCatalogProviderApiKey,
+          resolveProviderAuth: (providerId, options) =>
+            ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+          timeoutMs: ctx.providerDiscoveryTimeoutMs ?? resolveLiveProviderCatalogTimeoutMs(ctx.env),
+        });
+    if (!result && !useStaticCatalog && provider.staticCatalog) {
+      result = await runProviderStaticCatalog({
+        provider,
+        config: catalogConfig,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+        env: ctx.env,
+      });
+    }
     if (!result) {
       continue;
     }

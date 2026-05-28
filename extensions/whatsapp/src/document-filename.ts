@@ -13,5 +13,8 @@ export function resolveWhatsAppDocumentFileName(params: {
   fileName?: string;
   mimetype?: string;
 }): string {
-  return params.fileName?.trim() || resolveWhatsAppDefaultDocumentFileName(params.mimetype);
+  const fallbackName = resolveWhatsAppDefaultDocumentFileName(params.mimetype);
+  // eslint-disable-next-line no-control-regex
+  const stripped = params.fileName?.replace(/[\x00-\x1f\x7f]/g, "").trim();
+  return stripped || fallbackName;
 }

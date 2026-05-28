@@ -26,6 +26,23 @@ const deprecatedTargetParserCompatFiles = new Set([
   "src/plugins/compat/registry.test.ts",
 ]);
 
+function listTsFiles(root: string): string[] {
+  const results: string[] = [];
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const childPath = `${root}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (entry.name !== "node_modules") {
+        results.push(...listTsFiles(childPath));
+      }
+      continue;
+    }
+    if (/\.(?:ts|tsx)$/u.test(entry.name)) {
+      results.push(childPath);
+    }
+  }
+  return results;
+}
+
 const knownDeprecatedSurfaceMarkers = [
   {
     code: "legacy-extension-api-import",
@@ -61,6 +78,11 @@ const knownDeprecatedSurfaceMarkers = [
     code: "agent-tool-result-harness-alias",
     file: "src/plugins/agent-tool-result-middleware-types.ts",
     marker: "AgentToolResultMiddlewareHarness",
+  },
+  {
+    code: "embedded-pi-agent-sdk-aliases",
+    file: "src/plugins/runtime/types-core.ts",
+    marker: "runEmbeddedPiAgent",
   },
   {
     code: "runtime-config-load-write",
@@ -156,6 +178,11 @@ const knownDeprecatedSurfaceMarkers = [
     code: "legacy-deactivate-hook-alias",
     file: "src/plugins/hook-types.ts",
     marker: "@deprecated Use gateway_stop",
+  },
+  {
+    code: "deprecated-memory-embedding-provider-api",
+    file: "src/plugins/types.ts",
+    marker: "registerMemoryEmbeddingProvider",
   },
   {
     code: "channel-route-key-aliases",

@@ -50,6 +50,25 @@ async function setupPairedNodeDevice(baseDir: string) {
   await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
 }
 
+async function setupPairedBrowserOperatorDevice(baseDir: string) {
+  const request = await requestDevicePairing(
+    {
+      deviceId: "browser-device-1",
+      publicKey: "public-key-browser-1",
+      clientId: "openclaw-control-ui",
+      clientMode: "webchat",
+      role: "operator",
+      scopes: ["operator.read"],
+    },
+    baseDir,
+  );
+  await approveDevicePairing(
+    request.request.requestId,
+    { callerScopes: ["operator.read"] },
+    baseDir,
+  );
+}
+
 async function setupOperatorToken(scopes: string[]) {
   const baseDir = await makeDevicePairingDir();
   await setupPairedOperatorDevice(baseDir, scopes);
@@ -1004,6 +1023,174 @@ describe("device pairing tokens", () => {
         token: seededToken,
         role: "node",
         scopes: [],
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  test("tags browser tokens minted from shared gateway auth and rejects stale generations", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedBrowserOperatorDevice(baseDir);
+    const legacy = await getPairedDevice("browser-device-1", baseDir);
+    const legacyToken = requireToken(legacy?.tokens?.operator?.token);
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: legacyToken,
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "old-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "legacy-browser-token" });
+
+    const oldIssued = await ensureDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "old-generation" },
+      baseDir,
+    });
+    expect(oldIssued?.token).not.toBe(legacyToken);
+    expect(oldIssued?.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "old-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: requireToken(oldIssued?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "old-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "old-generation" },
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: requireToken(oldIssued?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: false, reason: "issuer-generation-stale" });
+
+    const newIssued = await ensureDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+      baseDir,
+    });
+    expect(newIssued?.token).not.toBe(oldIssued?.token);
+    expect(newIssued?.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "new-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: requireToken(newIssued?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
+
+    const rotated = await rotateDeviceToken({
+      deviceId: "browser-device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    const rotatedEntry = requireRotatedEntry(rotated);
+    expect(rotatedEntry.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "new-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "browser-device-1",
+        token: rotatedEntry.token,
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
+  });
+
+  test("keeps ambiguous legacy device tokens valid across shared gateway auth rotation", async () => {
+    const baseDir = await makeDevicePairingDir();
+    await setupPairedOperatorDevice(baseDir, ["operator.read"]);
+    const paired = await getPairedDevice("device-1", baseDir);
+    const token = requireToken(paired?.tokens?.operator?.token);
+
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token,
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    const issuedFromBrowserSharedAuth = await ensureDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+      baseDir,
+    });
+    expect(issuedFromBrowserSharedAuth?.token).not.toBe(token);
+    expect(issuedFromBrowserSharedAuth?.issuer).toEqual({
+      kind: "shared-gateway-auth",
+      generation: "new-generation",
+    });
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(issuedFromBrowserSharedAuth?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
+        baseDir,
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      issuer: { kind: "shared-gateway-auth", generation: "new-generation" },
+    });
+
+    const issuedWithoutSharedAuth = await ensureDeviceToken({
+      deviceId: "device-1",
+      role: "operator",
+      scopes: ["operator.read"],
+      baseDir,
+    });
+    expect(issuedWithoutSharedAuth?.token).not.toBe(issuedFromBrowserSharedAuth?.token);
+    expect(issuedWithoutSharedAuth?.issuer).toBeUndefined();
+    await expect(
+      verifyDeviceToken({
+        deviceId: "device-1",
+        token: requireToken(issuedWithoutSharedAuth?.token),
+        role: "operator",
+        scopes: ["operator.read"],
+        requiredSharedGatewaySessionGeneration: "new-generation",
         baseDir,
       }),
     ).resolves.toEqual({ ok: true });

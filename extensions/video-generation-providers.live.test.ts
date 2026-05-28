@@ -50,6 +50,7 @@ import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openaiPlugin from "./openai/index.js";
 import openrouterPlugin from "./openrouter/index.js";
+import pixversePlugin from "./pixverse/index.js";
 import qwenPlugin from "./qwen/index.js";
 import runwayPlugin from "./runway/index.js";
 import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
@@ -126,6 +127,12 @@ const CASES: LiveProviderCase[] = [
     pluginId: "openrouter",
     pluginName: "OpenRouter Provider",
     providerId: "openrouter",
+  },
+  {
+    plugin: pixversePlugin,
+    pluginId: "pixverse",
+    pluginName: "PixVerse Provider",
+    providerId: "pixverse",
   },
   { plugin: qwenPlugin, pluginId: "qwen", pluginName: "Qwen Provider", providerId: "qwen" },
   { plugin: runwayPlugin, pluginId: "runway", pluginName: "Runway Provider", providerId: "runway" },

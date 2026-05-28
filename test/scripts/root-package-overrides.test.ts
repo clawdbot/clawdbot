@@ -36,12 +36,11 @@ describe("root package override guardrails", () => {
     );
     const bedrockRuntimeDependency = bedrockManifest.dependencies?.[packageName];
     const npmOverride = manifest.overrides?.[packageName];
-    const pnpmOverride = pnpmWorkspace.overrides?.[packageName];
 
     expect(bedrockRuntimeDependency).toBeDefined();
     expect(manifest.dependencies).not.toHaveProperty(packageName);
     expect(npmOverride).toBeUndefined();
-    expect(pnpmOverride).toBe(bedrockRuntimeDependency);
+    expect(pnpmWorkspace.overrides).not.toHaveProperty(packageName);
   });
 
   it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {

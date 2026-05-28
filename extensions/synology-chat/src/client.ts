@@ -292,8 +292,15 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   if (userId === undefined) {
     return undefined;
   }
-  const numericId = typeof userId === "number" ? userId : Number.parseInt(userId, 10);
-  return Number.isNaN(numericId) ? undefined : numericId;
+  if (typeof userId === "number") {
+    return Number.isSafeInteger(userId) ? userId : undefined;
+  }
+  const trimmed = userId.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const numericId = Number(trimmed);
+  return Number.isSafeInteger(numericId) ? numericId : undefined;
 }
 
 function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {

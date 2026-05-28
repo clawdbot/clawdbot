@@ -43,8 +43,8 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
           scenarioId: "approval-turn-tool-followthrough",
           drift: "none",
           cells: {
-            pi: {
-              runtime: "pi",
+            openclaw: {
+              runtime: "openclaw",
               transcriptBytes: '{"role":"assistant"}\n',
               toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
               finalText: "done",
@@ -73,8 +73,8 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
           drift: "tool-call-shape",
           driftDetails: "tool call 1 differs",
           cells: {
-            pi: {
-              runtime: "pi",
+            openclaw: {
+              runtime: "openclaw",
               transcriptBytes: '{"role":"assistant"}\n',
               toolCalls: [{ tool: "read_file", argsHash: "a", resultHash: "r" }],
               finalText: "done",
@@ -103,7 +103,7 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
     run: {
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      runtimePair: ["pi", "codex"],
+      runtimePair: ["openclaw", "codex"],
     },
   };
 }
@@ -800,7 +800,7 @@ status=done`,
       comparedAt: "2026-05-10T00:00:00.000Z",
     });
 
-    expect(report.runtimePair).toEqual(["pi", "codex"]);
+    expect(report.runtimePair).toEqual(["openclaw", "codex"]);
     expect(report.pass).toBe(true);
     expect(report.driftCounts.none).toBe(1);
     expect(report.driftCounts["tool-call-shape"]).toBe(1);
@@ -838,7 +838,11 @@ status=done`,
     if (!scenario?.runtimeParity) {
       throw new Error("runtime parity fixture missing");
     }
-    scenario.runtimeParity.cells.pi.usage = { inputTokens: 0, outputTokens: 0, totalTokens: 0 };
+    scenario.runtimeParity.cells.openclaw.usage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+    };
     scenario.runtimeParity.cells.codex.usage = {
       inputTokens: 0,
       outputTokens: 0,
@@ -853,7 +857,7 @@ status=done`,
     expect(report.pass).toBe(false);
     expect(report.failedScenarios).toBe(1);
     expect(report.failures).toContain(
-      "Approval turn tool followthrough missing live assistant-message usage (pi=0, codex=0).",
+      "Approval turn tool followthrough missing live assistant-message usage (openclaw=0, codex=0).",
     );
     expect(report.scenarios[0]?.status).toBe("fail");
   });
@@ -866,7 +870,7 @@ status=done`,
       }),
     );
 
-    expect(report).toContain("# OpenClaw Runtime Parity Report — pi vs codex");
+    expect(report).toContain("# OpenClaw Runtime Parity Report — openclaw vs codex");
     expect(report).toContain("| Tool-call-shape drift | 1 |");
     expect(report).toContain("### Compaction retry after mutating tool");
     expect(report).toContain("- drift: tool-call-shape");

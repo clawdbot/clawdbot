@@ -9,11 +9,11 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
-import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
@@ -57,7 +57,7 @@ import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-r
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
-type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+type EmbeddedAgentRunResult = Awaited<ReturnType<typeof runEmbeddedAgent>>;
 
 type FollowupAgentEvent = { stream: string; data: Record<string, unknown> };
 
@@ -532,7 +532,7 @@ export function createFollowupRunner(params: {
         });
       }
       let autoCompactionCount = 0;
-      let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+      let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
@@ -681,19 +681,17 @@ export function createFollowupRunner(params: {
               entry: activeSessionEntry,
             });
             const cliExecutionProvider =
-              sessionRuntimeOverride === "pi"
-                ? provider
-                : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
-                    ? sessionRuntimeOverride
-                    : undefined) ??
-                  resolveCliRuntimeExecutionProvider({
-                    provider,
-                    cfg: runtimeConfig,
-                    agentId: run.agentId,
-                    modelId: model,
-                    authProfileId: selectedAuthProfile.authProfileId,
-                  }) ??
-                  provider);
+              (sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+                ? sessionRuntimeOverride
+                : undefined) ??
+              resolveCliRuntimeExecutionProvider({
+                provider,
+                cfg: runtimeConfig,
+                agentId: run.agentId,
+                modelId: model,
+                authProfileId: selectedAuthProfile.authProfileId,
+              }) ??
+              provider;
             let attemptCompactionCount = 0;
             const userTurnTranscriptRecorder =
               effectiveQueued.userTurnTranscriptRecorder ?? opts?.userTurnTranscriptRecorder;
@@ -727,6 +725,7 @@ export function createFollowupRunner(params: {
                     trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
                     sessionFile: run.sessionFile,
                     workspaceDir: run.workspaceDir,
+                    cwd: run.cwd,
                     config: runtimeConfig,
                     prompt: queued.prompt,
                     transcriptPrompt: queued.transcriptPrompt,
@@ -792,7 +791,7 @@ export function createFollowupRunner(params: {
                 return result;
               }
               pendingDeferredCliTerminal = undefined;
-              const result = await runEmbeddedPiAgent({
+              const result = await runEmbeddedAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
                 sessionId: run.sessionId,
@@ -819,6 +818,7 @@ export function createFollowupRunner(params: {
                 sessionFile: run.sessionFile,
                 agentDir: run.agentDir,
                 workspaceDir: run.workspaceDir,
+                cwd: run.cwd,
                 config: runtimeConfig,
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,

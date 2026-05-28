@@ -51,6 +51,31 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/status.test.ts", "src/plugins/contracts/shape.contract.test.ts"],
   },
   {
+    code: "deprecated-memory-embedding-provider-api",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-21",
+    deprecated: "2026-05-21",
+    warningStarts: "2026-05-21",
+    removeAfter: "2026-08-21",
+    replacement: "`api.registerEmbeddingProvider(...)` and `contracts.embeddingProviders`",
+    docsPath: "/plugins/sdk-migration#memory-embedding-provider-api",
+    surfaces: [
+      "api.registerMemoryEmbeddingProvider(...)",
+      "contracts.memoryEmbeddingProviders",
+      "openclaw/plugin-sdk/memory-core-host-engine-embeddings registerMemoryEmbeddingProvider",
+      "plugins inspect compatibility notices",
+    ],
+    diagnostics: ["plugin compatibility notice", "plugin SDK package guardrail"],
+    tests: [
+      "src/plugins/status.test.ts",
+      "src/plugins/compat/registry.test.ts",
+      "src/plugins/contracts/plugin-sdk-package-contract-guardrails.test.ts",
+    ],
+    releaseNote:
+      "Memory-specific embedding provider registration remains wired as a deprecated compatibility path while providers migrate to the generic embedding provider contract.",
+  },
+  {
     code: "legacy-root-sdk-import",
     status: "deprecated",
     owner: "sdk",
@@ -78,7 +103,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     diagnostics: ["hook runner contract probe"],
     tests: [
       "src/plugins/hooks.security.test.ts",
-      "src/agents/pi-tools.before-tool-call.e2e.test.ts",
+      "src/agents/agent-tools.before-tool-call.e2e.test.ts",
     ],
   },
   {
@@ -429,6 +454,29 @@ export const PLUGIN_COMPAT_RECORDS = [
     surfaces: ["openclaw/plugin-sdk/agent-harness", "openclaw/plugin-sdk/agent-harness-runtime"],
     diagnostics: ["plugin SDK compatibility warning"],
     tests: ["src/plugins/contracts/plugin-sdk-subpaths.test.ts"],
+  },
+  {
+    code: "embedded-pi-agent-sdk-aliases",
+    status: "deprecated",
+    owner: "agent-runtime",
+    introduced: "2026-05-21",
+    deprecated: "2026-05-21",
+    warningStarts: "2026-05-21",
+    removeAfter: "2026-08-21",
+    replacement: "`runEmbeddedAgent` and `EmbeddedAgent*` SDK/runtime names",
+    docsPath: "/plugins/sdk-runtime",
+    surfaces: [
+      "api.runtime.agent.runEmbeddedPiAgent",
+      "openclaw/extension-api runEmbeddedPiAgent",
+      "openclaw/plugin-sdk/agent-harness-runtime EmbeddedPi* aliases",
+    ],
+    diagnostics: ["plugin SDK compatibility registry"],
+    tests: [
+      "src/plugins/runtime/index.test.ts",
+      "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
+    ],
+    releaseNote:
+      "Legacy `runEmbeddedPiAgent` and `EmbeddedPi*` plugin aliases remain as deprecated SDK compatibility only.",
   },
   {
     code: "agent-harness-id-alias",

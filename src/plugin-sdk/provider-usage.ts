@@ -13,11 +13,7 @@ export {
   fetchMinimaxUsage,
   fetchZaiUsage,
 } from "../infra/provider-usage.fetch.js";
-export {
-  clampPercent,
-  PROVIDER_LABELS,
-  resolveLegacyPiAgentAccessToken,
-} from "../infra/provider-usage.shared.js";
+export { clampPercent, PROVIDER_LABELS } from "../infra/provider-usage.shared.js";
 export {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,

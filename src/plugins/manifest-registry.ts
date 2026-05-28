@@ -107,7 +107,7 @@ function resolveManifestPluginSourcePath(params: {
   rootDir: string;
   manifestPath: string;
   pluginId: string;
-  entryName: "providerCatalogEntry" | "providerDiscoveryEntry";
+  entryName: "providerCatalogEntry";
   entry: string;
   rejectHardlinks: boolean;
   diagnostics: PluginDiagnostic[];
@@ -472,12 +472,7 @@ function buildRecord(params: {
           entryName: "providerCatalogEntry" as const,
           entry: params.manifest.providerCatalogEntry,
         }
-      : params.manifest.providerDiscoveryEntry !== undefined
-        ? {
-            entryName: "providerDiscoveryEntry" as const,
-            entry: params.manifest.providerDiscoveryEntry,
-          }
-        : undefined;
+      : undefined;
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
       ? params.bundledChannelConfigCollector({
@@ -779,14 +774,17 @@ function matchesInstalledPluginRecord(params: {
       const resolved = resolveUserPath(entry, params.env);
       return safeRealpathSync(resolved) ?? resolved;
     });
-  if (trackedPaths.length === 0 || candidatePaths.length === 0) {
+  if (candidatePaths.length === 0 || trackedPaths.length === 0) {
     return false;
   }
-  return candidatePaths.some((candidatePath) => {
-    return trackedPaths.some((trackedPath) => {
-      return candidatePath === trackedPath || isPathInside(trackedPath, candidatePath);
-    });
-  });
+  return trackedPaths.some((trackedPath) =>
+    candidatePaths.some(
+      (candidatePath) =>
+        candidatePath === trackedPath ||
+        isPathInside(trackedPath, candidatePath) ||
+        isPathInside(candidatePath, trackedPath),
+    ),
+  );
 }
 
 function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {

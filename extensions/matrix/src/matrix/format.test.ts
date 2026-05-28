@@ -211,6 +211,18 @@ describe("markdownToMatrixHtml", () => {
     expect(result.mentions).toStrictEqual({});
   });
 
+  it("does not emit mentions for filename-embedded mxids with trailing hyphens", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toBe(
+      "<p>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt</p>",
+    );
+    expect(result.mentions).toStrictEqual({});
+  });
+
   it("accepts bracketed homeservers in matrix mentions", async () => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown: "hello @alice:[2001:db8::1]",

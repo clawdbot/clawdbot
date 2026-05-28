@@ -38,8 +38,8 @@ describe("resolveRemoteEmbeddingBearerClient", () => {
         remote: {
           apiKey: "sk-test",
           headers: {
-            originator: "pi",
-            "User-Agent": "pi",
+            originator: "openclaw",
+            "User-Agent": "openclaw",
           },
         },
       },

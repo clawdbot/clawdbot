@@ -51,7 +51,6 @@ import type {
   PreparedChannelTurn,
   PreflightFacts,
   RunChannelTurnParams,
-  RunResolvedChannelTurnParams,
 } from "./types.js";
 export { createChannelDeliveryResultFromReceipt } from "./delivery-result.js";
 export {
@@ -88,7 +87,6 @@ export type {
   ReplyPlanFacts,
   RouteFacts,
   RunChannelTurnParams,
-  RunResolvedChannelTurnParams,
   SenderFacts,
   SupplementalContextFacts,
 } from "./types.js";
@@ -764,21 +762,3 @@ export async function runChannelTurn<
 }
 
 export const runChannelInboundEvent = runChannelTurn;
-
-export async function runResolvedChannelTurn<
-  TRaw,
-  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
->(
-  params: RunResolvedChannelTurnParams<TRaw, TDispatchResult>,
-): Promise<ChannelTurnResult<TDispatchResult>> {
-  return await runChannelTurn({
-    channel: params.channel,
-    accountId: params.accountId,
-    raw: params.raw,
-    log: params.log,
-    adapter: {
-      ingest: (raw) => (typeof params.input === "function" ? params.input(raw) : params.input),
-      resolveTurn: params.resolveTurn,
-    },
-  });
-}

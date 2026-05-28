@@ -2,7 +2,6 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "../plugins/bundled-compat.js";
@@ -82,10 +81,7 @@ function setCompatibleActiveMediaUnderstandingRegistry(
     .toSorted((left, right) => left.localeCompare(right));
   const compatibleConfig = withBundledPluginVitestCompat({
     config: withBundledPluginEnablementCompat({
-      config: withBundledPluginAllowlistCompat({
-        config: cfg,
-        pluginIds,
-      }),
+      config: cfg,
       pluginIds,
     }),
     pluginIds,

@@ -6,6 +6,11 @@ import {
 } from "@openclaw/fs-safe/json";
 import { replaceFileAtomic } from "./replace-file.js";
 
+type WriteTextAtomicBeforeRename = (params: {
+  filePath: string;
+  tempPath: string;
+}) => Promise<void>;
+
 export {
   JsonFileReadError,
   readJsonSync,
@@ -71,6 +76,7 @@ export type WriteTextAtomicOptions = {
   dirMode?: number;
   trailingNewline?: boolean;
   durable?: boolean;
+  beforeRename?: WriteTextAtomicBeforeRename;
   /**
    * Prefix for the staged `<prefix>.<pid>.<uuid>.tmp` file. Defaults to the
    * generic `.fs-safe-replace`; pass a target-specific prefix so an orphaned
@@ -93,6 +99,7 @@ export async function writeTextAtomic(
     copyFallbackOnPermissionError: true,
     syncTempFile: options?.durable !== false,
     syncParentDir: options?.durable !== false,
+    ...(options?.beforeRename ? { beforeRename: options.beforeRename } : {}),
     ...(options?.tempPrefix ? { tempPrefix: options.tempPrefix } : {}),
   });
 }

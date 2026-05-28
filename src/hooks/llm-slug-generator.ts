@@ -10,8 +10,8 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentDir,
 } from "../agents/agent-scope.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -59,7 +59,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     });
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
-    const result = await runEmbeddedPiAgent({
+    const result = await runEmbeddedAgent({
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
       agentId,

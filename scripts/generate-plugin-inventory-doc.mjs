@@ -114,6 +114,7 @@ function humanizeId(value) {
     ["opencode", "OpenCode"],
     ["openrouter", "OpenRouter"],
     ["otel", "OpenTelemetry"],
+    ["pixverse", "PixVerse"],
     ["qa", "QA"],
     ["qqbot", "QQ Bot"],
     ["qwen", "Qwen"],

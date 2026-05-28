@@ -49,7 +49,7 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     mergePaths: ["src/agents/heartbeat-system-prompt.ts"],
     consumerPaths: [
       "src/agents/heartbeat-system-prompt.ts",
-      "src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts",
+      "src/agents/embedded-agent-runner/run/attempt.prompt-helpers.ts",
     ],
     reloadPaths: ["src/gateway/config-reload-plan.ts"],
     testPaths: ["src/agents/heartbeat-system-prompt.test.ts"],

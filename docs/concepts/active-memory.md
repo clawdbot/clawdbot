@@ -810,16 +810,16 @@ confirm `config.toolsAllow` names the tools that plugin actually registers.
 
 <AccordionGroup>
   <Accordion title="Embedding provider switched or stopped working">
-    If `memorySearch.provider` is unset, OpenClaw auto-detects the first
-    available embedding provider. A new API key, quota exhaustion, or a
-    rate-limited hosted provider can change which provider resolves between
-    runs. If no provider resolves, `memory_search` may degrade to lexical-only
-    retrieval; runtime failures after a provider is already selected do not
-    fall back automatically.
+    If `memorySearch.provider` is unset, OpenClaw uses OpenAI embeddings. Set
+    `memorySearch.provider` explicitly for local, Ollama, Gemini, Voyage,
+    Mistral, DeepInfra, Bedrock, GitHub Copilot, or OpenAI-compatible
+    embeddings. If the configured provider cannot run, `memory_search` may
+    degrade to lexical-only retrieval; runtime failures after a provider is
+    already selected do not fall back automatically.
 
-    Pin the provider (and an optional fallback) explicitly to make selection
-    deterministic. See [Memory Search](/concepts/memory-search) for the full
-    list of providers and pinning examples.
+    Set an optional `memorySearch.fallback` only when you want a deliberate
+    single fallback. See [Memory Search](/concepts/memory-search) for the full
+    list of providers and examples.
 
   </Accordion>
 

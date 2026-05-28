@@ -54,6 +54,14 @@ const MCP_CONNECT_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_MCP_CHANNELS_CONNECT_TIMEOUT_MS,
   60_000,
 );
+const GATEWAY_EVENT_RETAIN_LIMIT = readPositiveInt(
+  process.env.OPENCLAW_MCP_CHANNELS_GATEWAY_EVENT_RETAIN_LIMIT,
+  2_000,
+);
+const MCP_RAW_MESSAGE_RETAIN_LIMIT = readPositiveInt(
+  process.env.OPENCLAW_MCP_CHANNELS_RAW_MESSAGE_RETAIN_LIMIT,
+  2_000,
+);
 
 export function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -64,6 +72,13 @@ export function assert(condition: unknown, message: string): asserts condition {
 function readPositiveInt(raw: string | undefined, fallback: number) {
   const parsed = Number.parseInt(raw ?? "", 10);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function pushBounded<T>(items: T[], item: T, limit: number): void {
+  items.push(item);
+  if (items.length > limit) {
+    items.splice(0, items.length - limit);
+  }
 }
 
 export function extractTextFromGatewayPayload(
@@ -164,13 +179,17 @@ async function connectGatewayOnce(params: {
       error?: { message?: unknown } | null;
     };
     if (typed.type === "event" && typeof typed.event === "string") {
-      events.push({
-        event: typed.event,
-        payload:
-          typed.payload && typeof typed.payload === "object"
-            ? (typed.payload as Record<string, unknown>)
-            : {},
-      });
+      pushBounded(
+        events,
+        {
+          event: typed.event,
+          payload:
+            typed.payload && typeof typed.payload === "object"
+              ? (typed.payload as Record<string, unknown>)
+              : {},
+        },
+        GATEWAY_EVENT_RETAIN_LIMIT,
+      );
       return;
     }
     if (typed.type !== "res" || typeof typed.id !== "string") {
@@ -336,7 +355,7 @@ export async function connectMcpClient(params: {
   // runtime, not an EventTarget-style addEventListener API.
   // oxlint-disable-next-line unicorn/prefer-add-event-listener
   transport.onmessage = (message) => {
-    rawMessages.push(message);
+    pushBounded(rawMessages, message, MCP_RAW_MESSAGE_RETAIN_LIMIT);
   };
 
   const client = new Client({ name: "docker-mcp-channels", version: "1.0.0" });

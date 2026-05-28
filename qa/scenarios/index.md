@@ -27,13 +27,13 @@ Coverage tracking:
 
 Runtime parity tiers:
 
-- `standard`: required Codex-vs-Pi mock gate coverage for first-hour depth and
+- `standard`: required Codex-vs-OpenClaw mock gate coverage for first-hour depth and
   default runtime-tool fixtures. OpenClaw dynamic integration tools in this
   tier are hard-gated by `openclaw qa coverage --tools --summary`; Codex-native
   workspace rows remain separately tracked until native/live behavior is the
   asserted surface. Rows that explicitly target searchable/deferred OpenClaw
   dynamic loading stay report-only unless a fixture promotes them to required. Selected with
-  `openclaw qa suite --runtime-pair pi,codex --runtime-parity-tier standard`
+  `openclaw qa suite --runtime-pair openclaw,codex --runtime-parity-tier standard`
 - `optional`: profile-, plugin-, or external-service-dependent runtime-tool
   fixtures that stay out of the default release gate
 - `live-only`: scenarios that need real provider/runtime behavior rather than

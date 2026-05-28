@@ -105,6 +105,19 @@ function mockArchiveResponse(buffer: Uint8Array): void {
   });
 }
 
+function createCancelableBody() {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return { stream, wasCanceled: () => canceled };
+}
+
 function runCommandResult(params?: Partial<Record<"code" | "stdout" | "stderr", string | number>>) {
   return {
     code: 0,
@@ -209,6 +222,37 @@ describe("installDownloadSpec extraction safety", () => {
         "utf-8",
       ),
     ).toBe("payload");
+  });
+
+  it("cancels failed download response bodies before returning the error", async () => {
+    const { stream, wasCanceled } = createCancelableBody();
+    const release = vi.fn(async () => undefined);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: {
+        ok: false,
+        status: 500,
+        statusText: "Server Error",
+        body: stream,
+      },
+      release,
+    });
+
+    const result = await installDownloadSpec({
+      entry: buildEntry("failed-download-body"),
+      spec: {
+        kind: "download",
+        id: "dl",
+        url: "https://example.invalid/broken.bin",
+        extract: false,
+        targetDir: "runtime",
+      },
+      timeoutMs: 30_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("Download failed (500 Server Error)");
+    expect(wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it.runIf(process.platform !== "win32")(

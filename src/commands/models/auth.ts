@@ -246,15 +246,18 @@ async function resolveModelsAuthContext(params?: {
   const agentDir = resolveAgentDir(config, agentId);
   const workspaceDir =
     resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const requestedProvider = params?.requestedProvider?.trim();
   const providers = resolvePluginProviders({
     config,
     workspaceDir,
     mode: "setup",
     includeUntrustedWorkspacePlugins: false,
-    bundledProviderAllowlistCompat: true,
     bundledProviderVitestCompat: true,
-    ...(params?.requestedProvider?.trim()
-      ? { providerRefs: [params.requestedProvider], activate: true }
+    ...(requestedProvider
+      ? {
+          providerRefs: [requestedProvider],
+          activate: true,
+        }
       : {}),
   });
   const authProviders = preferSetupAuthProviders({
@@ -587,22 +590,23 @@ export async function modelsAuthPasteTokenCommand(
   const profileId =
     normalizeOptionalString(opts.profileId) || resolveDefaultTokenProfileId(provider);
 
+  const validateTokenInput = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return "Required";
+    }
+    if (provider === "anthropic") {
+      return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
+    }
+    if (isOpenAICodexProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
+      return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai-codex")} for API-key auth.`;
+    }
+    return undefined;
+  };
   const tokenInput = await readPastedSecret({
     message: `Paste token for ${provider}`,
     masked: false,
-    validate: (value) => {
-      const trimmed = value?.trim();
-      if (!trimmed) {
-        return "Required";
-      }
-      if (provider === "anthropic") {
-        return validateAnthropicSetupToken(trimmed.replaceAll(/\s+/g, ""));
-      }
-      if (isOpenAICodexProvider(provider) && looksLikeOpenAIApiKey(trimmed)) {
-        return `That looks like an OpenAI API key. Use ${formatCliCommand("openclaw models auth paste-api-key --provider openai-codex")} for API-key auth.`;
-      }
-      return undefined;
-    },
+    validate: validateTokenInput,
   });
   const token =
     provider === "anthropic"

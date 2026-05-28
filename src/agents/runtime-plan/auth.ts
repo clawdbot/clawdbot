@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { shouldRouteOpenAIPiThroughCodexAuthProvider } from "../openai-codex-routing.js";
-import { normalizeEmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import { shouldRouteOpenAIThroughCodexAuthProvider } from "../openai-codex-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
@@ -11,8 +11,8 @@ function resolveHarnessAuthProvider(params: {
   harnessId?: string;
   harnessRuntime?: string;
 }): string | undefined {
-  const harnessId = normalizeEmbeddedAgentRuntime(params.harnessId);
-  const runtime = normalizeEmbeddedAgentRuntime(params.harnessRuntime);
+  const harnessId = normalizeOptionalAgentRuntimeId(params.harnessId);
+  const runtime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
   return harnessId === "codex" || runtime === "codex" ? CODEX_HARNESS_AUTH_PROVIDER : undefined;
 }
 
@@ -48,7 +48,7 @@ export function buildAgentRuntimeAuthPlan(params: {
       (harnessProviderForAuth === CODEX_HARNESS_AUTH_PROVIDER &&
         authProfileProviderForAuth === OPENAI_PROVIDER &&
         params.authProfileMode === "api_key"));
-  const openAIPiCanForwardCodexProfile = shouldRouteOpenAIPiThroughCodexAuthProvider({
+  const openAICanForwardCodexProfile = shouldRouteOpenAIThroughCodexAuthProvider({
     provider: providerForAuth,
     harnessRuntime: params.harnessRuntime,
     agentHarnessId: params.harnessId,
@@ -60,7 +60,7 @@ export function buildAgentRuntimeAuthPlan(params: {
   const providerCanForwardProfile =
     !harnessProviderForAuth && providerForAuth === authProfileProviderForAuth;
   const canForwardProfile =
-    providerCanForwardProfile || harnessCanForwardProfile || openAIPiCanForwardCodexProfile;
+    providerCanForwardProfile || harnessCanForwardProfile || openAICanForwardCodexProfile;
 
   return {
     providerForAuth,

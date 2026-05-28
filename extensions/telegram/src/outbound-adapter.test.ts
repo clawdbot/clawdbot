@@ -595,12 +595,14 @@ describe("telegramOutbound", () => {
       target: { channel: "telegram", to: "12345", accountId: "ops" },
       messageId: "tg-1",
       pin: { enabled: true, notify: true },
+      gatewayClientScopes: ["operator.write"],
     });
 
     const options = callOptionsAt(pinMessageTelegramMock, 0, "12345", "tg-1");
     expect(options.accountId).toBe("ops");
     expect(options.notify).toBe(true);
     expect(options.verbose).toBe(false);
+    expect(options.gatewayClientScopes).toEqual(["operator.write"]);
   });
 
   it("normalizes legacy durable group retry targets before Telegram pinning", async () => {

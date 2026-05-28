@@ -137,6 +137,36 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("uses spawned cwd when creating a missing transcript header", async () => {
+    const taskCwd = path.join(fixture.sessionsDir(), "task-repo");
+    fs.mkdirSync(taskCwd, { recursive: true });
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          chatType: "direct",
+          channel: "discord",
+          spawnedCwd: taskCwd,
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from task cwd!",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      const [headerLine] = fs.readFileSync(result.sessionFile, "utf-8").trim().split("\n");
+      const header = JSON.parse(headerLine ?? "{}") as { cwd?: string };
+      expect(header.cwd).toBe(taskCwd);
+    }
+  });
+
   it("runs matching owned transcript appends through the active session write lock", async () => {
     writeTranscriptStore();
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());

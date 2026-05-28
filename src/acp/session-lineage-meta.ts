@@ -17,6 +17,7 @@ export type AcpSessionLineageMeta = {
   subagentRole?: SubagentRole;
   subagentControlScope?: SubagentControlScope;
   spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
 };
 
 export type AcpSessionLineageRow = Pick<
@@ -30,6 +31,7 @@ export type AcpSessionLineageRow = Pick<
   | "subagentRole"
   | "subagentControlScope"
   | "spawnedWorkspaceDir"
+  | "spawnedCwd"
 >;
 
 function readInteger(value: unknown): number | undefined {
@@ -55,6 +57,7 @@ export function toAcpSessionLineageMeta(row: AcpSessionLineageRow): AcpSessionLi
   const subagentRole = readEnum(row.subagentRole, SUBAGENT_ROLES);
   const subagentControlScope = readEnum(row.subagentControlScope, SUBAGENT_CONTROL_SCOPES);
   const spawnedWorkspaceDir = normalizeOptionalString(row.spawnedWorkspaceDir);
+  const spawnedCwd = normalizeOptionalString(row.spawnedCwd);
 
   return {
     sessionKey,
@@ -66,5 +69,6 @@ export function toAcpSessionLineageMeta(row: AcpSessionLineageRow): AcpSessionLi
     ...(subagentRole ? { subagentRole } : {}),
     ...(subagentControlScope ? { subagentControlScope } : {}),
     ...(spawnedWorkspaceDir ? { spawnedWorkspaceDir } : {}),
+    ...(spawnedCwd ? { spawnedCwd } : {}),
   };
 }

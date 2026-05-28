@@ -57,7 +57,7 @@ function resolveAnthropicEphemeralCacheControl(
   cacheRetention: AnthropicPayloadPolicyInput["cacheRetention"],
 ): AnthropicEphemeralCacheControl | undefined {
   const retention =
-    cacheRetention ?? (process.env.PI_CACHE_RETENTION === "long" ? "long" : "short");
+    cacheRetention ?? (process.env.OPENCLAW_CACHE_RETENTION === "long" ? "long" : "short");
   if (retention === "none") {
     return undefined;
   }

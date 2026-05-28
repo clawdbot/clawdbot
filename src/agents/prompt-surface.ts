@@ -1,3 +1,4 @@
+import { isOpenClawMainPromptSurface } from "../plugins/agent-prompt-surface-kind.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { isAcpSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 
@@ -17,9 +18,9 @@ export function buildOpenClawToolFallbackText(params: {
   execToolName: string;
   processToolName: string;
 }): string {
-  if (params.surface === "pi_main") {
+  if (isOpenClawMainPromptSurface(params.surface)) {
     return [
-      "Pi lists the standard tools above. This runtime enables:",
+      "OpenClaw lists the standard tools above. This runtime enables:",
       "- grep: search file contents for patterns",
       "- find: find files by glob pattern",
       "- ls: list directory contents",
@@ -47,7 +48,7 @@ export function shouldRenderOpenClawToolWorkflowHints(params: {
   surface: AgentPromptSurfaceKind;
   hasToolList: boolean;
 }): boolean {
-  return params.surface === "pi_main";
+  return isOpenClawMainPromptSurface(params.surface);
 }
 
 export function resolveAgentPromptSurfaceForSessionKey(
@@ -56,5 +57,5 @@ export function resolveAgentPromptSurfaceForSessionKey(
   if (sessionKey && isAcpSessionKey(sessionKey)) {
     return "acp_backend";
   }
-  return sessionKey && isSubagentSessionKey(sessionKey) ? "subagent" : "pi_main";
+  return sessionKey && isSubagentSessionKey(sessionKey) ? "subagent" : "openclaw_main";
 }

@@ -14,10 +14,67 @@ describe("createPluginRuntimeMock", () => {
     expect(vi.isMockFunction(debouncer.cancelKey)).toBe(true);
   });
 
+  it("exposes channel inbound helpers without the removed turn aliases", async () => {
+    const runtime = createPluginRuntimeMock();
+    const channel = "test";
+
+    expect("turn" in runtime.channel).toBe(false);
+
+    const input = vi.fn((raw: { id: string }) => ({
+      id: raw.id,
+      rawText: "hello",
+    }));
+    const recordInboundSession = vi.fn();
+    const runDispatch = vi.fn(async () => ({
+      visibleReplySent: true,
+    }));
+    const resolveTurn = vi.fn(async () => ({
+      channel,
+      storePath: "/tmp/openclaw-test",
+      routeSessionKey: "agent:main:test:direct:u1",
+      ctxPayload: {
+        Body: "hello",
+        CommandAuthorized: false,
+        SessionKey: "agent:main:test:direct:u1",
+      },
+      recordInboundSession,
+      runDispatch,
+    }));
+
+    const result = await runtime.channel.inbound.run({
+      channel,
+      raw: { id: "m1" },
+      adapter: {
+        ingest: input,
+        resolveTurn,
+      },
+    });
+
+    expect(input).toHaveBeenCalledWith({ id: "m1" });
+    expect(resolveTurn).toHaveBeenCalledWith(
+      { id: "m1", rawText: "hello" },
+      { kind: "message", canStartAgentTurn: true },
+      {},
+    );
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        storePath: "/tmp/openclaw-test",
+        sessionKey: "agent:main:test:direct:u1",
+      }),
+    );
+    expect(runDispatch).toHaveBeenCalled();
+    expect(result).toEqual(
+      expect.objectContaining({
+        admission: { kind: "dispatch" },
+        dispatched: true,
+      }),
+    );
+  });
+
   it("routes untrusted group prompt facts into untrusted structured context", () => {
     const runtime = createPluginRuntimeMock();
 
-    const ctx = runtime.channel.turn.buildContext({
+    const ctx = runtime.channel.inbound.buildContext({
       channel: "test",
       from: "test:user:u1",
       sender: { id: "u1" },

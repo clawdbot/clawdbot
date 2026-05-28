@@ -1,9 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { renderQaMarkdownReport } from "openclaw/plugin-sdk/qa-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderQaMarkdownReport } from "../../report.js";
 import { testing as liveTesting } from "./runtime.js";
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -106,6 +107,37 @@ describe("matrix live qa runtime", () => {
     }
   });
 
+  it("does not start Matrix QA work after the hard run deadline expires", async () => {
+    const task = vi.fn(async () => "started");
+    vi.spyOn(Date, "now").mockReturnValue(1_001);
+
+    await expect(
+      liveTesting.withMatrixQaRunDeadline(
+        {
+          deadlineMs: 1_000,
+          timeoutMs: 30_000,
+        },
+        "Matrix scenario late",
+        task,
+      ),
+    ).rejects.toThrow(/Matrix scenario late not started because Matrix QA run timed out/u);
+    expect(task).not.toHaveBeenCalled();
+  });
+
+  it("passes the remaining Matrix QA run budget to the phase timeout", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    expect(
+      liveTesting.remainingMatrixQaRunMs(
+        {
+          deadlineMs: 1_250,
+          timeoutMs: 30_000,
+        },
+        "Matrix canary",
+      ),
+    ).toBe(250);
+  });
+
   it("normalizes the Matrix QA canary timeout env", () => {
     const previous = process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS;
     try {
@@ -122,6 +154,43 @@ describe("matrix live qa runtime", () => {
         process.env.OPENCLAW_QA_MATRIX_CANARY_TIMEOUT_MS = previous;
       }
     }
+  });
+
+  it("uses a scenario provider override for the canary only when the whole run is pinned", () => {
+    const blockStreamingScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-room-block-streaming",
+    );
+    const threadScenario = liveTesting.MATRIX_QA_SCENARIOS.find(
+      (scenario) => scenario.id === "matrix-thread-follow-up",
+    );
+    expect(blockStreamingScenario).toBeDefined();
+    expect(threadScenario).toBeDefined();
+
+    const pinnedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
+      blockStreamingScenario!,
+    ]);
+    expect(liveTesting.selectMatrixQaCanaryProviderMode(pinnedSchedule)).toBe("mock-openai");
+
+    const mixedSchedule = liveTesting.scheduleMatrixQaScenariosInCatalogOrder([
+      threadScenario!,
+      blockStreamingScenario!,
+    ]);
+    expect(liveTesting.selectMatrixQaCanaryProviderMode(mixedSchedule)).toBeUndefined();
+  });
+
+  it("preserves explicit model pins when a scenario keeps the suite provider", () => {
+    const defaultModels = {
+      alternateModel: "mock-openai/custom-alt",
+      primaryModel: "mock-openai/custom",
+      providerMode: "mock-openai" as const,
+    };
+
+    expect(
+      liveTesting.resolveMatrixQaGatewayModels({
+        defaultModels,
+        providerMode: "mock-openai",
+      }),
+    ).toEqual(defaultModels);
   });
 
   it("injects a temporary Matrix account into the QA gateway config", () => {
@@ -621,5 +690,33 @@ describe("matrix live qa runtime", () => {
     );
     await vi.advanceTimersByTimeAsync(300);
     await expectation;
+  });
+
+  it("caps Matrix readiness status RPCs and sleeps to the remaining timeout budget", async () => {
+    vi.useFakeTimers();
+    const gateway = {
+      call: vi.fn().mockResolvedValue({
+        channelAccounts: {
+          matrix: [{ accountId: "sut", running: true, connected: true, healthState: "degraded" }],
+        },
+      }),
+    };
+
+    const waitPromise = liveTesting.waitForMatrixChannelReady(gateway as never, "sut", {
+      timeoutMs: 250,
+      pollMs: 1_000,
+    });
+    const expectation = expect(waitPromise).rejects.toThrow(
+      'matrix account "sut" did not become ready',
+    );
+    await vi.advanceTimersByTimeAsync(250);
+
+    await expectation;
+    expect(gateway.call).toHaveBeenCalledTimes(1);
+    expect(gateway.call).toHaveBeenCalledWith(
+      "channels.status",
+      { probe: false, timeoutMs: 250 },
+      { timeoutMs: 250 },
+    );
   });
 });

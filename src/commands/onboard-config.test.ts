@@ -53,4 +53,28 @@ describe("applyLocalSetupWorkspaceConfig", () => {
 
     expect(result.tools?.profile).toBe("full");
   });
+
+  it("preserves agents.list and bindings on onboard rerun (openclaw#84692)", () => {
+    const baseConfig: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
+          { id: "beta", model: "openai/gpt-4o" },
+        ],
+      },
+      bindings: [
+        {
+          type: "route",
+          agentId: "alpha",
+          match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
+        },
+      ],
+    } as OpenClawConfig;
+
+    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+
+    expect(result.agents?.list).toHaveLength(2);
+    expect(result.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+    expect(result.bindings).toEqual(baseConfig.bindings);
+  });
 });

@@ -124,7 +124,8 @@
             "mediaInput": {
               "image": { "maxSidePx": 6000, "preferredSidePx": 2048, "tokenMode": "detail" }
             },
-            "contextWindow": 272000,
+            "contextWindow": 1000000,
+            "contextTokens": 272000,
             "maxTokens": 128000,
             "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 0 }
           },
@@ -309,8 +310,13 @@
       }
     ]
   },
-  "providerAuthEnvVars": {
-    "openai": ["OPENAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "openai",
+        "envVars": ["OPENAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

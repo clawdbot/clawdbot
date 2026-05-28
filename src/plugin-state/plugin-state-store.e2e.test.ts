@@ -196,10 +196,9 @@ describe("limits", () => {
 
   it("enforces the per-plugin live-row cap", async () => {
     await withOpenClawTestState({ label: "e2e-limit-plugin" }, async () => {
-      // Spread MAX_ENTRIES_PER_PLUGIN rows across several namespaces so
-      // namespace eviction never fires (each namespace has generous room).
+      // Fill the plugin budget outside the namespace that attempts the write.
       const nsCount = 10;
-      const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount; // 100
+      const perNs = MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN / nsCount;
       seedPluginStateEntriesForTests(
         Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN }, (_, index) => {
           const ns = Math.floor(index / perNs);
@@ -213,8 +212,8 @@ describe("limits", () => {
         }),
       );
       const store = createPluginStateKeyedStore("fixture-plugin", {
-        namespace: "ns-0",
-        maxEntries: perNs + 1,
+        namespace: "overflow-ns",
+        maxEntries: 10,
       });
 
       // One more row tips over the plugin-wide limit.

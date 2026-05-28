@@ -1,12 +1,12 @@
 ---
 name: acp-router
-description: Route plain-language requests for Pi, Claude Code, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, Qwen, Kiro, Kimi, iFlow, Factory Droid, Kilocode, or explicit ACP harness work into either OpenClaw ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow). For coding-agent thread requests, read this skill first, then use only `sessions_spawn` for thread creation. Codex chat binding defaults to the native Codex app-server plugin unless ACP is explicit or background spawn needs ACP.
+description: Route plain-language requests for Claude Code, Cursor, Copilot, OpenClaw ACP, OpenCode, Gemini CLI, Qwen, Kiro, Kimi, iFlow, Factory Droid, Kilocode, or explicit ACP harness work into either OpenClaw ACP runtime sessions or direct acpx-driven sessions ("telephone game" flow). For coding-agent thread requests, read this skill first, then use only `sessions_spawn` for thread creation. Codex chat binding defaults to the native Codex app-server plugin unless ACP is explicit or background spawn needs ACP.
 user-invocable: false
 ---
 
 # ACP Harness Router
 
-When user intent is "run this in Pi/Claude Code/Cursor/Copilot/OpenClaw/OpenCode/Gemini/Qwen/Kiro/Kimi/iFlow/Droid/Kilocode (ACP harness)", do not use subagent runtime or PTY scraping. Route through ACP-aware flows.
+When user intent is "run this in Claude Code/Cursor/Copilot/OpenClaw/OpenCode/Gemini/Qwen/Kiro/Kimi/iFlow/Droid/Kilocode (ACP harness)", do not use subagent runtime or PTY scraping. Route through ACP-aware flows.
 
 Codex is special: plain chat/conversation binding and control should use the native Codex app-server plugin (`/codex bind`, `/codex threads`, `/codex resume`) instead of the default ACP path. Use ACP for Codex only when the user explicitly names ACP/`/acp`/acpx, or when spawning background child sessions through `sessions_spawn` where a native Codex runtime spawn is not available yet.
 
@@ -14,7 +14,7 @@ Codex is special: plain chat/conversation binding and control should use the nat
 
 Trigger this skill when the user asks OpenClaw to:
 
-- run something in Pi / Claude Code / Cursor / Copilot / OpenClaw / OpenCode / Gemini / Qwen / Kiro / Kimi / iFlow / Droid / Kilocode
+- run something in Claude Code / Cursor / Copilot / OpenClaw / OpenCode / Gemini / Qwen / Kiro / Kimi / iFlow / Droid / Kilocode
 - run Codex explicitly through ACP, `/acp`, or acpx
 - continue existing harness work
 - relay instructions to an external coding harness
@@ -48,7 +48,6 @@ Do not use:
 
 Use these defaults when user names a harness directly:
 
-- "pi" -> `agentId: "pi"`
 - "openclaw" -> `agentId: "openclaw"`
 - "claude" or "claude code" -> `agentId: "claude"`
 - "codex" -> `agentId: "codex"` only for explicit ACP/acpx requests or background ACP runtime spawn
@@ -203,7 +202,6 @@ ${ACPX_CMD} codex sessions close oc-codex-<conversationId>
 - `kiro`
 - `openclaw`
 - `opencode`
-- `pi`
 - `qwen`
 
 ### Built-in adapter commands in acpx
@@ -222,7 +220,6 @@ Defaults are:
 - `kimi -> kimi acp`
 - `kiro -> kiro-cli acp`
 - `opencode -> npx -y opencode-ai acp`
-- `pi -> npx pi-acp@^0.0.22`
 - `qwen -> qwen --acp`
 
 If `~/.acpx/config.json` overrides `agents`, those overrides replace defaults.

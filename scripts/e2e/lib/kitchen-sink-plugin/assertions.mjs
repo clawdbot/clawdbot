@@ -5,6 +5,9 @@ import path from "node:path";
 const command = process.argv[2];
 const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
 
+const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
+const LOG_SCAN_MAX_FINDINGS = 100;
+
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
@@ -37,14 +40,49 @@ function expectFailure() {
   }
 }
 
+function scanTextFileLines(file, onLine) {
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(LOG_SCAN_CHUNK_BYTES);
+    let carry = "";
+    let lineNumber = 1;
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      const lines = text.split(/\r?\n/u);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        if (onLine(line, lineNumber) === false) {
+          return;
+        }
+        lineNumber += 1;
+      }
+    }
+    if (carry.length > 0) {
+      onLine(carry, lineNumber);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function scanLogs() {
+  if (!process.env.KITCHEN_SINK_TMP_DIR) {
+    throw new Error("KITCHEN_SINK_TMP_DIR is required for kitchen-sink log scans");
+  }
   const roots = [scratchRoot, path.join(process.env.HOME, ".openclaw")];
   const files = [];
   const visit = (entry) => {
     if (!fs.existsSync(entry)) {
       return;
     }
-    const stat = fs.statSync(entry);
+    const stat = fs.lstatSync(entry);
+    if (stat.isSymbolicLink()) {
+      return;
+    }
     if (stat.isDirectory()) {
       for (const child of fs.readdirSync(entry)) {
         visit(path.join(entry, child));
@@ -72,20 +110,28 @@ function scanLogs() {
   ];
   const allow = [/0 errors?/iu, /expected no diagnostics errors?/iu, /diagnostics errors?:\s*$/iu];
   const findings = [];
+  let omittedFindings = false;
   for (const file of files) {
-    const text = fs.readFileSync(file, "utf8");
-    const lines = text.split(/\r?\n/u);
-    lines.forEach((line, index) => {
+    scanTextFileLines(file, (line, lineNumber) => {
       if (allow.some((pattern) => pattern.test(line))) {
-        return;
+        return true;
       }
       if (deny.some((pattern) => pattern.test(line))) {
-        findings.push(`${file}:${index + 1}: ${line}`);
+        if (findings.length >= LOG_SCAN_MAX_FINDINGS) {
+          omittedFindings = true;
+          return false;
+        }
+        findings.push(`${file}:${lineNumber}: ${line}`);
       }
+      return true;
     });
+    if (omittedFindings) {
+      break;
+    }
   }
   if (findings.length > 0) {
-    throw new Error(`unexpected error-like log lines:\n${findings.join("\n")}`);
+    const suffix = omittedFindings ? "\n... additional findings omitted" : "";
+    throw new Error(`unexpected error-like log lines:\n${findings.join("\n")}${suffix}`);
   }
   console.log(`log scan passed (${files.length} file(s))`);
 }

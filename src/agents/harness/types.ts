@@ -1,7 +1,7 @@
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
-  requestedRuntime: import("../pi-embedded-runner/runtime.js").EmbeddedAgentRuntime;
+  requestedRuntime: import("../agent-runtime-id.js").EmbeddedAgentRuntime;
 };
 
 export type AgentHarnessSupport =
@@ -9,15 +9,15 @@ export type AgentHarnessSupport =
   | { supported: false; reason?: string };
 
 export type AgentHarnessAttemptParams =
-  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptParams;
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptParams;
 export type AgentHarnessAttemptResult =
-  import("../pi-embedded-runner/run/types.js").EmbeddedRunAttemptResult;
+  import("../embedded-agent-runner/run/types.js").EmbeddedRunAttemptResult;
 export type AgentHarnessSideQuestionParams = {
   cfg: import("../../config/types.openclaw.js").OpenClawConfig;
   agentDir: string;
   provider: string;
   model: string;
-  runtimeModel?: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+  runtimeModel?: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
   question: string;
   sessionEntry: import("../../config/sessions.js").SessionEntry;
   sessionStore?: Record<string, import("../../config/sessions.js").SessionEntry>;
@@ -25,7 +25,7 @@ export type AgentHarnessSideQuestionParams = {
   storePath?: string;
   resolvedThinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   resolvedReasoningLevel: import("../../auto-reply/thinking.js").ReasoningLevel;
-  blockReplyChunking?: import("../pi-embedded-block-chunker.js").BlockReplyChunking;
+  blockReplyChunking?: import("../embedded-agent-block-chunker.js").BlockReplyChunking;
   resolvedBlockStreamingBreak?: "text_end" | "message_end";
   opts?: import("../../auto-reply/get-reply-options.types.js").GetReplyOptions;
   isNewSession: boolean;
@@ -43,9 +43,9 @@ export type AgentHarnessSideQuestionResult = {
   text: string;
 };
 export type AgentHarnessCompactParams =
-  import("../pi-embedded-runner/compact.types.js").CompactEmbeddedPiSessionParams;
+  import("../embedded-agent-runner/compact.types.js").CompactEmbeddedAgentSessionParams;
 export type AgentHarnessCompactResult =
-  import("../pi-embedded-runner/types.js").EmbeddedPiCompactResult;
+  import("../embedded-agent-runner/types.js").EmbeddedAgentCompactResult;
 export type AgentHarnessResetParams = {
   sessionId?: string;
   sessionKey?: string;

@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
-import { isClientToolNameConflictError } from "../agents/pi-tool-definition-adapter.js";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   hasNonzeroUsage,
   normalizeUsage,
   toOpenAiChatCompletionsUsage,
   type NormalizedUsage,
+  type OpenAiChatCompletionsUsage,
 } from "../agents/usage.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
@@ -348,7 +349,7 @@ function writeUsageChunk(
   params: {
     runId: string;
     model: string;
-    usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
+    usage: OpenAiChatCompletionsUsage;
   },
 ) {
   writeSse(res, {
@@ -767,11 +768,7 @@ function resolveStopReasonAndPendingToolCalls(meta: unknown): {
   return { stopReason, pendingToolCalls };
 }
 
-function resolveChatCompletionUsage(result: unknown): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-} {
+function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage {
   return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 }
 
@@ -1066,13 +1063,7 @@ export async function handleOpenAiHttpRequest(
   let wroteRole = false;
   let wroteStopChunk = false;
   let sawAssistantDelta = false;
-  let finalUsage:
-    | {
-        prompt_tokens: number;
-        completion_tokens: number;
-        total_tokens: number;
-      }
-    | undefined;
+  let finalUsage: OpenAiChatCompletionsUsage | undefined;
   let finalizeRequested = false;
   let finalizeFinishReason: "stop" | "tool_calls" = "stop";
   let resultResolved = false;

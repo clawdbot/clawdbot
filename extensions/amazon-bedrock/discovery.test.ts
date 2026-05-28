@@ -502,18 +502,10 @@ describe("bedrock discovery", () => {
     ).toEqual(["amazon.nova-micro-v1:0"]);
   });
 
-  it("prefers plugin-owned discovery config and still honors legacy fallback", async () => {
+  it("uses plugin-owned discovery config without runtime legacy fallback", async () => {
     mockSingleActiveSummary();
 
     const pluginEnabled = await resolveImplicitBedrockProvider({
-      config: {
-        models: {
-          bedrockDiscovery: {
-            enabled: false,
-            region: "us-west-2",
-          },
-        },
-      },
       pluginConfig: {
         discovery: {
           enabled: true,
@@ -527,24 +519,6 @@ describe("bedrock discovery", () => {
     expect(pluginEnabled?.baseUrl).toBe("https://bedrock-runtime.us-east-1.amazonaws.com");
     // 2 calls per discovery (ListFoundationModels + ListInferenceProfiles).
     expect(sendMock).toHaveBeenCalledTimes(2);
-
-    mockSingleActiveSummary();
-
-    const legacyEnabled = await resolveImplicitBedrockProvider({
-      config: {
-        models: {
-          bedrockDiscovery: {
-            enabled: true,
-            region: "us-west-2",
-          },
-        },
-      },
-      env: {} as NodeJS.ProcessEnv,
-      clientFactory,
-    });
-
-    expect(legacyEnabled?.baseUrl).toBe("https://bedrock-runtime.us-west-2.amazonaws.com");
-    expect(sendMock).toHaveBeenCalledTimes(4);
   });
 
   // Ported from #65449 by @alickgithub2 — extended to also cover apac. prefix

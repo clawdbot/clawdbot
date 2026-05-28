@@ -73,6 +73,12 @@ export const AgentRunRetriesConfigSchema = z
     { message: "max must be greater than or equal to min", path: ["max"] },
   );
 
+const AgentEntryEmbeddedAgentConfigSchema = z
+  .object({
+    executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
+  })
+  .strict();
+
 export const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -995,6 +1001,15 @@ export const AgentRuntimePolicySchema = z
   .strict()
   .optional();
 
+export const AgentModelRuntimeEntrySchema = z
+  .object({
+    alias: z.string().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
+    agentRuntime: AgentRuntimePolicySchema,
+    streaming: z.boolean().optional(),
+  })
+  .strict();
+
 export const AgentEntrySchema = z
   .object({
     id: z.string(),
@@ -1004,22 +1019,8 @@ export const AgentEntrySchema = z
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
     systemPromptOverride: z.string().optional(),
-    agentRuntime: AgentRuntimePolicySchema,
-    embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
-    models: z
-      .record(
-        z.string(),
-        z
-          .object({
-            alias: z.string().optional(),
-            params: z.record(z.string(), z.unknown()).optional(),
-            agentRuntime: AgentRuntimePolicySchema,
-            streaming: z.boolean().optional(),
-          })
-          .strict(),
-      )
-      .optional(),
+    models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
@@ -1059,12 +1060,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
-    embeddedPi: z
-      .object({
-        executionContract: z.union([z.literal("default"), z.literal("strict-agentic")]).optional(),
-      })
-      .strict()
-      .optional(),
+    embeddedAgent: AgentEntryEmbeddedAgentConfigSchema.optional(),
     sandbox: AgentSandboxSchema,
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,

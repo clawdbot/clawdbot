@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/diffs-language-pack",
+  "version": "2026.5.28",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/diffs-language-pack",
+      "version": "2026.5.28"
+    }
+  }
+}

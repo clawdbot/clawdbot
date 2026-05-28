@@ -7,6 +7,8 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
+const ROOT_SHIMS_NODE_OPTIONS =
+  `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=4096`.trim();
 
 const PLUGIN_SDK_TYPE_INPUTS = [
   "tsconfig.json",
@@ -23,10 +25,10 @@ const ROOT_DTS_REQUIRED_OUTPUTS = [
   "dist/plugin-sdk/packages/memory-host-sdk/src/engine-embeddings.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/secret.d.ts",
   "dist/plugin-sdk/packages/memory-host-sdk/src/status.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/error-runtime.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/plugin-entry.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/provider-auth.d.ts",
-  "dist/plugin-sdk/src/plugin-sdk/video-generation.d.ts",
+  "dist/plugin-sdk/error-runtime.d.ts",
+  "dist/plugin-sdk/plugin-entry.d.ts",
+  "dist/plugin-sdk/provider-auth.d.ts",
+  "dist/plugin-sdk/video-generation.d.ts",
 ];
 const PACKAGE_DTS_INPUTS = ["packages/plugin-sdk/tsconfig.json", ...PLUGIN_SDK_TYPE_INPUTS];
 const PACKAGE_DTS_STAMP = "packages/plugin-sdk/dist/.boundary-dts.stamp";
@@ -67,6 +69,7 @@ const WHATSAPP_DTS_INPUTS = [
 const WHATSAPP_DTS_STAMP = "dist/plugin-sdk/extensions/whatsapp/.boundary-dts.stamp";
 const WHATSAPP_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/whatsapp/api.d.ts"];
 const ENTRY_SHIMS_INPUTS = [
+  "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/write-plugin-sdk-entry-dts.ts",
   "scripts/lib/plugin-sdk-entrypoints.json",
   "scripts/lib/plugin-sdk-entries.mjs",
@@ -505,6 +508,7 @@ async function main(argv = process.argv.slice(2)) {
         "plugin-sdk boundary root shims",
         ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
         120_000,
+        { env: { NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS } },
       );
     } else if (mode === "all") {
       process.stdout.write("[plugin-sdk boundary root shims] fresh; skipping\n");

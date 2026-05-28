@@ -672,9 +672,38 @@ export type SkillsStatusConfigCheck = {
 
 export type SkillInstallOption = {
   id: string;
-  kind: "brew" | "node" | "go" | "uv";
+  kind: "brew" | "node" | "go" | "uv" | "download";
   label: string;
   bins: string[];
+};
+
+export type SkillClawHubLink =
+  | {
+      status: "linked";
+      valid: true;
+      registry: string;
+      slug: string;
+      installedVersion: string;
+      installedAt: number;
+      originPath?: string;
+      lockPath?: string;
+    }
+  | {
+      status: "invalid";
+      valid: false;
+      reason: string;
+      registry?: string;
+      slug?: string;
+      installedVersion?: string;
+      installedAt?: number;
+      originPath?: string;
+      lockPath?: string;
+    };
+
+export type SkillCardStatus = {
+  present: true;
+  path: string;
+  sizeBytes: number;
 };
 
 export type SkillStatusEntry = {
@@ -691,8 +720,13 @@ export type SkillStatusEntry = {
   always: boolean;
   disabled: boolean;
   blockedByAllowlist: boolean;
+  blockedByAgentFilter?: boolean;
   eligible: boolean;
+  modelVisible?: boolean;
+  userInvocable?: boolean;
+  commandVisible?: boolean;
   requirements: {
+    anyBins?: string[];
     bins: string[];
     env: string[];
     config: string[];
@@ -706,11 +740,15 @@ export type SkillStatusEntry = {
   };
   configChecks: SkillsStatusConfigCheck[];
   install: SkillInstallOption[];
+  clawhub?: SkillClawHubLink;
+  skillCard?: SkillCardStatus;
 };
 
 export type SkillStatusReport = {
   workspaceDir: string;
   managedSkillsDir: string;
+  agentId?: string;
+  agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
 

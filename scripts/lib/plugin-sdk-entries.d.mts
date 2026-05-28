@@ -15,3 +15,4 @@ export function buildPluginSdkPackageExports(): Record<
   }
 >;
 export function listPluginSdkDistArtifacts(): string[];
+export function listPrivateLocalOnlyPluginSdkDistArtifacts(): string[];

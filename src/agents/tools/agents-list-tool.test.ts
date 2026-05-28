@@ -36,7 +36,7 @@ describe("agents_list tool", () => {
       agents: {
         defaults: {
           model: "anthropic/claude-opus-4.5",
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
           subagents: { allowAgents: ["codex"] },
         },
         list: [
@@ -45,14 +45,14 @@ describe("agents_list tool", () => {
             id: "codex",
             name: "Codex",
             model: "openai/gpt-5.5",
-            agentRuntime: { id: "pi" },
+            agentRuntime: { id: "openclaw" },
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
             },
           },
         ],
       },
-    } satisfies OpenClawConfig);
+    } as unknown as OpenClawConfig);
 
     const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
       "call",

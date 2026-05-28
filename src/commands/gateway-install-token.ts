@@ -7,6 +7,10 @@ import { shouldRequireGatewayTokenForInstall } from "../gateway/auth-install-pol
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
 import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   readConfigFileSnapshotForWrite,
@@ -133,6 +137,15 @@ export async function resolveGatewayInstallToken(
     env: options.env,
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
   });
+  const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+  if (isUnsafeGatewayTailscaleNoAuth({ authMode: resolvedAuth.mode, tailscaleMode })) {
+    return {
+      token: undefined,
+      tokenRefConfigured: false,
+      unavailableReason: formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
+      warnings,
+    };
+  }
   const needsToken =
     shouldRequireGatewayTokenForInstall(cfg, options.env) && !resolvedAuth.allowTailscale;
   if (!needsToken) {

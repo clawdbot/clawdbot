@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing as replyRunTesting,
@@ -10,7 +10,10 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import {
+  createUserTurnTranscriptRecorder,
+  type UserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
   createManagedRun,
@@ -893,6 +896,82 @@ describe("runCliAgent reliability", () => {
       );
       expect(JSON.stringify(messages)).not.toContain("runtime prompt");
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes cwd to approved CLI user-turn persistence", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const { dir, sessionFile } = createSessionFile();
+    const taskDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-persist-cwd-"));
+    let capturedTarget: unknown;
+    const recorder = {
+      message: undefined,
+      resolveMessage: vi.fn(async () => undefined),
+      markRuntimePersistencePending: vi.fn(),
+      markRuntimePersisted: vi.fn(),
+      markBlocked: vi.fn(),
+      hasPersisted: vi.fn(() => false),
+      isBlocked: vi.fn(() => false),
+      hasRuntimePersistencePending: vi.fn(() => false),
+      waitForRuntimePersistence: vi.fn(async () => undefined),
+      persistApproved: vi.fn(async (options?: { target?: unknown }) => {
+        capturedTarget =
+          typeof options?.target === "function" ? await options.target() : options?.target;
+        return {
+          sessionFile,
+          sessionEntry: undefined,
+          messageId: "message-1",
+          message: {
+            role: "user",
+            content: "display prompt",
+          },
+        };
+      }),
+      persistFallback: vi.fn(async () => undefined),
+    } as unknown as UserTurnTranscriptRecorder;
+
+    try {
+      const context = buildPreparedContext({
+        sessionKey: "agent:main:main",
+        runId: "run-persist-cli-cwd",
+      });
+      const result = await runPreparedCliAgent({
+        ...context,
+        params: {
+          ...context.params,
+          agentId: "main",
+          sessionFile,
+          workspaceDir: dir,
+          cwd: taskDir,
+          prompt: "runtime prompt",
+          userTurnTranscriptRecorder: recorder,
+        },
+      });
+
+      expect(result.payloads).toEqual([{ text: "hello from cli" }]);
+      expect(recorder.persistApproved).toHaveBeenCalledOnce();
+      expect(capturedTarget).toEqual(
+        expect.objectContaining({
+          transcriptPath: sessionFile,
+          sessionId: context.params.sessionId,
+          sessionKey: "agent:main:main",
+          cwd: taskDir,
+        }),
+      );
+    } finally {
+      fs.rmSync(taskDir, { recursive: true, force: true });
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

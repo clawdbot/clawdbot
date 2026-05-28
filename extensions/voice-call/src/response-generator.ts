@@ -1,5 +1,5 @@
 /**
- * Voice call response generator - uses the embedded Pi agent for tool support.
+ * Voice call response generator - uses the embedded OpenClaw agent for tool support.
  * Routes voice responses through the same agent infrastructure as messaging.
  */
 
@@ -207,7 +207,7 @@ function resolveVoiceSandboxSessionKey(agentId: string, sessionKey: string): str
 }
 
 /**
- * Generate a voice response using the embedded Pi agent with full tool support.
+ * Generate a voice response using the embedded OpenClaw agent with full tool support.
  * Uses the same agent infrastructure as messaging for consistent behavior.
  */
 export async function generateVoiceResponse(
@@ -321,7 +321,7 @@ export async function generateVoiceResponse(
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
-    const result = await agentRuntime.runEmbeddedPiAgent({
+    const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
       sessionKey: resolvedSessionKey,
       sandboxSessionKey: resolveVoiceSandboxSessionKey(agentId, resolvedSessionKey),

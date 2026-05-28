@@ -102,7 +102,7 @@ function extractRetryAfterMs(err: unknown): number | null {
     return retryAfter >= 0 ? retryAfter * 1000 : null;
   }
   if (typeof retryAfter === "string") {
-    const parsed = Number.parseFloat(retryAfter);
+    const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
     if (Number.isFinite(parsed) && parsed >= 0) {
       return parsed * 1000;
     }
@@ -121,7 +121,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = Number.parseFloat(raw);
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
         return parsed * 1000;
       }
@@ -137,7 +137,7 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = Number.parseFloat(raw);
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
       if (Number.isFinite(parsed) && parsed >= 0) {
         return parsed * 1000;
       }
@@ -145,6 +145,14 @@ function extractRetryAfterMs(err: unknown): number | null {
   }
 
   return null;
+}
+
+function parseNonNegativeRetryAfterSeconds(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Number.NaN;
+  }
+  return Number(trimmed);
 }
 
 type MSTeamsSendErrorKind =

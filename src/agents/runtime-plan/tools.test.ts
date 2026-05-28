@@ -1,4 +1,4 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   createNativeOpenAIResponsesModel,
   createParameterFreeTool,
@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
   normalizeProviderToolSchemas: vi.fn(),
 }));
 
-vi.mock("../pi-embedded-runner/tool-schema-runtime.js", () => ({
+vi.mock("../embedded-agent-runner/tool-schema-runtime.js", () => ({
   logProviderToolSchemaDiagnostics: mocks.logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas: mocks.normalizeProviderToolSchemas,
 }));

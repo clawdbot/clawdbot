@@ -77,9 +77,8 @@ steps:
                   patch:
                     agents:
                       defaults:
-                        agentRuntime:
-                          id:
-                            expr: config.harnessRuntime
+                        models:
+                          expr: "({ [env.primaryModel]: { agentRuntime: { id: config.harnessRuntime } } })"
             - call: waitForGatewayHealthy
               args:
                 - ref: env
@@ -93,10 +92,10 @@ steps:
               args:
                 - ref: env
             - assert:
-                expr: "snapshot.config.agents?.defaults?.agentRuntime?.id === config.harnessRuntime"
+                expr: "snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id === config.harnessRuntime"
                 message:
-                  expr: "`expected agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.agentRuntime)}`"
-    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.agentRuntime?.id}` : `mock mode: parsed ${scenario.id}`"
+                  expr: "`expected ${env.primaryModel} agentRuntime.id=${config.harnessRuntime}, got ${JSON.stringify(snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime)}`"
+    detailsExpr: "env.providerMode === 'live-frontier' ? `provider=${selected?.provider} model=${selected?.model} runtime=${snapshot.config.agents?.defaults?.models?.[env.primaryModel]?.agentRuntime?.id}` : `mock mode: parsed ${scenario.id}`"
   - name: builds the medium game artifact
     actions:
       - if:

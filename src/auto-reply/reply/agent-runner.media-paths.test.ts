@@ -2,23 +2,23 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddedPiQueueMessageOutcome } from "../../agents/pi-embedded-runner/runs.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "../../agents/embedded-agent-runner/runs.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 
-const runEmbeddedPiAgentMock = vi.fn();
+const runEmbeddedAgentMock = vi.fn();
 const runWithModelFallbackMock = vi.fn();
-const abortEmbeddedPiRunMock = vi.fn();
-const compactEmbeddedPiSessionMock = vi.fn();
-const isEmbeddedPiRunActiveMock = vi.fn(() => false);
-const isEmbeddedPiRunStreamingMock = vi.fn(() => false);
-const queueEmbeddedPiMessageWithOutcomeAsyncMock = vi.fn(
+const abortEmbeddedAgentRunMock = vi.fn();
+const compactEmbeddedAgentSessionMock = vi.fn();
+const isEmbeddedAgentRunActiveMock = vi.fn(() => false);
+const isEmbeddedAgentRunStreamingMock = vi.fn(() => false);
+const queueEmbeddedAgentMessageWithOutcomeAsyncMock = vi.fn(
   async (
     sessionId: string,
     _text: string,
     _options?: unknown,
-  ): Promise<EmbeddedPiQueueMessageOutcome> => ({
+  ): Promise<EmbeddedAgentQueueMessageOutcome> => ({
     queued: false,
     sessionId,
     reason: "not_streaming",
@@ -26,7 +26,7 @@ const queueEmbeddedPiMessageWithOutcomeAsyncMock = vi.fn(
   }),
 );
 const resolveEmbeddedSessionLaneMock = vi.fn();
-const waitForEmbeddedPiRunEndMock = vi.fn();
+const waitForEmbeddedAgentRunEndMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 const scheduleFollowupDrainMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
@@ -45,23 +45,23 @@ vi.mock("../../agents/model-fallback.js", () => ({
     Array.isArray((err as { attempts?: unknown[] }).attempts),
 }));
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: abortEmbeddedPiRunMock,
-  compactEmbeddedPiSession: compactEmbeddedPiSessionMock,
-  isEmbeddedPiRunActive: isEmbeddedPiRunActiveMock,
-  isEmbeddedPiRunStreaming: isEmbeddedPiRunStreamingMock,
-  queueEmbeddedPiMessageWithOutcomeAsync: queueEmbeddedPiMessageWithOutcomeAsyncMock,
+vi.mock("../../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
+  compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
+  isEmbeddedAgentRunActive: isEmbeddedAgentRunActiveMock,
+  isEmbeddedAgentRunStreaming: isEmbeddedAgentRunStreamingMock,
+  queueEmbeddedAgentMessageWithOutcomeAsync: queueEmbeddedAgentMessageWithOutcomeAsyncMock,
   resolveEmbeddedSessionLane: resolveEmbeddedSessionLaneMock,
-  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
-  waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
+  runEmbeddedAgent: runEmbeddedAgentMock,
+  waitForEmbeddedAgentRunEnd: waitForEmbeddedAgentRunEndMock,
 }));
 
-vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
-  formatEmbeddedPiQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
+vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+  formatEmbeddedAgentQueueFailureSummary: (outcome: { reason?: string; sessionId?: string }) =>
     outcome.reason && outcome.sessionId
       ? `queue_message_failed reason=${outcome.reason} sessionId=${outcome.sessionId} gatewayHealth=live`
       : undefined,
-  queueEmbeddedPiMessageWithOutcomeAsync: queueEmbeddedPiMessageWithOutcomeAsyncMock,
+  queueEmbeddedAgentMessageWithOutcomeAsync: queueEmbeddedAgentMessageWithOutcomeAsyncMock,
 }));
 
 vi.mock("./queue.js", () => ({
@@ -146,23 +146,23 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   beforeEach(() => {
-    runEmbeddedPiAgentMock.mockReset();
+    runEmbeddedAgentMock.mockReset();
     runWithModelFallbackMock.mockReset();
-    abortEmbeddedPiRunMock.mockReset();
-    compactEmbeddedPiSessionMock.mockReset();
-    isEmbeddedPiRunActiveMock.mockReset();
-    isEmbeddedPiRunActiveMock.mockReturnValue(false);
-    isEmbeddedPiRunStreamingMock.mockReset();
-    isEmbeddedPiRunStreamingMock.mockReturnValue(false);
-    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockReset();
-    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+    abortEmbeddedAgentRunMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockReset();
+    isEmbeddedAgentRunActiveMock.mockReset();
+    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    isEmbeddedAgentRunStreamingMock.mockReset();
+    isEmbeddedAgentRunStreamingMock.mockReturnValue(false);
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockReset();
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: false,
       sessionId,
       reason: "not_streaming",
       gatewayHealth: "live",
     }));
     resolveEmbeddedSessionLaneMock.mockReset();
-    waitForEmbeddedPiRunEndMock.mockReset();
+    waitForEmbeddedAgentRunEndMock.mockReset();
     enqueueFollowupRunMock.mockReset();
     scheduleFollowupDrainMock.mockReset();
     refreshQueuedFollowupSessionMock.mockReset();
@@ -196,7 +196,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("normalizes final MEDIA replies against the run workspace", async () => {
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "MEDIA:./out/generated.png" }],
       meta: {
         agentMeta: {
@@ -230,7 +230,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("steers active prompts in steer queue mode", async () => {
-    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: true,
       sessionId,
       target: "embedded_run",
@@ -246,7 +246,7 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(queueEmbeddedPiMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
       "session",
       "generate chart",
       {
@@ -268,13 +268,13 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(queueEmbeddedPiMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
   });
 
   it("falls back to a queued followup when active steering is rejected", async () => {
-    queueEmbeddedPiMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
+    queueEmbeddedAgentMessageWithOutcomeAsyncMock.mockImplementation(async (sessionId: string) => ({
       queued: false,
       sessionId,
       reason: "runtime_rejected",
@@ -306,7 +306,7 @@ describe("runReplyAgent media path normalization", () => {
       };
     });
     const onBlockReply = vi.fn();
-    runEmbeddedPiAgentMock.mockImplementation(
+    runEmbeddedAgentMock.mockImplementation(
       async (params: {
         onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
       }) => {
@@ -354,7 +354,7 @@ describe("runReplyAgent media path normalization", () => {
     //
     // After the fix, agent-runner.ts passes its media context into runAgentTurnWithFallback, so
     // the .runtime import path is never called from inside that function.
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [],
       meta: {
         agentMeta: {
@@ -379,8 +379,8 @@ describe("runReplyAgent media path normalization", () => {
     expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
   });
 
-  it("passes current inbound media paths as native PI images", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-pi-media-"));
+  it("passes current inbound media paths as native OpenClaw images", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-media-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "photo.png");
     await writeFile(
@@ -390,7 +390,7 @@ describe("runReplyAgent media path normalization", () => {
         "base64",
       ),
     );
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
@@ -419,8 +419,8 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
       | {
           images?: Array<{ type?: string; data?: string; mimeType?: string }>;
           imageOrder?: string[];
@@ -437,8 +437,8 @@ describe("runReplyAgent media path normalization", () => {
     expect(call?.imageOrder).toEqual(["inline"]);
   });
 
-  it("does not pass recent history images as unlabeled native PI images", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-pi-history-"));
+  it("does not pass recent history images as unlabeled native OpenClaw images", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-history-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "recent.png");
     await writeFile(
@@ -448,7 +448,7 @@ describe("runReplyAgent media path normalization", () => {
         "base64",
       ),
     );
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
@@ -483,8 +483,8 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
       | {
           images?: Array<{ type?: string; data?: string; mimeType?: string }>;
           imageOrder?: string[];
@@ -495,7 +495,7 @@ describe("runReplyAgent media path normalization", () => {
   });
 
   it("falls back to prompt refs instead of forwarding partial current media", async () => {
-    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-pi-partial-"));
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-partial-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "present.png");
     await writeFile(
@@ -505,7 +505,7 @@ describe("runReplyAgent media path normalization", () => {
         "base64",
       ),
     );
-    runEmbeddedPiAgentMock.mockResolvedValue({
+    runEmbeddedAgentMock.mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
@@ -534,8 +534,8 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
-    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const call = runEmbeddedAgentMock.mock.calls[0]?.[0] as
       | {
           images?: Array<{ type?: string; data?: string; mimeType?: string }>;
           imageOrder?: string[];

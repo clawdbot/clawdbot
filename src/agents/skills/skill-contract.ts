@@ -1,4 +1,5 @@
-import type { Skill as CanonicalSkill, SourceInfo } from "@earendil-works/pi-coding-agent";
+import type { Skill as CanonicalSkill } from "../sessions/skills.js";
+import type { SourceInfo } from "../sessions/source-info.js";
 
 export type SourceScope = "user" | "project" | "temporary";
 export type SourceOrigin = "package" | "top-level";
@@ -37,7 +38,7 @@ function escapeXml(str: string): string {
 
 /**
  * Keep this formatter's XML layout byte-for-byte aligned with the upstream
- * Agent Skills formatter so we can avoid importing the full pi-coding-agent
+ * Agent Skills formatter so we can avoid importing the full session runtime
  * package root on the cold skills path. Visibility policy is applied upstream
  * before calling this helper.
  */

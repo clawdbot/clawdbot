@@ -5,7 +5,7 @@ import type { enqueueSystemEvent } from "../infra/system-events.js";
 import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import { setCliRunnerExecuteTestDeps } from "./cli-runner/execute.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;

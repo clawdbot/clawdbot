@@ -6,13 +6,16 @@
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
   "providers": ["volcengine", "volcengine-plan"],
-  "providerAuthEnvVars": {
-    "volcengine": ["VOLCANO_ENGINE_API_KEY"],
-    "volcengine-tts": [
-      "VOLCENGINE_TTS_API_KEY",
-      "BYTEPLUS_SEED_SPEECH_API_KEY",
-      "VOLCENGINE_TTS_APPID",
-      "VOLCENGINE_TTS_TOKEN"
+  "setup": {
+    "providers": [
+      {
+        "id": "volcengine",
+        "envVars": ["VOLCANO_ENGINE_API_KEY"]
+      },
+      {
+        "id": "volcengine-tts",
+        "envVars": ["VOLCENGINE_TTS_API_KEY", "BYTEPLUS_SEED_SPEECH_API_KEY", "VOLCENGINE_TTS_APPID", "VOLCENGINE_TTS_TOKEN"]
+      }
     ]
   },
   "providerAuthAliases": {

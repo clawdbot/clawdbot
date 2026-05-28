@@ -1,8 +1,8 @@
 import "./isolated-agent.mocks.js";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginProviderRegistration } from "../plugins/registry.js";
@@ -68,7 +68,7 @@ const OPENAI_PI_RUNTIME_CONFIG: Partial<OpenClawConfig> = {
     providers: {
       openai: {
         baseUrl: "https://api.openai.com/v1",
-        agentRuntime: { id: "pi" },
+        agentRuntime: { id: "openclaw" },
         models: [],
       },
     },
@@ -81,7 +81,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
     resetPluginRuntimeStateForTest();
     installThinkingTestProviders();
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
-    vi.mocked(runEmbeddedPiAgent).mockClear();
+    vi.mocked(runEmbeddedAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 
@@ -96,7 +96,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
       });
 
       expect(res.status).toBe("ok");
-      expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(runEmbeddedAgent)).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -172,7 +172,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
       });
       gmailModel.assert();
 
-      vi.mocked(runEmbeddedPiAgent).mockClear();
+      vi.mocked(runEmbeddedAgent).mockClear();
       res = (
         await runGmailHookTurn(home, {
           "agent:main:hook:gmail:msg-1": {
@@ -244,7 +244,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
 
       expect(res.status).toBe("error");
       expect(res.error).toMatch("cron payload.model 'openai/' rejected: invalid model");
-      expect(vi.mocked(runEmbeddedPiAgent)).not.toHaveBeenCalled();
+      expect(vi.mocked(runEmbeddedAgent)).not.toHaveBeenCalled();
     });
   });
 
@@ -257,7 +257,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
         mockTexts: ["done"],
       });
 
-      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      const calls = vi.mocked(runEmbeddedAgent).mock.calls;
       const callArgs = calls[calls.length - 1]?.[0];
       expect(callArgs?.thinkLevel).toBe("low");
     });
@@ -289,7 +289,7 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
         mockTexts: ["done"],
       });
 
-      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      const calls = vi.mocked(runEmbeddedAgent).mock.calls;
       const callArgs = calls[calls.length - 1]?.[0];
       expect(callArgs?.provider).toBe("google");
       expect(callArgs?.model).toBe("gemini-3-flash-preview");

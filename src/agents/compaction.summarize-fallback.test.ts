@@ -1,22 +1,31 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { summarizeWithFallback } from "./compaction.js";
 
-const piCodingAgentMocks = vi.hoisted(() => ({
+const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
   estimateTokens: vi.fn((_message: unknown) => 100),
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
-    "@earendil-works/pi-coding-agent",
+vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-sessions")>(
+    "openclaw/plugin-sdk/agent-sessions",
   );
   return {
     ...actual,
-    generateSummary: piCodingAgentMocks.generateSummary,
-    estimateTokens: piCodingAgentMocks.estimateTokens,
+    generateSummary: agentSessionMocks.generateSummary,
+    estimateTokens: agentSessionMocks.estimateTokens,
+  };
+});
+
+vi.mock("./sessions/index.js", async () => {
+  const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
+  return {
+    ...actual,
+    generateSummary: agentSessionMocks.generateSummary,
+    estimateTokens: agentSessionMocks.estimateTokens,
   };
 });
 
@@ -30,12 +39,12 @@ const testModel = {
 
 describe("summarizeWithFallback", () => {
   beforeEach(() => {
-    piCodingAgentMocks.generateSummary.mockReset();
-    piCodingAgentMocks.generateSummary.mockRejectedValue(
+    agentSessionMocks.generateSummary.mockReset();
+    agentSessionMocks.generateSummary.mockRejectedValue(
       new Error("Summarization failed: fetch failed"),
     );
-    piCodingAgentMocks.estimateTokens.mockReset();
-    piCodingAgentMocks.estimateTokens.mockImplementation(() => 100);
+    agentSessionMocks.estimateTokens.mockReset();
+    agentSessionMocks.estimateTokens.mockImplementation(() => 100);
   });
 
   it("does not duplicate summarization when no messages were oversized", async () => {
@@ -60,11 +69,11 @@ describe("summarizeWithFallback", () => {
     expect(result).toContain("Context contained 1 messages");
     expect(result).toContain("0 oversized");
     // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
-    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(1);
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 
   it("still attempts partial summarization when oversized messages were excluded", async () => {
-    piCodingAgentMocks.estimateTokens.mockImplementation((message: unknown) => {
+    agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
       const content =
         typeof (message as { content?: unknown }).content === "string"
           ? (message as { content: string }).content
@@ -97,6 +106,6 @@ describe("summarizeWithFallback", () => {
 
     expect(result).toContain("2 messages (1 oversized)");
     // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
-    expect(piCodingAgentMocks.generateSummary.mock.calls.length).toBe(2);
+    expect(agentSessionMocks.generateSummary.mock.calls.length).toBe(2);
   });
 });

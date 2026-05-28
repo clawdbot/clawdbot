@@ -168,7 +168,7 @@ function resolveSessionRuntimeLabel(params: {
     acpBackend: params.entry?.acp?.backend,
   });
   const id = normalizeOptionalLowercaseString(runtime.id);
-  const resolvedHarness = id && id !== "pi" && id !== "auto" ? id : undefined;
+  const resolvedHarness = id && id !== "openclaw" && id !== "auto" ? id : undefined;
   return resolveAgentRuntimeLabel({
     config: params.cfg,
     sessionEntry: params.entry,

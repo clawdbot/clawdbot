@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -38,6 +39,10 @@ describe("modelsSetCommand", () => {
     vi.clearAllMocks();
     mocks.replaceConfigFile.mockResolvedValue(undefined);
     mocks.repairCodexRuntimePluginInstallForModelSelection.mockResolvedValue({ warnings: [] });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("resolves aliases from runtime config while writing only source config", async () => {
@@ -130,5 +135,41 @@ describe("modelsSetCommand", () => {
       model: "openai/gpt-5.5",
     });
     expect(runtime.log).toHaveBeenCalledWith("Default model: openai/gpt-5.5");
+  });
+
+  it("persists manifest-owned provider aliases with the canonical provider id", async () => {
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+
+    const sourceConfig = {
+      agents: {
+        defaults: {
+          models: {},
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      hash: "config-hash",
+      sourceConfig,
+      runtimeConfig: sourceConfig,
+      config: sourceConfig,
+    });
+    const runtime = makeRuntime();
+
+    await modelsSetCommand("z.ai/glm-4.7", runtime);
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expect(replaceParams?.nextConfig.agents?.defaults?.model).toEqual({
+      primary: "zai/glm-4.7",
+    });
+    expect(replaceParams?.nextConfig.agents?.defaults?.models).toEqual({
+      "zai/glm-4.7": {},
+    });
+    expect(mocks.repairCodexRuntimePluginInstallForModelSelection).toHaveBeenCalledWith({
+      cfg: replaceParams?.nextConfig,
+      model: "zai/glm-4.7",
+    });
+    expect(runtime.log).toHaveBeenCalledWith("Default model: zai/glm-4.7");
   });
 });

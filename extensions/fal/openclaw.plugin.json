@@ -5,8 +5,13 @@
   },
   "enabledByDefault": true,
   "providers": ["fal"],
-  "providerAuthEnvVars": {
-    "fal": ["FAL_KEY", "FAL_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "fal",
+        "envVars": ["FAL_KEY", "FAL_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

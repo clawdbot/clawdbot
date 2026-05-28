@@ -4,6 +4,7 @@ import {
   buildIMessageApprovalReactionHint,
   clearIMessageApprovalReactionTargetsForTest,
   extractIMessageApprovalPromptBinding,
+  listPendingIMessageApprovalReactionPollTargets,
   maybeResolveIMessageApprovalReaction,
   registerIMessageApprovalReactionTargetForOutboundMessage,
   registerIMessageApprovalReactionTarget,
@@ -40,9 +41,9 @@ describe("iMessage approval reactions", () => {
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
   });
 
-  it("renders thumbs-only reaction choices for allowed decisions", () => {
-    expect(buildIMessageApprovalReactionHint(["allow-once", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n👎 Deny",
+  it("renders shared reaction choices for allowed decisions", () => {
+    expect(buildIMessageApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
+      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
     );
   });
 
@@ -70,13 +71,13 @@ describe("iMessage approval reactions", () => {
     expect(appendIMessageApprovalReactionHintForOutboundMessage(prompt)).toBe(prompt);
   });
 
-  it("does not expose allow-always as a reaction choice", () => {
+  it("exposes allow-always as the shared infinity reaction choice", () => {
     expect(buildIMessageApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n👎 Deny",
+      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
     );
   });
 
-  it("does not register reaction state when only allow-always is available", () => {
+  it("registers and resolves allow-always through the shared infinity reaction", async () => {
     expect(
       registerIMessageApprovalReactionTarget({
         accountId: "default",
@@ -85,7 +86,22 @@ describe("iMessage approval reactions", () => {
         approvalId: "exec-allow-always",
         allowedDecisions: ["allow-always"],
       }),
-    ).toBeNull();
+    ).toEqual({
+      approvalId: "exec-allow-always",
+      allowedDecisions: ["allow-always"],
+    });
+
+    await expect(
+      resolveIMessageApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversation: { handle: "+15551230000" },
+        messageId: "msg-allow-always",
+        reactionKey: "♾",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-allow-always",
+      decision: "allow-always",
+    });
   });
 
   it("resolves a registered reaction target keyed by handle", async () => {
@@ -108,6 +124,40 @@ describe("iMessage approval reactions", () => {
       approvalId: "exec-1",
       decision: "deny",
     });
+  });
+
+  it("merges learned chat ids into pending poll targets", () => {
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: { handle: "+15551230000" },
+      messageId: "p:0/msg-1",
+      approvalId: "exec-1",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+    registerIMessageApprovalReactionTarget({
+      accountId: "default",
+      conversation: {
+        chatGuid: "SMS;-;+15551230000",
+        chatIdentifier: "+15551230000",
+        chatId: 42,
+      },
+      messageId: "msg-1",
+      approvalId: "exec-1",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    expect(listPendingIMessageApprovalReactionPollTargets({ accountId: "default" })).toEqual([
+      expect.objectContaining({
+        approvalId: "exec-1",
+        conversation: {
+          chatGuid: "SMS;-;+15551230000",
+          chatIdentifier: "+15551230000",
+          chatId: 42,
+          handle: "+15551230000",
+        },
+        messageId: "p:0/msg-1",
+      }),
+    ]);
   });
 
   it("resolves a registered group reaction target keyed by chat_guid", async () => {
@@ -172,7 +222,7 @@ describe("iMessage approval reactions", () => {
       decision: "deny",
     });
 
-    for (const reactionKey of ["1️⃣", "2️⃣", "3️⃣", "1", "2", "3", "❤️"]) {
+    for (const reactionKey of ["1️⃣", "2️⃣", "3️⃣", "1", "2", "3", "❤️", "♾️"]) {
       await expect(
         resolveIMessageApprovalReactionTargetWithPersistence({
           accountId: "default",
@@ -217,7 +267,7 @@ describe("iMessage approval reactions", () => {
     });
   });
 
-  it("ignores cross-device is_from_me tapbacks even when the actor is an approver", async () => {
+  it("resolves is_from_me tapbacks when the actor is an explicit approver", async () => {
     registerIMessageApprovalReactionTarget({
       accountId: "default",
       conversation: { handle: "+15551230000" },
@@ -238,8 +288,14 @@ describe("iMessage approval reactions", () => {
       bodyText: "",
     });
 
-    expect(handled).toBe(false);
-    expect(resolverMocks.resolveIMessageApproval).not.toHaveBeenCalled();
+    expect(handled).toBe(true);
+    expect(resolverMocks.resolveIMessageApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approvalId: "exec-self",
+        decision: "allow-once",
+        senderId: "+15551230000",
+      }),
+    );
   });
 
   it("clears the in-memory binding on successful approval resolve so toggle 👍→👎 does not refire", async () => {

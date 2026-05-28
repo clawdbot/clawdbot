@@ -250,17 +250,10 @@ describe("media-chunked: ChunkedMediaApi.uploadChunked", () => {
       ]),
     );
 
-    // Cache populated with the complete result.
-    const expectedMd5 = crypto.createHash("md5").update(FIXTURE_BUFFER).digest("hex");
-    expect(cache.setSpy).toHaveBeenCalledWith(
-      expectedMd5,
-      "group",
-      "g1",
-      MediaFileType.FILE,
-      "final-file-info",
-      "uuid-final",
-      3600,
-    );
+    // FILE uploads carry filename metadata in upload_prepare, so the content-only
+    // cache is bypassed to avoid reusing file_info with a stale name.
+    expect(cache.getSpy).not.toHaveBeenCalled();
+    expect(cache.setSpy).not.toHaveBeenCalled();
 
     // Progress callback hit 3 times with monotonically-increasing counts.
     expect(onProgress).toHaveBeenCalledTimes(3);

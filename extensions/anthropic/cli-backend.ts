@@ -16,6 +16,7 @@ import {
 export function buildAnthropicCliBackend(): CliBackendPlugin {
   return {
     id: CLAUDE_CLI_BACKEND_ID,
+    modelProvider: "anthropic",
     liveTest: {
       defaultModelRef: CLAUDE_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,

@@ -147,63 +147,6 @@ describe("resolveProviderAuths plugin boundary", () => {
     expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
   });
 
-  it("keeps plugin usage auth when a shared legacy plugin credential source exists", async () => {
-    await withTempHome(async (homeDir) => {
-      fs.mkdirSync(path.join(homeDir, ".pi", "agent"), { recursive: true });
-      fs.writeFileSync(
-        path.join(homeDir, ".pi", "agent", "auth.json"),
-        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } })}\n`,
-      );
-      resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
-        token: "legacy-zai-token",
-      });
-      await expect(
-        resolveProviderAuthsForTest({
-          providers: ["zai"],
-          skipPluginAuthWithoutCredentialSource: true,
-          env: { HOME: homeDir },
-        }),
-      ).resolves.toEqual([
-        {
-          provider: "zai",
-          token: "legacy-zai-token",
-        },
-      ]);
-    });
-
-    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["zai"]);
-    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps legacy plugin credential sources provider-specific", async () => {
-    await withTempHome(async (homeDir) => {
-      fs.mkdirSync(path.join(homeDir, ".pi", "agent"), { recursive: true });
-      fs.writeFileSync(
-        path.join(homeDir, ".pi", "agent", "auth.json"),
-        `${JSON.stringify({ "z-ai": { access: "legacy-zai-token" } })}\n`,
-      );
-      resolveProviderUsageAuthWithPluginMock.mockResolvedValueOnce({
-        token: "legacy-zai-token",
-      });
-
-      await expect(
-        resolveProviderAuthsForTest({
-          providers: ["anthropic", "zai"],
-          skipPluginAuthWithoutCredentialSource: true,
-          env: { HOME: homeDir },
-        }),
-      ).resolves.toEqual([
-        {
-          provider: "zai",
-          token: "legacy-zai-token",
-        },
-      ]);
-    });
-
-    expect(resolveProviderUsageAuthWithPluginMock).toHaveBeenCalledTimes(1);
-    expect(providerCalls(resolveProviderUsageAuthWithPluginMock)).toEqual(["zai"]);
-  });
-
   it("keeps auth-profile credential sources provider-specific", async () => {
     hasAnyAuthProfileStoreSourceMock.mockReturnValue(true);
     ensureAuthProfileStoreWithoutExternalProfilesMock.mockReturnValue({

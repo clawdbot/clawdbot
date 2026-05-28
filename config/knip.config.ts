@@ -10,6 +10,7 @@ const rootEntries = [
   "src/entry.ts!",
   "src/cli/daemon-cli.ts!",
   "src/agents/code-mode.worker.ts!",
+  "src/agents/model-provider-auth.worker.ts!",
   "src/infra/kysely-node-sqlite.ts!",
   "src/infra/warning-filter.ts!",
   "src/infra/command-explainer/index.ts!",
@@ -55,10 +56,6 @@ const bundledPluginIgnoredRuntimeDependencies = [
 const rootBundledPluginRuntimeDependencies = [
   "@anthropic-ai/sdk",
   "@anthropic-ai/vertex-sdk",
-  "@aws-sdk/client-bedrock",
-  "@aws-sdk/client-bedrock-runtime",
-  "@aws-sdk/credential-provider-node",
-  "@aws/bedrock-token-generator",
   "@google/genai",
   "@grammyjs/runner",
   "@grammyjs/transformer-throttler",
@@ -129,7 +126,7 @@ const config = {
     "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
     "src/agents/claude-cli-runner.ts",
-    "src/agents/pi-auth-json.ts",
+    "src/agents/agent-auth-json.ts",
     "src/agents/tool-policy.conformance.ts",
     "src/auto-reply/reply/audio-tags.ts",
     "src/gateway/live-tool-probe-utils.ts",
@@ -160,16 +157,15 @@ const config = {
       ],
     },
     ui: {
-      entry: [
-        "index.html!",
-        "src/main.ts!",
-        "vite.config.ts!",
-        "vitest*.ts!",
-      ],
+      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {
       entry: ["src/index.ts!"],
+      project: ["src/**/*.ts!"],
+    },
+    "packages/agent-core": {
+      entry: ["src/index.ts!", "src/*.ts!", "src/harness/**/*.ts!"],
       project: ["src/**/*.ts!"],
     },
     "packages/*": {

@@ -1,4 +1,4 @@
-import type { AssistantMessage, StopReason, Usage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, StopReason, Usage } from "../llm/types.js";
 
 type StreamModelDescriptor = {
   api: string;

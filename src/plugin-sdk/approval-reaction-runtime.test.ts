@@ -205,21 +205,18 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
         sessionKey: "main:signal:+15555550123",
         actions: [
           {
-            kind: "decision",
             decision: "allow-once",
             label: "Allow Once",
             style: "success",
             command: "/approve exec-approval-123 allow-once",
           },
           {
-            kind: "decision",
             decision: "allow-always",
             label: "Allow Always",
             style: "primary",
             command: "/approve exec-approval-123 allow-always",
           },
           {
-            kind: "decision",
             decision: "deny",
             label: "Deny",
             style: "danger",

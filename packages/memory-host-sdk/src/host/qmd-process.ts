@@ -190,7 +190,7 @@ export async function runCliCommand(params: {
       }
       reject(err);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (timer) {
         clearTimeout(timer);
       }
@@ -205,10 +205,52 @@ export async function runCliCommand(params: {
       if (code === 0) {
         resolve({ stdout, stderr });
       } else {
-        reject(new Error(`${params.commandSummary} failed (code ${code}): ${stderr || stdout}`));
+        reject(
+          new CliCommandError({
+            commandSummary: params.commandSummary,
+            code,
+            signal: signal ?? null,
+            stdout,
+            stderr,
+          }),
+        );
       }
     });
   });
+}
+
+class CliCommandError extends Error {
+  readonly code: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly stdout: string;
+  readonly stderr: string;
+
+  constructor(params: {
+    commandSummary: string;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stdout: string;
+    stderr: string;
+  }) {
+    super(formatCliCommandFailureMessage(params));
+    this.name = "CliCommandError";
+    this.code = params.code;
+    this.signal = params.signal;
+    this.stdout = params.stdout;
+    this.stderr = params.stderr;
+  }
+}
+
+function formatCliCommandFailureMessage(params: {
+  commandSummary: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}): string {
+  const exit =
+    params.code === null ? `signal ${params.signal ?? "unknown"}` : `code ${String(params.code)}`;
+  return `${params.commandSummary} failed (${exit}): ${params.stderr || params.stdout}`;
 }
 
 function appendOutputWithCap(

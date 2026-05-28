@@ -4423,7 +4423,21 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
+      "text": "ClawHub link invalid"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
       "text": "Close"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Full security report"
     },
     {
       "count": 1,
@@ -4458,6 +4472,20 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
+      "text": "Overview"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Refreshing…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
       "text": "Save key"
     },
     {
@@ -4473,6 +4501,13 @@
       "name": "text",
       "path": "ui/src/ui/views/skills.ts",
       "text": "Searching…"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/skills.ts",
+      "text": "Skill Card"
     },
     {
       "count": 1,

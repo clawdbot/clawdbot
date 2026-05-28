@@ -1,4 +1,4 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "../../agents/runtime/index.js";
 
 export function createCapturedThinkingConfigStream() {
   let capturedPayload: Record<string, unknown> | undefined;

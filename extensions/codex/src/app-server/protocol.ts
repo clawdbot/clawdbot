@@ -448,9 +448,32 @@ export type CodexSkillsListParams = {
   forceReload?: boolean;
 };
 
+export type CodexSkillScope = "user" | "repo" | "system" | "admin";
+
+export type CodexSkillMetadata = {
+  name: string;
+  description: string;
+  shortDescription?: string;
+  interface?: JsonObject;
+  dependencies?: JsonObject;
+  path: string;
+  scope: CodexSkillScope;
+  enabled: boolean;
+};
+
+export type CodexSkillErrorInfo = {
+  path: string;
+  message: string;
+};
+
+export type CodexSkillsListEntry = {
+  cwd: string;
+  skills: CodexSkillMetadata[];
+  errors: CodexSkillErrorInfo[];
+};
+
 export type CodexSkillsListResponse = {
-  data: JsonValue[];
-  nextCursor?: string | null;
+  data: CodexSkillsListEntry[];
 };
 
 export type CodexHooksListParams = {

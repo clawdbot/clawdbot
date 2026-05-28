@@ -8,6 +8,10 @@ import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
 
+const SCAN_CHUNK_BYTES = 64 * 1024;
+const SCAN_CARRY_CHARS = 256;
+const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
+
 function assert(condition, message) {
   if (!condition) {
     throw new Error(message);
@@ -16,6 +20,71 @@ function assert(condition, message) {
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function tailText(text, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
+    return text;
+  }
+  return Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
+}
+
+function readTextFileTail(file, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return "";
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return "";
+  }
+
+  const length = Math.min(maxBytes, stat.size);
+  const start = stat.size - length;
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
+    return buffer.subarray(0, bytesRead).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function fileContainsText(file, needle) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return false;
+  }
+
+  const fd = fs.openSync(file, "r");
+  try {
+    const buffer = Buffer.alloc(Math.min(SCAN_CHUNK_BYTES, stat.size));
+    let carry = "";
+    let offset = 0;
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(buffer.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      offset += bytesRead;
+      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
+      if (text.includes(needle)) {
+        return true;
+      }
+      carry = text.slice(-Math.max(SCAN_CARRY_CHARS, needle.length - 1));
+    }
+    return false;
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function configPath() {
@@ -71,8 +140,10 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file)}`,
+  );
 }
 
 function assertPackageVersion() {
@@ -98,8 +169,10 @@ function assertImageDescribe() {
   const output = payload.outputs?.[0];
   assert(output?.text?.includes("OPENCLAW_E2E_OK"), "image description marker missing");
   assert(output.provider === "openai", `unexpected image provider: ${output?.provider}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(requestLog.includes("/v1/responses"), "image describe did not hit Responses API");
+  assert(
+    fileContainsText(requestLogPath, "/v1/responses"),
+    "image describe did not hit Responses API",
+  );
 }
 
 function assertImageGenerate() {
@@ -112,8 +185,10 @@ function assertImageGenerate() {
   assert(output?.path && fs.existsSync(output.path), `generated image missing: ${output?.path}`);
   assert(output.mimeType === "image/png", `unexpected generated mime type: ${output.mimeType}`);
   assert(payload.provider === "openai", `unexpected generation provider: ${payload.provider}`);
-  const requestLog = fs.existsSync(requestLogPath) ? fs.readFileSync(requestLogPath, "utf8") : "";
-  assert(requestLog.includes("/v1/images/generations"), "image generation endpoint was not used");
+  assert(
+    fileContainsText(requestLogPath, "/v1/images/generations"),
+    "image generation endpoint was not used",
+  );
 }
 
 function assertMemorySearch() {

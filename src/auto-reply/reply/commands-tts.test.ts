@@ -140,6 +140,13 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
   });
 
+  it("does not coerce partial TTS limit values", async () => {
+    const result = await handleTtsCommands(buildTtsParams("/tts limit 2000chars"), true);
+
+    expect(expectReply(result).text).toBe("❌ Limit must be between 100 and 4096 characters.");
+    expect(ttsMocks.setTtsMaxLength).not.toHaveBeenCalled();
+  });
+
   it("shows attempted provider chain for failed attempts", async () => {
     ttsMocks.getLastTtsAttempt.mockReturnValue({
       timestamp: Date.now() - 1_000,

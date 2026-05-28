@@ -148,9 +148,9 @@ function parseRawPage(value: unknown): number {
   if (typeof value === "number") {
     return normalizeModelPickerPage(value);
   }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) {
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) {
       return normalizeModelPickerPage(parsed);
     }
   }
@@ -161,11 +161,15 @@ function parseRawPositiveInt(value: unknown): number | undefined {
   if (typeof value !== "string" && typeof value !== "number") {
     return undefined;
   }
-  const parsed = Number.parseInt(String(value), 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const raw = String(value).trim();
+  if (!/^[+]?\d+$/.test(raw)) {
     return undefined;
   }
-  return Math.floor(parsed);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    return undefined;
+  }
+  return parsed;
 }
 
 function coerceString(value: unknown): string {

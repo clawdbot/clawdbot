@@ -1,5 +1,7 @@
 {
   "id": "whatsapp",
+  "name": "WhatsApp",
+  "description": "OpenClaw WhatsApp channel plugin for WhatsApp Web chats.",
   "activation": {
     "onStartup": false
   },

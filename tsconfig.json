@@ -27,6 +27,8 @@
       "openclaw/extension-api": ["./src/extensionAPI.ts"],
       "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+      "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
+      "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
       "@openclaw/sdk": ["./packages/sdk/src/index.ts"],
       "@openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],

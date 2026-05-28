@@ -249,6 +249,8 @@ extensions/qa-lab/web/dist/
 # Generated bundled plugin runtime dependency manifests
 extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json
+extensions/diffs/assets/viewer-runtime.js
+extensions/diffs-language-pack/assets/viewer-runtime.js
 
 # Output dir for scripts/run-opengrep.sh (local opengrep scans)
 /.opengrep-out/

@@ -4,7 +4,7 @@ import {
   type ReactionLevel,
   type ResolvedReactionLevel as BaseResolvedReactionLevel,
 } from "openclaw/plugin-sdk/status-helpers";
-import { resolveTelegramAccount } from "./accounts.js";
+import { inspectTelegramAccount } from "./account-inspect.js";
 
 export type TelegramReactionLevel = ReactionLevel;
 export type ResolvedReactionLevel = BaseResolvedReactionLevel;
@@ -16,7 +16,7 @@ export function resolveTelegramReactionLevel(params: {
   cfg: OpenClawConfig;
   accountId?: string;
 }): ResolvedReactionLevel {
-  const account = resolveTelegramAccount({
+  const account = inspectTelegramAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   });

@@ -10,11 +10,11 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/
 import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
 import { formatTimestamp } from "../logging/timestamps.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { clearActiveProgressLine } from "../terminal/progress-line.js";
@@ -22,16 +22,6 @@ import { createSafeStreamWriter } from "../terminal/stream-writer.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
-
-type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
-
-const logsCliRuntimeLoader = createLazyImportLoader<LogsCliRuntimeModule>(
-  () => import("./logs-cli.runtime.js"),
-);
-
-async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
-  return logsCliRuntimeLoader.load();
-}
 
 type LogsTailPayload = {
   file?: string;
@@ -49,6 +39,8 @@ type LogsTailPayload = {
   localFallback?: boolean;
 };
 
+type LogsCliRuntimeModule = typeof import("./logs-cli.runtime.js");
+
 type LogCursorState = {
   gateway?: number;
   journal?: string;
@@ -61,6 +53,10 @@ class JournalFallbackUnavailableError extends Error {
     super("Active systemd journal unavailable for logs follow fallback");
     this.name = "JournalFallbackUnavailableError";
   }
+}
+
+async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
+  return await import("./logs-cli.runtime.js");
 }
 
 type LogsCliOptions = {
@@ -86,21 +82,24 @@ const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
 const JOURNAL_MAX_LIMIT = 5000;
 const JOURNAL_MAX_BYTES = 1_000_000;
 
-function parsePositiveInt(value: string | undefined, fallback: number): number {
+function parsePositiveInt(value: string | undefined, fallback: number, flag: string): number {
   if (!value) {
     return fallback;
   }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 async function fetchLogs(
   opts: LogsCliOptions,
   cursors: LogCursorState,
   showProgress: boolean,
+  params: { limit: number; maxBytes: number },
 ): Promise<LogsTailPayload> {
-  const limit = parsePositiveInt(opts.limit, 200);
-  const maxBytes = parsePositiveInt(opts.maxBytes, 250_000);
+  const { limit, maxBytes } = params;
   if (cursors.forceJournal) {
     const journalPayload = await readSystemdJournalFallback({
       cursor: cursors.journal,
@@ -313,10 +312,7 @@ function parseJournalctlOutput(output: string): { lines: string[]; cursor?: stri
   return { lines, cursor };
 }
 
-function resolveLogsSystemdUnitName(
-  runtime: LogsCliRuntimeModule,
-  env: NodeJS.ProcessEnv,
-): string {
+function resolveLogsSystemdUnitName(runtime: LogsCliRuntimeModule, env: NodeJS.ProcessEnv): string {
   const override = env.OPENCLAW_SYSTEMD_UNIT?.trim();
   if (override) {
     return override.endsWith(".service") ? override : `${override}.service`;
@@ -446,12 +442,11 @@ async function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const runtime = await loadLogsCliRuntime();
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = formatErrorMessage(err);
 
-  const details = runtime.buildGatewayConnectionDetails({ url: opts.url });
+  const details = buildGatewayConnectionDetails({ url: opts.url });
   if (mode === "json") {
     if (
       !emitJsonLine(
@@ -502,7 +497,9 @@ export function registerLogsCli(program: Command) {
 
   logs.action(async (opts: LogsCliOptions) => {
     const { logLine, errorLine, emitJsonLine } = createLogWriters();
-    const interval = parsePositiveInt(opts.interval, 1000);
+    const interval = parsePositiveInt(opts.interval, 1000, "--interval");
+    const limit = parsePositiveInt(opts.limit, 200, "--limit");
+    const maxBytes = parsePositiveInt(opts.maxBytes, 250_000, "--max-bytes");
     let gatewayCursor: number | undefined;
     let journalCursor: string | undefined;
     let journalSince: string | undefined;
@@ -524,6 +521,7 @@ export function registerLogsCli(program: Command) {
           opts,
           { gateway: gatewayCursor, journal: journalCursor, journalSince, forceJournal },
           showProgress,
+          { limit, maxBytes },
         );
       } catch (err) {
         if (err instanceof JournalFallbackUnavailableError) {

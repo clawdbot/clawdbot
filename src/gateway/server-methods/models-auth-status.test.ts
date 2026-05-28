@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   ),
   refreshActiveSecretsRuntimeSnapshot: vi.fn(async () => false),
   clearCurrentProviderAuthState: vi.fn(),
-  warmCurrentProviderAuthState: vi.fn(async (_cfg: unknown) => {}),
+  warmCurrentProviderAuthStateOffMainThread: vi.fn(async (_cfg: unknown) => {}),
   buildAuthHealthSummary: vi.fn(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
@@ -74,7 +74,7 @@ vi.mock("../../secrets/runtime.js", () => ({
 
 vi.mock("../../agents/model-provider-auth.js", () => ({
   clearCurrentProviderAuthState: mocks.clearCurrentProviderAuthState,
-  warmCurrentProviderAuthState: mocks.warmCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread: mocks.warmCurrentProviderAuthStateOffMainThread,
 }));
 
 import {
@@ -505,11 +505,7 @@ describe("models.authStatus", () => {
     expect(call?.[0]?.providers).toBeUndefined();
   });
 
-  it("normalizes expectsOAuth provider ids to match buildAuthHealthSummary", async () => {
-    // Config uses alias `z.ai`; buildAuthHealthSummary normalizes to `zai`.
-    // Without normalization, expectsOAuth.has(prov.provider) fires on the
-    // raw `z.ai` key but prov.provider is `zai`, so the "configured oauth
-    // but no oauth profile" signal silently skipped the alias path.
+  it("does not map expectsOAuth provider ids across provider id variants", async () => {
     mocks.getRuntimeConfig.mockReturnValue({
       models: { providers: { "z.ai": { auth: "oauth" } } },
     });
@@ -538,7 +534,7 @@ describe("models.authStatus", () => {
     await handler(opts);
     const [, payload] = firstRespondCall(opts) ?? [];
     const result = payload as ModelAuthStatusResult;
-    expect(result.providers[0]?.status).toBe("missing");
+    expect(result.providers[0]?.status).toBe("static");
   });
 
   it("flags provider configured auth:oauth but with only api_key profile as missing", async () => {
@@ -622,7 +618,7 @@ describe("models.authLogout", () => {
     });
     expect(mocks.refreshActiveSecretsRuntimeSnapshot).toHaveBeenCalledTimes(1);
     expect(mocks.clearCurrentProviderAuthState).toHaveBeenCalled();
-    expect(mocks.warmCurrentProviderAuthState).toHaveBeenCalledWith({});
+    expect(mocks.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith({});
     const [ok, payload] = firstRespondCall(opts) ?? [];
     expect(ok).toBe(true);
     expect((payload as ModelAuthLogoutResult).removedProfiles).toEqual(["openrouter:default"]);

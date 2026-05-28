@@ -81,6 +81,35 @@ describe("buildThreadAwareOutboundSessionRoute", () => {
     ).toBeUndefined();
   });
 
+  it("does not recover current-session threads across case-distinct Matrix rooms", () => {
+    const route = baseRoute({
+      sessionKey: "agent:main:matrix:channel:!Mixed:example.org",
+      baseSessionKey: "agent:main:matrix:channel:!Mixed:example.org",
+      peer: { kind: "channel", id: "!Mixed:example.org" },
+      from: "matrix:room:!Mixed:example.org",
+      to: "room:!Mixed:example.org",
+    });
+
+    expect(
+      recoverCurrentThreadSessionId({
+        route,
+        currentSessionKey: "agent:main:matrix:channel:!mixed:example.org:thread:$Root",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps recovering current-session threads for non-opaque folded channel keys", () => {
+    expect(
+      recoverCurrentThreadSessionId({
+        route: baseRoute({
+          sessionKey: "agent:main:slack:channel:c1",
+          baseSessionKey: "agent:main:slack:channel:c1",
+        }),
+        currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
+      }),
+    ).toBe("1712345678.123456");
+  });
+
   it("lets providers veto current-session recovery", () => {
     const route = buildThreadAwareOutboundSessionRoute({
       route: baseRoute(),

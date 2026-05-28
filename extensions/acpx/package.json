@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/acpx",
-  "version": "2026.5.26",
-  "description": "OpenClaw ACP runtime backend",
+  "version": "2026.5.28",
+  "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
@@ -26,18 +26,14 @@
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.5.26"
+      "pluginApi": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.5.26",
+      "openclawVersion": "2026.5.28",
       "staticAssets": [
         {
           "source": "./src/runtime-internals/mcp-proxy.mjs",
           "output": "mcp-proxy.mjs"
-        },
-        {
-          "source": "./src/runtime-internals/error-format.mjs",
-          "output": "error-format.mjs"
         },
         {
           "source": "./src/runtime-internals/mcp-command-line.mjs",

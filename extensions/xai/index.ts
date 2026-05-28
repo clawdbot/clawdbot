@@ -8,8 +8,6 @@ import {
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
-  resolveXaiModelCompatPatch,
-  shouldContributeXaiCompat,
 } from "./api.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
@@ -226,8 +224,6 @@ export default defineSingleProviderPluginEntry({
     normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
-    contributeResolvedModelCompat: ({ modelId, model }) =>
-      shouldContributeXaiCompat({ modelId, model }) ? resolveXaiModelCompatPatch() : undefined,
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
     refreshOAuth: refreshXaiOAuthCredential,

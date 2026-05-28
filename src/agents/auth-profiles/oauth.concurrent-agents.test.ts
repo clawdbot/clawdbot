@@ -32,7 +32,7 @@ async function loadOAuthModuleForTest() {
   ({ resolveApiKeyForProfile, resetOAuthRefreshQueuesForTest } = await import("./oauth.js"));
 }
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: vi.fn(async () => null),
   getOAuthProviders: () => [{ id: "openai-codex" }],
 }));

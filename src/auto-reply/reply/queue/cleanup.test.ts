@@ -22,7 +22,7 @@ vi.mock("../../../process/command-queue.js", () => ({
   clearCommandLane: commandQueueMocks.clearCommandLane,
 }));
 
-vi.mock("../../../agents/pi-embedded-runner/lanes.js", () => ({
+vi.mock("../../../agents/embedded-agent-runner/lanes.js", () => ({
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 

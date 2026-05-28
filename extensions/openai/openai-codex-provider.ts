@@ -411,13 +411,20 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   }
 }
 
-async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
+type OpenAICodexOAuthContext = ProviderAuthContext & {
+  signal?: AbortSignal;
+  onManualCodeInput?: () => Promise<string>;
+};
+
+async function runOpenAICodexOAuth(ctx: OpenAICodexOAuthContext) {
   const creds = await loginOpenAICodexOAuth({
     prompter: ctx.prompter,
     runtime: ctx.runtime,
     oauth: ctx.oauth,
     isRemote: ctx.isRemote,
     openUrl: ctx.openUrl,
+    signal: ctx.signal,
+    onManualCodeInput: ctx.onManualCodeInput,
     localBrowserMessage: "Complete sign-in in browser…",
   });
   if (!creds) {

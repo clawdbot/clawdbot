@@ -1,5 +1,5 @@
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
-import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 
 export type OpenAiCompatError = {
   status: number;

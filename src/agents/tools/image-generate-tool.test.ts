@@ -376,7 +376,7 @@ describe("createImageGenerateTool", () => {
     expect(listProviders).not.toHaveBeenCalled();
   });
 
-  it("matches image-generation providers across canonical provider aliases", () => {
+  it("matches image-generation providers across plugin-advertised aliases", () => {
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
         id: "z.ai",

@@ -367,6 +367,18 @@ describe("TwilioProvider", () => {
     expect(parsed.turnToken).toBe("turn-xyz");
   });
 
+  it("does not coerce partial Twilio speech confidence values", () => {
+    const provider = createProvider();
+    const ctx = createContext("CallSid=CA223&Direction=inbound&SpeechResult=hello&Confidence=0.2x");
+
+    const event = provider.parseWebhookEvent(ctx).events[0];
+    const parsed = requireEvent(event, "expected speech event from Twilio webhook");
+    if (parsed.type !== "call.speech") {
+      throw new Error("expected speech event from Twilio webhook");
+    }
+    expect(parsed.confidence).toBe(0.9);
+  });
+
   it("fails when an active stream exists but telephony TTS is unavailable", async () => {
     const { provider, apiRequest } = configureTelephonyTwiMlFallback({
       providerCallId: "CA-stream",

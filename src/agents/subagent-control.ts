@@ -50,7 +50,7 @@ const steerRateLimit = new Map<string, number>();
 
 type GatewayCaller = typeof callGateway;
 type UpdateSessionStore = typeof updateSessionStore;
-type AbortEmbeddedPiRun = (sessionId: string) => boolean;
+type AbortEmbeddedAgentRun = (sessionId: string) => boolean;
 type ClearSessionQueues = (keys: Array<string | undefined>) => ClearSessionQueueResult;
 
 const defaultSubagentControlDeps = {
@@ -61,7 +61,7 @@ const defaultSubagentControlDeps = {
 let subagentControlDeps: {
   callGateway: GatewayCaller;
   updateSessionStore: UpdateSessionStore;
-  abortEmbeddedPiRun?: AbortEmbeddedPiRun;
+  abortEmbeddedAgentRun?: AbortEmbeddedAgentRun;
   clearSessionQueues?: ClearSessionQueues;
 } = defaultSubagentControlDeps;
 
@@ -74,18 +74,19 @@ function loadSubagentControlRuntime() {
 }
 
 async function resolveSubagentControlRuntime(): Promise<{
-  abortEmbeddedPiRun: AbortEmbeddedPiRun;
+  abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
   clearSessionQueues: ClearSessionQueues;
 }> {
-  if (subagentControlDeps.abortEmbeddedPiRun && subagentControlDeps.clearSessionQueues) {
+  if (subagentControlDeps.abortEmbeddedAgentRun && subagentControlDeps.clearSessionQueues) {
     return {
-      abortEmbeddedPiRun: subagentControlDeps.abortEmbeddedPiRun,
+      abortEmbeddedAgentRun: subagentControlDeps.abortEmbeddedAgentRun,
       clearSessionQueues: subagentControlDeps.clearSessionQueues,
     };
   }
   const runtime = await loadSubagentControlRuntime();
   return {
-    abortEmbeddedPiRun: subagentControlDeps.abortEmbeddedPiRun ?? runtime.abortEmbeddedPiRun,
+    abortEmbeddedAgentRun:
+      subagentControlDeps.abortEmbeddedAgentRun ?? runtime.abortEmbeddedAgentRun,
     clearSessionQueues: subagentControlDeps.clearSessionQueues ?? runtime.clearSessionQueues,
   };
 }
@@ -153,6 +154,17 @@ function ensureControllerOwnsRun(params: {
   return "Subagents can only control runs spawned from their own session.";
 }
 
+function isFinishedForSteerControl(
+  entry: SubagentRunRecord,
+  hasPendingDescendants: boolean,
+) {
+  return (
+    Boolean(entry.endedAt) &&
+    entry.pauseReason !== "sessions_yield" &&
+    !hasPendingDescendants
+  );
+}
+
 async function killSubagentRun(params: {
   cfg: OpenClawConfig;
   entry: SubagentRunRecord;
@@ -169,7 +181,7 @@ async function killSubagentRun(params: {
   });
   const sessionId = resolved.entry?.sessionId;
   const runtime = await resolveSubagentControlRuntime();
-  const aborted = sessionId ? runtime.abortEmbeddedPiRun(sessionId) : false;
+  const aborted = sessionId ? runtime.abortEmbeddedAgentRun(sessionId) : false;
   const cleared = runtime.clearSessionQueues([childSessionKey, sessionId]);
   if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
     logVerbose(
@@ -469,7 +481,7 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const targetHasPendingDescendants = countPendingDescendantRuns(params.entry.childSessionKey) > 0;
-  if (params.entry.endedAt && !targetHasPendingDescendants) {
+  if (isFinishedForSteerControl(params.entry, targetHasPendingDescendants)) {
     return {
       status: "done",
       runId: params.entry.runId,
@@ -486,12 +498,13 @@ export async function steerControlledSubagentRun(params: {
     };
   }
   const currentEntry = getLatestSubagentRunByChildSessionKey(params.entry.childSessionKey);
-  const currentHasPendingDescendants =
-    currentEntry && countPendingDescendantRuns(currentEntry.childSessionKey) > 0;
+  const currentHasPendingDescendants = currentEntry
+    ? countPendingDescendantRuns(currentEntry.childSessionKey) > 0
+    : false;
   if (
     !currentEntry ||
     currentEntry.runId !== params.entry.runId ||
-    (currentEntry.endedAt && !currentHasPendingDescendants)
+    isFinishedForSteerControl(currentEntry, currentHasPendingDescendants)
   ) {
     return {
       status: "done",
@@ -530,7 +543,7 @@ export async function steerControlledSubagentRun(params: {
 
   if (sessionId) {
     const runtime = await resolveSubagentControlRuntime();
-    runtime.abortEmbeddedPiRun(sessionId);
+    runtime.abortEmbeddedAgentRun(sessionId);
   }
   const runtime = await resolveSubagentControlRuntime();
   const cleared = runtime.clearSessionQueues([params.entry.childSessionKey, sessionId]);
@@ -733,7 +746,7 @@ export const testing = {
     overrides?: Partial<{
       callGateway: GatewayCaller;
       updateSessionStore: UpdateSessionStore;
-      abortEmbeddedPiRun: AbortEmbeddedPiRun;
+      abortEmbeddedAgentRun: AbortEmbeddedAgentRun;
       clearSessionQueues: ClearSessionQueues;
     }>,
   ) {

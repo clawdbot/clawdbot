@@ -1,4 +1,5 @@
 export { deriveDurableFinalDeliveryRequirements } from "./capabilities.js";
+export { defineChannelMessageAdapter } from "./adapter.js";
 export { createChannelMessageAdapterFromOutbound } from "./outbound-bridge.js";
 export { createDurableInboundReceiveJournal } from "./durable-receive.js";
 export {

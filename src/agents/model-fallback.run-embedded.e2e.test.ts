@@ -4,19 +4,19 @@ import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
+import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
 import { runWithModelFallback } from "./model-fallback.js";
-import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
-import type { EmbeddedRunAttemptResult } from "./pi-embedded-runner/run/types.js";
 import {
   buildEmbeddedRunnerAssistant,
   createResolvedEmbeddedRunnerModel,
   makeEmbeddedRunnerAttempt,
-} from "./test-helpers/pi-embedded-runner-e2e-fixtures.js";
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerBaseE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
-} from "./test-helpers/pi-embedded-runner-e2e-mocks.js";
+} from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { computeBackoffMock, sleepWithAbortMock } = vi.hoisted(() => ({
@@ -46,18 +46,18 @@ const installRunEmbeddedMocks = () => {
     computeBackoff: (policy, attempt) => computeBackoffMock(policy, attempt),
     sleepWithAbort: (ms, abortSignal) => sleepWithAbortMock(ms, abortSignal),
   });
-  vi.doMock("./pi-embedded-runner/model.js", () => ({
+  vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) =>
       createResolvedEmbeddedRunnerModel(provider, modelId),
   }));
 };
 
-let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
+let runEmbeddedAgent: typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
 
 beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
-  ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
+  ({ runEmbeddedAgent } = await import("./embedded-agent-runner/run.js"));
 });
 
 beforeEach(() => {
@@ -237,7 +237,7 @@ async function runEmbeddedFallback(params: {
     runId: params.runId,
     agentDir: params.agentDir,
     run: (provider, model, options) =>
-      runEmbeddedPiAgent({
+      runEmbeddedAgent({
         sessionId: `session:${params.runId}`,
         sessionKey: params.sessionKey,
         sessionFile: path.join(params.workspaceDir, `${params.runId}.jsonl`),
@@ -372,7 +372,7 @@ function expectProviderAttemptCounts(expected: { openai: number; groq: number })
   expect(countProviderAttempts("groq")).toBe(expected.groq);
 }
 
-describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
+describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
   it("keeps tool summary on incomplete side-effect terminal results", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeAuthStore(agentDir);
@@ -388,7 +388,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         }),
       );
 
-      const result = await runEmbeddedPiAgent({
+      const result = await runEmbeddedAgent({
         sessionId: "session:tool-side-effect-terminal",
         sessionKey: "agent:test:tool-side-effect-terminal",
         sessionFile: path.join(workspaceDir, "tool-side-effect-terminal.jsonl"),
@@ -407,7 +407,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
       expect(result.meta.toolSummary?.calls).toBe(1);
       expect(result.meta.toolSummary?.tools).toEqual(["write"]);
       expect(
-        classifyEmbeddedPiRunResultForModelFallback({
+        classifyEmbeddedAgentRunResultForModelFallback({
           provider: "openai-codex",
           model: "gpt-5.4",
           result,

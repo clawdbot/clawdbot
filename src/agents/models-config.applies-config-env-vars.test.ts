@@ -30,6 +30,25 @@ function createImplicitOpenRouterProvider(): ProviderConfig {
   };
 }
 
+function createImplicitOpenAiProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+  return {
+    baseUrl: "https://api.openai.com/v1",
+    api: "openai-responses",
+    models: [
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      },
+    ],
+    ...overrides,
+  };
+}
+
 async function resolveProvidersForConfigEnvTest(params: {
   cfg: OpenClawConfig;
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
@@ -186,6 +205,62 @@ describe("models-config", () => {
     );
 
     expect(observedSnapshot).toBe(pluginMetadataSnapshot);
+  });
+
+  it("does not write unauthenticated model providers that would invalidate models.json", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: {},
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          openai: createImplicitOpenAiProvider(),
+          "auth-only": createImplicitOpenAiProvider({
+            baseUrl: "https://auth.example/v1",
+            api: "openai-responses",
+            models: [],
+          }),
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as { providers?: Record<string, unknown> };
+    expect(parsed.providers?.openai).toBeUndefined();
+    expect(parsed.providers?.["auth-only"]).toBeDefined();
+  });
+
+  it("falls back to canonical env markers when provider runtime has no api-key policy", async () => {
+    const plan = await planOpenClawModelsJsonWithDeps(
+      {
+        cfg: { models: { providers: {} } },
+        agentDir: "/tmp/openclaw-models-config-env-vars-test",
+        env: { OPENAI_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
+        existingRaw: "",
+        existingParsed: null,
+      },
+      {
+        resolveImplicitProviders: async () => ({
+          openai: createImplicitOpenAiProvider(),
+        }),
+      },
+    );
+
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error("Expected models.json write plan");
+    }
+    const parsed = JSON.parse(plan.contents) as {
+      providers?: Record<string, { apiKey?: string }>;
+    };
+    expect(parsed.providers?.openai?.apiKey).toBe("OPENAI_API_KEY");
   });
 
   it("normalizes retired Gemini ids preserved from existing models.json rows", async () => {

@@ -2,7 +2,10 @@ import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineHostCapability } from "../context-engine/types.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
-import { resolvePluginSetupCliBackend } from "../plugins/setup-registry.js";
+import {
+  resolvePluginSetupCliBackend,
+  resolvePluginSetupRegistry,
+} from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
 import type {
   CliBackendAuthEpochMode,
@@ -14,16 +17,18 @@ import type {
 } from "../plugins/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { uniqueStrings } from "../shared/string-normalization.js";
-import { normalizeProviderId } from "./model-selection.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
+import { normalizeProviderId } from "./provider-id.js";
 
 type CliBackendsDeps = {
   resolvePluginSetupCliBackend: typeof resolvePluginSetupCliBackend;
+  resolvePluginSetupRegistry: typeof resolvePluginSetupRegistry;
   resolveRuntimeCliBackends: typeof resolveRuntimeCliBackends;
 };
 
 const defaultCliBackendsDeps: CliBackendsDeps = {
   resolvePluginSetupCliBackend,
+  resolvePluginSetupRegistry,
   resolveRuntimeCliBackends,
 };
 
@@ -31,6 +36,7 @@ let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
 export type ResolvedCliBackend = {
   id: string;
+  modelProvider?: string;
   config: CliBackendConfig;
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
@@ -53,7 +59,14 @@ type ResolvedCliBackendLiveTest = {
   dockerBinaryName?: string;
 };
 
+export type CliRuntimeModelBackendBinding = {
+  provider: string;
+  runtime: string;
+  pluginId?: string;
+};
+
 type FallbackCliBackendPolicy = {
+  modelProvider?: string;
   bundleMcp: boolean;
   bundleMcpMode?: CliBundleMcpMode;
   baseConfig?: CliBackendConfig;
@@ -94,6 +107,7 @@ function resolveSetupCliBackendPolicy(provider: string): FallbackCliBackendPolic
     // Setup-registered backends keep narrow CLI paths generic even when the
     // runtime plugin registry has not booted yet.
     bundleMcp: entry.backend.bundleMcp === true,
+    modelProvider: resolveCliBackendModelProvider(entry.backend),
     bundleMcpMode: normalizeBundleMcpMode(
       entry.backend.bundleMcpMode,
       entry.backend.bundleMcp === true,
@@ -142,6 +156,117 @@ function resolveRegisteredBackend(provider: string) {
   return cliBackendsDeps
     .resolveRuntimeCliBackends()
     .find((entry) => normalizeBackendKey(entry.id) === normalized);
+}
+
+function resolveCliBackendModelProvider(
+  backend: Pick<CliBackendPlugin, "modelProvider">,
+): string | undefined {
+  const provider = backend.modelProvider?.trim();
+  return provider ? normalizeProviderId(provider) : undefined;
+}
+
+function addCliRuntimeModelBinding(
+  bindings: Map<string, CliRuntimeModelBackendBinding>,
+  params: { backend: CliBackendPlugin; pluginId?: string },
+): void {
+  const provider = resolveCliBackendModelProvider(params.backend);
+  const runtime = normalizeBackendKey(params.backend.id);
+  if (!provider || !runtime) {
+    return;
+  }
+  bindings.set(`${provider}:${runtime}`, {
+    provider,
+    runtime,
+    ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+  });
+}
+
+export function listCliRuntimeModelBackendBindings(
+  params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    includeSetupRegistry?: boolean;
+  } = {},
+): CliRuntimeModelBackendBinding[] {
+  const bindings = new Map<string, CliRuntimeModelBackendBinding>();
+  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends()) {
+    addCliRuntimeModelBinding(bindings, {
+      backend,
+      ...(backend.pluginId ? { pluginId: backend.pluginId } : {}),
+    });
+  }
+  if (params.includeSetupRegistry === true) {
+    for (const entry of cliBackendsDeps.resolvePluginSetupRegistry({
+      config: params.config,
+      env: params.env,
+    }).cliBackends) {
+      addCliRuntimeModelBinding(bindings, {
+        backend: entry.backend,
+        pluginId: entry.pluginId,
+      });
+    }
+  }
+  return [...bindings.values()].toSorted((left, right) =>
+    left.provider === right.provider
+      ? left.runtime.localeCompare(right.runtime)
+      : left.provider.localeCompare(right.provider),
+  );
+}
+
+export function listCliRuntimeProviderIds(
+  params: {
+    config?: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+    includeSetupRegistry?: boolean;
+  } = {},
+): string[] {
+  // Only CLI backends with a canonical modelProvider are runtime aliases that
+  // should be hidden from model-provider pickers. Standalone CLI backends own
+  // direct refs such as acme-cli/model and must remain selectable.
+  return [
+    ...new Set(
+      listCliRuntimeModelBackendBindings(params)
+        .map((binding) => normalizeBackendKey(binding.runtime))
+        .filter(Boolean),
+    ),
+  ].toSorted();
+}
+
+export function resolveCliRuntimeModelBackendBinding(params: {
+  provider: string | undefined;
+  runtime: string | undefined;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): CliRuntimeModelBackendBinding | undefined {
+  const provider = normalizeProviderId(params.provider ?? "");
+  const runtime = normalizeBackendKey(params.runtime ?? "");
+  if (!provider || !runtime) {
+    return undefined;
+  }
+  const runtimeBinding = listCliRuntimeModelBackendBindings().find(
+    (binding) => binding.provider === provider && binding.runtime === runtime,
+  );
+  if (runtimeBinding) {
+    return runtimeBinding;
+  }
+  const includeSetupRegistry = params.config !== undefined || params.env !== undefined;
+  if (!includeSetupRegistry) {
+    return undefined;
+  }
+  return listCliRuntimeModelBackendBindings({
+    config: params.config,
+    env: params.env,
+    includeSetupRegistry: true,
+  }).find((binding) => binding.provider === provider && binding.runtime === runtime);
+}
+
+export function isCliRuntimeModelBackendForProvider(params: {
+  provider: string | undefined;
+  runtime: string | undefined;
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  return resolveCliRuntimeModelBackendBinding(params) !== undefined;
 }
 
 function mergeBackendConfig(base: CliBackendConfig, override?: CliBackendConfig): CliBackendConfig {
@@ -233,6 +358,9 @@ export function resolveCliBackendConfig(
     }
     return {
       id: normalized,
+      ...(registered.modelProvider
+        ? { modelProvider: normalizeProviderId(registered.modelProvider) }
+        : {}),
       config: { ...config, command },
       bundleMcp: registered.bundleMcp === true,
       bundleMcpMode: normalizeBundleMcpMode(
@@ -265,6 +393,7 @@ export function resolveCliBackendConfig(
     }
     return {
       id: normalized,
+      ...(fallbackPolicy.modelProvider ? { modelProvider: fallbackPolicy.modelProvider } : {}),
       config: { ...baseConfig, command },
       bundleMcp: fallbackPolicy.bundleMcp,
       bundleMcpMode: fallbackPolicy.bundleMcpMode,
@@ -293,6 +422,7 @@ export function resolveCliBackendConfig(
   }
   return {
     id: normalized,
+    ...(fallbackPolicy?.modelProvider ? { modelProvider: fallbackPolicy.modelProvider } : {}),
     config: { ...config, command },
     bundleMcp: fallbackPolicy?.bundleMcp === true,
     bundleMcpMode: fallbackPolicy?.bundleMcpMode,

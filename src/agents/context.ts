@@ -1,10 +1,11 @@
-// Lazy-load pi-coding-agent model metadata so we can infer context windows when
-// the agent reports a model id. This includes custom models.json entries.
+// Load session runtime model metadata so we can infer context windows when the
+// agent reports a model id. This includes custom models.json entries.
 
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
@@ -164,8 +165,6 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
     }
 
     try {
-      const { discoverAuthStorage, discoverModels } =
-        await import("./pi-model-discovery-runtime.js");
       const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir, {
@@ -257,7 +256,7 @@ function resolveConfiguredProviderContextTokens(
     return undefined;
   }
 
-  // Mirror the lookup order in pi-embedded-runner/model.ts: exact key first,
+  // Mirror the lookup order in embedded-agent-runner/model.ts: exact key first,
   // then normalized fallback. This prevents alias collisions from picking the
   // wrong configured cap based on Object.entries iteration order.
   function readProviderContextTokens(providerConfig: ProviderConfigEntry | undefined) {
@@ -307,7 +306,7 @@ function resolveConfiguredProviderContextTokens(
     return exactResult;
   }
 
-  // 2. Normalized fallback: covers alias keys such as "z.ai" → "zai".
+  // 2. Normalized fallback: covers case-only provider key differences.
   const normalizedProvider = normalizeProviderId(provider);
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }

@@ -1,11 +1,15 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_RESOURCE_LIMITS } from "../../scripts/lib/docker-e2e-plan.mjs";
 import {
+  appendBoundedShellCapture,
   canStartSchedulerLane,
   describeDockerSchedulerLimits,
   dockerPreflightContainerNames,
   parseDockerAllCliArgs,
+  SHELL_CAPTURE_MAX_CHARS,
 } from "../../scripts/test-docker-all.mjs";
 
 const limits = {
@@ -71,6 +75,51 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(result.stderr).toContain("unknown argument: --bogus");
     expect(result.stderr).toContain("Usage: node scripts/test-docker-all.mjs [--plan-json]");
     expect(result.stderr).not.toContain("at ");
+  });
+
+  it("rejects loose numeric runner env vars without a stack trace", () => {
+    const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs", "--plan-json"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_DOCKER_ALL_PARALLELISM: "1e3",
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain(
+      "OPENCLAW_DOCKER_ALL_PARALLELISM must be a positive integer",
+    );
+    expect(result.stderr).not.toContain("at ");
+  });
+
+  it("rejects loose numeric resource limit env vars before scheduling lanes", () => {
+    const logDir = mkdtempSync(`${tmpdir()}/openclaw-docker-all-`);
+    try {
+      const result = spawnSync(process.execPath, ["scripts/test-docker-all.mjs"], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_ALL_BUILD: "0",
+          OPENCLAW_DOCKER_ALL_DOCKER_LIMIT: "1e3",
+          OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+          OPENCLAW_DOCKER_ALL_LOG_DIR: logDir,
+          OPENCLAW_DOCKER_ALL_PREFLIGHT: "0",
+          OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+        },
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "OPENCLAW_DOCKER_ALL_DOCKER_LIMIT must be a positive integer",
+      );
+      expect(result.stderr).not.toContain("at ");
+    } finally {
+      rmSync(logDir, { force: true, recursive: true });
+    }
   });
 
   it("allows an overweight lane to start alone under low parallelism", () => {
@@ -228,6 +277,15 @@ postgres Created
       "openclaw-openwebui-gateway-567",
       "openclaw-openwebui-678",
     ]);
+  });
+
+  it("bounds captured preflight command output while keeping the newest tail", () => {
+    const first = appendBoundedShellCapture("abc", "def", 8);
+    expect(first).toEqual({ text: "abcdef", truncated: false });
+
+    const second = appendBoundedShellCapture(first.text, "ghijkl", 8);
+    expect(second).toEqual({ text: "efghijkl", truncated: true });
+    expect(SHELL_CAPTURE_MAX_CHARS).toBeGreaterThan(1024);
   });
 
   it("describes effective scheduler limits for operator errors", () => {

@@ -1,5 +1,5 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
+import type { AgentTool } from "../runtime/index.js";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
 
@@ -76,7 +76,6 @@ export type AgentRuntimeProviderHandle = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
 };
 

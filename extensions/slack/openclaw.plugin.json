@@ -1,5 +1,7 @@
 {
   "id": "slack",
+  "name": "Slack",
+  "description": "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
   "activation": {
     "onStartup": false
   },

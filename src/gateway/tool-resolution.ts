@@ -1,11 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
-} from "../agents/pi-tools.policy.js";
+} from "../agents/agent-tools.policy.js";
+import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,

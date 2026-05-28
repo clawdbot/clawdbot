@@ -37,8 +37,12 @@ Examples:
 }
 
 function parsePositiveInt(raw, flagName) {
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${flagName} must be a positive integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new Error(`${flagName} must be a positive integer`);
   }
   return parsed;

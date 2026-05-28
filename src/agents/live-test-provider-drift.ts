@@ -1,13 +1,13 @@
 import { isCloudflareOrHtmlErrorPage } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { isAnthropicBillingError, isApiKeyRateLimitError } from "./live-auth-keys.js";
-import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isRateLimitErrorMessage,
   isTimeoutErrorMessage,
-} from "./pi-embedded-helpers/failover-matches.js";
+} from "./embedded-agent-helpers/failover-matches.js";
+import { isAnthropicBillingError, isApiKeyRateLimitError } from "./live-auth-keys.js";
+import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 export type LiveProviderDriftReason =
   | "auth"

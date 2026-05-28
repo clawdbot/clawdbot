@@ -71,6 +71,7 @@ export function buildEmbeddedRunBaseParams(params: {
   return {
     sessionFile: params.run.sessionFile,
     workspaceDir: params.run.workspaceDir,
+    cwd: params.run.cwd,
     agentDir: params.run.agentDir,
     config,
     skillsSnapshot: params.run.skillsSnapshot,

@@ -10,7 +10,6 @@ import {
   execServerUrlFromClient,
   openSocket,
   rpc,
-  shellQuote,
   waitForHttpBodyDeltas,
 } from "./sandbox-exec-server.test-helpers.js";
 
@@ -18,6 +17,12 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await closeCodexSandboxExecServersForTests();
 });
+
+function testExecEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+  };
+}
 
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   it("routes HTTP requests through the sandbox backend", async () => {
@@ -84,13 +89,13 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
     });
     const buildExecSpec = vi.fn(async () => ({
       argv: [
-        "/bin/sh",
-        "-lc",
+        process.execPath,
+        "-e",
         [headerLine, bodyLine, doneLine]
-          .map((line) => `printf '%s\\n' ${shellQuote(line)}`)
-          .join("; "),
+          .map((line) => `process.stdout.write(${JSON.stringify(`${line}\n`)});`)
+          .join(""),
       ],
-      env: process.env,
+      env: testExecEnv(),
       stdinMode: "pipe-closed" as const,
     }));
     const runShellCommand = vi.fn(async () => ({
@@ -167,7 +172,7 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
             "setInterval(() => {}, 1000);",
           ].join(""),
         ],
-        env: process.env,
+        env: testExecEnv(),
         finalizeToken: "stream-token",
         stdinMode: "pipe-closed",
       }),

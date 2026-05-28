@@ -8,7 +8,6 @@ import {
   resolveMistralCompatPatch,
 } from "./api.js";
 import mistralPlugin from "./index.js";
-import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe provider compat shape.
 function readCompat<T>(model: unknown): T | undefined {
@@ -156,40 +155,5 @@ describe("applyMistralModelCompat", () => {
         modelId: MISTRAL_MEDIUM_3_5_ID,
       }),
     ).toEqual({ levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" });
-  });
-
-  it("contributes Mistral transport compat for native, provider-family, and hinted custom routes", () => {
-    expect(
-      contributeMistralResolvedModelCompat({
-        modelId: "mistral-large-latest",
-        model: {
-          provider: "mistral",
-          api: "openai-completions",
-          baseUrl: "https://proxy.example/v1",
-        },
-      }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
-
-    expect(
-      contributeMistralResolvedModelCompat({
-        modelId: "custom-model",
-        model: {
-          provider: "custom-mistral-host",
-          api: "openai-completions",
-          baseUrl: "https://api.mistral.ai/v1",
-        },
-      }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
-
-    expect(
-      contributeMistralResolvedModelCompat({
-        modelId: "mistralai/mistral-small-3.2",
-        model: {
-          provider: "openrouter",
-          api: "openai-completions",
-          baseUrl: "https://openrouter.ai/api/v1",
-        },
-      }),
-    ).toEqual(MISTRAL_MODEL_TRANSPORT_PATCH);
   });
 });

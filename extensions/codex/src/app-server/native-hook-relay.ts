@@ -1,8 +1,11 @@
 import { createHash } from "node:crypto";
-import type {
-  NativeHookRelayEvent,
-  NativeHookRelayRegistrationHandle,
+import {
+  registerNativeHookRelay,
+  type EmbeddedRunAttemptParams,
+  type NativeHookRelayEvent,
+  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CodexAppServerRuntimeOptions } from "./config.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
 export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
@@ -12,7 +15,183 @@ export const CODEX_NATIVE_HOOK_RELAY_EVENTS: readonly NativeHookRelayEvent[] = [
   "before_agent_finalize",
 ] as const;
 
+const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
+  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
+const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
+export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
+const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
+const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
+
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
+
+type PendingCodexNativeHookRelayUnregister = {
+  timeout: ReturnType<typeof setTimeout>;
+  unregister: () => void;
+};
+
+const pendingCodexNativeHookRelayUnregisters = new Set<PendingCodexNativeHookRelayUnregister>();
+
+export function scheduleCodexNativeHookRelayUnregister(params: {
+  relay: NativeHookRelayRegistrationHandle;
+  hookTimeoutSec?: number;
+}): void {
+  let pending: PendingCodexNativeHookRelayUnregister | undefined;
+  const unregister = () => {
+    if (!pending) {
+      return;
+    }
+    const current = pending;
+    pending = undefined;
+    if (!pendingCodexNativeHookRelayUnregisters.delete(current)) {
+      return;
+    }
+    params.relay.unregister();
+  };
+  const timeout = setTimeout(
+    unregister,
+    resolveCodexNativeHookRelayUnregisterGraceMs(params.hookTimeoutSec),
+  );
+  pending = { timeout, unregister };
+  pendingCodexNativeHookRelayUnregisters.add(pending);
+  timeout.unref();
+}
+
+export function resolveCodexNativeHookRelayUnregisterGraceMs(
+  hookTimeoutSec: number | undefined,
+): number {
+  const hookTimeoutMs =
+    typeof hookTimeoutSec === "number" && Number.isFinite(hookTimeoutSec) && hookTimeoutSec > 0
+      ? Math.ceil(hookTimeoutSec) * 1000
+      : 0;
+  return Math.max(
+    CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
+    hookTimeoutMs + CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS,
+  );
+}
+
+export function flushPendingCodexNativeHookRelayUnregistersForTests(): void {
+  while (pendingCodexNativeHookRelayUnregisters.size > 0) {
+    const pending = pendingCodexNativeHookRelayUnregisters.values().next().value;
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timeout);
+    pending.unregister();
+  }
+}
+
+export function clearPendingCodexNativeHookRelayUnregistersForTests(): void {
+  for (const pending of pendingCodexNativeHookRelayUnregisters) {
+    clearTimeout(pending.timeout);
+  }
+  pendingCodexNativeHookRelayUnregisters.clear();
+}
+
+export function createCodexNativeHookRelay(params: {
+  options:
+    | {
+        enabled?: boolean;
+        ttlMs?: number;
+        gatewayTimeoutMs?: number;
+      }
+    | undefined;
+  generation?: string;
+  generationMismatchGraceMs?: number;
+  events: readonly NativeHookRelayEvent[];
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+  config: EmbeddedRunAttemptParams["config"];
+  runId: string;
+  channelId?: string;
+  attemptTimeoutMs: number;
+  startupTimeoutMs: number;
+  turnStartTimeoutMs: number;
+  signal: AbortSignal;
+}): NativeHookRelayRegistrationHandle | undefined {
+  if (params.options?.enabled === false) {
+    return undefined;
+  }
+  return registerNativeHookRelay({
+    provider: "codex",
+    relayId: buildCodexNativeHookRelayId({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    }),
+    ...(params.generation ? { generation: params.generation } : {}),
+    ...(params.generationMismatchGraceMs
+      ? { generationMismatchGraceMs: params.generationMismatchGraceMs }
+      : {}),
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.config ? { config: params.config } : {}),
+    runId: params.runId,
+    ...(params.channelId ? { channelId: params.channelId } : {}),
+    allowedEvents: params.events,
+    ttlMs: resolveCodexNativeHookRelayTtlMs({
+      explicitTtlMs: params.options?.ttlMs,
+      attemptTimeoutMs: params.attemptTimeoutMs,
+      startupTimeoutMs: params.startupTimeoutMs,
+      turnStartTimeoutMs: params.turnStartTimeoutMs,
+    }),
+    signal: params.signal,
+    command: {
+      // Hook relay subprocesses are observational for most tool events; keep
+      // them lower priority so they do not compete with the active reply turn.
+      nice: 10,
+      timeoutMs: params.options?.gatewayTimeoutMs,
+    },
+  });
+}
+
+export function resolveCodexNativeHookRelayEvents(params: {
+  configuredEvents?: readonly NativeHookRelayEvent[];
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
+}): readonly NativeHookRelayEvent[] {
+  if (params.configuredEvents?.length) {
+    return params.configuredEvents;
+  }
+  // Codex emits PermissionRequest before the app-server approval reviewer has
+  // resolved the command. In native approval modes, let Codex's app-server
+  // approval bridge own the real escalation instead of surfacing a stale
+  // pre-guardian OpenClaw plugin approval prompt.
+  return params.appServer.approvalPolicy === "never"
+    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+}
+
+export function resolveCodexNativeHookRelayTtlMs(params: {
+  explicitTtlMs: number | undefined;
+  attemptTimeoutMs: number;
+  startupTimeoutMs: number;
+  turnStartTimeoutMs: number;
+}): number {
+  if (params.explicitTtlMs !== undefined) {
+    return params.explicitTtlMs;
+  }
+  const relayBudgetMs =
+    params.attemptTimeoutMs +
+    params.startupTimeoutMs +
+    params.turnStartTimeoutMs +
+    CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
+  return Math.max(CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS, Math.floor(relayBudgetMs));
+}
+
+export function buildCodexNativeHookRelayId(params: {
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+}): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:native-hook-relay:v1");
+  hash.update("\0");
+  hash.update(params.agentId?.trim() || "");
+  hash.update("\0");
+  hash.update(params.sessionKey?.trim() || params.sessionId);
+  return `codex-${hash.digest("hex").slice(0, 40)}`;
+}
 
 const CODEX_HOOK_EVENT_BY_NATIVE_EVENT: Record<NativeHookRelayEvent, CodexHookEventName> = {
   pre_tool_use: "PreToolUse",

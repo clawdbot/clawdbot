@@ -7,10 +7,7 @@ import { listImportedBundledPluginFacadeIds } from "../plugin-sdk/facade-runtime
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { inspectBundleLspRuntimeSupport } from "./bundle-lsp.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import {
-  withBundledPluginAllowlistCompat,
-  withBundledPluginEnablementCompat,
-} from "./bundled-compat.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
@@ -53,7 +50,7 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
-  code: "legacy-before-agent-start" | "hook-only";
+  code: "legacy-before-agent-start" | "hook-only" | "deprecated-memory-embedding-provider-api";
   compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
@@ -113,7 +110,9 @@ export type PluginInspectReport = {
 };
 
 function buildCompatibilityNoticesForInspect(
-  inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart">,
+  inspect: Pick<PluginInspectReport, "plugin" | "shape" | "usesLegacyBeforeAgentStart"> & {
+    hasRuntimeMemoryEmbeddingProviderRegistration: boolean;
+  },
 ): PluginCompatibilityNotice[] {
   const warnings: PluginCompatibilityNotice[] = [];
   if (inspect.usesLegacyBeforeAgentStart) {
@@ -134,6 +133,20 @@ function buildCompatibilityNoticesForInspect(
       severity: "info",
       message:
         "is hook-only. This remains a supported compatibility path, but it has not migrated to explicit capability registration yet.",
+    });
+  }
+  const usesMemoryEmbeddingProviderApi =
+    inspect.plugin.memoryEmbeddingProviderIds.length > 0 ||
+    (inspect.plugin.contracts?.memoryEmbeddingProviders?.length ?? 0) > 0 ||
+    inspect.hasRuntimeMemoryEmbeddingProviderRegistration;
+  if (usesMemoryEmbeddingProviderApi && inspect.plugin.origin !== "bundled") {
+    warnings.push({
+      pluginId: inspect.plugin.id,
+      code: "deprecated-memory-embedding-provider-api",
+      compatCode: "deprecated-memory-embedding-provider-api",
+      severity: "warn",
+      message:
+        "uses deprecated memory-specific embedding provider API; use api.registerEmbeddingProvider and contracts.embeddingProviders for new embedding providers.",
     });
   }
   return warnings;
@@ -292,22 +305,14 @@ function buildPluginReport(
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
   // report the same loaded/disabled status the gateway uses at runtime.  Without
-  // this, bundled provider plugins are incorrectly shown as "disabled" when
-  // `plugins.allow` is set because the allowlist check runs before the
-  // bundled-default-enable check.  Scoped to bundled providers only (not all
-  // bundled plugins) to match the runtime compat surface in providers.runtime.ts.
   const bundledProviderIds = resolveBundledProviderCompatPluginIds({
     config,
     workspaceDir,
     env: params?.env,
     manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
-  const effectiveConfig = withBundledPluginAllowlistCompat({
-    config,
-    pluginIds: bundledProviderIds,
-  });
   const runtimeCompatConfig = withBundledPluginEnablementCompat({
-    config: effectiveConfig,
+    config,
     pluginIds: bundledProviderIds,
   });
   const onlyPluginIds =
@@ -495,10 +500,14 @@ export function buildPluginInspectReport(params: {
   }
 
   const usesLegacyBeforeAgentStart = shapeSummary.usesLegacyBeforeAgentStart;
+  const hasRuntimeMemoryEmbeddingProviderRegistration = report.memoryEmbeddingProviders.some(
+    (entry) => entry.pluginId === plugin.id,
+  );
   const compatibility = buildCompatibilityNoticesForInspect({
     plugin,
     shape,
     usesLegacyBeforeAgentStart,
+    hasRuntimeMemoryEmbeddingProviderRegistration,
   });
   return {
     workspaceDir: report.workspaceDir,

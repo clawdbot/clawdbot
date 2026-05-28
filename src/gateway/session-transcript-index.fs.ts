@@ -37,6 +37,10 @@ type CacheEntry = {
   index: SessionTranscriptIndex;
 };
 
+type ReadSessionTranscriptIndexOptions = {
+  cache?: "reuse" | "skip";
+};
+
 const transcriptIndexCache = new Map<string, CacheEntry>();
 const transcriptIndexBuilds = new Map<
   string,
@@ -228,6 +232,7 @@ async function buildSessionTranscriptIndex(
 
 export async function readSessionTranscriptIndex(
   filePath: string,
+  opts: ReadSessionTranscriptIndexOptions = {},
 ): Promise<SessionTranscriptIndex | null> {
   let stat: fs.Stats;
   try {
@@ -239,6 +244,9 @@ export async function readSessionTranscriptIndex(
   if (!stat.isFile()) {
     transcriptIndexCache.delete(filePath);
     return null;
+  }
+  if (opts.cache === "skip") {
+    return await buildSessionTranscriptIndex(filePath, stat);
   }
   const cached = transcriptIndexCache.get(filePath);
   if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {

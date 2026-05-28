@@ -16,7 +16,6 @@ type TestPluginWebSearchConfig = {
 };
 
 type WebSearchProviderResolverParams = {
-  bundledAllowlistCompat?: boolean;
   config?: OpenClawConfig;
   onlyPluginIds?: readonly string[];
   origin?: string;

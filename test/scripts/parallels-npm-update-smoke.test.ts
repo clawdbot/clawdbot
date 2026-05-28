@@ -36,6 +36,16 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("freshTargetStatus");
   });
 
+  it("guards beta validation against cross-version harness checkouts", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("assertPublishedTargetMatchesHarnessCheckout");
+    expect(script).toContain("readHarnessCheckoutVersion");
+    expect(script).toContain("openClawVersionFamily");
+    expect(script).toContain("OPENCLAW_PARALLELS_ALLOW_HARNESS_TARGET_MISMATCH");
+    expect(script).toContain("checkout the matching release branch");
+  });
+
   it("lets callers override the Parallels host IP", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 
@@ -88,14 +98,16 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("Remove-FuturePluginEntries\nStop-OpenClawGatewayProcesses");
     expect(script).toContain("scrub_future_plugin_entries\nstop_openclaw_gateway_processes");
     expect(script).toContain("Invoke-WithScopedEnv @{ OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'");
-    expect(macosScript).toContain("OPENCLAW_BIN=\"$(resolve_required_command openclaw)\"");
+    expect(macosScript).toContain('OPENCLAW_BIN="$(resolve_required_command openclaw)"');
     expect(macosScript).toContain("/usr/local/bin:/usr/local/sbin");
     expect(macosScript).toContain(
       'OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" update --tag',
     );
     expect(macosScript).not.toContain("/opt/homebrew/bin/openclaw");
     expect(script).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag");
-    expect(macosScript).toContain('OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop');
+    expect(macosScript).toContain(
+      'OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 "$OPENCLAW_BIN" gateway stop',
+    );
     expect(script).toContain(
       "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 OPENCLAW_ALLOW_ROOT=1 openclaw gateway stop",
     );

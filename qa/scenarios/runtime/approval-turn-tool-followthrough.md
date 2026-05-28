@@ -20,7 +20,7 @@ docsRefs:
 codeRefs:
   - extensions/qa-lab/src/suite.ts
   - extensions/qa-lab/src/mock-openai-server.ts
-  - src/agents/pi-embedded-runner/run/incomplete-turn.ts
+  - src/agents/embedded-agent-runner/run/incomplete-turn.ts
 execution:
   kind: flow
   summary: Verify a short approval like "ok do it" triggers immediate tool use instead of fake-progress narration.

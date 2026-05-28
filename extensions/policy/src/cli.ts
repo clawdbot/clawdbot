@@ -309,8 +309,19 @@ function policyWatchStatus(report: PolicyCheckReport): "clean" | "findings" | "s
 }
 
 function normalizeWatchIntervalMs(value: string | number | undefined): number {
-  const raw = typeof value === "number" ? value : Number.parseInt(value ?? "", 10);
-  return Number.isFinite(raw) && raw >= 250 ? raw : 2000;
+  if (value === undefined) {
+    return 2000;
+  }
+  const raw =
+    typeof value === "number"
+      ? value
+      : /^\+?\d+$/.test(value.trim())
+        ? Number(value.trim())
+        : Number.NaN;
+  if (!Number.isSafeInteger(raw) || raw < 250) {
+    throw new Error("--interval-ms must be an integer >= 250.");
+  }
+  return raw;
 }
 
 function toJsonFinding(finding: HealthFinding): Record<string, unknown> {

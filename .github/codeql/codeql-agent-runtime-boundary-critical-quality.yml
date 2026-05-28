@@ -17,7 +17,8 @@ paths:
   - src/acp/control-plane
   - src/agents/command
   - src/agents/cli-runner
-  - src/agents/pi-embedded-runner
+  - src/agents/embedded-agent-runner
+  - src/agents/sessions
   - src/agents/tools
   - src/agents/*completion*.ts
   - src/agents/*transport*.ts

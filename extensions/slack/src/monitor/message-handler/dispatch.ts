@@ -591,6 +591,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedReplyThreadTs: string | undefined;
   let usedBlockReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
+  let observedFinalReplyDelivery = false;
   const deliveryTracker = createSlackEventDeliveryTracker();
   const resolveDeliveryThreadTs = (params: {
     kind: ReplyDispatchKind;
@@ -693,6 +694,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
     });
     observedReplyDelivery = true;
+    if (params.kind === "final") {
+      observedFinalReplyDelivery = true;
+    }
     const deliveredThreadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: replyDeliveryMode,
       payloadReplyToId: params.payload.replyToId,
@@ -720,6 +724,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       return false;
     }
     replyPlan.markSent();
+    if (params.kind === "final") {
+      observedFinalReplyDelivery = true;
+    }
     deliveryTracker.markDelivered({
       kind: params.kind,
       payload: params.payload,
@@ -798,6 +805,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         // the SDK reports a real Slack response.
         if (streamSession.delivered) {
           observedReplyDelivery = true;
+          if (params.kind === "final") {
+            observedFinalReplyDelivery = true;
+          }
         }
         rememberDeliveredThreadTs(params.kind, streamThreadTs);
         replyPlan.markSent();
@@ -829,6 +839,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       // optimistic "done" status until Slack acknowledges a flush.
       if (streamSession.delivered) {
         observedReplyDelivery = true;
+        if (params.kind === "final") {
+          observedFinalReplyDelivery = true;
+        }
       }
       deliveryTracker.markDelivered({
         kind: params.kind,
@@ -915,6 +928,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ttsSupplement?.visibleTextAlreadyDelivered !== true &&
       Boolean(draftStream) &&
       !draftPreviewCommitted &&
+      !observedFinalReplyDelivery &&
       previewStreamingEnabled &&
       !payload.text?.trim();
 
@@ -923,6 +937,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       ttsSupplement &&
       draftStream &&
       !draftPreviewCommitted &&
+      !observedFinalReplyDelivery &&
       previewStreamingEnabled &&
       !payload.isError &&
       trimmedFinalText.length > 0
@@ -970,6 +985,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           return;
         }
         draftPreviewCommitted = true;
+        observedFinalReplyDelivery = true;
         observedReplyDelivery = true;
         replyPlan.markSent();
         await deliverNormally({
@@ -987,7 +1003,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       payload,
       adapter: defineFinalizableLivePreviewAdapter({
         draft:
-          draftStream && !draftPreviewCommitted
+          draftStream && !draftPreviewCommitted && !observedFinalReplyDelivery
             ? {
                 flush: draftStream.flush,
                 clear: draftStream.clear,
@@ -1030,11 +1046,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             threadTs: edit.threadTs,
           });
           draftPreviewCommitted = true;
+          observedFinalReplyDelivery = true;
         },
         onPreviewFinalized: (_preview) => {
           // The preview edit promotes the draft message into the final answer.
           // Later same-turn payloads must not let fallback cleanup clear it.
           draftPreviewCommitted = true;
+          observedFinalReplyDelivery = true;
           const finalThreadTs = usedReplyThreadTs ?? statusThreadTs;
           observedReplyDelivery = true;
           replyPlan.markSent();

@@ -50,6 +50,32 @@ function createManifestPlugin(id: string): PluginManifestRecord {
   };
 }
 
+function createManifestPluginWithModelCatalog(id: string): PluginManifestRecord {
+  return {
+    ...createManifestPluginWithoutDiscovery({ id }),
+    modelCatalog: {
+      providers: {
+        [id]: {
+          baseUrl: "https://catalog.example.test/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "catalog-model",
+              name: "Catalog Model",
+              reasoning: true,
+              input: ["text"],
+              contextWindow: 128000,
+              maxTokens: 4096,
+              cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
+            },
+          ],
+        },
+      },
+      discovery: { [id]: "static" },
+    },
+  };
+}
+
 function createManifestPluginWithoutDiscovery(params: {
   id: string;
   providerAuthEnvVars?: Record<string, string[]>;
@@ -83,12 +109,10 @@ function createProvider(params: { id: string; mode: "static" | "catalog" }): Pro
 }
 
 function requireResolvePluginProvidersParams(index = 0): {
-  bundledProviderAllowlistCompat?: boolean;
   onlyPluginIds?: string[];
 } {
   const params = (mocks.resolvePluginProviders.mock.calls[index] as [unknown] | undefined)?.[0] as
     | {
-        bundledProviderAllowlistCompat?: boolean;
         onlyPluginIds?: string[];
       }
     | undefined;
@@ -133,24 +157,20 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     );
   });
 
-  it("falls back to full provider plugins when discovery entries only expose static catalogs", () => {
-    const fullProvider = createProvider({ id: "deepseek", mode: "catalog" });
-    mocks.loadSource.mockReturnValue(createProvider({ id: "deepseek", mode: "static" }));
-    mocks.resolvePluginProviders.mockReturnValue([fullProvider]);
+  it("uses static provider catalog entries without loading the full plugin", () => {
+    const staticProvider = createProvider({ id: "deepseek", mode: "static" });
+    mocks.loadSource.mockReturnValue(staticProvider);
 
-    expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([fullProvider]);
-    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
-    const params = requireResolvePluginProvidersParams();
-    expect(params.bundledProviderAllowlistCompat).toBe(true);
-    expect(params.onlyPluginIds).toEqual(["deepseek"]);
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([
+      { ...staticProvider, pluginId: "deepseek" },
+    ]);
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
     const codexEntryProvider = createProvider({ id: "codex", mode: "catalog" });
-    const fullProviders = [
-      createProvider({ id: "deepseek", mode: "catalog" }),
-      createProvider({ id: "kilocode", mode: "catalog" }),
-    ];
+    const deepseekEntryProvider = createProvider({ id: "deepseek", mode: "static" });
+    const fullProviders = [createProvider({ id: "kilocode", mode: "catalog" })];
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue([
       "codex",
       "deepseek",
@@ -176,9 +196,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       },
     });
     mocks.loadSource.mockImplementation((modulePath: string) =>
-      modulePath.includes("/codex/")
-        ? codexEntryProvider
-        : createProvider({ id: "deepseek", mode: "static" }),
+      modulePath.includes("/codex/") ? codexEntryProvider : deepseekEntryProvider,
     );
     mocks.resolvePluginProviders.mockReturnValue(fullProviders);
 
@@ -186,10 +204,14 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       resolvePluginDiscoveryProvidersRuntime({
         env: { KILOCODE_API_KEY: "sk-test" } as NodeJS.ProcessEnv,
       }),
-    ).toEqual([{ ...codexEntryProvider, pluginId: "codex" }, ...fullProviders]);
+    ).toEqual([
+      { ...codexEntryProvider, pluginId: "codex" },
+      { ...deepseekEntryProvider, pluginId: "deepseek" },
+      ...fullProviders,
+    ]);
     expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
-    expect(params.onlyPluginIds).toEqual(["deepseek", "kilocode"]);
+    expect(params.onlyPluginIds).toEqual(["kilocode"]);
   });
 
   it("falls back to full provider plugins when setup provider env vars are configured", () => {
@@ -286,6 +308,175 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(providers[0]?.pluginId).toBe("deepseek");
     expect(providers[0]?.staticCatalog).toBe(staticProvider.staticCatalog);
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("returns manifest model catalogs as static discovery entries", async () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["openai"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("openai")],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai"]);
+    expect(providers[0]?.pluginId).toBe("openai");
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+    await expect(
+      providers[0]?.staticCatalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toEqual({
+      providers: {
+        openai: {
+          baseUrl: "https://catalog.example.test/v1",
+          api: "openai-responses",
+          models: [
+            expect.objectContaining({
+              id: "catalog-model",
+              name: "Catalog Model",
+              reasoning: true,
+            }),
+          ],
+        },
+      },
+    });
+  });
+
+  it("defaults missing manifest model costs for static discovery entries", async () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["anthropic"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          {
+            ...createManifestPluginWithModelCatalog("anthropic"),
+            modelCatalog: {
+              providers: {
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "claude-sonnet-4-6",
+                      name: "Claude Sonnet 4.6",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 200000,
+                      maxTokens: 64000,
+                    },
+                  ],
+                },
+              },
+              discovery: { anthropic: "static" },
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    await expect(
+      providers[0]?.staticCatalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      }),
+    ).resolves.toEqual({
+      providers: {
+        anthropic: expect.objectContaining({
+          models: [
+            expect.objectContaining({
+              id: "claude-sonnet-4-6",
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            }),
+          ],
+        }),
+      },
+    });
+  });
+
+  it("ignores manifest model catalogs that cannot form valid models.json providers", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["anthropic"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          {
+            ...createManifestPluginWithModelCatalog("anthropic"),
+            modelCatalog: {
+              providers: {
+                "claude-cli": {
+                  models: [
+                    {
+                      id: "claude-sonnet-4-6",
+                      name: "Claude Sonnet 4.6",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 200000,
+                      maxTokens: 64000,
+                    },
+                  ],
+                },
+                anthropic: {
+                  baseUrl: "https://api.anthropic.com",
+                  api: "anthropic-messages",
+                  models: [
+                    {
+                      id: "claude-sonnet-4-6",
+                      name: "Claude Sonnet 4.6",
+                      reasoning: true,
+                      input: ["text"],
+                      contextWindow: 200000,
+                      maxTokens: 64000,
+                    },
+                  ],
+                },
+              },
+              discovery: { "claude-cli": "static", anthropic: "static" },
+            },
+          },
+        ],
+        diagnostics: [],
+      },
+    });
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["anthropic"]);
+  });
+
+  it("keeps manifest catalogs and loads only scoped plugins that have no entry", () => {
+    const dynamicProvider = createProvider({ id: "minimax", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["minimax", "openai"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          createManifestPluginWithoutDiscovery({ id: "minimax" }),
+          createManifestPluginWithModelCatalog("openai"),
+        ],
+        diagnostics: [],
+      },
+    });
+    mocks.resolvePluginProviders.mockReturnValue([dynamicProvider]);
+
+    const providers = resolvePluginDiscoveryProvidersRuntime({
+      onlyPluginIds: ["minimax", "openai"],
+    });
+
+    expect(providers.map((provider) => provider.id)).toEqual(["openai", "minimax"]);
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["minimax"]);
   });
 
   it("does not fall back to full plugin loading when discovery entries are requested only", () => {

@@ -480,6 +480,11 @@ describe("argv helpers", () => {
       argv: ["node", "openclaw", "status", "--timeout", "nope"],
       expected: undefined,
     },
+    {
+      name: "partial integer",
+      argv: ["node", "openclaw", "status", "--timeout", "5s"],
+      expected: undefined,
+    },
   ])("parses positive integer flag values: $name", ({ argv, expected }) => {
     expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);
   });

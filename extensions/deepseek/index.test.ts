@@ -1,5 +1,5 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,

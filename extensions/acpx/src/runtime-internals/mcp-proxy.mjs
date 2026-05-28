@@ -4,8 +4,14 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
-import { formatErrorMessage } from "./error-format.mjs";
 import { splitCommandLine } from "./mcp-command-line.mjs";
+
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message || error.name || "Error";
+  }
+  return String(error);
+}
 
 function decodePayload(argv) {
   const payloadIndex = argv.indexOf("--payload");

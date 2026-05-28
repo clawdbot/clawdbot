@@ -1,6 +1,5 @@
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../agents/model-auth-markers.js";
@@ -157,33 +156,12 @@ const providerRuntimeMocks = vi.hoisted(() => ({
         providerIds?: string[];
         envDirect?: Array<string | undefined>;
       }) => params.context.resolveApiKeyFromConfigAndStore(options);
-      const resolveLegacyZaiToken = (): string | null => {
-        const home = params.context.env?.HOME ?? params.context.env?.USERPROFILE;
-        if (!home) {
-          return null;
-        }
-        try {
-          const parsed = JSON.parse(
-            nodeFs.readFileSync(path.join(home, ".pi", "agent", "auth.json"), "utf8"),
-          ) as {
-            "z-ai"?: { access?: string };
-          };
-          return parsed["z-ai"]?.access ?? null;
-        } catch {
-          return null;
-        }
-      };
-
       if (params.provider === "zai") {
         const token = resolveToken({
           providerIds: ["zai", "z-ai"],
           envDirect: [params.context.env?.ZAI_API_KEY, params.context.env?.Z_AI_API_KEY],
         });
-        return token
-          ? { token }
-          : resolveLegacyZaiToken()
-            ? { token: resolveLegacyZaiToken()! }
-            : null;
+        return token ? { token } : null;
       }
 
       if (params.provider === "minimax") {
@@ -375,12 +353,6 @@ describe("resolveProviderAuths key normalization", () => {
     );
   }
 
-  async function writeLegacyPiAuth(home: string, raw: string) {
-    const legacyDir = path.join(home, ".pi", "agent");
-    await fs.mkdir(legacyDir, { recursive: true });
-    await fs.writeFile(path.join(legacyDir, "auth.json"), raw, "utf8");
-  }
-
   function createTestModelDefinition(): ModelDefinitionConfig {
     return {
       id: "test-model",
@@ -521,21 +493,6 @@ describe("resolveProviderAuths key normalization", () => {
     expect(auths).toEqual([{ provider: "anthropic", token: "token-1", accountId: "acc-1" }]);
   });
 
-  it("falls back to legacy .pi auth file for zai keys even after os.homedir() is primed", async () => {
-    // Prime os.homedir() to simulate long-lived workers that may have touched it before HOME changes.
-    os.homedir();
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai"],
-      setup: async (home) => {
-        await writeLegacyPiAuth(
-          home,
-          `${JSON.stringify({ "z-ai": { access: "legacy-zai-key" } }, null, 2)}\n`,
-        );
-      },
-      expected: [{ provider: "zai", token: "legacy-zai-key" }],
-    });
-  });
-
   it.each([
     {
       name: "extracts google oauth token from JSON payload in token profiles",
@@ -618,16 +575,6 @@ describe("resolveProviderAuths key normalization", () => {
         });
       },
       expected: [{ provider: "zai", token: "profile-zai-key" }],
-    });
-  });
-
-  it("ignores invalid legacy z-ai auth files", async () => {
-    await expectResolvedAuthsFromSuiteHome({
-      providers: ["zai"],
-      setup: async (home) => {
-        await writeLegacyPiAuth(home, "{not-json");
-      },
-      expected: [],
     });
   });
 

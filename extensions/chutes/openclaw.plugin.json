@@ -18,8 +18,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "chutes": ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]
+  "setup": {
+    "providers": [
+      {
+        "id": "chutes",
+        "envVars": ["CHUTES_API_KEY", "CHUTES_OAUTH_TOKEN"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

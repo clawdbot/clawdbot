@@ -31,7 +31,7 @@ function expectZaiModelFields(expected: ExpectedZaiModelFields) {
 }
 
 describe("zai model definitions", () => {
-  it("uses current Pi metadata for the new GLM-5.1 model", () => {
+  it("uses current OpenClaw metadata for the new GLM-5.1 model", () => {
     expectZaiModelFields({
       id: "glm-5.1",
       reasoning: true,
@@ -42,7 +42,7 @@ describe("zai model definitions", () => {
     });
   });
 
-  it("uses current Pi metadata for the new GLM-5V Turbo model", () => {
+  it("uses current OpenClaw metadata for the new GLM-5V Turbo model", () => {
     expectZaiModelFields({
       id: "glm-5v-turbo",
       reasoning: true,
@@ -53,7 +53,7 @@ describe("zai model definitions", () => {
     });
   });
 
-  it("uses current Pi metadata for the GLM-5 model", () => {
+  it("uses current OpenClaw metadata for the GLM-5 model", () => {
     expectZaiModelFields({
       id: "glm-5",
       reasoning: true,
@@ -64,7 +64,7 @@ describe("zai model definitions", () => {
     });
   });
 
-  it("publishes newer GLM 4.5/4.6 family metadata from Pi", () => {
+  it("publishes newer GLM 4.5/4.6 family metadata from OpenClaw", () => {
     expectZaiModelFields({
       id: "glm-4.6v",
       input: ["text", "image"],
@@ -81,7 +81,7 @@ describe("zai model definitions", () => {
     });
   });
 
-  it("keeps the remaining GLM 4.7/5 pricing and token limits aligned with Pi", () => {
+  it("keeps the remaining GLM 4.7/5 pricing and token limits aligned with OpenClaw", () => {
     expectZaiModelFields({
       id: "glm-4.7-flash",
       cost: { input: 0.07, output: 0.4, cacheRead: 0, cacheWrite: 0 },

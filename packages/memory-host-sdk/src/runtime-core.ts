@@ -2,7 +2,7 @@
 
 export type { AnyAgentTool } from "./host/openclaw-runtime-agent.js";
 export { resolveCronStyleNow } from "./host/openclaw-runtime-agent.js";
-export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "./host/openclaw-runtime-agent.js";
+export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "./host/openclaw-runtime-agent.js";
 export { resolveDefaultAgentId, resolveSessionAgentId } from "./host/openclaw-runtime-agent.js";
 export { resolveMemorySearchConfig } from "./host/openclaw-runtime-agent.js";
 export {

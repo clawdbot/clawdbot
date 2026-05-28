@@ -8,12 +8,17 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ConfiguredEntry } from "./list.types.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER, modelKey } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
 
-export function resolveConfiguredEntries(cfg: OpenClawConfig) {
+export function resolveConfiguredEntries(
+  cfg: OpenClawConfig,
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
+) {
   const resolvedDefault = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -28,13 +33,25 @@ export function resolveConfiguredEntries(cfg: OpenClawConfig) {
   const order: string[] = [];
   const tagsByKey = new Map<string, Set<string>>();
   const aliasesByKey = new Map<string, string[]>();
+  const canonicalizeProviderAlias = createModelCatalogProviderAliasCanonicalizer({
+    cfg,
+    metadataSnapshot,
+  });
 
   for (const [key, aliases] of aliasIndex.byKey.entries()) {
     aliasesByKey.set(key, aliases);
   }
 
   const addEntry = (ref: { provider: string; model: string }, tag: string) => {
-    const key = modelKey(ref.provider, ref.model);
+    const canonicalRef = canonicalizeProviderAlias.ref(ref);
+    const key = modelKey(canonicalRef.provider, canonicalRef.model);
+    const originalKey = modelKey(ref.provider, ref.model);
+    if (originalKey !== key) {
+      const aliases = aliasesByKey.get(originalKey);
+      if (aliases) {
+        aliasesByKey.set(key, [...new Set([...(aliasesByKey.get(key) ?? []), ...aliases])]);
+      }
+    }
     if (!tagsByKey.has(key)) {
       tagsByKey.set(key, new Set());
       order.push(key);

@@ -32,7 +32,7 @@ vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
-vi.mock("./pi-model-discovery-runtime.js", () => ({
+vi.mock("./agent-model-discovery.js", () => ({
   discoverAuthStorage: contextTestState.discoverAuthStorage,
   discoverModels: contextTestState.discoverModels,
 }));
@@ -380,7 +380,7 @@ describe("lookupContextTokens", () => {
   it("resolveContextTokensForModel prefers exact provider key over alias-normalized match", async () => {
     // When both "bedrock" and "amazon-bedrock" exist as config keys (alias pattern),
     // resolveConfiguredProviderContextWindow must return the exact-key match first,
-    // not the first normalized hit — mirroring pi-embedded-runner/model.ts behaviour.
+    // not the first normalized hit — mirroring embedded-agent-runner/model.ts behaviour.
     mockDiscoveryDeps([]);
 
     const cfg = {
@@ -481,7 +481,7 @@ describe("lookupContextTokens", () => {
     expect(result).toBe(1_048_576);
   });
 
-  it("resolveContextTokensForModel normalizes explicit provider aliases before config lookup", async () => {
+  it("resolveContextTokensForModel does not match explicit provider id variants before config lookup", async () => {
     mockDiscoveryDeps([]);
 
     const cfg = createContextOverrideConfig("z.ai", "glm-5", 256_000);
@@ -492,6 +492,6 @@ describe("lookupContextTokens", () => {
       provider: "z-ai",
       model: "glm-5",
     });
-    expect(result).toBe(256_000);
+    expect(result).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 ---
 name: coding-agent
-description: "Delegate coding work to Codex, Claude Code, OpenCode, or Pi as background workers; not simple edits or read-only code lookup."
+description: "Delegate coding work to Codex, Claude Code, or OpenCode as background workers; not simple edits or read-only code lookup."
 metadata:
   {
     "openclaw":
@@ -8,7 +8,7 @@ metadata:
         "emoji": "🧩",
         "requires":
           {
-            "anyBins": ["claude", "codex", "opencode", "pi"],
+            "anyBins": ["claude", "codex", "opencode"],
             "config": ["skills.entries.coding-agent.enabled"],
           },
         "install":
@@ -39,7 +39,7 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 ## Hard rules
 
 - Always launch with `background:true`.
-- Codex, Pi, OpenCode: use `pty:true`.
+- Codex and OpenCode: use `pty:true`.
 - Claude Code: no PTY; use `claude --permission-mode bypassPermissions --print`.
 - Capture a real notification route before spawning.
 - Worker must send completion/failure via `openclaw message send`.
@@ -100,12 +100,6 @@ OpenCode:
 
 ```bash
 bash pty:true background:true workdir:/path/repo command:"opencode run < \"$PROMPT\""
-```
-
-Pi:
-
-```bash
-bash pty:true background:true workdir:/path/repo command:"pi -p \"$(cat \"$PROMPT\")\""
 ```
 
 ## Long issue-to-PR work

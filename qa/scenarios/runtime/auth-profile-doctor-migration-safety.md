@@ -10,12 +10,10 @@ coverage:
     - runtime.doctor-repair
   secondary:
     - runtime.codex-plugin.auth
-objective: Reproduce the four manual doctor-migration cells as an automated fixture matrix for Codex OAuth selection and stale Pi runtime pin removal.
+objective: Reproduce the doctor-migration auth cells as an automated fixture matrix for Codex OAuth selection.
 successCriteria:
   - OAuth-only hosts select the openai-codex OAuth profile and use the Codex harness.
   - Mixed-profile hosts still select openai-codex OAuth when an openai API-key profile exists.
-  - Mixed-profile defaults-level pi runtime pins are stripped by doctor repair.
-  - Mixed-profile per-agent pi runtime pins are stripped by doctor repair.
 docsRefs:
   - docs/cli/doctor.md
 codeRefs:
@@ -24,13 +22,11 @@ codeRefs:
   - extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
 execution:
   kind: flow
-  summary: Exercise the four-cell doctor migration matrix against Codex auth and stale Pi runtime pins.
+  summary: Exercise the doctor migration matrix against Codex auth routing.
   config:
     matrixCells:
       - oauth-only
       - mixed-no-pin
-      - mixed-defaults-pi-pin
-      - mixed-main-agent-pi-pin
 ```
 
 ```yaml qa-flow
@@ -54,9 +50,6 @@ steps:
             - set: profileShape
               value:
                 expr: "cell === 'oauth-only' ? 'oauth-only' : 'mixed'"
-            - set: doctorConfig
-              value:
-                expr: "cell === 'mixed-defaults-pi-pin' ? { agents: { defaults: { agentRuntime: { id: 'pi' } } } } : cell === 'mixed-main-agent-pi-pin' ? { agents: { list: { main: { agentRuntime: { id: 'pi' } } } } } : {}"
             - try:
                 actions:
                   - call: plugin.seedCodexPluginAt
@@ -69,15 +62,11 @@ steps:
                       - ref: tmpRoot
                   - set: result
                     value:
-                      expr: "plugin.evaluateCodexPluginLifecycle({ plugin: await plugin.snapshotCodexPluginState(tmpRoot), auth: await auth.snapshotAuthProfiles(tmpRoot), hostVersion: plugin.CODEX_PLUGIN_CURRENT_VERSION, config: doctorConfig, doctorFix: true })"
+                      expr: "plugin.evaluateCodexPluginLifecycle({ plugin: await plugin.snapshotCodexPluginState(tmpRoot), auth: await auth.snapshotAuthProfiles(tmpRoot), hostVersion: plugin.CODEX_PLUGIN_CURRENT_VERSION, doctorFix: true })"
                   - assert:
                       expr: "result.status === 'ready' && result.selectedAuthProfileId === auth.QA_CODEX_OAUTH_PROFILE_ID && result.tokenRoute === 'codex-oauth'"
                       message:
                         expr: "`doctor matrix cell ${cell} failed Codex auth routing: ${JSON.stringify(result)}`"
-                  - assert:
-                      expr: "(Object.keys(doctorConfig).length === 0 && result.removedRuntimePins.length === 0) || result.removedRuntimePins.includes('agentRuntime.id=pi')"
-                      message:
-                        expr: "`doctor matrix cell ${cell} did not report stale Pi pin cleanup: ${JSON.stringify(result)}`"
                 finally:
                   - call: fs.rm
                     args:
@@ -85,7 +74,7 @@ steps:
                       - recursive: true
                         force: true
       - assert:
-          expr: "config.matrixCells.length === 4"
-          message: "expected four doctor migration cells"
+          expr: "config.matrixCells.length === 2"
+          message: "expected two doctor migration cells"
     detailsExpr: "`cells=${config.matrixCells.join(',')}`"
 ```

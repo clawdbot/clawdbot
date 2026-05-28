@@ -53,6 +53,7 @@ import {
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestClientIp } from "./net.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
 const ROOT_PREFIX = "/";
 const CONTROL_UI_ASSISTANT_MEDIA_PREFIX = "/__openclaw__/assistant-media";
@@ -323,7 +324,12 @@ async function authorizeControlUiReadRequest(
         retryAfterMs: deviceRateCheck.retryAfterMs,
       };
     } else {
-      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token);
+      const deviceTokenOk = await authorizeControlUiDeviceReadToken(token, {
+        requiredSharedGatewaySessionGeneration: resolveSharedGatewaySessionGeneration(
+          opts.auth,
+          opts.trustedProxies,
+        ),
+      });
       if (deviceTokenOk) {
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
         opts.rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET);
@@ -358,7 +364,10 @@ async function authorizeControlUiReadRequest(
   return true;
 }
 
-async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean> {
+async function authorizeControlUiDeviceReadToken(
+  token: string,
+  opts: { requiredSharedGatewaySessionGeneration?: string },
+): Promise<boolean> {
   const pairing = await listDevicePairing();
   for (const device of pairing.paired) {
     const operatorToken = device.tokens?.[CONTROL_UI_OPERATOR_ROLE];
@@ -373,6 +382,7 @@ async function authorizeControlUiDeviceReadToken(token: string): Promise<boolean
       token,
       role: CONTROL_UI_OPERATOR_ROLE,
       scopes: [CONTROL_UI_OPERATOR_READ_SCOPE],
+      requiredSharedGatewaySessionGeneration: opts.requiredSharedGatewaySessionGeneration,
     });
     if (verified.ok) {
       return true;

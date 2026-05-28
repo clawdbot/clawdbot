@@ -306,12 +306,13 @@ export function resolveSessionAgentId(params: {
 export function resolveAgentExecutionContract(
   cfg: OpenClawConfig | undefined,
   agentId?: string | null,
-): NonNullable<NonNullable<AgentDefaultsConfig["embeddedPi"]>["executionContract"]> | undefined {
-  const defaultContract = cfg?.agents?.defaults?.embeddedPi?.executionContract;
+): NonNullable<NonNullable<AgentDefaultsConfig["embeddedAgent"]>["executionContract"]> | undefined {
+  const defaultContract = cfg?.agents?.defaults?.embeddedAgent?.executionContract;
   if (!cfg || !agentId) {
     return defaultContract;
   }
-  const agentContract = resolveAgentConfig(cfg, agentId)?.embeddedPi?.executionContract;
+  const agentConfig = resolveAgentConfig(cfg, agentId);
+  const agentContract = agentConfig?.embeddedAgent?.executionContract;
   return agentContract ?? defaultContract;
 }
 

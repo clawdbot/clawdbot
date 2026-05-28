@@ -280,16 +280,6 @@ echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
-echo "📦 Copying model catalog"
-MODEL_CATALOG_SRC="$ROOT_DIR/node_modules/@earendil-works/pi-ai/dist/models.generated.js"
-MODEL_CATALOG_DEST="$APP_ROOT/Contents/Resources/models.generated.js"
-if [ -f "$MODEL_CATALOG_SRC" ]; then
-  cp "$MODEL_CATALOG_SRC" "$MODEL_CATALOG_DEST"
-else
-  echo "ERROR: model catalog missing at $MODEL_CATALOG_SRC" >&2
-  exit 1
-fi
-
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"
 CONTROL_UI_DEST="$APP_ROOT/Contents/Resources/control-ui"

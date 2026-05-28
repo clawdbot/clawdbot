@@ -5,8 +5,13 @@
   },
   "enabledByDefault": true,
   "providers": ["arcee"],
-  "providerAuthEnvVars": {
-    "arcee": ["ARCEEAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "arcee",
+        "envVars": ["ARCEEAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

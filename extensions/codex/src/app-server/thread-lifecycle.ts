@@ -1,5 +1,6 @@
 import {
   embeddedAgentLog,
+  formatErrorMessage,
   isActiveHarnessContextEngine,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -7,7 +8,11 @@ import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/c
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
-import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerConnectionClosedError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
@@ -54,6 +59,26 @@ export type CodexAppServerThreadLifecycle = {
 
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
+};
+
+class CodexThreadStartRequestError extends Error {
+  constructor(cause: unknown) {
+    super(formatErrorMessage(cause), { cause });
+    this.name = "CodexThreadStartRequestError";
+  }
+}
+
+export function isCodexThreadStartRequestError(error: unknown): boolean {
+  return error instanceof CodexThreadStartRequestError;
+}
+
+export type CodexThreadFinalConfigPatchDecision =
+  | { action: "resume"; binding: CodexAppServerThreadBinding }
+  | { action: "start" };
+
+export type CodexThreadFinalConfigPatchResult = {
+  configPatch?: JsonObject;
+  nativeHookRelayGeneration?: string;
 };
 
 export type CodexContextEngineThreadBootstrapProjection = {
@@ -202,6 +227,10 @@ export async function startOrResumeThread(params: {
   developerInstructions?: string;
   config?: JsonObject;
   finalConfigPatch?: JsonObject;
+  buildFinalConfigPatch?: (
+    decision: CodexThreadFinalConfigPatchDecision,
+  ) => CodexThreadFinalConfigPatchResult;
+  nativeHookRelayGeneration?: string;
   nativeCodeModeEnabled?: boolean;
   nativeCodeModeOnlyEnabled?: boolean;
   userMcpServersEnabled?: boolean;
@@ -387,10 +416,17 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const finalConfigPatch = params.buildFinalConfigPatch?.({
+          action: "resume",
+          binding,
+        }) ?? {
+          configPatch: params.finalConfigPatch,
+          nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+        };
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
-          params.finalConfigPatch,
+          finalConfigPatch.configPatch,
         );
         const resumeParams = lifecycleTiming.measureSync("thread_resume_params", () =>
           buildThreadResumeParams(params.params, {
@@ -433,6 +469,8 @@ export async function startOrResumeThread(params: {
               dynamicToolsFingerprint,
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
+              nativeHookRelayGeneration:
+                finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
               pluginAppsFingerprint: binding.pluginAppsFingerprint,
               pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
               pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -475,6 +513,8 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration:
+            finalConfigPatch.nativeHookRelayGeneration ?? binding.nativeHookRelayGeneration,
           pluginAppsFingerprint: binding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -500,12 +540,16 @@ export async function startOrResumeThread(params: {
         params.pluginThreadConfig?.build(),
       )))
     : undefined;
+  const finalConfigPatch = params.buildFinalConfigPatch?.({ action: "start" }) ?? {
+    configPatch: params.finalConfigPatch,
+    nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+  };
   const config = lifecycleTiming.measureSync("merge_thread_config", () =>
     mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
       pluginThreadConfig?.configPatch,
-      params.finalConfigPatch,
+      finalConfigPatch.configPatch,
     ),
   );
   const startParams = lifecycleTiming.measureSync("thread_start_params", () =>
@@ -520,11 +564,17 @@ export async function startOrResumeThread(params: {
       environmentSelection: params.environmentSelection,
     }),
   );
-  const response = assertCodexThreadStartResponse(
-    await lifecycleTiming.measure("thread_start_request", () =>
-      params.client.request("thread/start", startParams),
-    ),
-  );
+  const threadStartResponse = await lifecycleTiming.measure("thread_start_request", async () => {
+    try {
+      return await params.client.request("thread/start", startParams);
+    } catch (error) {
+      if (error instanceof CodexAppServerRpcError) {
+        throw new CodexThreadStartRequestError(error);
+      }
+      throw error;
+    }
+  });
+  const response = assertCodexThreadStartResponse(threadStartResponse);
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -548,6 +598,7 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -592,6 +643,7 @@ export async function startOrResumeThread(params: {
     dynamicToolsFingerprint,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
+    nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -1173,7 +1225,7 @@ export function resolveCodexAppServerModelProvider(params: {
 // none/low/medium/high/xhigh effort enum and reject "minimal". The CLI
 // defaults thinkLevel to "minimal", so without translation EVERY agent turn
 // on those models pays a wasted first request + retry-with-low fallback in
-// pi-embedded-runner. Map "minimal" -> "low" upfront for modern models so the
+// embedded-agent-runner. Map "minimal" -> "low" upfront for modern models so the
 // first request is accepted. Older Codex models still accept "minimal"
 // directly. (#71946)
 // Exported for unit-test coverage of the model-aware translation path.

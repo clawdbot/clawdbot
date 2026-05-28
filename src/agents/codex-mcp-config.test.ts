@@ -131,7 +131,7 @@ describe("loadCodexBundleMcpThreadConfig", () => {
     expect(loaded.evaluated).toBe(true);
   });
 
-  it("returns an evaluated empty MCP config when Pi would not create a bundle MCP runtime", () => {
+  it("returns an evaluated empty MCP config when no bundle MCP runtime is needed", () => {
     const cfg = {
       mcp: {
         servers: {

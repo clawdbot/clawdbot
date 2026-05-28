@@ -301,7 +301,7 @@ function installModelsListCommandForwardCompatMocks() {
     loadModelCatalog: mocks.loadModelCatalog,
   }));
 
-  vi.doMock("../../agents/pi-embedded-runner/model.js", () => ({
+  vi.doMock("../../agents/embedded-agent-runner/model.js", () => ({
     resolveModelWithRegistry: mocks.resolveModelWithRegistry,
   }));
 
@@ -1335,8 +1335,8 @@ describe("modelsListCommand forward-compat", () => {
     });
   });
 
-  describe("provider filter canonicalization", () => {
-    it("matches alias-valued discovered providers against canonical provider filters", async () => {
+  describe("provider filter matching", () => {
+    it("matches discovered providers against exact provider filters", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
       mocks.loadModelRegistry.mockResolvedValueOnce({
@@ -1373,7 +1373,7 @@ describe("modelsListCommand forward-compat", () => {
 
       const runtime = createRuntime();
 
-      await modelsListCommand({ all: true, provider: "z-ai", json: true }, runtime as never);
+      await modelsListCommand({ all: true, provider: "z.ai", json: true }, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalled();
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["z.ai/glm-4.5"]);

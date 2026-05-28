@@ -1,5 +1,6 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { VERSION } from "../version.js";
 import {
   composeProviderStreamWrappers as composeProviderStreamWrappersShared,
@@ -340,5 +341,47 @@ describe("buildProviderStreamFamilyHooks", () => {
     expect(OPENAI_RESPONSES_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(OPENROUTER_THINKING_STREAM_HOOKS.wrapStreamFn).toBeTypeOf("function");
     expect(TOOL_STREAM_DEFAULT_ON_HOOKS.wrapStreamFn).toBeTypeOf("function");
+  });
+});
+
+describe("createPlainTextToolCallCompatWrapper", () => {
+  it("streams normal prose that starts with a Harmony channel word", async () => {
+    let pushSourceEvent: ((event: never) => void) | undefined;
+    const baseStreamFn: StreamFn = () => {
+      const stream = createAssistantMessageEventStream();
+      pushSourceEvent = (event) => stream.push(event);
+      return stream;
+    };
+    const wrapped = requireStreamFn(createPlainTextToolCallCompatWrapper(baseStreamFn));
+    const output = wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>;
+    const iterator = output[Symbol.asyncIterator]();
+    const first = iterator.next();
+
+    pushSourceEvent?.({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: "final answer starts here",
+      partial: { role: "assistant", content: "final answer starts here" },
+    } as never);
+
+    const firstResult = await Promise.race([
+      first,
+      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 20)),
+    ]);
+    expect(firstResult).not.toBe("timeout");
+    expect(firstResult).toMatchObject({
+      done: false,
+      value: { type: "text_delta", delta: "final answer starts here" },
+    });
+
+    pushSourceEvent?.({
+      type: "done",
+      message: { role: "assistant", content: "final answer starts here" },
+    } as never);
+    await iterator.next();
   });
 });

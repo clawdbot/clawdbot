@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   BUILD_ALL_PROFILES,
   BUILD_ALL_STEPS,
+  formatBuildAllDuration,
+  formatBuildAllTimingSummary,
   resolveBuildAllStepCacheState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
@@ -255,6 +257,26 @@ describe("resolveBuildAllSteps", () => {
 
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
+  });
+});
+
+describe("build-all timing output", () => {
+  it("formats short and long phase durations compactly", () => {
+    expect(formatBuildAllDuration(42.4)).toBe("42ms");
+    expect(formatBuildAllDuration(1234)).toBe("1.23s");
+    expect(formatBuildAllDuration(12345)).toBe("12.3s");
+  });
+
+  it("summarizes phases slowest first with total time and status", () => {
+    expect(
+      formatBuildAllTimingSummary([
+        { label: "tsdown", status: "ran", durationMs: 99000 },
+        { label: "plugins:assets:copy", status: "cached", durationMs: 12 },
+        { label: "build:plugin-sdk:dts", status: "ran", durationMs: 34567 },
+      ]),
+    ).toBe(
+      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; build:plugin-sdk:dts 34.6s; plugins:assets:copy (cached) 12ms",
+    );
   });
 });
 

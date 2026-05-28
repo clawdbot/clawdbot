@@ -9,7 +9,7 @@ export const WORKSPACE_TEMPLATE_PACK_PATHS = [
   "docs/reference/templates/TOOLS.md",
   "docs/reference/templates/IDENTITY.md",
   "docs/reference/templates/USER.md",
-  "docs/reference/templates/HEARTBEAT.md",
+  "src/agents/templates/HEARTBEAT.md",
   "docs/reference/templates/BOOTSTRAP.md",
 ];
 

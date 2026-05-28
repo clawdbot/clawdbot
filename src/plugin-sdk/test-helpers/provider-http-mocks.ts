@@ -177,11 +177,12 @@ providerHttpMocks.fetchProviderDownloadResponseMock.mockImplementation(
 providerHttpMocks.pollProviderOperationJsonMock.mockImplementation(
   async (params: PollProviderOperationJsonParams) => {
     for (let attempt = 0; attempt < params.maxAttempts; attempt += 1) {
+      const headers = typeof params.headers === "function" ? params.headers() : params.headers;
       const response = await providerHttpMocks.fetchWithTimeoutMock(
         params.url,
         {
           method: "GET",
-          headers: params.headers,
+          headers,
         },
         params.defaultTimeoutMs,
         params.fetchFn,

@@ -113,7 +113,7 @@ describe("context-window-guard", () => {
     });
   });
 
-  it("normalizes provider aliases when reading models config context windows", () => {
+  it("does not read models config context windows across provider id variants", () => {
     const cfg = {
       models: {
         providers: {
@@ -145,8 +145,8 @@ describe("context-window-guard", () => {
     });
 
     expect(info).toEqual({
-      source: "modelsConfig",
-      tokens: 12_000,
+      source: "model",
+      tokens: 64_000,
     });
   });
 

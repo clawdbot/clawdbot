@@ -1,8 +1,8 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { FileEntry, SessionEntry, SessionHeader } from "@earendil-works/pi-coding-agent";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
+import type { AgentMessage } from "../agents/runtime/index.js";
+import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   jsonSupportBundleFile,

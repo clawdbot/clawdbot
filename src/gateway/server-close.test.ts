@@ -44,16 +44,16 @@ vi.mock("../agents/harness/registry.js", () => ({
   disposeRegisteredAgentHarnesses: mocks.disposeAgentHarnesses,
 }));
 
-vi.mock("../agents/pi-bundle-mcp-tools.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-mcp-tools.js")>(
-    "../agents/pi-bundle-mcp-tools.js",
+vi.mock("../agents/agent-bundle-mcp-tools.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-mcp-tools.js")>(
+    "../agents/agent-bundle-mcp-tools.js",
   )),
   disposeAllSessionMcpRuntimes: mocks.disposeAllSessionMcpRuntimes,
 }));
 
-vi.mock("../agents/pi-bundle-lsp-runtime.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/pi-bundle-lsp-runtime.js")>(
-    "../agents/pi-bundle-lsp-runtime.js",
+vi.mock("../agents/agent-bundle-lsp-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/agent-bundle-lsp-runtime.js")>(
+    "../agents/agent-bundle-lsp-runtime.js",
   )),
   disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
 }));

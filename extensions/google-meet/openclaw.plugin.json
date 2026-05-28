@@ -1,7 +1,7 @@
 {
   "id": "google-meet",
   "name": "Google Meet",
-  "description": "Join Google Meet calls through Chrome or Twilio transports.",
+  "description": "OpenClaw Google Meet participant plugin for joining calls through Chrome or Twilio transports.",
   "enabledByDefault": false,
   "commandAliases": [{ "name": "googlemeet" }],
   "activation": {

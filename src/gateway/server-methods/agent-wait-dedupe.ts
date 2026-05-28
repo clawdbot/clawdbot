@@ -19,6 +19,7 @@ export type AgentWaitTerminalSnapshot = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
 };

@@ -1,5 +1,5 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { abortAndDrainEmbeddedPiRun } from "../agents/pi-embedded.js";
+import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -387,7 +387,7 @@ export function buildGatewayCronService(params: {
       if (!execution?.sessionId) {
         return;
       }
-      const result = await abortAndDrainEmbeddedPiRun({
+      const result = await abortAndDrainEmbeddedAgentRun({
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         settleMs: 15_000,

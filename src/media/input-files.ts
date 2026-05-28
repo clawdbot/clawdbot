@@ -192,6 +192,7 @@ export async function fetchWithGuard(params: {
 
   try {
     if (!response.ok) {
+      await discardIgnoredResponseBody(response);
       throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
     }
 
@@ -199,6 +200,7 @@ export async function fetchWithGuard(params: {
     if (contentLength) {
       const size = Number(contentLength);
       if (Number.isFinite(size) && size > params.maxBytes) {
+        await discardIgnoredResponseBody(response);
         throw new Error(`Content too large: ${size} bytes (limit: ${params.maxBytes} bytes)`);
       }
     }
@@ -212,6 +214,10 @@ export async function fetchWithGuard(params: {
   } finally {
     await release();
   }
+}
+
+async function discardIgnoredResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
 }
 
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {

@@ -743,6 +743,80 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("accepts bootstrap generation mismatches during a bounded grace window", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-bootstrap-stale-generation",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      generationMismatchGraceMs: 60_000,
+    });
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: "stale-generation-from-resumed-thread",
+        event: "pre_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(getOnlyNativeHookRelayInvocation()).toMatchObject({
+      relayId: relay.relayId,
+      runId: "run-1",
+      event: "pre_tool_use",
+    });
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: "different-stale-generation",
+        event: "pre_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+  });
+
+  it("rejects bootstrap generation mismatches after the grace window", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-expired-bootstrap-stale-generation",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      generationMismatchGraceMs: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId: relay.relayId,
+        generation: "stale-generation-from-resumed-thread",
+        event: "pre_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_input: { command: "pnpm test" },
+        },
+      }),
+    ).rejects.toThrow("native hook relay bridge stale registration");
+    expect(testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
+  });
+
   it("renews relay ttl without rotating the direct hook bridge", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",

@@ -3,7 +3,7 @@ import { resolveCommitHash } from "../../infra/git-commit.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { isRich, theme } from "../../terminal/theme.js";
 import { escapeRegExp } from "../../utils.js";
-import { hasFlag, hasRootVersionAlias } from "../argv.js";
+import { isRootVersionInvocation } from "../argv.js";
 import { formatCliBannerLine, hasEmittedCliBanner } from "../banner.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { CLI_LOG_LEVEL_VALUES, parseCliLogLevelOption } from "../log-level-option.js";
@@ -117,11 +117,7 @@ export function configureProgramHelp(
     outputError: (str, write) => write(formatCliParseErrorOutput(str, { argv: process.argv })),
   });
 
-  if (
-    hasFlag(process.argv, "-V") ||
-    hasFlag(process.argv, "--version") ||
-    hasRootVersionAlias(process.argv)
-  ) {
+  if (isRootVersionInvocation(process.argv)) {
     const commit = resolveCommitHash({ moduleUrl: import.meta.url });
     console.log(
       commit ? `OpenClaw ${ctx.programVersion} (${commit})` : `OpenClaw ${ctx.programVersion}`,

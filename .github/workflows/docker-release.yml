@@ -162,6 +162,50 @@ jobs:
           provenance: mode=max
           push: true
 
+      - name: Smoke test amd64 runtime workspace templates
+        shell: bash
+        env:
+          IMAGE_REFS: ${{ steps.tags.outputs.value }}
+        run: |
+          set -euo pipefail
+          mapfile -t image_refs <<< "${IMAGE_REFS}"
+          image_ref="${image_refs[0]}"
+          if [[ -z "${image_ref}" ]]; then
+            echo "::error::No amd64 image ref resolved for runtime template smoke"
+            exit 1
+          fi
+          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
+            set -eu
+            test -f /app/src/agents/templates/HEARTBEAT.md
+            temp_root="$(mktemp -d)"
+            trap "rm -rf \"${temp_root}\"" EXIT
+            mkdir -p "${temp_root}/home" "${temp_root}/cwd"
+            cd "${temp_root}/cwd"
+            set +e
+            HOME="${temp_root}/home" \
+            USERPROFILE="${temp_root}/home" \
+            OPENCLAW_HOME="${temp_root}/home" \
+            OPENCLAW_NO_ONBOARD=1 \
+            OPENCLAW_SUPPRESS_NOTES=1 \
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \
+            OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK=1 \
+            AWS_EC2_METADATA_DISABLED=true \
+            AWS_SHARED_CREDENTIALS_FILE="${temp_root}/home/.aws/credentials" \
+            AWS_CONFIG_FILE="${temp_root}/home/.aws/config" \
+              node /app/openclaw.mjs agent --message "workspace bootstrap smoke" --session-id "workspace-bootstrap-smoke" --local --timeout 1 --json \
+              >"${temp_root}/out.log" 2>&1
+            status="$?"
+            set -e
+            if grep -F "Missing workspace template:" "${temp_root}/out.log"; then
+              cat "${temp_root}/out.log"
+              exit 1
+            fi
+            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
+            if [ "${status}" -ne 0 ]; then
+              cat "${temp_root}/out.log"
+            fi
+          '
+
   # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
     needs: [approve_manual_backfill]
@@ -259,6 +303,50 @@ jobs:
           sbom: true
           provenance: mode=max
           push: true
+
+      - name: Smoke test arm64 runtime workspace templates
+        shell: bash
+        env:
+          IMAGE_REFS: ${{ steps.tags.outputs.value }}
+        run: |
+          set -euo pipefail
+          mapfile -t image_refs <<< "${IMAGE_REFS}"
+          image_ref="${image_refs[0]}"
+          if [[ -z "${image_ref}" ]]; then
+            echo "::error::No arm64 image ref resolved for runtime template smoke"
+            exit 1
+          fi
+          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
+            set -eu
+            test -f /app/src/agents/templates/HEARTBEAT.md
+            temp_root="$(mktemp -d)"
+            trap "rm -rf \"${temp_root}\"" EXIT
+            mkdir -p "${temp_root}/home" "${temp_root}/cwd"
+            cd "${temp_root}/cwd"
+            set +e
+            HOME="${temp_root}/home" \
+            USERPROFILE="${temp_root}/home" \
+            OPENCLAW_HOME="${temp_root}/home" \
+            OPENCLAW_NO_ONBOARD=1 \
+            OPENCLAW_SUPPRESS_NOTES=1 \
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 \
+            OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK=1 \
+            AWS_EC2_METADATA_DISABLED=true \
+            AWS_SHARED_CREDENTIALS_FILE="${temp_root}/home/.aws/credentials" \
+            AWS_CONFIG_FILE="${temp_root}/home/.aws/config" \
+              node /app/openclaw.mjs agent --message "workspace bootstrap smoke" --session-id "workspace-bootstrap-smoke" --local --timeout 1 --json \
+              >"${temp_root}/out.log" 2>&1
+            status="$?"
+            set -e
+            if grep -F "Missing workspace template:" "${temp_root}/out.log"; then
+              cat "${temp_root}/out.log"
+              exit 1
+            fi
+            test -f "${temp_root}/home/.openclaw/workspace/HEARTBEAT.md"
+            if [ "${status}" -ne 0 ]; then
+              cat "${temp_root}/out.log"
+            fi
+          '
 
   # Create multi-platform manifests
   create-manifest:

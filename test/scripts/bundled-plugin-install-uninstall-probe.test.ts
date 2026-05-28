@@ -5,7 +5,7 @@ import { createServer as createNetServer, type Server as NetServer, type Socket 
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
 const probePath = path.resolve("scripts/e2e/lib/bundled-plugin-install-uninstall/probe.mjs");
@@ -127,6 +127,7 @@ async function closeServer(server: HttpServer | NetServer): Promise<void> {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -148,6 +149,87 @@ describe("bundled plugin install/uninstall probe", () => {
 
     const second = runtimeSmoke.appendBoundedOutput(first, "ghij", 5);
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("keeps runtime log tail reads bounded", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(logPath, `${"old log line\n".repeat(1000)}[gateway] ready\n`, "utf8");
+
+    const fullRead = vi.spyOn(fs, "readFileSync");
+    const tail = runtimeSmoke.readFileTail(logPath, 64);
+
+    expect(tail).toContain("[gateway] ready");
+    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(64);
+    expect(fullRead).not.toHaveBeenCalled();
+  });
+
+  it("remembers runtime ready logs after they fall outside the tail", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    const readyLogSeen = runtimeSmoke.createReadyLogScanner(logPath);
+
+    fs.writeFileSync(logPath, `[gateway] ready\n${"x".repeat(300_000)}`, "utf8");
+
+    expect(readyLogSeen()).toBe(true);
+
+    fs.appendFileSync(logPath, "more log output".repeat(30_000), "utf8");
+
+    expect(readyLogSeen()).toBe(true);
+  });
+
+  it("does not treat shallow HTTP listen logs as runtime readiness", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    const readyLogSeen = runtimeSmoke.createReadyLogScanner(logPath);
+
+    fs.writeFileSync(logPath, "[gateway] http server listening\n", "utf8");
+
+    expect(readyLogSeen()).toBe(false);
+  });
+
+  it("scans only post-ready runtime logs for dependency work", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      `pre-ready npm install is allowed here\n${"x".repeat(300_000)}\n[gateway] ready\nruntime ok\n`,
+      "utf8",
+    );
+
+    const fullRead = vi.spyOn(fs, "readFileSync");
+    const readyOffset = runtimeSmoke.findReadyLogOffset(logPath);
+
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).not.toThrow();
+    expect(fullRead).not.toHaveBeenCalled();
+
+    fs.appendFileSync(logPath, "post-ready pnpm install should fail\n", "utf8");
+
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(
+      /post-ready runtime dependency work/u,
+    );
+  });
+
+  it("keeps post-ready scans anchored when ready logs fall outside the tail", async () => {
+    const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(
+      logPath,
+      `startup\n[gateway] ready\npost-ready yarn install should fail\n${"x".repeat(300_000)}`,
+      "utf8",
+    );
+
+    const readyOffset = runtimeSmoke.findReadyLogOffset(logPath);
+
+    expect(readyOffset).toBe("startup\n".length);
+    expect(() => runtimeSmoke.assertNoPostReadyRuntimeDepsWork(logPath, readyOffset)).toThrow(
+      /post-ready runtime dependency work/u,
+    );
   });
 
   it("bounds runtime smoke child commands and preserves captured output", async () => {

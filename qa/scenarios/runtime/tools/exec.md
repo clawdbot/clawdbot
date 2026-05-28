@@ -8,9 +8,9 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.exec
-objective: Verify command execution behavior is tracked across Pi and Codex while Codex owns exec/process natively.
+objective: Verify command execution behavior is tracked across OpenClaw and Codex while Codex owns exec/process natively.
 successCriteria:
-  - Pi may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
+  - OpenClaw may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
   - Mock provider exec plans are reported as fixture intent, not as actual runtime tool calls.
   - The row stays report-only until the fixture validates native Codex command behavior directly.
 docsRefs:

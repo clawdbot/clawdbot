@@ -34,7 +34,6 @@ import { resolveQQBotAccount } from "../config.js";
 import { getBridgeLogger } from "../logger.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalDecision = NonNullable<Parameters<typeof buildApprovalKeyboard>[1]>[number];
 
 type QQBotPendingEntry = {
   messageId?: string;
@@ -44,19 +43,11 @@ type QQBotPendingEntry = {
 
 type QQBotPendingPayload = {
   text: string;
-  keyboard?: InlineKeyboard;
+  keyboard: InlineKeyboard;
 };
 
 function isExecRequest(request: ApprovalRequest): request is ExecApprovalRequest {
-  return "command" in request.request;
-}
-
-function listDecisionActions(
-  actions: readonly { kind?: string; decision?: ApprovalDecision }[],
-): ApprovalDecision[] {
-  return actions.flatMap((action) =>
-    action.kind === "decision" && action.decision ? [action.decision] : [],
-  );
+  return "expiresAtMs" in request;
 }
 
 function resolveQQTarget(request: ApprovalRequest): { type: ChatScope; id: string } | null {
@@ -140,12 +131,11 @@ const qqbotApprovalRuntimeSpec: ChannelApprovalNativeRuntimeSpec<
   presentation: {
     buildPendingPayload: ({ request, view }) => {
       const req = request as ApprovalRequest;
-      const text = isExecRequest(req)
-        ? buildExecApprovalText(req)
-        : buildPluginApprovalText(req, view.actions);
-      const decisionActions = listDecisionActions(view.actions);
-      const keyboard =
-        decisionActions.length > 0 ? buildApprovalKeyboard(req.id, decisionActions) : undefined;
+      const text = isExecRequest(req) ? buildExecApprovalText(req) : buildPluginApprovalText(req);
+      const keyboard = buildApprovalKeyboard(
+        req.id,
+        view.actions.map((action) => action.decision),
+      );
       getBridgeLogger().debug?.(
         `[qqbot:approval-runtime] buildPendingPayload requestId=${req.id} kind=${
           isExecRequest(req) ? "exec" : "plugin"

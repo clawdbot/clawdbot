@@ -30,6 +30,7 @@ import {
   formatCodexStatus,
   formatList,
   formatModels,
+  formatSkills,
   formatThreads,
   readString,
 } from "./command-formatters.js";
@@ -380,9 +381,8 @@ export async function handleCodexSubcommand(
       return { text: "Usage: /codex skills" };
     }
     return {
-      text: formatList(
+      text: formatSkills(
         await deps.codexControlRequest(options.pluginConfig, CODEX_CONTROL_METHODS.listSkills, {}),
-        "Codex skills",
       ),
     };
   }
@@ -1932,8 +1932,9 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
     }
     if (arg === "--limit") {
       const value = readRequiredOptionValue(args, index);
-      const parsedLimit = value ? Number.parseInt(value, 10) : Number.NaN;
-      if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+      const parsedLimit =
+        value && /^\+?\d+$/.test(value.trim()) ? Number(value.trim()) : Number.NaN;
+      if (!Number.isSafeInteger(parsedLimit) || parsedLimit <= 0) {
         parsed.help = true;
         continue;
       }

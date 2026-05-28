@@ -14,10 +14,7 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import {
-  buildApprovalPresentationFromActionDescriptors,
-  type ExecApprovalActionDescriptor,
-} from "openclaw/plugin-sdk/approval-reply-runtime";
+import { buildApprovalPresentationFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logError } from "openclaw/plugin-sdk/logging-core";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -40,9 +37,6 @@ type SlackPendingDelivery = {
   text: string;
   blocks: SlackBlock[];
 };
-type SlackApprovalAction = PendingApprovalView["actions"][number];
-type SlackCommandApprovalAction = Extract<SlackApprovalAction, { kind: "command" }>;
-type SlackApprovalDecision = "allow-once" | "allow-always" | "deny";
 
 const SLACK_CONTEXT_ELEMENTS_MAX = 10;
 const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
@@ -126,106 +120,6 @@ function buildSlackMetadataContextElements(metadata: readonly { label: string; v
   return elements;
 }
 
-function isSlackApprovalDecision(value: unknown): value is SlackApprovalDecision {
-  return value === "allow-once" || value === "allow-always" || value === "deny";
-}
-
-function isSlackCommandApprovalAction(
-  action: SlackApprovalAction,
-): action is SlackCommandApprovalAction {
-  return action.kind === "command" && action.command.trim().length > 0;
-}
-
-function buildSlackApprovalCommandText(params: {
-  approvalCommandId: string;
-  decision: SlackApprovalDecision;
-}): string {
-  return `/approve ${params.approvalCommandId} ${params.decision}`;
-}
-
-function listSlackDecisionApprovalActions(
-  approvalId: string,
-  actions: readonly SlackApprovalAction[],
-): ExecApprovalActionDescriptor[] {
-  const decisionActions: ExecApprovalActionDescriptor[] = [];
-  for (const action of actions) {
-    const raw = action as {
-      command?: unknown;
-      decision?: unknown;
-      kind?: unknown;
-      label?: unknown;
-      style?: unknown;
-    };
-    const kind = raw.kind === "command" ? "command" : "decision";
-    if (kind !== "decision" || !isSlackApprovalDecision(raw.decision)) {
-      continue;
-    }
-    if (
-      typeof raw.label !== "string" ||
-      typeof raw.command !== "string" ||
-      (raw.style !== "primary" &&
-        raw.style !== "secondary" &&
-        raw.style !== "success" &&
-        raw.style !== "danger")
-    ) {
-      continue;
-    }
-    decisionActions.push({
-      kind: "decision",
-      decision: raw.decision,
-      label: raw.label,
-      command: buildSlackApprovalCommandText({
-        approvalCommandId: approvalId,
-        decision: raw.decision,
-      }),
-      style: raw.style,
-    });
-  }
-  return decisionActions;
-}
-
-function buildSlackDecisionActionBlocks(view: PendingApprovalView): SlackBlock[] {
-  const decisionActions = listSlackDecisionApprovalActions(view.approvalId, view.actions);
-  return (
-    resolveSlackReplyBlocks({
-      text: "",
-      presentation: buildApprovalPresentationFromActionDescriptors(decisionActions),
-    }) ?? []
-  );
-}
-
-function buildSlackCommandActionTextLines(actions: readonly SlackApprovalAction[]): string[] {
-  const commandActions = actions.filter(isSlackCommandApprovalAction);
-  if (commandActions.length === 0) {
-    return [];
-  }
-  return [
-    "",
-    "*Command actions*",
-    ...commandActions.flatMap((action) => [
-      truncateSlackMrkdwn(action.label, 120),
-      buildSlackCodeBlock(action.command.trim()),
-    ]),
-  ];
-}
-
-function buildSlackCommandActionBlocks(actions: readonly SlackApprovalAction[]): SlackBlock[] {
-  const commandActions = actions.filter(isSlackCommandApprovalAction);
-  return commandActions.map((action, index) => {
-    const label = truncateSlackMrkdwn(action.label, 120);
-    const command = truncateSlackMrkdwn(action.command.trim(), 2600);
-    return {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `${index === 0 ? "*Command actions*\n" : ""}${label}\n${buildSlackCodeBlock(
-          command,
-        )}`,
-      },
-    };
-  });
-}
-
 function resolveSlackApprovalDecisionLabel(
   decision: "allow-once" | "allow-always" | "deny",
 ): string {
@@ -257,7 +151,6 @@ function buildSlackExecPendingApprovalText(view: ExecApprovalPendingView): strin
     "*Command*",
     buildSlackCodeBlock(view.commandText),
     ...metadataLines,
-    ...buildSlackCommandActionTextLines(view.actions),
   ];
   return lines.join("\n");
 }
@@ -271,7 +164,6 @@ function buildSlackPluginPendingApprovalText(view: PluginApprovalPendingView): s
     "*Request*",
     view.title,
     ...metadataLines,
-    ...buildSlackCommandActionTextLines(view.actions),
   ];
   return lines.join("\n");
 }
@@ -284,8 +176,11 @@ function buildSlackPendingApprovalText(view: PendingApprovalView): string {
 
 function buildSlackExecPendingApprovalBlocks(view: ExecApprovalPendingView): SlackBlock[] {
   const metadataElements = buildSlackMetadataContextElements(view.metadata);
-  const commandActionBlocks = buildSlackCommandActionBlocks(view.actions);
-  const interactiveBlocks = buildSlackDecisionActionBlocks(view);
+  const interactiveBlocks =
+    resolveSlackReplyBlocks({
+      text: "",
+      presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
+    }) ?? [];
   return [
     {
       type: "section",
@@ -309,15 +204,17 @@ function buildSlackExecPendingApprovalBlocks(view: ExecApprovalPendingView): Sla
           } satisfies SlackBlock,
         ]
       : []),
-    ...commandActionBlocks,
     ...interactiveBlocks,
   ];
 }
 
 function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView): SlackBlock[] {
   const metadataElements = buildSlackMetadataContextElements(buildSlackPluginMetadata(view));
-  const commandActionBlocks = buildSlackCommandActionBlocks(view.actions);
-  const interactiveBlocks = buildSlackDecisionActionBlocks(view);
+  const interactiveBlocks =
+    resolveSlackReplyBlocks({
+      text: "",
+      presentation: buildApprovalPresentationFromActionDescriptors(view.actions),
+    }) ?? [];
   return [
     {
       type: "section",
@@ -344,7 +241,6 @@ function buildSlackPluginPendingApprovalBlocks(view: PluginApprovalPendingView):
           } satisfies SlackBlock,
         ]
       : []),
-    ...commandActionBlocks,
     ...interactiveBlocks,
   ];
 }

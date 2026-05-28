@@ -133,6 +133,34 @@ describe("google web search provider", () => {
     expect(provider.getConfiguredCredentialValue?.(config)).toBe("AIza-plugin-test");
   });
 
+  it("keeps model-provider fallback config runtime-only when Gemini config was injected", () => {
+    const searchConfig = Object.defineProperty({ provider: "gemini" }, "gemini", {
+      value: { apiKey: "AIza-plugin-test" },
+      enumerable: false,
+      configurable: true,
+      writable: true,
+    });
+
+    const merged = testing.withGoogleModelProviderFallbacks(searchConfig, {
+      models: {
+        providers: {
+          google: createGoogleModelProviderConfig({
+            apiKey: "AIza-provider-test",
+            baseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+          }),
+        },
+      },
+    });
+
+    expect(merged?.gemini).toEqual({
+      apiKey: "AIza-plugin-test",
+      providerApiKey: "AIza-provider-test",
+      providerBaseUrl: "https://generativelanguage.googleapis.com/proxy/v1beta/",
+    });
+    expect(Object.keys(merged ?? {})).toEqual(["provider"]);
+    expect(Object.getOwnPropertyDescriptor(merged, "gemini")?.enumerable).toBe(false);
+  });
+
   it("defaults the Gemini web search model and trims explicit overrides", () => {
     expect(testing.resolveGeminiModel()).toBe("gemini-2.5-flash");
     expect(testing.resolveGeminiModel({ model: "  gemini-2.5-pro  " })).toBe("gemini-2.5-pro");

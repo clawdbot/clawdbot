@@ -27,11 +27,11 @@ import {
   buildLimitedBootstrapPromptLines,
 } from "./bootstrap-prompt.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type {
   EmbeddedFullAccessBlockedReason,
   EmbeddedSandboxInfo,
-} from "./pi-embedded-runner/types.js";
+} from "./embedded-agent-runner/types.js";
 import {
   normalizePromptCapabilityIds,
   normalizeStructuredPromptSection,
@@ -706,7 +706,7 @@ export function buildAgentSystemPrompt(params: {
   subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
-  /** Prompt surface controls runtime-specific fallback fragments. Defaults to PI main. */
+  /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
   promptSurface?: AgentPromptSurfaceKind;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
@@ -740,7 +740,7 @@ export function buildAgentSystemPrompt(params: {
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const acpEnabled = params.acpEnabled === true;
-  const promptSurface = params.promptSurface ?? "pi_main";
+  const promptSurface = params.promptSurface ?? "openclaw_main";
   const sandboxedRuntime = params.sandboxInfo?.enabled === true;
   const acpSpawnRuntimeEnabled = acpEnabled && !sandboxedRuntime;
   const coreToolSummaries: Record<string, string> = {

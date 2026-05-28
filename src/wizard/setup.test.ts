@@ -550,7 +550,7 @@ describe("runSetupWizard", () => {
     );
     expectRecordFields(
       replaceParams.writeOptions,
-      { allowConfigSizeDrop: true },
+      { allowConfigSizeDrop: false },
       "config replacement write options",
     );
     expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 0, "workspace setup")).toBe(workspaceDir);
@@ -559,6 +559,89 @@ describe("runSetupWizard", () => {
       getMockCallArg(ensureWorkspaceAndSessions, 0, 2, "workspace setup"),
       { skipBootstrap: true },
       "workspace setup options",
+    );
+  });
+
+  it("allows size-drop writes for pending plugin install record migration", async () => {
+    replaceConfigFile.mockClear();
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        plugins: {
+          installs: {
+            demo: { source: "npm", spec: "@openclaw/demo-plugin" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const workspaceDir = await makeCaseDir("plugin-install-migration-");
+    const select = vi.fn(async ({ options }: WizardSelectParams<unknown>) => {
+      const values = options.map((option) => option.value);
+      if (values.includes("keep")) {
+        return "keep";
+      }
+      if (values.includes("quickstart")) {
+        return "quickstart";
+      }
+      if (values.includes("__skip__")) {
+        return "__skip__";
+      }
+      return values[0];
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipBootstrap: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(replaceConfigFile).toHaveBeenCalledTimes(3);
+    const migrationParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
+      "migration config replacement params",
+    );
+    expect(
+      requireRecord(migrationParams.nextConfig, "migration next config").plugins,
+    ).toBeUndefined();
+    const migrationWriteOptions = expectRecordFields(
+      migrationParams.writeOptions,
+      { allowConfigSizeDrop: true },
+      "migration config replacement write options",
+    );
+    expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
+
+    const replaceParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 2, 0, "config replacement"),
+      "config replacement params",
+    );
+    expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();
+    expectRecordFields(
+      replaceParams.writeOptions,
+      { allowConfigSizeDrop: false },
+      "config replacement write options",
     );
   });
 

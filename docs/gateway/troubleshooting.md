@@ -454,6 +454,58 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
 
+## macOS gateway silently stops responding, then resumes when you touch the dashboard
+
+Use this when channels (Telegram, WhatsApp, etc.) on a macOS host go quiet for minutes to hours at a time, and the gateway appears to come back the moment you open the Control UI, SSH in, or otherwise interact with the host. There is usually no obvious symptom in `openclaw status` because by the time you look the gateway is alive again.
+
+```bash
+ls ~/.openclaw/logs/stability/ | tail -5
+openclaw gateway stability --bundle latest
+pmset -g log | grep -iE "sleep|wake|maintenance" | tail -50
+launchctl print gui/$UID/ai.openclaw.gateway | grep -E "state|last exit|runs"
+```
+
+Look for:
+
+- One or more `*-uncaught_exception.json` bundles in `~/.openclaw/logs/stability/` with `error.code` set to a transient network code such as `ENETDOWN`, `ENETUNREACH`, `EHOSTUNREACH`, or `ECONNREFUSED`.
+- `pmset -g log` lines like `Entering Sleep state due to 'Maintenance Sleep'` or `en0 driver is slow (msg: WillChangeState to 0)` aligned with the crash timestamps. Power Nap / Maintenance Sleep briefly puts the Wi-Fi driver into state 0; any outbound `connect()` that lands in that window can fail with `ENETDOWN` even on a host that otherwise has full network connectivity.
+- `launchctl print` output showing `state = not running` with multiple recent `runs` and an exit code, especially when the gap between crash and the next launch is on the order of an hour rather than seconds. macOS launchd applies an undocumented respawn-protection gate after a crash burst that can stop honoring `KeepAlive=true` until an external trigger such as interactive login, dashboard connection, or `launchctl kickstart` re-arms it.
+
+Common signatures:
+
+- A stability bundle whose `error.code` is `ENETDOWN` or a sibling code, with the call stack pointing into Node `net` `lookupAndConnect` / `Socket.connect`. OpenClaw `2026.5.26` and newer classify these as benign transient network errors so they no longer propagate to the top-level uncaught handler; if you are on an older release, upgrade first.
+- Long quiet periods that end the instant you connect to the Control UI or SSH into the host: the user-visible activity is what re-arms launchd's respawn gate, not anything the dashboard does to the gateway.
+- `runs` count incrementing across the day with no corresponding `received SIG*; shutting down` line in `~/Library/Logs/openclaw/gateway.log`: clean shutdowns log a signal; transient crashes do not.
+
+What to do:
+
+1. **Upgrade the gateway** if you are running a release before `2026.5.26`. After upgrading, future `ENETDOWN` errors are logged as warnings instead of terminating the process.
+2. **Reduce maintenance sleep activity** on Mac mini / desktop hosts that are meant to run as always-on servers:
+
+   ```bash
+   sudo pmset -a sleep 0 disksleep 0 standby 0 powernap 0
+   ```
+
+   This significantly reduces, but does not entirely eliminate, the underlying driver flap. The system can still perform some maintenance sleeps for TCP keepalive and mDNS upkeep regardless of these flags.
+
+3. **Add a liveness watchdog** so a future crash burst that gets parked by launchd is caught quickly:
+
+   ```bash
+   # Example launchd-aware liveness check, suitable for a 5-minute cron or LaunchAgent
+   state=$(launchctl print gui/$UID/ai.openclaw.gateway 2>/dev/null | awk -F'= ' '/state =/ {print $2; exit}')
+   if [ "$state" != "running" ]; then
+     launchctl kickstart -k gui/$UID/ai.openclaw.gateway
+   fi
+   ```
+
+   The point is to externally re-arm the respawn gate; `KeepAlive=true` alone is not sufficient on macOS after a crash burst.
+
+Related:
+
+- [macOS platform notes](/platforms/macos)
+- [Logging](/logging)
+- [Doctor](/gateway/doctor)
+
 ## Gateway exits during high memory use
 
 Use this when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs mention `critical memory pressure bundle written`.

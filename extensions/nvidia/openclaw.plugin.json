@@ -96,8 +96,13 @@
       "nvidia": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "nvidia": ["NVIDIA_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "nvidia",
+        "envVars": ["NVIDIA_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

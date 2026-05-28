@@ -10,12 +10,12 @@ import type { ProviderPlugin } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   clearSessionAuthProfileOverrideMock,
-  compactEmbeddedPiSessionMock,
+  compactEmbeddedAgentSessionMock,
   loadModelCatalogMock,
   resolveCommandSecretRefsViaGatewayMock,
   resolveSessionAuthProfileOverrideMock,
   runDirectiveBehaviorReplyAgent,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
   runDirectiveBehaviorPreparedReply,
   runPreparedReplyMock,
   runReplyAgentMock,
@@ -97,9 +97,9 @@ export function installDirectiveBehaviorE2EHooks() {
     resetSystemEventsForTest();
     resetPluginRuntimeStateForTest();
     setActivePluginRegistry(createDirectiveBehaviorProviderRegistry());
-    compactEmbeddedPiSessionMock.mockReset();
-    compactEmbeddedPiSessionMock.mockResolvedValue({ payloads: [], meta: {} });
-    runEmbeddedPiAgentMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockResolvedValue({ payloads: [], meta: {} });
+    runEmbeddedAgentMock.mockReset();
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue(DEFAULT_TEST_MODEL_CATALOG);
     resolveCommandSecretRefsViaGatewayMock.mockReset();

@@ -1,5 +1,5 @@
 ---
-summary: "Adds agent-callable tools."
+summary: "OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search."
 read_when:
   - You are installing, configuring, or auditing the memory-lancedb plugin
 title: "Memory Lancedb plugin"
@@ -7,7 +7,7 @@ title: "Memory Lancedb plugin"
 
 # Memory Lancedb plugin
 
-Adds agent-callable tools.
+OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.
 
 ## Distribution
 

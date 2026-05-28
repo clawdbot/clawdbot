@@ -644,6 +644,7 @@ function analyzeWindowsShellCommand(params: {
   command: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): ExecCommandAnalysis {
   const effective = stripWindowsShellWrapper(params.command.trim());
   const unsupported = findWindowsUnsupportedToken(effective);
@@ -664,7 +665,12 @@ function analyzeWindowsShellCommand(params: {
       {
         raw: params.command,
         argv,
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+          (params.platform ?? undefined) as NodeJS.Platform | undefined,
+        ),
       },
     ],
   };
@@ -679,6 +685,7 @@ function parseSegmentsFromParts(
   parts: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  platform?: string | null,
 ): ExecCommandSegment[] | null {
   const segments: ExecCommandSegment[] = [];
   for (const raw of parts) {
@@ -689,7 +696,12 @@ function parseSegmentsFromParts(
     segments.push({
       raw,
       argv,
-      resolution: resolveCommandResolutionFromArgv(argv, cwd, env),
+      resolution: resolveCommandResolutionFromArgv(
+        argv,
+        cwd,
+        env,
+        (platform ?? undefined) as NodeJS.Platform | undefined,
+      ),
     });
   }
   return segments;
@@ -1206,7 +1218,12 @@ export function analyzeShellCommand(params: {
       if (!pipelineSplit.ok) {
         return { ok: false, reason: pipelineSplit.reason, segments: [] };
       }
-      const segments = parseSegmentsFromParts(pipelineSplit.segments, params.cwd, params.env);
+      const segments = parseSegmentsFromParts(
+        pipelineSplit.segments,
+        params.cwd,
+        params.env,
+        params.platform,
+      );
       if (!segments) {
         return { ok: false, reason: "unable to parse shell segment", segments: [] };
       }
@@ -1222,7 +1239,7 @@ export function analyzeShellCommand(params: {
   if (!split.ok) {
     return { ok: false, reason: split.reason, segments: [] };
   }
-  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env);
+  const segments = parseSegmentsFromParts(split.segments, params.cwd, params.env, params.platform);
   if (!segments) {
     return { ok: false, reason: "unable to parse shell segment", segments: [] };
   }
@@ -1233,6 +1250,7 @@ export function analyzeArgvCommand(params: {
   argv: string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  platform?: string | null;
 }): ExecCommandAnalysis {
   const argv = params.argv.filter((entry) => entry.trim().length > 0);
   if (argv.length === 0) {
@@ -1245,7 +1263,12 @@ export function analyzeArgvCommand(params: {
         raw: argv.join(" "),
         argv,
         sourceArgv: [...params.argv],
-        resolution: resolveCommandResolutionFromArgv(argv, params.cwd, params.env),
+        resolution: resolveCommandResolutionFromArgv(
+          argv,
+          params.cwd,
+          params.env,
+          (params.platform ?? undefined) as NodeJS.Platform | undefined,
+        ),
       },
     ],
   };

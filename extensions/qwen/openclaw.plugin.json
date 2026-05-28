@@ -70,8 +70,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "qwen": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "qwen",
+        "envVars": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

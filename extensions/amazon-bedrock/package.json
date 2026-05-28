@@ -1,7 +1,7 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.5.26",
-  "description": "OpenClaw Amazon Bedrock provider plugin",
+  "version": "2026.5.28",
+  "description": "OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and guardrail support.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
@@ -11,8 +11,9 @@
     "@aws-sdk/client-bedrock": "3.1053.0",
     "@aws-sdk/client-bedrock-runtime": "3.1053.0",
     "@aws-sdk/credential-provider-node": "3.972.44",
-    "@earendil-works/pi-ai": "0.75.5",
-    "@smithy/shared-ini-file-loader": "4.5.4"
+    "@smithy/node-http-handler": "4.7.3",
+    "@smithy/shared-ini-file-loader": "4.5.4",
+    "@smithy/types": "4.14.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -27,10 +28,10 @@
       "minHostVersion": ">=2026.5.12-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.5.26"
+      "pluginApi": ">=2026.5.28"
     },
     "build": {
-      "openclawVersion": "2026.5.26",
+      "openclawVersion": "2026.5.28",
       "bundledDist": false
     },
     "release": {

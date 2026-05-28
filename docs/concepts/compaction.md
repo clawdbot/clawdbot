@@ -54,7 +54,7 @@ Type `/compact` in any chat to force a compaction. Add instructions to guide the
 /compact Focus on the API design decisions
 ```
 
-When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that Pi cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
+When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that OpenClaw cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
 
 ## Configuration
 

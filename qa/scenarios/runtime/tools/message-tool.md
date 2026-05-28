@@ -16,7 +16,7 @@ successCriteria:
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
-  - src/agents/pi-embedded-messaging.ts
+  - src/agents/embedded-agent-messaging.ts
   - src/agents/tools/sessions-send-tool.ts
   - extensions/qa-lab/src/runtime-tool-fixture.ts
 execution:

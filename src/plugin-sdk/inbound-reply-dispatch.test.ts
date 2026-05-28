@@ -301,7 +301,7 @@ describe("recordInboundSessionAndDispatchReply", () => {
     });
   });
 
-  it("exposes channel-message dispatch names as the canonical helpers for new channel code", () => {
+  it("keeps deprecated channel-message dispatch names as aliases for focused helpers", () => {
     expect(createChannelMessageReplyPipeline).toBe(createChannelReplyPipeline);
     expect(resolveChannelMessageSourceReplyDeliveryMode).toBe(
       resolveChannelSourceReplyDeliveryMode,

@@ -7,6 +7,7 @@ import {
   createTelegramMessageCache,
   resetTelegramMessageCacheBucketsForTest,
   resolveTelegramMessageCachePath,
+  TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   type TelegramMessageCachePersistentStore,
 } from "./message-cache.js";
 
@@ -24,7 +25,7 @@ type PersistedCacheValue = {
 
 let persistentStoreId = 0;
 
-function createMemoryPersistentStore(maxEntries = 1000): {
+function createMemoryPersistentStore(maxEntries = TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES): {
   bucketKey: string;
   entries: Map<string, PersistedCacheValue>;
   store: TelegramMessageCachePersistentStore;

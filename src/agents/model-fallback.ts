@@ -17,10 +17,14 @@ import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
   coerceToFailoverError,
@@ -58,8 +62,6 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection-resolve.js";
-import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
 import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
@@ -396,7 +398,7 @@ async function assertModelFallbackCandidateHarnessAvailable(
   if (isCliProvider(params.provider, params.cfg)) {
     return;
   }
-  const agentRuntimeOverride = normalizeOptionalString(agentHarnessRuntimeOverride);
+  const agentRuntimeOverride = normalizeOptionalAgentRuntimeId(agentHarnessRuntimeOverride);
   const harnessPolicy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.model,
@@ -404,14 +406,20 @@ async function assertModelFallbackCandidateHarnessAvailable(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const agentRuntime = agentRuntimeOverride ?? harnessPolicy.runtime;
-  const agentRuntimeSource = agentRuntimeOverride ? "model" : harnessPolicy.runtimeSource;
+  const agentRuntime =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? agentRuntimeOverride
+      : harnessPolicy.runtime;
+  const agentRuntimeSource =
+    agentRuntimeOverride && !isDefaultAgentRuntimeId(agentRuntimeOverride)
+      ? "model"
+      : harnessPolicy.runtimeSource;
   if (isCliAgentRuntime(agentRuntime, params.cfg)) {
     return;
   }
   if (
     agentRuntime === "auto" ||
-    agentRuntime === "pi" ||
+    agentRuntime === "openclaw" ||
     (agentRuntime === "codex" && agentRuntimeSource === "implicit")
   ) {
     return;
@@ -421,7 +429,12 @@ async function assertModelFallbackCandidateHarnessAvailable(
     model: params.model,
     agentHarnessRuntimeOverride,
   });
-  if (!getRegisteredAgentHarness(agentRuntime)) {
+  if (
+    agentRuntime !== "auto" &&
+    agentRuntime !== "openclaw" &&
+    !(agentRuntime === "codex" && agentRuntimeSource === "implicit") &&
+    !getRegisteredAgentHarness(agentRuntime)
+  ) {
     throw new MissingAgentHarnessError(agentRuntime);
   }
 }
@@ -750,7 +763,6 @@ function resolveFallbackCandidateCacheKey(
       env,
       ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
       activate: false,
-      bundledProviderAllowlistCompat: true,
       bundledProviderVitestCompat: true,
     })
   ) {

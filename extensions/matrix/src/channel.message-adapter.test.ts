@@ -60,6 +60,10 @@ describe("matrix channel message adapter", () => {
     mocks.sendMessageMatrix.mockReset();
   });
 
+  it("declares Matrix markdown rendering support for shared reply payloads", () => {
+    expect(matrixPlugin.meta.markdownCapable).toBe(true);
+  });
+
   beforeEach(() => {
     mocks.sendMessageMatrix.mockReset();
     mocks.sendMessageMatrix.mockResolvedValue({ messageId: "$event-1", roomId: "!room:example" });

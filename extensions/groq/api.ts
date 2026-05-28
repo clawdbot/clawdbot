@@ -48,13 +48,3 @@ export function resolveGroqReasoningCompatPatch(
   }
   return null;
 }
-
-export function contributeGroqResolvedModelCompat(params: {
-  modelId: string;
-  model: { api?: unknown; provider?: unknown };
-}): Partial<ModelCompatConfig> | undefined {
-  if (params.model.api !== "openai-completions" || params.model.provider !== "groq") {
-    return undefined;
-  }
-  return resolveGroqReasoningCompatPatch(params.modelId) ?? undefined;
-}

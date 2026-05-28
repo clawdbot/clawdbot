@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { AnyAgentTool } from "./agent-tools.types.js";
 import { filterLocalModelLeanTools, isLocalModelLeanEnabled } from "./local-model-lean.js";
-import type { AnyAgentTool } from "./pi-tools.types.js";
 
 function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];

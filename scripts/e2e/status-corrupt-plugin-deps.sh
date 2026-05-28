@@ -105,7 +105,6 @@ cat > "$CONFIG_PATH" <<JSON
   "gateway": { "mode": "local" },
   "plugins": {
     "enabled": true,
-    "bundledDiscovery": "allowlist",
     "load": { "paths": ["$PLUGIN_DIR"] },
     "allow": ["e2e-corrupt-chat"]
   },

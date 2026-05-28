@@ -145,8 +145,32 @@ wildcard to the visible model catalog:
 
   <Accordion title="Qwen thinking controls">
     For Qwen models served through vLLM, set
-    `params.qwenThinkingFormat: "chat-template"` on the model entry when the
-    server expects Qwen chat-template kwargs. OpenClaw maps `/think off` to:
+    `compat.thinkingFormat: "qwen-chat-template"` on the configured provider
+    model row when the server expects Qwen chat-template kwargs. Models
+    configured this way expose a binary `/think` profile (`off`, `on`) because
+    Qwen template thinking is an on/off request flag, not an OpenAI-style effort
+    ladder.
+
+    ```json5
+    {
+      models: {
+        providers: {
+          vllm: {
+            models: [
+              {
+                id: "Qwen/Qwen3-8B",
+                name: "Qwen3 8B",
+                reasoning: true,
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+            ],
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw maps `/think off` to:
 
     ```json
     {
@@ -159,8 +183,8 @@ wildcard to the visible model catalog:
 
     Non-`off` thinking levels send `enable_thinking: true`. If your endpoint
     expects DashScope-style top-level flags instead, use
-    `params.qwenThinkingFormat: "top-level"` to send `enable_thinking` at the
-    request root. Snake-case `params.qwen_thinking_format` is also accepted.
+    `compat.thinkingFormat: "qwen"` to send `enable_thinking` at the request
+    root.
 
   </Accordion>
 

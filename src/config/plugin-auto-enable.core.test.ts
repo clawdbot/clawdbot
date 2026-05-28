@@ -620,8 +620,12 @@ describe("applyPluginAutoEnable core", () => {
         agents: {
           defaults: {
             model: "openai/gpt-5.5",
-            agentRuntime: {
-              id: "codex",
+            models: {
+              "openai/gpt-5.5": {
+                agentRuntime: {
+                  id: "codex",
+                },
+              },
             },
           },
         },
@@ -835,7 +839,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
         agents: {
-          list: [{ id: "pi" }],
+          list: [{ id: "openclaw" }],
         },
       },
       env,
@@ -849,7 +853,7 @@ describe("applyPluginAutoEnable core", () => {
         },
       },
       agents: {
-        list: [{ id: "pi" }],
+        list: [{ id: "openclaw" }],
       },
     });
     expect(result.changes).toStrictEqual([]);

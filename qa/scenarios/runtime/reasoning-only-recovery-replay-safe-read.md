@@ -19,7 +19,7 @@ docsRefs:
   - docs/help/testing.md
 codeRefs:
   - extensions/qa-lab/src/mock-openai-server.ts
-  - src/agents/pi-embedded-runner/run/incomplete-turn.ts
+  - src/agents/embedded-agent-runner/run/incomplete-turn.ts
 execution:
   kind: flow
   summary: Verify reasoning-only OpenAI turns recover after a replay-safe read.

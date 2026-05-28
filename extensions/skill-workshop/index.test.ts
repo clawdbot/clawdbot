@@ -725,7 +725,7 @@ describe("skill-workshop", () => {
       path.join(workspaceDir, "skills", "qa-scenario-workflow", "SKILL.md"),
       "---\nname: qa-scenario-workflow\ndescription: QA notes.\n---\n\n## Workflow\n\n- Run smoke tests.\n",
     );
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [
         {
           text: JSON.stringify({
@@ -746,7 +746,7 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -777,7 +777,7 @@ describe("skill-workshop", () => {
     expect(proposal?.change.kind === "append" ? proposal.change.section : undefined).toBe(
       "Workflow",
     );
-    const reviewerRequest = firstMockArg(runEmbeddedPiAgent);
+    const reviewerRequest = firstMockArg(runEmbeddedAgent);
     expect(reviewerRequest.disableTools).toBe(true);
     expect(reviewerRequest.toolsAllow).toEqual([]);
     expect(reviewerRequest.provider).toBe("openai");
@@ -787,7 +787,7 @@ describe("skill-workshop", () => {
   it("uses the configured agent default for reviewer fallback", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: JSON.stringify({ action: "none" }) }],
       meta: {},
     }));
@@ -803,7 +803,7 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -828,7 +828,7 @@ describe("skill-workshop", () => {
       messages: [{ role: "user", content: "Remember this repeatable fix." }],
     });
 
-    const reviewerRequest = firstMockArg(runEmbeddedPiAgent);
+    const reviewerRequest = firstMockArg(runEmbeddedAgent);
     expect(reviewerRequest.provider).toBe("openai-codex");
     expect(reviewerRequest.model).toBe("gpt-5.5");
   });
@@ -836,7 +836,7 @@ describe("skill-workshop", () => {
   it("infers reviewer fallback provider for a bare configured model", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: JSON.stringify({ action: "none" }) }],
       meta: {},
     }));
@@ -870,7 +870,7 @@ describe("skill-workshop", () => {
         agent: {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -895,7 +895,7 @@ describe("skill-workshop", () => {
       messages: [{ role: "user", content: "Remember this bare-model default." }],
     });
 
-    const reviewerRequest = firstMockArg(runEmbeddedPiAgent);
+    const reviewerRequest = firstMockArg(runEmbeddedAgent);
     expect(reviewerRequest.provider).toBe("openai-codex");
     expect(reviewerRequest.model).toBe("gpt-5.5");
   });
@@ -903,7 +903,7 @@ describe("skill-workshop", () => {
   it("runs reviewer after threshold and queues the proposal", async () => {
     const workspaceDir = await makeTempDir();
     const stateDir = await makeTempDir();
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [
         {
           text: JSON.stringify({
@@ -926,7 +926,7 @@ describe("skill-workshop", () => {
           defaults: { provider: "openai", model: "gpt-5.4" },
           resolveAgentWorkspaceDir: () => workspaceDir,
           resolveAgentDir: () => path.join(workspaceDir, ".agent"),
-          runEmbeddedPiAgent,
+          runEmbeddedAgent,
         },
         state: {
           resolveStateDir: () => stateDir,
@@ -947,7 +947,7 @@ describe("skill-workshop", () => {
 
     const store = new SkillWorkshopStore({ stateDir, workspaceDir });
     expect(await store.list("pending")).toHaveLength(1);
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("quarantines unsafe tool suggestions with scan metadata", async () => {

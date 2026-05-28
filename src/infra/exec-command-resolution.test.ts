@@ -189,6 +189,32 @@ describe("exec-command-resolution", () => {
     expect(timeResolution?.execution.executableName).toBe(fixture.exeName);
   });
 
+  it("keeps file-writing dispatch wrappers on the policy boundary", () => {
+    const timeResolution = resolveCommandResolutionFromArgv([
+      "/usr/bin/time",
+      "-o",
+      "/tmp/time.log",
+      "-a",
+      "-f",
+      "payload",
+      "git",
+      "status",
+    ]);
+    expect(timeResolution?.policyBlocked).toBe(true);
+    expect(timeResolution?.blockedWrapper).toBe("time");
+    expect(timeResolution?.execution.rawExecutable).toBe("/usr/bin/time");
+
+    const scriptResolution = resolveCommandResolutionFromArgv(
+      ["script", "/tmp/session.log", "git", "status"],
+      undefined,
+      undefined,
+      "darwin",
+    );
+    expect(scriptResolution?.policyBlocked).toBe(true);
+    expect(scriptResolution?.blockedWrapper).toBe("script");
+    expect(scriptResolution?.execution.rawExecutable).toBe("script");
+  });
+
   it("keeps shell multiplexer wrappers as a separate policy target", () => {
     if (process.platform === "win32") {
       return;

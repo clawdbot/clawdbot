@@ -82,6 +82,12 @@ Onboarding:
 
 Then open `http://127.0.0.1:18789/` and use the token from `~/.openclaw/.env`.
 
+Model auth in Podman:
+
+- Use OpenClaw-managed auth during setup: Anthropic API keys for Anthropic, or OpenAI Codex browser OAuth/device-code auth for Codex-backed OpenAI.
+- The Podman launcher does not mount host CLI credential homes such as `~/.claude` or `~/.codex` into the setup or gateway container.
+- Existing host CLI logins are same-host convenience paths. For container installs, keep provider auth in the mounted `~/.openclaw` state that setup manages.
+
 Host CLI default:
 
 ```bash

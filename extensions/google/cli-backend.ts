@@ -14,6 +14,7 @@ const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
+    modelProvider: "google",
     liveTest: {
       defaultModelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,

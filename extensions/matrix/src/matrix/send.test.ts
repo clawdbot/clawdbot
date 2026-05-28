@@ -716,6 +716,30 @@ describe("sendSingleTextMessageMatrix", () => {
     );
   });
 
+  it("supports partial draft preview sends without activating mention-looking text", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix(
+      "room:!room:example",
+      "Working...\n- `read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed`",
+      {
+        client,
+        cfg: {} as never,
+        includeMentions: false,
+        live: true,
+      },
+    );
+
+    const content = sentContent(sendMessage);
+    expect(content.msgtype).toBe("m.text");
+    expect(content).not.toHaveProperty("m.mentions");
+    expect(content["org.matrix.msc4357.live"]).toEqual({});
+    expect((content as { formatted_body?: string }).formatted_body).toContain(
+      "<code>read matrix-progress-@room-@alice:example.org-!room:example.org.txt failed</code>",
+    );
+    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
+  });
+
   it("does not activate mentions inside Matrix tool-progress code spans", async () => {
     const { client, sendMessage } = makeClient();
 
@@ -735,6 +759,23 @@ describe("sendSingleTextMessageMatrix", () => {
     const formattedBody = (sentContent(sendMessage) as { formatted_body?: string }).formatted_body;
     expect(formattedBody).toContain("<code>@room ping @alice:example.org !room:example.org</code>");
     expect(formattedBody).not.toContain("matrix.to");
+  });
+
+  it("does not activate filename-embedded Matrix mentions in normal text", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix(
+      "room:!room:example",
+      "read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt failed",
+      {
+        client,
+        cfg: {} as never,
+      },
+    );
+
+    const content = sentContent(sendMessage);
+    expect(content["m.mentions"]).toEqual({});
+    expect((content as { formatted_body?: string }).formatted_body).not.toContain("matrix.to");
   });
 
   it("merges extra content fields into single-event sends", async () => {

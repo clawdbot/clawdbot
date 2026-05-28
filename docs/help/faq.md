@@ -523,20 +523,17 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Codex CLI login)** does not help for semantic memory search. OpenAI embeddings
     still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`).
 
-    If you don't set a provider explicitly, OpenClaw auto-selects a provider when it
-    can resolve an API key (auth profiles, `models.providers.*.apiKey`, or env vars).
-    It prefers OpenAI if an OpenAI key resolves, otherwise Gemini if a Gemini key
-    resolves, then Voyage, then Mistral. If no remote key is available, memory
-    search stays disabled until you configure it. If you have a local model path
-    configured and present, OpenClaw
-    prefers `local`. Ollama is supported when you explicitly set
-    `memorySearch.provider = "ollama"`.
+    If you don't set a provider explicitly, OpenClaw uses OpenAI embeddings. Legacy
+    configs that still say `memorySearch.provider = "auto"` resolve to OpenAI too.
+    If no OpenAI API key is available, semantic memory search stays unavailable
+    until you configure a key or choose another provider explicitly.
 
     If you'd rather stay local, set `memorySearch.provider = "local"` (and optionally
     `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
     `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
-    `memorySearch.remote.apiKey`). We support **OpenAI, Gemini, Voyage, Mistral, Ollama, or local** embedding
-    models - see [Memory](/concepts/memory) for the setup details.
+    `memorySearch.remote.apiKey`). We support **OpenAI, OpenAI-compatible, Gemini,
+    Voyage, Mistral, Bedrock, Ollama, LM Studio, GitHub Copilot, DeepInfra, or local**
+    embedding models - see [Memory](/concepts/memory) for the setup details.
 
   </Accordion>
 </AccordionGroup>

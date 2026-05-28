@@ -7,6 +7,7 @@ export function createMoonshotProvider(): ProviderPlugin {
     id: "moonshot",
     label: "Moonshot",
     docsPath: "/providers/moonshot",
+    aliases: ["moonshotai", "moonshot-ai"],
     auth: [
       {
         id: "api-key",

@@ -336,6 +336,52 @@ describe("waitForAgentJob", () => {
     expect(fresh?.startedAt).toBe(200);
     expect(fresh?.endedAt).toBe(210);
   });
+
+  it("surfaces pending error diagnostics when outer timeout fires before error grace period", async () => {
+    // Preserve the retry grace: the caller timeout may carry the pending error
+    // reason, but it must not cache a terminal error before a later start can
+    // cancel the pending snapshot.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", error: "transient-auth-failure" },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expect(result?.status).toBe("timeout");
+      expect(result?.error).toBe("transient-auth-failure");
+      expect(result?.pendingError).toBe(true);
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 12_000 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 12_000, endedAt: 12_100 },
+      });
+
+      const recovered = await waitForAgentJob({ runId, timeoutMs: 1_000 });
+      expectRecordFields(recovered, {
+        status: "ok",
+        startedAt: 12_000,
+        endedAt: 12_100,
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {

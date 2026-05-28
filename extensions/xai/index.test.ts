@@ -275,18 +275,5 @@ describe("xai provider plugin", () => {
     expect(normalizedCompat?.toolSchemaProfile).toBe("xai");
     expect(normalizedCompat?.nativeWebSearchTool).toBe(true);
     expect(normalizedCompat?.toolCallArgumentsEncoding).toBe("html-entities");
-
-    const compat = provider.contributeResolvedModelCompat?.({
-      provider: "openrouter",
-      modelId: "x-ai/grok-4-1-fast",
-      model: createProviderModel({
-        id: "x-ai/grok-4-1-fast",
-        provider: "openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-      }),
-    } as never);
-    expect(compat?.toolSchemaProfile).toBe("xai");
-    expect(compat?.nativeWebSearchTool).toBe(true);
-    expect(compat?.toolCallArgumentsEncoding).toBe("html-entities");
   });
 });

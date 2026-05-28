@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { statusSummaryRuntime } from "./status.summary.runtime.js";
 
 describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
-  it("matches provider context window overrides across canonical provider aliases", () => {
+  it("does not match provider context window overrides across provider id variants", () => {
     const contextTokens = statusSummaryRuntime.resolveContextTokensForModel({
       cfg: {
         models: {
@@ -18,7 +18,7 @@ describe("statusSummaryRuntime.resolveContextTokensForModel", () => {
       fallbackContextTokens: 999,
     });
 
-    expect(contextTokens).toBe(123_456);
+    expect(contextTokens).toBe(999);
   });
 
   it("prefers per-model contextTokens over contextWindow", () => {
@@ -96,7 +96,7 @@ describe("statusSummaryRuntime.resolveSessionRuntimeLabel", () => {
           agents: {
             defaults: {
               models: {
-                "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+                "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
               },
             },
             list: [

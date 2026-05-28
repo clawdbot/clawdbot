@@ -73,7 +73,10 @@ const SENTINEL_FILENAME = "restart-sentinel.json";
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string {
-  return `Run: ${formatCliCommand("openclaw doctor --non-interactive", env)}`;
+  return `Recommended follow-up: run ${formatCliCommand(
+    "openclaw doctor --non-interactive",
+    env,
+  )} in a terminal or approvals-capable OpenClaw surface.`;
 }
 
 export function resolveRestartSentinelPath(env: NodeJS.ProcessEnv = process.env): string {

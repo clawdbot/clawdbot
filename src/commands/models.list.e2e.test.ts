@@ -86,7 +86,7 @@ vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog,
 }));
 
-vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+vi.mock("../agents/embedded-agent-runner/model.js", () => ({
   resolveModelWithRegistry: ({
     provider,
     modelId,
@@ -98,7 +98,7 @@ vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   }) => modelRegistry.find(provider, modelId),
 }));
 
-vi.mock("../agents/pi-model-discovery.js", () => {
+vi.mock("../agents/agent-model-discovery.js", () => {
   class MockModelRegistry {
     find(provider: string, id: string) {
       if (modelRegistryState.findError !== undefined) {

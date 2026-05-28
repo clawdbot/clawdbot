@@ -26,6 +26,18 @@ describe("gateway CPU scenario guard", () => {
     ).toThrow("--skip-startup and --skip-qa cannot be used together");
   });
 
+  it("rejects non-decimal numeric options", () => {
+    expect(() =>
+      testing.parseArgs(["--output-dir", makeTempRoot(), "--runs", "1e3"]),
+    ).toThrow("--runs must be a positive integer");
+    expect(() =>
+      testing.parseArgs(["--output-dir", makeTempRoot(), "--warmup", "0x10"]),
+    ).toThrow("--warmup must be a non-negative integer");
+    expect(() =>
+      testing.parseArgs(["--output-dir", makeTempRoot(), "--cpu-core-warn", "1e3"]),
+    ).toThrow("--cpu-core-warn must be a positive number");
+  });
+
   it("prepares CLI startup artifacts before running the startup bench", async () => {
     const outputDir = makeTempRoot();
     const calls: Array<{ command: string; args: string[] }> = [];

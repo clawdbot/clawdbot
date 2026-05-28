@@ -15,6 +15,7 @@ export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_
 const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
 const CLI_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
 const CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
+const CLI_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 
 type CliRespawnPlan = {
   command: string;
@@ -169,6 +170,7 @@ export function runCliRespawnPlan(
   });
   let signalExitTimer: NodeJS.Timeout | undefined;
   let signalForceKillTimer: NodeJS.Timeout | undefined;
+  let signalHardExitTimer: NodeJS.Timeout | undefined;
   const clearSignalTimers = (): void => {
     if (signalExitTimer) {
       clearTimeout(signalExitTimer);
@@ -177,6 +179,10 @@ export function runCliRespawnPlan(
     if (signalForceKillTimer) {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = undefined;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = undefined;
     }
   };
   const forceKillChild = (): void => {
@@ -194,7 +200,10 @@ export function runCliRespawnPlan(
     }
     signalForceKillTimer = setTimeout(() => {
       forceKillChild();
-      runtime.exit(1);
+      signalHardExitTimer = setTimeout(() => {
+        runtime.exit(1);
+      }, CLI_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS);
+      signalHardExitTimer.unref?.();
     }, CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
     signalForceKillTimer.unref?.();
   };

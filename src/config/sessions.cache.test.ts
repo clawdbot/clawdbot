@@ -257,7 +257,12 @@ describe("Session Store Cache", () => {
     const parseSpy = vi.spyOn(JSON, "parse");
 
     try {
-      writeSessionStoreCache({ storePath, store: testStore, serialized });
+      writeSessionStoreCache({
+        storePath,
+        store: testStore,
+        serialized,
+        cloneSerialized: serialized,
+      });
 
       expect(parseSpy).not.toHaveBeenCalled();
 
@@ -556,6 +561,30 @@ describe("Session Store Cache", () => {
     expect(after).not.toBe(before);
     expect(before["session:1"].displayName).toBe("Test Session 1");
     expect(after["session:1"].displayName).toBe("Updated Session");
+  });
+
+  it("keeps whole-store update results detached from the mutable cache by default", async () => {
+    await saveSessionStore(storePath, createSingleSessionStore());
+
+    const persisted = await updateSessionStore(
+      storePath,
+      (store) => {
+        const next = {
+          ...store["session:1"],
+          displayName: "Updated Session",
+          updatedAt: Date.now() + 1,
+        };
+        store["session:1"] = next;
+        return next;
+      },
+      { skipMaintenance: true },
+    );
+
+    persisted.displayName = "Mutated after write";
+
+    const cached = loadSessionStore(storePath, { clone: false });
+    expect(cached["session:1"]).not.toBe(persisted);
+    expect(cached["session:1"].displayName).toBe("Updated Session");
   });
 
   it("can publish writer-owned session updates directly into the object cache", async () => {

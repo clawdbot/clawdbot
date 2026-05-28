@@ -946,7 +946,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "openai/gpt-5.5-alt" \
-            --runtime-pair pi,codex \
+            --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
       - name: Run standard runtime parity tier
@@ -959,7 +959,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "openai/gpt-5.5-alt" \
-            --runtime-pair pi,codex \
+            --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
 
       - name: Run soak runtime parity tier
@@ -973,7 +973,7 @@ jobs:
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "openai/gpt-5.5-alt" \
-            --runtime-pair pi,codex \
+            --runtime-pair openclaw,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-soak"
 
       - name: Generate runtime parity report

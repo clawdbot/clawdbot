@@ -145,6 +145,20 @@ describe("web_search scoped config merge", () => {
     });
   });
 
+  it("keeps mirrored Brave plugin config runtime-only when newly injected", () => {
+    const merged = mergeScopedSearchConfig(
+      { provider: "brave" },
+      "brave",
+      { apiKey: "brave-test-key" },
+      { mirrorApiKeyToTopLevel: true },
+    );
+
+    expect(merged?.brave).toEqual({ apiKey: "brave-test-key" });
+    expect(merged?.apiKey).toBe("brave-test-key");
+    expect(Object.keys(merged ?? {})).toEqual(["provider", "apiKey"]);
+    expect(Object.getOwnPropertyDescriptor(merged, "brave")?.enumerable).toBe(false);
+  });
+
   it("keeps newly injected legacy provider config runtime-only for validation", () => {
     const merged = mergeScopedSearchConfig({ enabled: true, provider: "gemini" }, "perplexity", {
       apiKey: "perplexity-test-key",

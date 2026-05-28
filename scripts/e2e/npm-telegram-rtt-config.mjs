@@ -33,7 +33,7 @@ config.models = config.models ?? {};
 config.models.providers = config.models.providers ?? {};
 config.models.providers.openai = {
   api: "openai-responses",
-  agentRuntime: { id: "pi" },
+  agentRuntime: { id: "openclaw" },
   apiKey: {
     source: "env",
     provider: "default",
@@ -56,7 +56,7 @@ config.agents.defaults = config.agents.defaults ?? {};
 config.agents.defaults.model = { primary: "openai/gpt-5.5" };
 config.agents.defaults.models = {
   "openai/gpt-5.5": {
-    agentRuntime: { id: "pi" },
+    agentRuntime: { id: "openclaw" },
     params: {
       transport: "sse",
       openaiWsWarmup: false,

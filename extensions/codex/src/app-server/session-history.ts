@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
-import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { SessionEntry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   buildSessionContext,
   migrateSessionEntries,
   parseSessionEntries,
-} from "@earendil-works/pi-coding-agent";
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+} from "openclaw/plugin-sdk/agent-sessions";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 function isMissingFileError(error: unknown): boolean {

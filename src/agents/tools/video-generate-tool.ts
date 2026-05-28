@@ -177,7 +177,7 @@ const VideoGenerateToolProperties = {
   resolution: Type.Optional(
     Type.String({
       description:
-        "Resolution: 480P, 720P, 768P, 1080P, 4K, or provider value; unsupported normalized/ignored.",
+        "Resolution: 360P, 480P, 540P, 720P, 768P, 1080P, 4K, or provider value; unsupported normalized/ignored.",
     }),
   ),
   durationSeconds: Type.Optional(

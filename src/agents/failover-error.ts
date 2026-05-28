@@ -5,9 +5,9 @@ import {
   isUnclassifiedNoBodyHttpSignal,
   type FailoverClassification,
   type FailoverSignal,
-} from "./pi-embedded-helpers/errors.js";
-import { isTimeoutErrorMessage } from "./pi-embedded-helpers/errors.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+} from "./embedded-agent-helpers/errors.js";
+import { isTimeoutErrorMessage } from "./embedded-agent-helpers/errors.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
@@ -240,7 +240,7 @@ function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set())
 }
 
 function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
-  // Match by name to avoid importing pi-embedded-runner here (would create a cycle).
+  // Match by name to avoid importing embedded-agent-runner here (would create a cycle).
   return Boolean(
     err && typeof err === "object" && readErrorName(err) === "EmbeddedAttemptSessionTakeoverError",
   );

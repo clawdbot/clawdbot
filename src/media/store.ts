@@ -198,6 +198,10 @@ function looksLikeUrl(src: string) {
   return /^https?:\/\//i.test(src);
 }
 
+function discardIgnoredHttpResponse(res: NodeJS.ReadableStream): void {
+  res.resume();
+}
+
 /**
  * Download media to disk while capturing the first few KB for mime sniffing.
  */
@@ -227,6 +231,7 @@ async function downloadToFile(
           if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
             const location = res.headers.location;
             if (!location || maxRedirects <= 0) {
+              discardIgnoredHttpResponse(res);
               reject(new Error(`Redirect loop or missing Location header`));
               return;
             }
@@ -234,6 +239,7 @@ async function downloadToFile(
             try {
               redirectUrl = new URL(location, url);
             } catch {
+              discardIgnoredHttpResponse(res);
               reject(new Error("Invalid redirect Location header"));
               return;
             }
@@ -241,12 +247,14 @@ async function downloadToFile(
               redirectUrl.origin === parsedUrl.origin
                 ? headers
                 : retainSafeHeadersForCrossOriginRedirect(headers);
+            discardIgnoredHttpResponse(res);
             resolve(
               downloadToFile(redirectUrl.href, dest, redirectHeaders, maxRedirects - 1, maxBytes),
             );
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {
+            discardIgnoredHttpResponse(res);
             reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
             return;
           }

@@ -136,6 +136,10 @@ const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
+const LOG_READY_TAIL_BYTES = readPositiveInt(
+  process.env.OPENCLAW_TELEGRAM_USER_PROOF_LOG_TAIL_BYTES,
+  256 * 1024,
+);
 const TELEGRAM_PROOF_WINDOW = {
   height: 1000,
   width: 650,
@@ -408,6 +412,11 @@ function readJsonFile(filePath: string): JsonObject {
   }
 }
 
+function readPositiveInt(raw: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(raw ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function requireString(source: JsonObject, key: string) {
   const value = source[key];
   if (typeof value === "number") {
@@ -634,16 +643,43 @@ function spawnDaemon(params: {
   return child.pid;
 }
 
-async function waitForLog(logPath: string, pattern: RegExp, label: string, timeoutMs: number) {
+export function readLogTail(logPath: string, maxBytes = LOG_READY_TAIL_BYTES): string {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(logPath);
+  } catch {
+    return "";
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return "";
+  }
+  const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(logPath, "r");
+  let bytesRead = 0;
+  try {
+    bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, stat.size - bytesToRead);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return buffer.subarray(0, bytesRead).toString("utf8");
+}
+
+export async function waitForLog(
+  logPath: string,
+  pattern: RegExp,
+  label: string,
+  timeoutMs: number,
+) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
-    const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+    const text = readLogTail(logPath);
     if (pattern.test(text)) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+  const text = readLogTail(logPath);
   throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
 }
 
@@ -2386,7 +2422,15 @@ async function main() {
   }
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+function isMainModule(): boolean {
+  return Boolean(
+    process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url),
+  );
+}
+
+if (isMainModule()) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  });
+}

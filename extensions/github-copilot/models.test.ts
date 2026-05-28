@@ -4,17 +4,6 @@ import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models
 import { deriveCopilotApiBaseUrlFromToken, resolveCopilotApiToken } from "./token.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-vi.mock("@earendil-works/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
-    "@earendil-works/pi-ai/oauth",
-  );
-  return {
-    ...actual,
-    getOAuthApiKey: vi.fn(),
-    getOAuthProviders: vi.fn(() => []),
-  };
-});
-
 vi.mock("openclaw/plugin-sdk/provider-model-shared", () => ({
   normalizeModelCompat: (model: Record<string, unknown>) => model,
   resolveProviderEndpoint: (baseUrl: string) => ({

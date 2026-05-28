@@ -93,7 +93,6 @@ export function listWebFetchProviders(params?: {
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebFetchProviders({
     config: params?.config,
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -102,7 +101,6 @@ export function listConfiguredWebFetchProviders(params?: {
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebFetchProviders({
     config: params?.config,
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -115,7 +113,6 @@ export function resolveWebFetchProviderId(params: {
     params.providers ??
       resolvePluginWebFetchProviders({
         config: params.config,
-        bundledAllowlistCompat: true,
       }),
   );
   const raw =
@@ -174,17 +171,14 @@ export function resolveWebFetchDefinition(
     options?.sandboxed
       ? resolvePluginWebFetchProviders({
           config: options?.config,
-          bundledAllowlistCompat: true,
           origin: "bundled",
         })
       : options?.preferRuntimeProviders
         ? resolveRuntimeWebFetchProviders({
             config: options?.config,
-            bundledAllowlistCompat: true,
           })
         : resolvePluginWebFetchProviders({
             config: options?.config,
-            bundledAllowlistCompat: true,
           }),
   );
   return resolveWebProviderDefinition({

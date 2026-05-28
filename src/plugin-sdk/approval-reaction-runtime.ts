@@ -1,10 +1,17 @@
+/**
+ * @deprecated Compatibility subpath for shipped approval reaction helpers.
+ * New plugin code should use the focused approval runtime/reply subpaths.
+ */
 import { sanitizeForPromptLiteral } from "../agents/sanitize-for-prompt.js";
 import { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
 import { buildPendingApprovalView } from "../infra/approval-view-model.js";
 import type { ApprovalRequest, PendingApprovalView } from "../infra/approval-view-model.types.js";
 import {
   buildExecApprovalPendingReplyPayload,
   formatExecApprovalExpiresIn,
+  getExecApprovalReplyMetadata,
+  type ExecApprovalReplyMetadata,
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
@@ -13,15 +20,21 @@ import {
   buildApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
 } from "./approval-renderers.js";
+import type { ChannelOutboundPayloadHint } from "./channel-contract.js";
+import type { OpenClawConfig } from "./config-runtime.js";
 import type { ReplyPayload } from "./reply-payload.js";
-
-export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-helpers.js";
 
 type ApprovalKind = "exec" | "plugin";
 type KeyedStore<TValue> = {
   register(key: string, value: TValue, opts?: { ttlMs?: number }): Promise<void>;
   lookup(key: string): Promise<TValue | undefined>;
   delete(key: string): Promise<boolean>;
+};
+type LocalNativeExecApprovalConfig = {
+  enabled?: boolean | "auto";
+  mode?: string | null;
+  agentFilter?: string[];
+  sessionFilter?: string[];
 };
 
 type PersistedApprovalReactionTarget<TTarget> = {
@@ -92,6 +105,82 @@ function normalizeDecisionList(
 ): ExecApprovalReplyDecision[] {
   const allowed = new Set(allowedDecisions);
   return APPROVAL_REACTION_ORDER.filter((decision) => allowed.has(decision));
+}
+
+export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  payload: ReplyPayload;
+  hint?: ChannelOutboundPayloadHint;
+  isTransportEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  isNativeDeliveryEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  resolveApprovalConfig?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    metadata: ExecApprovalReplyMetadata;
+  }) => LocalNativeExecApprovalConfig | undefined;
+  requireApprovalConfigEnabled?: boolean;
+  enforceForwardingMode?: boolean;
+  isSessionRouteEligible?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    metadata: ExecApprovalReplyMetadata;
+  }) => boolean;
+  hasExactTargetProof?: boolean;
+  fallbackAgentIdFromSessionKey?: boolean;
+}): boolean {
+  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
+    return false;
+  }
+  if (params.hint.nativeRouteActive !== true) {
+    return false;
+  }
+  const metadata = getExecApprovalReplyMetadata(params.payload);
+  if (!metadata || metadata.approvalKind !== "exec") {
+    return false;
+  }
+  const isDeliveryEnabled = params.isNativeDeliveryEnabled ?? params.isTransportEnabled;
+  if (!isDeliveryEnabled?.({ cfg: params.cfg, accountId: params.accountId })) {
+    return false;
+  }
+  const config =
+    params.resolveApprovalConfig?.({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      metadata,
+    }) ?? params.cfg.approvals?.exec;
+  const requireConfigEnabled =
+    params.requireApprovalConfigEnabled ?? params.resolveApprovalConfig === undefined;
+  if (requireConfigEnabled && !config?.enabled) {
+    return false;
+  }
+  const enforceForwardingMode =
+    params.enforceForwardingMode ?? params.resolveApprovalConfig === undefined;
+  if (enforceForwardingMode) {
+    const mode = config?.mode ?? "session";
+    if (mode !== "session" && mode !== "both" && !params.hasExactTargetProof) {
+      return false;
+    }
+  }
+  if (
+    params.isSessionRouteEligible &&
+    !params.isSessionRouteEligible({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      metadata,
+    })
+  ) {
+    return false;
+  }
+  return matchesApprovalRequestFilters({
+    request: {
+      agentId: metadata.agentId,
+      sessionKey: metadata.sessionKey,
+    },
+    agentFilter: config?.agentFilter,
+    sessionFilter: config?.sessionFilter,
+    fallbackAgentIdFromSessionKey: params.fallbackAgentIdFromSessionKey ?? true,
+  });
 }
 
 export function listApprovalReactionBindings(params: {
@@ -206,19 +295,13 @@ function buildManualInstructionSection(params: {
   return lines;
 }
 
-function listDecisionActions(actions: PendingApprovalView["actions"]): ExecApprovalReplyDecision[] {
-  return normalizeDecisionList(
-    actions.flatMap((action) => (action.kind === "decision" ? [action.decision] : [])),
-  );
-}
-
 function buildApprovalReactionPromptText(params: {
   view: PendingApprovalView;
   nowMs: number;
   reactionHint: string | null;
 }): string {
   const { view } = params;
-  const allowedDecisions = listDecisionActions(view.actions);
+  const allowedDecisions = normalizeDecisionList(view.actions.map((action) => action.decision));
   const sections: string[] = [];
   if (view.approvalKind === "exec") {
     const header = ["Exec approval required", `ID: ${view.approvalId}`];
@@ -321,7 +404,9 @@ export function buildApprovalPendingPromptPayload(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): ApprovalReactionPromptPayload {
-  const allowedDecisions = listDecisionActions(params.view.actions);
+  const allowedDecisions = normalizeDecisionList(
+    params.view.actions.map((action) => action.decision),
+  );
   const reactionBindings = listApprovalReactionBindings({ allowedDecisions });
   const text = buildApprovalReactionPromptText({
     view: params.view,

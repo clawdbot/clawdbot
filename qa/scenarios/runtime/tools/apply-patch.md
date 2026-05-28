@@ -8,9 +8,9 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.apply-patch
-objective: Verify apply_patch behavior is tracked across Pi and Codex while Codex owns patching natively.
+objective: Verify apply_patch behavior is tracked across OpenClaw and Codex while Codex owns patching natively.
 successCriteria:
-  - Pi may expose OpenClaw apply_patch while Codex app-server mode may omit duplicate OpenClaw dynamic apply_patch.
+  - OpenClaw may expose OpenClaw apply_patch while Codex app-server mode may omit duplicate OpenClaw dynamic apply_patch.
   - Mock provider apply_patch plans are reported as fixture intent, not as actual runtime tool calls.
   - The row stays report-only until fault injection uses valid patch-shaped inputs.
 docsRefs:

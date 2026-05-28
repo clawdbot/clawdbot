@@ -142,10 +142,10 @@ export function formatEnvelopeTimestamp(
 
   const formatted =
     zone.mode === "utc"
-      ? formatUtcTimestamp(date)
+      ? formatUtcTimestamp(date, { displaySeconds: true })
       : zone.mode === "local"
-        ? formatZonedTimestamp(date)
-        : formatZonedTimestamp(date, { timeZone: zone.timeZone });
+        ? formatZonedTimestamp(date, { displaySeconds: true })
+        : formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true });
 
   if (!formatted) {
     return undefined;

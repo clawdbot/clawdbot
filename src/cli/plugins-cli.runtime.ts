@@ -95,7 +95,9 @@ function formatBlockedRuntimePluginGuidance(params: {
 }): string | undefined {
   const pluginId = params.pluginId;
   const alternative =
-    pluginId === "acpx" ? "disable ACP/acpx in acp config" : 'change the runtime policy to "pi"';
+    pluginId === "acpx"
+      ? "disable ACP/acpx in acp config"
+      : 'change the runtime policy to "openclaw"';
   if (params.cfg.plugins?.enabled === false) {
     return `Enable plugin loading and the "${pluginId}" plugin, or ${alternative}.`;
   }
@@ -116,7 +118,7 @@ function formatDisabledRuntimePluginGuidance(params: {
   const alternative =
     params.pluginId === "acpx"
       ? "disable ACP/acpx in acp config"
-      : 'change the runtime policy to "pi"';
+      : 'change the runtime policy to "openclaw"';
   if (Array.isArray(allow) && allow.length > 0 && !allow.includes(params.pluginId)) {
     return `Add "${params.pluginId}" to plugins.allow and enable the plugin, or ${alternative}.`;
   }
@@ -133,10 +135,8 @@ function collectConfiguredRuntimePluginWarnings(params: {
       .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
       .map((plugin) => plugin.id),
   );
-  return collectConfiguredRuntimePluginIds(params.cfg, params.env, {
-    includeEnvRuntime: false,
+  return collectConfiguredRuntimePluginIds(params.cfg, {
     includeImplicitRuntimePreferences: false,
-    includeLegacyAgentRuntimes: false,
   }).flatMap((runtimeId) => {
     const candidate = resolveConfiguredRuntimePluginInstallCandidate(runtimeId);
     if (!candidate || enabledPluginIds.has(runtimeId)) {

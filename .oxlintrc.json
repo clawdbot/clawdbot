@@ -182,6 +182,7 @@
     "dist-runtime/",
     "docs/_layouts/",
     "extensions/diffs/assets/viewer-runtime.js",
+    "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",

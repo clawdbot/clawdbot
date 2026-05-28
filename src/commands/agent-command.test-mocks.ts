@@ -43,9 +43,9 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: vi.fn(() => acpManagerMock.current),
 }));
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  runEmbeddedAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 

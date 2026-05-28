@@ -66,7 +66,7 @@ the target agent signs in separately and creates its own local profile.
 
 `auth.profiles` entries with `mode: "aws-sdk"` are routing metadata, not stored
 credentials. They are valid when the target provider uses
-`models.providers.<id>.auth: "aws-sdk"` or the built-in Amazon Bedrock default
+`models.providers.<id>.auth: "aws-sdk"` or plugin-owned Amazon Bedrock setup
 AWS SDK route. These profile ids may appear in `auth.order` and session
 overrides even when no matching entry exists in `auth-profiles.json`.
 

@@ -4,7 +4,7 @@ import type { ModelAliasIndex } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { installDirectiveBehaviorE2EHooks } from "./reply.directive.directive-behavior.e2e-harness.js";
-import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { runEmbeddedAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
 import type { HandleDirectiveOnlyParams } from "./reply/directive-handling.params.js";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
@@ -133,7 +133,7 @@ describe("directive behavior", () => {
     expect(execText).toContain(
       "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
     );
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("treats /fast status like the no-argument status query", async () => {
     const { text: statusText } = await runDirectiveStatus("/fast status", {
@@ -155,7 +155,7 @@ describe("directive behavior", () => {
 
     expect(statusText).toContain("Current fast mode: on (config)");
     expect(statusText).toContain("Options: status, on, off, default.");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("enforces per-agent elevated restrictions and status visibility", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
@@ -171,7 +171,7 @@ describe("directive behavior", () => {
     });
     expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("applies per-agent allowlist requirements before allowing elevated", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
@@ -193,7 +193,7 @@ describe("directive behavior", () => {
       elevatedAllowed: true,
     });
     expect(allowedText).toContain("Elevated mode set to ask");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("handles runtime warning, invalid level, and multi-directive elevated inputs", async () => {
     for (const scenario of [
@@ -221,7 +221,7 @@ describe("directive behavior", () => {
         expect(text).toContain(snippet);
       }
     }
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("persists queue overrides and reset behavior", async () => {
     const interrupt = await runDirectiveStatus("/queue interrupt");
@@ -256,7 +256,7 @@ describe("directive behavior", () => {
     expect(reset.sessionEntry.queueDebounceMs).toBeUndefined();
     expect(reset.sessionEntry.queueCap).toBeUndefined();
     expect(reset.sessionEntry.queueDrop).toBeUndefined();
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("shows current trace level and persists trace directives", async () => {
@@ -281,7 +281,7 @@ describe("directive behavior", () => {
     expect(raw.text).toContain("Trace set to raw.");
     expect(raw.text).toContain("may contain sensitive information");
     expect(raw.sessionEntry.traceLevel).toBe("raw");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("blocks /trace for non-owners without delegated gateway scope", async () => {

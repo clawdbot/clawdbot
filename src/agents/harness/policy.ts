@@ -1,13 +1,11 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { AUTO_AGENT_RUNTIME_ID, type EmbeddedAgentRuntime } from "../agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
 import {
   isOpenAICodexProvider,
   openAIProviderUsesCodexRuntimeByDefault,
 } from "../openai-codex-routing.js";
-import {
-  normalizeEmbeddedAgentRuntime,
-  type EmbeddedAgentRuntime,
-} from "../pi-embedded-runner/runtime.js";
 
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
@@ -29,12 +27,12 @@ export function resolveAgentHarnessPolicy(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  const configuredRuntime = configured.policy?.id?.trim();
+  const configuredRuntime = normalizeOptionalAgentRuntimeId(configured.policy?.id);
   const runtimeSource = configured.source ?? "implicit";
   const runtime =
     configuredRuntime && configuredRuntime !== "default"
-      ? normalizeEmbeddedAgentRuntime(configuredRuntime)
-      : "auto";
+      ? configuredRuntime
+      : AUTO_AGENT_RUNTIME_ID;
   if (
     openAIProviderUsesCodexRuntimeByDefault({ provider: params.provider, config: params.config })
   ) {

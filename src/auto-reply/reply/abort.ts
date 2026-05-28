@@ -1,9 +1,9 @@
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   resolveActiveEmbeddedRunSessionId,
-} from "../../agents/pi-embedded-runner/runs.js";
+} from "../../agents/embedded-agent-runner/runs.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
@@ -62,7 +62,7 @@ export {
 
 const defaultAbortDeps = {
   getAcpSessionManager,
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   resolveActiveEmbeddedRunSessionId,
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
@@ -77,7 +77,8 @@ export const testing = {
   setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
     abortDeps.getAcpSessionManager =
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
-    abortDeps.abortEmbeddedPiRun = deps?.abortEmbeddedPiRun ?? defaultAbortDeps.abortEmbeddedPiRun;
+    abortDeps.abortEmbeddedAgentRun =
+      deps?.abortEmbeddedAgentRun ?? defaultAbortDeps.abortEmbeddedAgentRun;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.getLatestSubagentRunByChildSessionKey =
@@ -90,7 +91,7 @@ export const testing = {
   },
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
-    abortDeps.abortEmbeddedPiRun = defaultAbortDeps.abortEmbeddedPiRun;
+    abortDeps.abortEmbeddedAgentRun = defaultAbortDeps.abortEmbeddedAgentRun;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.getLatestSubagentRunByChildSessionKey =
@@ -116,7 +117,7 @@ export function abortSessionRunTarget(params: { key?: string; sessionId?: string
 
   let aborted = key ? replyRunRegistry.abort(key) : false;
   for (const sessionId of sessionIds) {
-    aborted = abortDeps.abortEmbeddedPiRun(sessionId) || aborted;
+    aborted = abortDeps.abortEmbeddedAgentRun(sessionId) || aborted;
   }
   return aborted;
 }

@@ -76,11 +76,12 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
 }
 
 function parsePositiveInt(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
     return undefined;
   }
-  return parsed;
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 export function hasFlag(argv: string[], name: string): boolean {

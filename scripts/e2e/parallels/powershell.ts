@@ -138,7 +138,7 @@ for (const op of payload.operations || []) {
 const selectedModelEntry = cfg.agents.defaults.models[payload.modelId];
 if (selectedModelEntry && typeof selectedModelEntry === "object" && !Array.isArray(selectedModelEntry)) {
   if (canWriteAgentRuntime) {
-    selectedModelEntry.agentRuntime = { id: "pi" };
+    selectedModelEntry.agentRuntime = { id: "openclaw" };
   } else {
     delete selectedModelEntry.agentRuntime;
   }

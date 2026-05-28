@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const loadConfigMock = vi.fn(() => ({}));
 const resolveDefaultAgentIdMock = vi.fn(() => "main");
 const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
+const buildWorkspaceSkillStatusMock = vi.fn();
+const readLocalSkillCardContentSyncMock = vi.fn();
+const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
 const installSkillFromClawHubMock = vi.fn();
 const installSkillMock = vi.fn();
 const updateSkillsFromClawHubMock = vi.fn();
@@ -14,28 +17,53 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: vi.fn(() => ["main"]),
+  resolveAgentConfig: vi.fn(() => undefined),
   resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
   resolveAgentWorkspaceDir: () => resolveAgentWorkspaceDirMock(),
+  resolveSessionAgentId: vi.fn(() => undefined),
 }));
 
 vi.mock("../../agents/skills-clawhub.js", () => ({
   installSkillFromClawHub: (...args: unknown[]) => installSkillFromClawHubMock(...args),
+  readLocalSkillCardContentSync: (...args: unknown[]) => readLocalSkillCardContentSyncMock(...args),
   updateSkillsFromClawHub: (...args: unknown[]) => updateSkillsFromClawHubMock(...args),
+}));
+
+vi.mock("../../agents/skills-status.js", () => ({
+  buildWorkspaceSkillStatus: (...args: unknown[]) => buildWorkspaceSkillStatusMock(...args),
 }));
 
 vi.mock("../../agents/skills-install.js", () => ({
   installSkill: (...args: unknown[]) => installSkillMock(...args),
 }));
 
+vi.mock("../../infra/clawhub.js", () => ({
+  fetchClawHubSkillDetail: vi.fn(),
+  fetchClawHubSkillSecurityVerdicts: (...args: unknown[]) =>
+    fetchClawHubSkillSecurityVerdictsMock(...args),
+  resolveClawHubBaseUrl: () => "https://clawhub.ai",
+}));
+
 const { skillsHandlers } = await import("./skills.js");
 
 const makeContext = () => ({ getRuntimeConfig: () => ({}) });
+
+function emptySkillStatusReport() {
+  return {
+    workspaceDir: "/tmp/workspace",
+    managedSkillsDir: "/tmp/openclaw/skills",
+    skills: [],
+  };
+}
 
 describe("skills gateway handlers (clawhub)", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
+    buildWorkspaceSkillStatusMock.mockReset();
+    readLocalSkillCardContentSyncMock.mockReset();
+    fetchClawHubSkillSecurityVerdictsMock.mockReset();
     installSkillFromClawHubMock.mockReset();
     installSkillMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
@@ -43,6 +71,211 @@ describe("skills gateway handlers (clawhub)", () => {
     loadConfigMock.mockReturnValue({});
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
+    buildWorkspaceSkillStatusMock.mockReturnValue(emptySkillStatusReport());
+  });
+
+  it("returns an empty verdict batch without calling ClawHub when no skills are linked", async () => {
+    let ok: boolean | null = null;
+    let response: unknown;
+    let error: unknown;
+
+    await skillsHandlers["skills.securityVerdicts"]({
+      params: {},
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: makeContext() as never,
+      respond: (success, result, err) => {
+        ok = success;
+        response = result;
+        error = err;
+      },
+    });
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [],
+    });
+  });
+
+  it("fetches one bulk ClawHub verdict batch for linked installed skills", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "agentreceipt",
+          skillKey: "agentreceipt",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "agentreceipt",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        },
+        {
+          name: "local-only",
+          skillKey: "local-only",
+        },
+      ],
+    });
+    fetchClawHubSkillSecurityVerdictsMock.mockResolvedValue({
+      schema: "clawhub.skill.security-verdicts.v1",
+      items: [
+        {
+          ok: true,
+          decision: "pass",
+          reasons: [],
+          requestedSlug: "agentreceipt",
+          slug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          version: "1.2.3",
+          securityAuditUrl: "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+          security: { status: "clean", passed: true },
+          scannerPayload: { ignored: true },
+        },
+      ],
+    });
+
+    let ok: boolean | null = null;
+    let response: unknown;
+    let error: unknown;
+    await skillsHandlers["skills.securityVerdicts"]({
+      params: {},
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: makeContext() as never,
+      respond: (success, result, err) => {
+        ok = success;
+        response = result;
+        error = err;
+      },
+    });
+
+    expect(error).toBeUndefined();
+    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledTimes(1);
+    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
+      baseUrl: "https://clawhub.ai",
+      items: [{ slug: "agentreceipt", version: "1.2.3" }],
+      skipAuth: true,
+    });
+    expect(ok).toBe(true);
+    expect(error).toBeUndefined();
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        expect.objectContaining({
+          registry: "https://clawhub.ai",
+          ok: true,
+          requestedSlug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          securityStatus: "clean",
+          securityPassed: true,
+        }),
+      ],
+    });
+    expect(JSON.stringify(response)).not.toContain("scannerPayload");
+    expect(JSON.stringify(response)).not.toContain('"security":');
+  });
+
+  it("does not passively fetch verdicts from a non-default registry", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "agentreceipt",
+          skillKey: "agentreceipt",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "http://127.0.0.1:3999",
+            slug: "agentreceipt",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+        },
+      ],
+    });
+
+    let ok: boolean | null = null;
+    let response: unknown;
+    let error: unknown;
+    await skillsHandlers["skills.securityVerdicts"]({
+      params: {},
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: makeContext() as never,
+      respond: (success, result, err) => {
+        ok = success;
+        response = result;
+        error = err;
+      },
+    });
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [],
+    });
+  });
+
+  it("loads local Skill Card content for a known installed skill", async () => {
+    buildWorkspaceSkillStatusMock.mockReturnValue({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/openclaw/skills",
+      skills: [
+        {
+          name: "AgentReceipt",
+          skillKey: "agentreceipt",
+          baseDir: "/tmp/workspace/skills/agentreceipt",
+          skillCard: {
+            present: true,
+            path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+            sizeBytes: 34,
+          },
+        },
+      ],
+    });
+    readLocalSkillCardContentSyncMock.mockReturnValue("# AgentReceipt\n\nLocal trust card.\n");
+
+    let ok: boolean | null = null;
+    let response: unknown;
+    let error: unknown;
+    await skillsHandlers["skills.skillCard"]({
+      params: { skillKey: "agentreceipt" },
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: makeContext() as never,
+      respond: (success, result, err) => {
+        ok = success;
+        response = result;
+        error = err;
+      },
+    });
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(readLocalSkillCardContentSyncMock).toHaveBeenCalledWith(
+      "/tmp/workspace/skills/agentreceipt",
+    );
+    expect(response).toEqual({
+      schema: "openclaw.skills.skill-card.v1",
+      skillKey: "agentreceipt",
+      path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+      sizeBytes: 34,
+      content: "# AgentReceipt\n\nLocal trust card.\n",
+    });
   });
 
   it("installs a ClawHub skill through skills.install", async () => {

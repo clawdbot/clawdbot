@@ -1,6 +1,6 @@
 import {
   normalizeAccountId,
-  resolveAccountEntry,
+  resolveNormalizedAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -49,7 +49,11 @@ export function resolveTelegramAccountConfig(
   accountId: string,
 ): TelegramAccountConfig | undefined {
   const normalized = normalizeAccountId(accountId);
-  return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
+  return resolveNormalizedAccountEntry(
+    cfg.channels?.telegram?.accounts,
+    normalized,
+    normalizeAccountId,
+  );
 }
 
 export function mergeTelegramAccountConfig(

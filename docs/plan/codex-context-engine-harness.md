@@ -4,7 +4,7 @@ summary: "Specification for making the bundled Codex app-server harness honor Op
 read_when:
   - You are wiring context-engine lifecycle behavior into the Codex harness
   - You need lossless-claw or another context-engine plugin to work with codex/* embedded harness sessions
-  - You are comparing embedded PI and Codex app-server context behavior
+  - You are comparing embedded OpenClaw and Codex app-server context behavior
 ---
 
 ## Status
@@ -14,10 +14,10 @@ Draft implementation specification.
 ## Goal
 
 Make the bundled Codex app-server harness honor the same OpenClaw context-engine
-lifecycle contract that embedded PI turns already honor.
+lifecycle contract that embedded OpenClaw turns already honor.
 
-A session using `agents.defaults.embeddedHarness.runtime: "codex"` or a
-`codex/*` model should still let the selected context-engine plugin, such as
+A session using provider/model `agentRuntime.id: "codex"` or a `codex/*` model
+should still let the selected context-engine plugin, such as
 `lossless-claw`, control context assembly, post-turn ingest, maintenance, and
 OpenClaw-level compaction policy as far as the Codex app-server boundary allows.
 
@@ -36,7 +36,7 @@ OpenClaw-level compaction policy as far as the Codex app-server boundary allows.
 The embedded run loop resolves the configured context engine once per run before
 selecting a concrete low-level harness:
 
-- `src/agents/pi-embedded-runner/run.ts`
+- `src/agents/embedded-agent-runner/run.ts`
   - initializes context-engine plugins
   - calls `resolveContextEngine(params.config)`
   - passes `contextEngine` and `contextTokenBudget` into
@@ -44,7 +44,7 @@ selecting a concrete low-level harness:
 
 `runEmbeddedAttemptWithBackend(...)` delegates to the selected agent harness:
 
-- `src/agents/pi-embedded-runner/run/backend.ts`
+- `src/agents/embedded-agent-runner/run/backend.ts`
 - `src/agents/harness/selection.ts`
 
 The Codex app-server harness is registered by the bundled Codex plugin:
@@ -53,7 +53,7 @@ The Codex app-server harness is registered by the bundled Codex plugin:
 - `extensions/codex/harness.ts`
 
 The Codex harness implementation receives the same `EmbeddedRunAttemptParams`
-as PI-backed attempts:
+as built-in OpenClaw attempts:
 
 - `extensions/codex/src/app-server/run-attempt.ts`
 
@@ -65,7 +65,7 @@ compactor.
 
 ## Current gap
 
-Embedded PI attempts call the context-engine lifecycle directly:
+Built-in OpenClaw attempts call the context-engine lifecycle directly:
 
 - bootstrap/maintenance before the attempt
 - assemble before the model call
@@ -73,11 +73,11 @@ Embedded PI attempts call the context-engine lifecycle directly:
 - maintenance after a successful turn
 - context-engine compaction for engines that own compaction
 
-Relevant PI code:
+Relevant OpenClaw code:
 
-- `src/agents/pi-embedded-runner/run/attempt.ts`
-- `src/agents/pi-embedded-runner/run/attempt.context-engine-helpers.ts`
-- `src/agents/pi-embedded-runner/context-engine-maintenance.ts`
+- `src/agents/embedded-agent-runner/run/attempt.ts`
+- `src/agents/embedded-agent-runner/run/attempt.context-engine-helpers.ts`
+- `src/agents/embedded-agent-runner/context-engine-maintenance.ts`
 
 Codex app-server attempts currently run generic agent-harness hooks and mirror
 the transcript, but do not call `params.contextEngine.bootstrap`,
@@ -147,10 +147,10 @@ ordering to generated context text.
 
 Harness selection remains as-is:
 
-- `runtime: "pi"` forces PI
+- `runtime: "openclaw"` selects the built-in OpenClaw harness
 - `runtime: "codex"` selects the registered Codex harness
 - `runtime: "auto"` lets plugin harnesses claim supported providers
-- unmatched `auto` runs use PI
+- unmatched `auto` runs use the built-in OpenClaw harness
 
 This work changes what happens after the Codex harness is selected.
 
@@ -158,14 +158,14 @@ This work changes what happens after the Codex harness is selected.
 
 ### 1. Export or relocate reusable context-engine attempt helpers
 
-Today the reusable lifecycle helpers live under the PI runner:
+Today the reusable lifecycle helpers live under the embedded agent runner:
 
-- `src/agents/pi-embedded-runner/run/attempt.context-engine-helpers.ts`
-- `src/agents/pi-embedded-runner/run/attempt.prompt-helpers.ts`
-- `src/agents/pi-embedded-runner/context-engine-maintenance.ts`
+- `src/agents/embedded-agent-runner/run/attempt.context-engine-helpers.ts`
+- `src/agents/embedded-agent-runner/run/attempt.prompt-helpers.ts`
+- `src/agents/embedded-agent-runner/context-engine-maintenance.ts`
 
-Codex should not import from an implementation path whose name implies PI if we
-can avoid it.
+Codex should import harness-neutral helpers rather than reaching into runner
+implementation details.
 
 Create a harness-neutral module, for example:
 
@@ -180,10 +180,9 @@ Move or re-export:
 - `buildAfterTurnRuntimeContextFromUsage`
 - a small wrapper around `runContextEngineMaintenance`
 
-Keep PI imports working either by re-exporting from the old files or updating PI
-call sites in the same PR.
+Update built-in harness call sites in the same PR.
 
-The neutral helper names should not mention PI.
+The neutral helper names should not mention the built-in harness.
 
 Suggested names:
 
@@ -324,10 +323,11 @@ should become context-aware:
 3. run `before_prompt_build` with the projected prompt/developer instructions
 
 This order lets generic prompt hooks see the same prompt Codex will receive. If
-we need strict PI parity, run context-engine assembly before hook composition,
-because PI applies context-engine `systemPromptAddition` to the final system
-prompt after its prompt pipeline. The important invariant is that both context
-engine and hooks get a deterministic, documented order.
+we need strict OpenClaw parity, run context-engine assembly before hook
+composition, because the built-in harness applies context-engine
+`systemPromptAddition` to the final system prompt after its prompt pipeline. The
+important invariant is that both context engine and hooks get a deterministic,
+documented order.
 
 Recommended order for first implementation:
 
@@ -472,7 +472,7 @@ context-engine lifecycle currently misses reset/delete events for all harnesses.
 
 ### 10. Error handling
 
-Follow PI semantics:
+Follow built-in OpenClaw semantics:
 
 - bootstrap failures warn and continue
 - assemble failures warn and fall back to unassembled pipeline messages/prompt
@@ -526,7 +526,7 @@ Add tests under `extensions/codex/src/app-server`:
   event details change.
 - `src/agents/harness/selection.test.ts` should not need changes unless config
   behavior changes; it should remain stable.
-- PI context-engine tests should continue to pass unchanged.
+- Built-in harness context-engine tests should continue to pass unchanged.
 
 ### Integration / live tests
 
@@ -534,7 +534,7 @@ Add or extend live Codex harness smoke tests:
 
 - configure `plugins.slots.contextEngine` to a test engine
 - configure `agents.defaults.model` to a `codex/*` model
-- configure `agents.defaults.embeddedHarness.runtime = "codex"`
+- configure provider/model `agentRuntime.id = "codex"`
 - assert test engine observed:
   - bootstrap
   - assemble
@@ -599,9 +599,9 @@ This should be backward-compatible:
 3. Should `before_prompt_build` run before or after context-engine assembly?
 
    Recommendation: after context-engine projection for Codex, so generic harness
-   hooks see the actual prompt/developer instructions Codex will receive. If PI
-   parity requires the opposite, encode the chosen order in tests and document it
-   here.
+   hooks see the actual prompt/developer instructions Codex will receive. If
+   built-in harness parity requires the opposite, encode the chosen order in
+   tests and document it here.
 
 4. Can Codex app-server accept a future structured context/history override?
 
@@ -619,6 +619,6 @@ This should be backward-compatible:
 - Failed/aborted/yield-aborted turns do not run turn maintenance.
 - Context-engine-owned compaction remains primary for OpenClaw/plugin state.
 - Codex native compaction remains auditable as native Codex behavior.
-- Existing PI context-engine behavior is unchanged.
+- Existing built-in harness context-engine behavior is unchanged.
 - Existing Codex harness behavior is unchanged when no non-legacy context engine
   is selected or when assembly fails.

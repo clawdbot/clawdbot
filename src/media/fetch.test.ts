@@ -35,6 +35,21 @@ function makeStream(chunks: Uint8Array[]) {
   });
 }
 
+function makeCancelableStream(chunks: Uint8Array[]) {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(chunk);
+      }
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return { stream, wasCanceled: () => canceled };
+}
+
 function makeStallingFetch(firstChunk: Uint8Array) {
   return vi.fn(async () => {
     return new Response(
@@ -254,6 +269,21 @@ describe("readRemoteMediaBuffer", () => {
     },
   ] as const)("$name", async ({ fetchImpl }) => {
     await expectRemoteMediaMaxBytesError({ fetchImpl, maxBytes: 4 });
+  });
+
+  it("cancels ignored content-length overflow bodies for remote buffer reads", async () => {
+    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(body.stream, {
+          status: 200,
+          headers: { "content-length": "5" },
+        }),
+    );
+
+    await expectRemoteMediaMaxBytesError({ fetchImpl, maxBytes: 4 });
+
+    expect(body.wasCanceled()).toBe(true);
   });
 
   it("applies a default stream limit when maxBytes is omitted", async () => {
@@ -581,6 +611,25 @@ describe("readRemoteMediaBuffer", () => {
     expect(saved.path).toMatch(/[a-f0-9-]{36}\.png$/);
     expect(saved.path).not.toMatch(/photo---/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it("cancels ignored content-length overflow bodies for saved responses", async () => {
+    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
+
+    await expect(
+      saveResponseMedia(
+        new Response(body.stream, {
+          status: 200,
+          headers: { "content-length": "5" },
+        }),
+        {
+          maxBytes: 4,
+          sourceUrl: "https://example.com/file.bin",
+        },
+      ),
+    ).rejects.toThrow("content length 5 exceeds maxBytes 4");
+
+    expect(body.wasCanceled()).toBe(true);
   });
 
   it("decodes URL path basenames when deriving remote media filenames", async () => {

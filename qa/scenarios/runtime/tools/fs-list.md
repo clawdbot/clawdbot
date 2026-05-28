@@ -10,13 +10,13 @@ coverage:
     - tools.fs.list
 objective: Verify directory inspection behavior is tracked through read while Codex owns file inspection natively.
 successCriteria:
-  - Pi may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
+  - OpenClaw may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
   - Mock provider read plans are reported as fixture intent, not as actual runtime tool calls.
   - The row stays report-only until directory fault injection proves native Codex read behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
-  - src/agents/pi-tools.read.ts
+  - src/agents/agent-tools.read.ts
   - extensions/qa-lab/src/runtime-tool-fixture.ts
 execution:
   kind: flow

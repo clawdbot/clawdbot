@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
-import { classifyEmbeddedPiRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CodexAppServerEventProjector,
@@ -72,7 +72,7 @@ function forCurrentTurn(
 
 function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
   const finalAssistantText = result.assistantTexts.join("\n\n").trim();
-  return classifyEmbeddedPiRunResultForModelFallback({
+  return classifyEmbeddedAgentRunResultForModelFallback({
     provider: "codex",
     model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
     result: createContractRunResult({

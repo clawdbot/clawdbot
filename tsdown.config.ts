@@ -233,6 +233,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
+    "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
     "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
@@ -242,7 +243,6 @@ function buildCoreDistEntries(): Record<string, string> {
     "plugins/synthetic-auth.runtime": "src/plugins/synthetic-auth.runtime.ts",
     "subagent-registry.runtime": "src/agents/subagent-registry.runtime.ts",
     "task-registry-control.runtime": "src/tasks/task-registry-control.runtime.ts",
-    "agents/pi-model-discovery-runtime": "src/agents/pi-model-discovery-runtime.ts",
     "link-understanding/apply.runtime": "src/link-understanding/apply.runtime.ts",
     "media-understanding/apply.runtime": "src/media-understanding/apply.runtime.ts",
     "commands/doctor/shared/plugin-registry-migration":
@@ -275,13 +275,13 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
   return {
     // Mounted Docker harnesses run against the npm tarball image, so any
     // internal module they assert must have a stable package dist entry.
-    "agents/pi-bundle-mcp-materialize": "src/agents/pi-bundle-mcp-materialize.ts",
-    "agents/pi-bundle-mcp-runtime": "src/agents/pi-bundle-mcp-runtime.ts",
-    "agents/pi-embedded-runner/effective-tool-policy":
-      "src/agents/pi-embedded-runner/effective-tool-policy.ts",
-    "agents/pi-embedded-runner/tool-split": "src/agents/pi-embedded-runner/tool-split.ts",
-    "agents/pi-embedded-runner/run/runtime-context-prompt":
-      "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
+    "agents/agent-bundle-mcp-materialize": "src/agents/agent-bundle-mcp-materialize.ts",
+    "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    "agents/embedded-agent-runner/effective-tool-policy":
+      "src/agents/embedded-agent-runner/effective-tool-policy.ts",
+    "agents/embedded-agent-runner/tool-split": "src/agents/embedded-agent-runner/tool-split.ts",
+    "agents/embedded-agent-runner/run/runtime-context-prompt":
+      "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
     "cli/run-main": "src/cli/run-main.ts",
     "commitments/runtime": "src/commitments/runtime.ts",
@@ -296,6 +296,50 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "plugins/tools": "src/plugins/tools.ts",
     "shared/string-coerce": "src/shared/string-coerce.ts",
   };
+}
+
+function buildAgentCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/agent-core/src/index.ts",
+    agent: "packages/agent-core/src/agent.ts",
+    "agent-loop": "packages/agent-core/src/agent-loop.ts",
+    llm: "packages/agent-core/src/llm.ts",
+    node: "packages/agent-core/src/node.ts",
+    "runtime-deps": "packages/agent-core/src/runtime-deps.ts",
+    types: "packages/agent-core/src/types.ts",
+    validation: "packages/agent-core/src/validation.ts",
+    "harness/agent-harness": "packages/agent-core/src/harness/agent-harness.ts",
+    "harness/types": "packages/agent-core/src/harness/types.ts",
+    "harness/messages": "packages/agent-core/src/harness/messages.ts",
+    "harness/env/kill-tree": "packages/agent-core/src/harness/env/kill-tree.ts",
+    "harness/session": "packages/agent-core/src/harness/session/session.ts",
+    "harness/session/jsonl-repo": "packages/agent-core/src/harness/session/jsonl-repo.ts",
+    "harness/session/jsonl-storage": "packages/agent-core/src/harness/session/jsonl-storage.ts",
+    "harness/session/memory-repo": "packages/agent-core/src/harness/session/memory-repo.ts",
+    "harness/session/memory-storage": "packages/agent-core/src/harness/session/memory-storage.ts",
+    "harness/session/repo-utils": "packages/agent-core/src/harness/session/repo-utils.ts",
+    "harness/session/uuid": "packages/agent-core/src/harness/session/uuid.ts",
+    "harness/compaction": "packages/agent-core/src/harness/compaction/compaction.ts",
+    "harness/branch-summarization":
+      "packages/agent-core/src/harness/compaction/branch-summarization.ts",
+    "harness/prompt-templates": "packages/agent-core/src/harness/prompt-templates.ts",
+    "harness/skills": "packages/agent-core/src/harness/skills.ts",
+    "harness/system-prompt": "packages/agent-core/src/harness/system-prompt.ts",
+    "harness/utils/shell-output": "packages/agent-core/src/harness/utils/shell-output.ts",
+    "harness/utils/truncate": "packages/agent-core/src/harness/utils/truncate.ts",
+  };
+}
+
+function shouldExternalizeAgentCoreDependency(id: string): boolean {
+  return (
+    id === "ignore" ||
+    id === "openclaw" ||
+    id.startsWith("openclaw/") ||
+    id === "typebox" ||
+    id.startsWith("typebox/") ||
+    id === "yaml" ||
+    id.startsWith("yaml/")
+  );
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -332,6 +376,15 @@ function buildUnifiedDistEntries(): Record<string, string> {
 }
 
 export default defineConfig([
+  nodeBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildAgentCoreDistEntries(),
+    outDir: "packages/agent-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeAgentCoreDependency,
+    },
+  }),
   nodeBuildConfig({
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.

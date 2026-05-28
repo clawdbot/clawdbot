@@ -6,7 +6,7 @@ import {
   CLI_RESUME_WATCHDOG_DEFAULTS,
   CLI_WATCHDOG_MIN_TIMEOUT_MS,
 } from "../cli-watchdog-defaults.js";
-import type { EmbeddedRunTrigger } from "../pi-embedded-runner/run/params.js";
+import type { EmbeddedRunTrigger } from "../embedded-agent-runner/run/params.js";
 
 function pickWatchdogProfile(
   backend: CliBackendConfig,

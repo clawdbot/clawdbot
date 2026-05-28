@@ -11,6 +11,7 @@ import {
 
 const mocks = {
   ...createStatusScanSharedMocks("status-fast-json"),
+  callGateway: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(() => []),
   resolveMemorySearchConfig: vi.fn(),
 };
@@ -112,6 +113,85 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
 
+  it("keeps default fast JSON update scans local-only", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ timeoutMs: 1234 }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1234,
+        fetchGit: false,
+        includeRegistry: false,
+      }),
+    );
+  });
+
+  it("restores registry-backed update checks and remote git fetches when --all is requested", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 6500,
+        fetchGit: true,
+        includeRegistry: true,
+      }),
+    );
+  });
+
+  it("keeps the local status RPC fallback off the default fast JSON path", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("honors explicit gateway probe timeouts on the lean JSON path", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ timeoutMs: 5000 }, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5000 }));
+  });
+
+  it("keeps configured gateway handshake timeouts on the lean JSON path", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    applyStatusScanDefaults(mocks, {
+      resolvedConfig: {
+        ...createStatusMemorySearchConfig(),
+        gateway: { handshakeTimeoutMs: 30_000 },
+      } as never,
+    });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("restores the local status RPC fallback when --all is requested", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "status",
+        timeoutMs: 2000,
+      }),
+    );
+  });
+
   it("keeps the fast JSON summary off the channel plugin summary path", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
 
@@ -171,7 +251,7 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
-  it("keeps cold-start probes when a channel is configured from manifest env vars", async () => {
+  it("keeps cold-start gateway probes with local-only updates when a channel is configured from manifest env vars", async () => {
     await withTemporaryEnv(
       {
         OPENCLAW_TWITCH_ACCESS_TOKEN: "token",
@@ -184,7 +264,12 @@ describe("scanStatusJsonFast", () => {
       },
     );
 
-    expect(mocks.getUpdateCheckResult).toHaveBeenCalled();
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchGit: false,
+        includeRegistry: false,
+      }),
+    );
     expect(mocks.probeGateway).toHaveBeenCalled();
   });
 });

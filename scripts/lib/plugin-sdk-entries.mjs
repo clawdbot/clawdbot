@@ -57,3 +57,10 @@ export function listPluginSdkDistArtifacts() {
     `dist/plugin-sdk/${entry}.d.ts`,
   ]);
 }
+
+export function listPrivateLocalOnlyPluginSdkDistArtifacts() {
+  return privateLocalOnlyPluginSdkEntrypoints.flatMap((entry) => [
+    `dist/plugin-sdk/${entry}.js`,
+    `dist/plugin-sdk/${entry}.d.ts`,
+  ]);
+}

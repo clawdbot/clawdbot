@@ -375,7 +375,6 @@ describeLive("gateway live (cli backend)", () => {
                 ? { [modelSwitchTarget]: { agentRuntime: modelSelection.agentRuntime } }
                 : {}),
             },
-            agentRuntime: modelSelection.agentRuntime,
             cliBackends: {
               ...existingBackends,
               [providerId]: {

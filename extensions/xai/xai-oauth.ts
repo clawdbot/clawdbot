@@ -216,7 +216,7 @@ function normalizeExpires(value: unknown, now: () => number): number | undefined
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value)
+        ? parsePositiveSeconds(value)
         : Number.NaN;
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return undefined;
@@ -229,12 +229,20 @@ function normalizePositiveSecondsToMs(value: unknown): number | undefined {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value)
+        ? parsePositiveSeconds(value)
         : Number.NaN;
   if (!Number.isFinite(seconds) || seconds <= 0) {
     return undefined;
   }
   return Math.trunc(seconds * 1000);
+}
+
+function parsePositiveSeconds(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return Number.NaN;
+  }
+  return Number(trimmed);
 }
 
 function parseXaiOAuthTokenResponse(

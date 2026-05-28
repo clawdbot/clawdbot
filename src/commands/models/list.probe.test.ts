@@ -5,8 +5,8 @@ let probeModule: typeof import("./list.probe.js");
 
 describe("mapFailoverReasonToProbeStatus", () => {
   beforeAll(async () => {
-    vi.doMock("../../agents/pi-embedded.js", () => {
-      throw new Error("pi-embedded should stay lazy for probe imports");
+    vi.doMock("../../agents/embedded-agent.js", () => {
+      throw new Error("embedded-agent should stay lazy for probe imports");
     });
     try {
       probeModule = await importFreshModule<typeof import("./list.probe.js")>(
@@ -14,7 +14,7 @@ describe("mapFailoverReasonToProbeStatus", () => {
         `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
       );
     } finally {
-      vi.doUnmock("../../agents/pi-embedded.js");
+      vi.doUnmock("../../agents/embedded-agent.js");
     }
   });
 

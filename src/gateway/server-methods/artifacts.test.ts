@@ -122,6 +122,13 @@ describe("artifacts RPC handlers", () => {
     expectFields(artifact?.download, { mode: "bytes" });
     expect(artifact?.id).toMatch(/^artifact_/);
     expect(artifact).not.toHaveProperty("data");
+    expect(hoisted.visitSessionMessagesAsync).toHaveBeenCalledWith(
+      "sess-main",
+      "/tmp/sessions.json",
+      "/tmp/sess-main.jsonl",
+      expect.any(Function),
+      expect.objectContaining({ cache: "skip" }),
+    );
   });
 
   it("applies agentId to direct sessionKey aliases", async () => {
@@ -287,6 +294,76 @@ describe("artifacts RPC handlers", () => {
       data: "aGVsbG8=",
     });
     expectFields(downloadPayload.artifact, { id: artifactId });
+  });
+
+  it("can scan artifact summaries without retaining inline data", () => {
+    const artifacts = collectArtifactsFromMessages({
+      sessionKey: "agent:main:main",
+      includeDownloadData: false,
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "image",
+              data: "aGVsbG8=",
+              mimeType: "image/png",
+              alt: "result.png",
+            },
+          ],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(artifacts).toHaveLength(1);
+    expectFields(artifacts[0], {
+      title: "result.png",
+      mimeType: "image/png",
+      sizeBytes: 5,
+    });
+    expectFields(artifacts[0]?.download, { mode: "bytes" });
+    expect(artifacts[0]).not.toHaveProperty("data");
+  });
+
+  it("hydrates inline data only for the requested download artifact", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "image",
+            data: "Zmlyc3Q=",
+            mimeType: "image/png",
+            alt: "first.png",
+          },
+          {
+            type: "image",
+            data: "c2Vjb25k",
+            mimeType: "image/png",
+            alt: "second.png",
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+    ];
+    const summaries = collectArtifactsFromMessages({
+      sessionKey: "agent:main:main",
+      includeDownloadData: false,
+      messages,
+    });
+    const secondArtifactId = requireNonEmptyString(summaries[1]?.id, "expected second artifact id");
+
+    const hydrated = collectArtifactsFromMessages({
+      sessionKey: "agent:main:main",
+      downloadArtifactId: secondArtifactId,
+      messages,
+    });
+
+    expect(hydrated).toHaveLength(2);
+    expectFields(hydrated[0], { title: "first.png" });
+    expect(hydrated[0]).not.toHaveProperty("data");
+    expectFields(hydrated[1], { title: "second.png", data: "c2Vjb25k" });
   });
 
   it("resolves runId queries through the gateway run-to-session lookup", async () => {

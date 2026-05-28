@@ -104,8 +104,8 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 ### OpenAI (direct API)
 
 - Prompt caching is automatic on supported recent models. OpenClaw does not need to inject block-level cache markers.
-- OpenClaw uses `prompt_cache_key` to keep cache routing stable across turns and uses `prompt_cache_retention: "24h"` only when `cacheRetention: "long"` is selected on direct OpenAI hosts.
-- OpenAI-compatible Completions providers receive `prompt_cache_key` only when their model config explicitly sets `compat.supportsPromptCacheKey: true`; `cacheRetention: "none"` still suppresses it.
+- OpenClaw uses `prompt_cache_key` to keep cache routing stable across turns. Direct OpenAI hosts use `prompt_cache_retention: "24h"` when `cacheRetention: "long"` is selected.
+- OpenAI-compatible Completions providers receive `prompt_cache_key` only when their model config explicitly sets `compat.supportsPromptCacheKey: true`; with that same opt-in, explicit `cacheRetention: "long"` also forwards `prompt_cache_retention: "24h"`, and `cacheRetention: "none"` suppresses both fields.
 - OpenAI responses expose cached prompt tokens via `usage.prompt_tokens_details.cached_tokens` (or `input_tokens_details.cached_tokens` on Responses API events). OpenClaw maps that to `cacheRead`.
 - OpenAI does not expose a separate cache-write token counter, so `cacheWrite` stays `0` on OpenAI paths even when the provider is warming a cache.
 - OpenAI returns useful tracing and rate-limit headers such as `x-request-id`, `openai-processing-ms`, and `x-ratelimit-*`, but cache-hit accounting should come from the usage payload, not from headers.

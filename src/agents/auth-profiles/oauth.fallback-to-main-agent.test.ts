@@ -13,7 +13,7 @@ const { getOAuthApiKeyMock } = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
+vi.mock("../../llm/oauth.js", () => ({
   getOAuthApiKey: getOAuthApiKeyMock,
   getOAuthProviders: () => [{ id: "anthropic" }, { id: "openai-codex" }],
 }));
@@ -37,7 +37,7 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 afterAll(() => {
-  vi.doUnmock("@earendil-works/pi-ai/oauth");
+  vi.doUnmock("../../llm/oauth.js");
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.doUnmock("../../plugins/provider-runtime.js");
@@ -48,11 +48,7 @@ function createUsableOAuthExpiry(): number {
 }
 
 describe("resolveApiKeyForProfile fallback to main agent", () => {
-  const envSnapshot = captureEnv([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
-    "PI_CODING_AGENT_DIR",
-  ]);
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"]);
   let tmpDir: string;
   let mainAgentDir: string;
   let secondaryAgentDir: string;
@@ -72,7 +68,6 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     // Set environment variables so the default agent dir resolves under tmpDir.
     process.env.OPENCLAW_STATE_DIR = tmpDir;
     process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    process.env.PI_CODING_AGENT_DIR = mainAgentDir;
     clearRuntimeAuthProfileStoreSnapshots();
   });
 

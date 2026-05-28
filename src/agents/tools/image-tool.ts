@@ -18,7 +18,11 @@ import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
-import type { ImageCompressionModelPolicy, ImageCompressionPolicy } from "../../media/web-media.js";
+import type {
+  ImageCompressionModelPolicy,
+  ImageCompressionPolicy,
+  WebMediaResult,
+} from "../../media/web-media.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -31,16 +35,16 @@ import {
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resolveModelAsync } from "../embedded-agent-runner/model.js";
+import {
+  bundledStaticCatalogProviderUsesRuntimeAugment,
+  resolveBundledStaticCatalogModel,
+} from "../embedded-agent-runner/model.static-catalog.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   resolveImageFallbackCandidates,
   resolveImageFallbackDefaultProvider,
 } from "../model-fallback.js";
-import { resolveModelAsync } from "../pi-embedded-runner/model.js";
-import {
-  bundledStaticCatalogProviderUsesRuntimeAugment,
-  resolveBundledStaticCatalogModel,
-} from "../pi-embedded-runner/model.static-catalog.js";
 import {
   coerceImageAssistantText,
   coerceImageModelConfig,
@@ -76,10 +80,23 @@ import {
 const DEFAULT_PROMPT = "Describe the image.";
 const DEFAULT_MAX_IMAGES = 20;
 
-type ImageWebMediaRuntime = Pick<
-  typeof import("../../media/web-media.js"),
-  "loadWebMedia" | "optimizeImageBufferForWebMedia"
->;
+type ImageToolLoadWebMediaOptions = {
+  maxBytes?: number;
+  sandboxValidated?: boolean;
+  readFile?: (filePath: string) => Promise<Buffer>;
+  imageCompression?: ImageCompressionPolicy;
+  localRoots?: readonly string[] | "any";
+  inboundRoots?: readonly string[];
+  ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
+};
+
+type ImageWebMediaRuntime = {
+  loadWebMedia: (
+    mediaUrl: string,
+    options?: ImageToolLoadWebMediaOptions,
+  ) => Promise<WebMediaResult>;
+  optimizeImageBufferForWebMedia: (typeof import("../../media/web-media.js"))["optimizeImageBufferForWebMedia"];
+};
 
 async function loadImageWebMediaRuntime(): Promise<ImageWebMediaRuntime> {
   return await import("../../media/web-media.js");
@@ -94,6 +111,7 @@ const imageToolProviderDeps = {
   resolveDefaultMediaModel,
   resolveBundledStaticCatalogModel,
   resolveModelAsync,
+  resolveImageCompressionPolicy,
   loadImageWebMediaRuntime,
 };
 
@@ -156,6 +174,7 @@ export const testing = {
     resolveDefaultMediaModel?: typeof resolveDefaultMediaModel;
     resolveBundledStaticCatalogModel?: typeof resolveBundledStaticCatalogModel;
     resolveModelAsync?: typeof resolveModelAsync;
+    resolveImageCompressionPolicy?: typeof resolveImageCompressionPolicy;
     loadImageWebMediaRuntime?: typeof loadImageWebMediaRuntime;
   }) {
     imageToolProviderDeps.buildProviderRegistry =
@@ -173,6 +192,8 @@ export const testing = {
     imageToolProviderDeps.resolveBundledStaticCatalogModel =
       overrides?.resolveBundledStaticCatalogModel ?? resolveBundledStaticCatalogModel;
     imageToolProviderDeps.resolveModelAsync = overrides?.resolveModelAsync ?? resolveModelAsync;
+    imageToolProviderDeps.resolveImageCompressionPolicy =
+      overrides?.resolveImageCompressionPolicy ?? resolveImageCompressionPolicy;
     imageToolProviderDeps.loadImageWebMediaRuntime =
       overrides?.loadImageWebMediaRuntime ?? loadImageWebMediaRuntime;
   },
@@ -421,7 +442,7 @@ async function resolveCompressionModelPolicyWithHooks(params: {
       {
         allowBundledStaticCatalogFallback: true,
         skipProviderRuntimeHooks: params.skipProviderRuntimeHooks,
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
         workspaceDir: params.workspaceDir,
       },
     );
@@ -813,7 +834,7 @@ export function createImageTool(options?: {
           "No image model is configured. Set agents.defaults.imageModel or configure an image-capable provider.",
         );
       }
-      const imageCompression = await resolveImageCompressionPolicy({
+      const imageCompression = await imageToolProviderDeps.resolveImageCompressionPolicy({
         cfg: options?.config,
         imageModelConfig,
         modelOverride,

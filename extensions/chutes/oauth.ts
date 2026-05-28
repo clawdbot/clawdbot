@@ -1,5 +1,4 @@
 import { randomBytes } from "node:crypto";
-import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import {
   parseOAuthCallbackInput,
@@ -14,6 +13,13 @@ const CHUTES_USERINFO_ENDPOINT = "https://api.chutes.ai/idp/userinfo";
 type OAuthPrompt = {
   message: string;
   placeholder?: string;
+};
+
+type OAuthCredentials = {
+  refresh: string;
+  access: string;
+  expires: number;
+  [key: string]: unknown;
 };
 
 type ChutesOAuthAppConfig = {

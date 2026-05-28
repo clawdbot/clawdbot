@@ -624,6 +624,49 @@ describe("exec approvals shell analysis", () => {
       expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
     });
 
+    it.each([
+      {
+        name: "BSD script transcript",
+        command: "script ~/.zshenv git log -1 --format='payload'",
+        platform: "darwin" as const,
+        blockedWrapper: "script",
+      },
+      {
+        name: "GNU time output file",
+        command: "/usr/bin/time -o ~/.bashrc -a -f 'payload' git status",
+        platform: "linux" as const,
+        blockedWrapper: "time",
+      },
+    ])("rejects side-effecting dispatch wrapper allowlist bypasses for $name", (testCase) => {
+      const result = evaluateShellAllowlist({
+        command: testCase.command,
+        allowlist: [{ pattern: "git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+        platform: testCase.platform,
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(false);
+      expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
+      expect(result.segments[0]?.resolution?.blockedWrapper).toBe(testCase.blockedWrapper);
+      expect(result.segmentSatisfiedBy).toEqual([null]);
+    });
+
+    it("keeps GNU time transparent when it only reports to stderr", () => {
+      const result = evaluateShellAllowlist({
+        command: "/usr/bin/time -p git status",
+        allowlist: [{ pattern: "git" }],
+        safeBins: new Set(),
+        cwd: "/tmp",
+        platform: "linux",
+      });
+
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+      expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
+    });
+
     it("rejects the legacy skill display prelude when only the wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;

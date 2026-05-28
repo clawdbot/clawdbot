@@ -1,4 +1,4 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -32,16 +32,16 @@ import type {
   IngestResult,
 } from "./types.js";
 
-const { compactEmbeddedPiSessionDirectMock } = vi.hoisted(() => ({
-  compactEmbeddedPiSessionDirectMock: vi.fn(),
+const { compactEmbeddedAgentSessionDirectMock } = vi.hoisted(() => ({
+  compactEmbeddedAgentSessionDirectMock: vi.fn(),
 }));
 
-vi.mock("../agents/pi-embedded-runner/compact.runtime.js", () => ({
-  compactEmbeddedPiSessionDirect: compactEmbeddedPiSessionDirectMock,
+vi.mock("../agents/embedded-agent-runner/compact.runtime.js", () => ({
+  compactEmbeddedAgentSessionDirect: compactEmbeddedAgentSessionDirectMock,
 }));
 
 function installCompactRuntimeSpy() {
-  return compactEmbeddedPiSessionDirectMock.mockResolvedValue({
+  return compactEmbeddedAgentSessionDirectMock.mockResolvedValue({
     ok: true,
     compacted: false,
     reason: "mock compaction",
@@ -56,7 +56,7 @@ function installCompactRuntimeSpy() {
 }
 
 function requireCompactRuntimeParams(callIndex: number): Record<string, unknown> {
-  const params = compactEmbeddedPiSessionDirectMock.mock.calls[callIndex]?.[0] as
+  const params = compactEmbeddedAgentSessionDirectMock.mock.calls[callIndex]?.[0] as
     | Record<string, unknown>
     | undefined;
   if (!params) {
@@ -379,7 +379,7 @@ class LegacyAssembleStrictEngine implements ContextEngine {
 describe("Engine contract tests", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    compactEmbeddedPiSessionDirectMock.mockReset();
+    compactEmbeddedAgentSessionDirectMock.mockReset();
     clearMemoryPluginState();
   });
 

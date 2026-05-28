@@ -889,6 +889,7 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
 
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
+const JITI_CONCRETE_ALIAS_TARGET_PATTERN = /^(?:[A-Za-z]:[/\\]|[/\\])/;
 
 // Memoize loader alias/config by effective resolution context so repeated
 // loader setup avoids rebuilding the same filesystem-derived map and cache key.
@@ -917,6 +918,45 @@ function createJitiAliasContentCacheKey(aliasMap: Record<string, string>) {
     .toSorted(([left], [right]) => left.localeCompare(right))
     .map(([key, value]) => `${key}\0${value}`)
     .join("\0");
+}
+
+function isConcreteJitiAliasTarget(target: string | undefined): boolean {
+  return typeof target === "string" && JITI_CONCRETE_ALIAS_TARGET_PATTERN.test(target);
+}
+
+function resolveJitiAliasTarget(
+  aliasKey: string,
+  aliasKeys: string[],
+  aliasMap: Record<string, string>,
+) {
+  let target = aliasMap[aliasKey];
+  const seenTargets = new Set<string>();
+  const seenAliasKeys = new Set<string>();
+  while (target && !isConcreteJitiAliasTarget(target) && !seenTargets.has(target)) {
+    seenTargets.add(target);
+    let nextTarget: string | undefined;
+    for (const candidateKey of aliasKeys) {
+      if (
+        candidateKey === aliasKey ||
+        aliasKey.startsWith(candidateKey) ||
+        !target.startsWith(candidateKey) ||
+        !JITI_ALIAS_ROOT_SENTINELS.has(target[candidateKey.length])
+      ) {
+        continue;
+      }
+      if (seenAliasKeys.has(candidateKey)) {
+        return target;
+      }
+      seenAliasKeys.add(candidateKey);
+      nextTarget = aliasMap[candidateKey] + target.slice(candidateKey.length);
+      break;
+    }
+    if (!nextTarget || nextTarget === target) {
+      break;
+    }
+    target = nextTarget;
+  }
+  return target;
 }
 
 function normalizePluginLoaderAliasMapForJiti(
@@ -950,18 +990,15 @@ function normalizePluginLoaderAliasMapForJiti(
       ([left], [right]) => getAliasDepth(right) - getAliasDepth(left),
     ),
   );
-  for (const aliasKey in normalizedAliasMap) {
-    for (const candidateKey in normalizedAliasMap) {
-      if (
-        candidateKey === aliasKey ||
-        aliasKey.startsWith(candidateKey) ||
-        !normalizedAliasMap[aliasKey]?.startsWith(candidateKey) ||
-        !JITI_ALIAS_ROOT_SENTINELS.has(normalizedAliasMap[aliasKey]?.[candidateKey.length])
-      ) {
-        continue;
-      }
-      normalizedAliasMap[aliasKey] =
-        normalizedAliasMap[candidateKey] + normalizedAliasMap[aliasKey].slice(candidateKey.length);
+  const aliasKeys = Object.keys(normalizedAliasMap);
+  for (const aliasKey of aliasKeys) {
+    const target = normalizedAliasMap[aliasKey];
+    if (!target || isConcreteJitiAliasTarget(target)) {
+      continue;
+    }
+    const resolvedTarget = resolveJitiAliasTarget(aliasKey, aliasKeys, normalizedAliasMap);
+    if (resolvedTarget) {
+      normalizedAliasMap[aliasKey] = resolvedTarget;
     }
   }
   Object.defineProperty(normalizedAliasMap, JITI_NORMALIZED_ALIAS_SYMBOL, {

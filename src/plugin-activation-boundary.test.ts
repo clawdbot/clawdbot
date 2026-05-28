@@ -139,7 +139,7 @@ describe("plugin activation boundary", () => {
     expect(isStaticallyChannelConfigured({}, "whatsapp", {})).toBe(false);
     const staticNormalize = {
       allowPluginNormalization: false,
-      manifestPlugins: loadPluginManifestRegistryForPluginRegistry().plugins,
+      manifestPlugins: [{ modelIdNormalization: testModelIdNormalization }],
     };
     expect(normalizeModelRef("google", "gemini-3.1-pro", staticNormalize)).toEqual({
       provider: "google",

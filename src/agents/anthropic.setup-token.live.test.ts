@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { type Api, completeSimple, type Model } from "@earendil-works/pi-ai";
+import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   ANTHROPIC_SETUP_TOKEN_PREFIX,
   validateAnthropicSetupToken,
 } from "../commands/auth-token.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import {
   type AuthProfileCredential,
@@ -19,7 +20,6 @@ import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
 const LIVE = isLiveTestEnabled();
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
@@ -125,7 +125,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
   return { agentDir, profileId: pickSetupTokenProfile(candidates) };
 }
 
-function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
+function pickModel(models: Array<Model>, raw?: string): Model | null {
   const normalized = raw?.trim() ?? "";
   if (normalized) {
     const parsed = parseModelRef(normalized, "anthropic");
@@ -156,8 +156,8 @@ function pickModel(models: Array<Model<Api>>, raw?: string): Model<Api> | null {
   return models[0] ?? null;
 }
 
-function buildTestModel(id: string, provider = "anthropic"): Model<Api> {
-  return { id, provider } as Model<Api>;
+function buildTestModel(id: string, provider = "anthropic"): Model {
+  return { id, provider } as Model;
 }
 
 describe("pickModel", () => {
@@ -192,7 +192,7 @@ describeLive("live anthropic setup-token", () => {
         const all = Array.isArray(modelRegistry) ? modelRegistry : modelRegistry.getAll();
         const candidates = all.filter(
           (model) => normalizeProviderId(model.provider) === "anthropic",
-        ) as Array<Model<Api>>;
+        ) as Array<Model>;
         expect(candidates.length).toBeGreaterThan(0);
 
         const model = pickModel(candidates, SETUP_TOKEN_MODEL);

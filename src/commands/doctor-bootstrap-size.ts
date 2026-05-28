@@ -7,7 +7,7 @@ import { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../agents/pi-embedded-helpers.js";
+} from "../agents/embedded-agent-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
 

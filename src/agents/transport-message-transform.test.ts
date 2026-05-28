@@ -1,9 +1,9 @@
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { transformTransportMessages } from "./transport-message-transform.js";
 
-function makeModel(api: Api, provider: string, id: string): Model<Api> {
-  return { api, provider, id, input: [], output: [] } as unknown as Model<Api>;
+function makeModel(api: Api, provider: string, id: string): Model {
+  return { api, provider, id, input: [], output: [] } as unknown as Model;
 }
 
 type ToolResultMessage = Extract<Context["messages"][number], { role: "toolResult" }>;

@@ -24,8 +24,13 @@
   },
   "nonSecretAuthMarkers": ["lmstudio-local"],
   "syntheticAuthRefs": ["lmstudio"],
-  "providerAuthEnvVars": {
-    "lmstudio": ["LM_API_TOKEN"]
+  "setup": {
+    "providers": [
+      {
+        "id": "lmstudio",
+        "envVars": ["LM_API_TOKEN"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

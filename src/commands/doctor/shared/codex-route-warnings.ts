@@ -1,11 +1,11 @@
 import fs from "node:fs";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveConfiguredProviderFallback } from "../../../agents/configured-provider-fallback.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { splitTrailingAuthProfile } from "../../../agents/model-ref-profile.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../../../agents/model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import { openAIProviderUsesCodexRuntimeByDefault } from "../../../agents/openai-codex-routing.js";
-import { normalizeEmbeddedAgentRuntime } from "../../../agents/pi-embedded-runner/runtime.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { AGENT_MODEL_CONFIG_KEYS } from "../../../config/model-refs.js";
 import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
@@ -68,13 +68,16 @@ type CodexSessionRouteRepairSummary = {
 };
 
 function normalizeRuntimeString(value: unknown): string | undefined {
-  const normalized = normalizeString(value);
-  return normalized ? normalizeEmbeddedAgentRuntime(normalized) : undefined;
+  return normalizeOptionalAgentRuntimeId(value);
 }
 
 function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {
   const record = asMutableRecord(value);
   return record ? { id: typeof record.id === "string" ? record.id : undefined } : undefined;
+}
+
+function readLegacyDefaultsRuntime(defaults: unknown): AgentRuntimePolicyConfig | undefined {
+  return asAgentRuntimePolicyConfig(asMutableRecord(defaults)?.agentRuntime);
 }
 
 function isOpenAICodexModelRef(model: string | undefined): model is string {
@@ -98,12 +101,10 @@ function toOpenAIModelId(model: string): string | undefined {
 }
 
 function resolveRuntime(params: {
-  env?: NodeJS.ProcessEnv;
   agentRuntime?: AgentRuntimePolicyConfig;
   defaultsRuntime?: AgentRuntimePolicyConfig;
 }): string | undefined {
   return (
-    normalizeRuntimeString(params.env?.OPENCLAW_AGENT_RUNTIME) ??
     normalizeRuntimeString(params.agentRuntime?.id) ??
     normalizeRuntimeString(params.defaultsRuntime?.id)
   );
@@ -578,18 +579,19 @@ function dedupeLegacyLosslessCompactionConfigs(
 
 function collectLegacyLosslessCompactionConfigs(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ignoreLegacyAgentRuntimePins?: boolean;
 }): LegacyLosslessCompactionConfig[] {
   const defaults = params.cfg.agents?.defaults;
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins ? undefined : defaults?.agentRuntime;
+  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
+    ? undefined
+    : readLegacyDefaultsRuntime(defaults);
   const defaultModelRef = readAgentPrimaryModelRef(defaults);
   const defaultCompaction = asMutableRecord(defaults?.compaction);
   const hits = collectLegacyLosslessCompactionForAgent({
     cfg: params.cfg,
     agent: defaults,
     path: "agents.defaults",
-    currentRuntime: resolveRuntime({ env: params.env, defaultsRuntime }),
+    currentRuntime: resolveRuntime({ defaultsRuntime }),
   });
   const agents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
   for (const [index, agent] of agents.entries()) {
@@ -608,7 +610,6 @@ function collectLegacyLosslessCompactionConfigs(params: {
         path: `agents.list.${id}`,
         agentId: id,
         currentRuntime: resolveRuntime({
-          env: params.env,
           agentRuntime: params.ignoreLegacyAgentRuntimePins
             ? undefined
             : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
@@ -639,18 +640,19 @@ function dedupeUnsupportedCompactionOverrides(
 
 function collectUnsupportedCodexCompactionOverrides(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ignoreLegacyAgentRuntimePins?: boolean;
 }): UnsupportedCodexCompactionOverride[] {
   const defaults = params.cfg.agents?.defaults;
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins ? undefined : defaults?.agentRuntime;
+  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
+    ? undefined
+    : readLegacyDefaultsRuntime(defaults);
   const defaultModelRef = readAgentPrimaryModelRef(defaults);
   const defaultCompaction = asMutableRecord(defaults?.compaction);
   const hits = collectUnsupportedCodexCompactionOverridesForAgent({
     cfg: params.cfg,
     agent: defaults,
     path: "agents.defaults",
-    currentRuntime: resolveRuntime({ env: params.env, defaultsRuntime }),
+    currentRuntime: resolveRuntime({ defaultsRuntime }),
   });
   const agents = Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : [];
   for (const [index, agent] of agents.entries()) {
@@ -669,7 +671,6 @@ function collectUnsupportedCodexCompactionOverrides(params: {
         path: `agents.list.${id}`,
         agentId: id,
         currentRuntime: resolveRuntime({
-          env: params.env,
           agentRuntime: params.ignoreLegacyAgentRuntimePins
             ? undefined
             : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
@@ -686,7 +687,6 @@ function collectUnsupportedCodexCompactionOverrides(params: {
 
 function getSharedDefaultCompactionOverrideConsumers(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ignoreLegacyAgentRuntimePins?: boolean;
 }): SharedDefaultCompactionOverrideConsumers {
   const consumers: SharedDefaultCompactionOverrideConsumers = { model: false, provider: false };
@@ -702,13 +702,12 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
   if (!hasDefaultModel && !hasDefaultProvider) {
     return consumers;
   }
-  const defaultsRuntime = defaults?.agentRuntime;
+  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   const inheritedModelRef = readAgentPrimaryModelRef(defaults);
   const defaultUsesCodexCompaction = agentUsesCodexRuntimeForCompaction({
     cfg: params.cfg,
     agent: defaults,
     currentRuntime: resolveRuntime({
-      env: params.env,
       defaultsRuntime: params.ignoreLegacyAgentRuntimePins ? undefined : defaultsRuntime,
     }),
   });
@@ -747,7 +746,6 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
       agent: agentRecord,
       agentId: id,
       currentRuntime: resolveRuntime({
-        env: params.env,
         agentRuntime: params.ignoreLegacyAgentRuntimePins
           ? undefined
           : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
@@ -768,7 +766,6 @@ function getSharedDefaultCompactionOverrideConsumers(params: {
 
 function sharedDefaultLosslessCompactionHasNonCodexConsumer(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ignoreLegacyAgentRuntimePins?: boolean;
 }): boolean {
   const defaults = params.cfg.agents?.defaults;
@@ -780,11 +777,13 @@ function sharedDefaultLosslessCompactionHasNonCodexConsumer(params: {
   if (!hasDefaultLosslessProvider && !hasDefaultModel) {
     return false;
   }
-  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins ? undefined : defaults?.agentRuntime;
+  const defaultsRuntime = params.ignoreLegacyAgentRuntimePins
+    ? undefined
+    : readLegacyDefaultsRuntime(defaults);
   const defaultUsesCodexCompaction = agentUsesCodexRuntimeForCompaction({
     cfg: params.cfg,
     agent: defaults,
-    currentRuntime: resolveRuntime({ env: params.env, defaultsRuntime }),
+    currentRuntime: resolveRuntime({ defaultsRuntime }),
   });
   if (!defaultUsesCodexCompaction) {
     return true;
@@ -815,7 +814,6 @@ function sharedDefaultLosslessCompactionHasNonCodexConsumer(params: {
       agent: agentRecord,
       agentId: id,
       currentRuntime: resolveRuntime({
-        env: params.env,
         agentRuntime: params.ignoreLegacyAgentRuntimePins
           ? undefined
           : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
@@ -900,15 +898,15 @@ function collectAgentModelRefs(params: {
   }
 }
 
-function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): CodexRouteHit[] {
+function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
-  const defaultsRuntime = defaults?.agentRuntime;
+  const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
   collectAgentModelRefs({
     hits,
     agent: defaults,
     path: "agents.defaults",
-    runtime: resolveRuntime({ env, defaultsRuntime }),
+    runtime: resolveRuntime({ defaultsRuntime }),
     collectModelsMap: true,
   });
 
@@ -927,7 +925,6 @@ function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): C
       agent: agentRecord,
       path: `agents.list.${id}`,
       runtime: resolveRuntime({
-        env,
         agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
       }),
@@ -1382,8 +1379,8 @@ function collectCodexRuntimeModelPolicyRefs(params: {
     if (!trimmed) {
       continue;
     }
-    const runtime = normalizeEmbeddedAgentRuntime(
-      normalizeString(asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id),
+    const runtime = normalizeRuntimeString(
+      asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
     );
     if (runtime === "codex") {
       params.refs.push({ path: `${params.path}.${trimmed}`, modelRef: trimmed });
@@ -1908,7 +1905,6 @@ function ensureLosslessLlmPolicy(params: {
 
 function maybeMigrateLegacyLosslessCompactionConfig(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   ignoreLegacyAgentRuntimePins?: boolean;
 }): string[] {
   const root = params.cfg as MutableRecord;
@@ -2184,7 +2180,6 @@ function isCompactionOnlyRouteHit(hit: CodexRouteHit): boolean {
 
 function rewriteConfigModelRefsWithCompactionPolicy(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   preserveSharedDefaultCompactionOverrides: SharedDefaultCompactionOverrideConsumers;
   ignoreLegacyAgentRuntimePins?: boolean;
 }): ConfigRouteRepairResult {
@@ -2196,32 +2191,29 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     params.ignoreLegacyAgentRuntimePins ??
     configRepairWouldClearLegacyRuntimePins({
       cfg: nextConfig,
-      env: params.env,
     });
   unsupportedCompactionChanges.push(
     ...maybeMigrateLegacyLosslessCompactionConfig({
       cfg: nextConfig,
-      env: params.env,
       ignoreLegacyAgentRuntimePins,
     }),
   );
   const preservedLegacyLosslessCompactionPaths = new Set(
     collectLegacyLosslessCompactionConfigs({
       cfg: nextConfig,
-      env: params.env,
       ignoreLegacyAgentRuntimePins,
     }).flatMap((hit) => (hit.modelPath ? [hit.providerPath, hit.modelPath] : [hit.providerPath])),
   );
   const defaultsRuntime = ignoreLegacyAgentRuntimePins
     ? undefined
-    : nextConfig.agents?.defaults?.agentRuntime;
+    : readLegacyDefaultsRuntime(nextConfig.agents?.defaults);
   const rewrittenInheritedCompactionModels = new Map<string, string>();
   rewriteAgentModelRefs({
     cfg: nextConfig,
     hits,
     agent: asMutableRecord(nextConfig.agents?.defaults),
     path: "agents.defaults",
-    currentRuntime: resolveRuntime({ env: params.env, defaultsRuntime }),
+    currentRuntime: resolveRuntime({ defaultsRuntime }),
     rewriteModelsMap: true,
     preserveUnsupportedCompactionOverrides: params.preserveSharedDefaultCompactionOverrides,
     preserveUnsupportedCompactionPaths: preservedLegacyLosslessCompactionPaths,
@@ -2247,7 +2239,6 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       path: `agents.list.${id}`,
       agentId: id,
       currentRuntime: resolveRuntime({
-        env: params.env,
         agentRuntime: ignoreLegacyAgentRuntimePins
           ? undefined
           : asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
@@ -2329,31 +2320,22 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
   };
 }
 
-function configRepairWouldClearLegacyRuntimePins(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): boolean {
+function configRepairWouldClearLegacyRuntimePins(params: { cfg: OpenClawConfig }): boolean {
   const dryRun = rewriteConfigModelRefsWithCompactionPolicy({
     cfg: params.cfg,
-    env: params.env,
     preserveSharedDefaultCompactionOverrides: { model: true, provider: true },
     ignoreLegacyAgentRuntimePins: false,
   });
   return dryRun.changes.some((hit) => !isCompactionOnlyRouteHit(hit));
 }
 
-function rewriteConfigModelRefs(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): ConfigRouteRepairResult {
+function rewriteConfigModelRefs(params: { cfg: OpenClawConfig }): ConfigRouteRepairResult {
   const preserveSharedDefaultCompactionOverrides = getSharedDefaultCompactionOverrideConsumers({
     cfg: params.cfg,
-    env: params.env,
     ignoreLegacyAgentRuntimePins: configRepairWouldClearLegacyRuntimePins(params),
   });
   return rewriteConfigModelRefsWithCompactionPolicy({
     cfg: params.cfg,
-    env: params.env,
     preserveSharedDefaultCompactionOverrides,
   });
 }
@@ -2408,8 +2390,8 @@ function formatDisabledCodexPluginWarning(params: {
   blockedOutsideEntry: boolean;
 }): string {
   const fixHint = params.blockedOutsideEntry
-    ? "- Enable plugin loading and remove `codex` from plugins.deny, or set the affected OpenAI models to a PI runtime policy."
-    : "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to a PI runtime policy.";
+    ? "- Enable plugin loading and remove `codex` from plugins.deny, or set the affected OpenAI models to an OpenClaw runtime policy."
+    : "- Run `openclaw doctor --fix`: it enables plugins.entries.codex, or set the affected OpenAI models to an OpenClaw runtime policy.";
   return [
     "- Codex runtime is selected, but the Codex plugin is disabled.",
     ...params.hits.map(
@@ -2447,11 +2429,11 @@ export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string[] {
-  const hits = collectConfigModelRefs(params.cfg, params.env);
+  const hits = collectConfigModelRefs(params.cfg);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg);
   const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins(params);
   const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
-    ...params,
+    cfg: params.cfg,
     ignoreLegacyAgentRuntimePins,
   });
   const legacyLosslessCompactionPaths = new Set(
@@ -2460,17 +2442,16 @@ export function collectCodexRouteWarnings(params: {
     ),
   );
   const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
-    ...params,
+    cfg: params.cfg,
     ignoreLegacyAgentRuntimePins,
   }).filter((hit) => !legacyLosslessCompactionPaths.has(hit.path));
   const sharedDefaultCompactionConsumers = getSharedDefaultCompactionOverrideConsumers({
     cfg: params.cfg,
-    env: params.env,
     ignoreLegacyAgentRuntimePins: configRepairWouldClearLegacyRuntimePins(params),
   });
   const sharedLosslessDefaultHasNonCodexConsumer =
     sharedDefaultLosslessCompactionHasNonCodexConsumer({
-      ...params,
+      cfg: params.cfg,
       ignoreLegacyAgentRuntimePins,
     });
   const warnings: string[] = [];
@@ -2550,17 +2531,15 @@ export function maybeRepairCodexRoutes(params: {
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
 }): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
-  const hits = collectConfigModelRefs(params.cfg, params.env);
+  const hits = collectConfigModelRefs(params.cfg);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg);
   const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins(params);
   const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
     cfg: params.cfg,
-    env: params.env,
     ignoreLegacyAgentRuntimePins,
   });
   const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
     cfg: params.cfg,
-    env: params.env,
     ignoreLegacyAgentRuntimePins,
   });
   if (
@@ -2580,7 +2559,6 @@ export function maybeRepairCodexRoutes(params: {
   }
   const repaired = rewriteConfigModelRefs({
     cfg: params.cfg,
-    env: params.env,
   });
   const codexPluginRepair = enableCodexPluginForRequiredRoutes({
     cfg: repaired.cfg,

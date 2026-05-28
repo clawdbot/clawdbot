@@ -22,8 +22,13 @@
   },
   "syntheticAuthRefs": ["ollama"],
   "nonSecretAuthMarkers": ["ollama-local"],
-  "providerAuthEnvVars": {
-    "ollama": ["OLLAMA_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "ollama",
+        "envVars": ["OLLAMA_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

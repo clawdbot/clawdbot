@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { runBeforeToolCallHook, type HookContext } from "../agents/pi-tools.before-tool-call.js";
+import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   MCP_LOOPBACK_SERVER_NAME,

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const log = createSubsystemLogger("provider-local-service");
@@ -55,7 +55,7 @@ export function getModelProviderLocalService(
 }
 
 export async function ensureModelProviderLocalService(
-  model: Model<Api>,
+  model: Model,
   probeHeaders?: HeadersInit,
   signal?: AbortSignal | null,
 ): Promise<ProviderLocalServiceLease | undefined> {
@@ -176,7 +176,7 @@ function sortedStringRecord(record: Record<string, string> | undefined): Record<
 }
 
 function buildHealthProbeHeaders(
-  model: Model<Api>,
+  model: Model,
   requestHeaders: HeadersInit | undefined,
 ): Headers | undefined {
   const headers = new Headers();

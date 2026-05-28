@@ -41,7 +41,6 @@ Current acpx built-in harness aliases:
 - `kiro`
 - `openclaw`
 - `opencode`
-- `pi`
 - `qwen`
 
 When OpenClaw uses the acpx backend, prefer these values for `agentId` unless your acpx config defines custom agent aliases.
@@ -79,7 +78,7 @@ Core ACP baseline:
       "kiro",
       "openclaw",
       "opencode",
-      "pi",
+      "openclaw",
       "qwen",
     ],
     maxConcurrentSessions: 8,

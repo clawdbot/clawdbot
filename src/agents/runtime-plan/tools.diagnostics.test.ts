@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   normalizeProviderToolSchemas: vi.fn((params: { tools: unknown[] }) => params.tools),
 }));
 
-vi.mock("../pi-embedded-runner/tool-schema-runtime.js", () => ({
+vi.mock("../embedded-agent-runner/tool-schema-runtime.js", () => ({
   logProviderToolSchemaDiagnostics: mocks.logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas: mocks.normalizeProviderToolSchemas,
 }));

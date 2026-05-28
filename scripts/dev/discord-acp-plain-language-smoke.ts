@@ -61,6 +61,11 @@ type DiscordUser = {
   bot?: boolean;
 };
 
+type WebhookForCleanup = {
+  id: string;
+  token: string;
+};
+
 const execFileAsync = promisify(execFile);
 
 type DriverMode = "token" | "webhook" | "openclaw";
@@ -128,9 +133,52 @@ type FailureResult = {
 };
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_OPENCLAW_CLI_TIMEOUT_MS = 60_000;
+const WEBHOOK_CLEANUP_TIMEOUT_MS = 10_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function remainingTimeoutMs(deadlineMs: number, nowMs = Date.now()): number {
+  const remaining = Math.floor(deadlineMs - nowMs);
+  if (!Number.isFinite(deadlineMs) || remaining <= 0) {
+    throw new Error("Discord ACP smoke exceeded total timeout.");
+  }
+  return Math.max(1, remaining);
+}
+
+async function sleepUntilDeadline(params: { pollMs: number; deadlineMs: number }): Promise<void> {
+  const remaining = params.deadlineMs - Date.now();
+  if (remaining <= 0) {
+    return;
+  }
+  await sleep(Math.min(params.pollMs, Math.max(1, remaining)));
+}
+
+async function withTimeout<T>(params: {
+  operation: Promise<T>;
+  timeoutMs: number;
+  timeoutError: () => Error;
+  onTimeout?: () => void;
+}): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      params.operation,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          params.onTimeout?.();
+          reject(params.timeoutError());
+        }, params.timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 function parseNumber(value: string | undefined, fallback: number, label: string): number {
@@ -299,10 +347,16 @@ function parseArgs(): Args {
   };
 }
 
-async function openclawCliJson<T>(params: { openclawBin: string; args: string[] }): Promise<T> {
+async function openclawCliJson<T>(params: {
+  openclawBin: string;
+  args: string[];
+  timeoutMs?: number;
+}): Promise<T> {
   const result = await execFileAsync(params.openclawBin, params.args, {
     maxBuffer: 8 * 1024 * 1024,
     env: process.env,
+    timeout: params.timeoutMs ?? DEFAULT_OPENCLAW_CLI_TIMEOUT_MS,
+    killSignal: "SIGKILL",
   });
   const stdout = (result.stdout || "").trim();
   if (!stdout) {
@@ -315,6 +369,7 @@ async function readMessagesWithOpenclaw(params: {
   openclawBin: string;
   target: string;
   limit: number;
+  timeoutMs?: number;
 }): Promise<DiscordMessage[]> {
   const response = await openclawCliJson<{
     payload?: {
@@ -333,6 +388,7 @@ async function readMessagesWithOpenclaw(params: {
       String(params.limit),
       "--json",
     ],
+    timeoutMs: params.timeoutMs,
   });
   return Array.isArray(response.payload?.messages) ? response.payload.messages : [];
 }
@@ -354,6 +410,7 @@ async function discordApi<T>(params: {
   authHeader: string;
   body?: unknown;
   retries?: number;
+  timeoutMs?: number;
 }): Promise<T> {
   return requestDiscordJson<T>({
     method: params.method,
@@ -364,6 +421,7 @@ async function discordApi<T>(params: {
     },
     body: params.body,
     retries: params.retries,
+    timeoutMs: params.timeoutMs,
     errorPrefix: "Discord API",
   });
 }
@@ -375,6 +433,7 @@ async function discordWebhookApi<T>(params: {
   body?: unknown;
   query?: string;
   retries?: number;
+  timeoutMs?: number;
 }): Promise<T> {
   const suffix = params.query ? `?${params.query}` : "";
   const path = `/webhooks/${encodeURIComponent(params.webhookId)}/${encodeURIComponent(params.webhookToken)}${suffix}`;
@@ -386,6 +445,7 @@ async function discordWebhookApi<T>(params: {
     },
     body: params.body,
     retries: params.retries,
+    timeoutMs: params.timeoutMs,
     errorPrefix: "Discord webhook API",
   });
 }
@@ -396,25 +456,56 @@ async function requestDiscordJson<T>(params: {
   headers: Record<string, string>;
   body?: unknown;
   retries?: number;
+  timeoutMs?: number;
   errorPrefix: string;
+  fetchImpl?: typeof fetch;
+  sleepImpl?: (ms: number) => Promise<void>;
 }): Promise<T> {
   const retries = params.retries ?? 6;
+  const fetchImpl = params.fetchImpl ?? fetch;
+  const sleepImpl = params.sleepImpl ?? sleep;
+  const deadlineMs = Date.now() + (params.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
+  const timeoutError = () =>
+    new Error(
+      `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} exceeded timeout.`,
+    );
+
   for (let attempt = 0; attempt <= retries; attempt += 1) {
-    const response = await fetch(`${DISCORD_API_BASE}${params.path}`, {
-      method: params.method,
-      headers: params.headers,
-      body: params.body === undefined ? undefined : JSON.stringify(params.body),
+    const controller = new AbortController();
+    const fetchTimeoutMs = remainingTimeoutMs(deadlineMs);
+    const response = await withTimeout({
+      operation: fetchImpl(`${DISCORD_API_BASE}${params.path}`, {
+        method: params.method,
+        headers: params.headers,
+        body: params.body === undefined ? undefined : JSON.stringify(params.body),
+        signal: controller.signal,
+      }),
+      timeoutMs: fetchTimeoutMs,
+      timeoutError,
+      onTimeout: () => controller.abort(),
     });
 
     if (response.status === 429) {
-      const body = (await response.json().catch(() => ({}))) as { retry_after?: number };
+      const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
+      const body = (await withTimeout({
+        operation: response.json().catch(() => ({})),
+        timeoutMs: bodyTimeoutMs,
+        timeoutError,
+        onTimeout: () => controller.abort(),
+      })) as { retry_after?: number };
       const waitSeconds = typeof body.retry_after === "number" ? body.retry_after : 1;
-      await sleep(Math.ceil(waitSeconds * 1000));
+      await sleepImpl(Math.min(Math.ceil(waitSeconds * 1000), remainingTimeoutMs(deadlineMs)));
       continue;
     }
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
+      const text = await withTimeout({
+        operation: response.text().catch(() => ""),
+        timeoutMs: bodyTimeoutMs,
+        timeoutError,
+        onTimeout: () => controller.abort(),
+      });
       throw new Error(
         redactForDevToolLog(
           `${params.errorPrefix} ${params.method} ${redactDiscordApiPath(params.path)} failed: ${response.status} ${response.statusText}${text ? ` :: ${text}` : ""}`,
@@ -426,7 +517,13 @@ async function requestDiscordJson<T>(params: {
       return undefined as T;
     }
 
-    return (await response.json()) as T;
+    const bodyTimeoutMs = remainingTimeoutMs(deadlineMs);
+    return (await withTimeout({
+      operation: response.json(),
+      timeoutMs: bodyTimeoutMs,
+      timeoutError,
+      onTimeout: () => controller.abort(),
+    })) as T;
   }
 
   throw new Error(
@@ -501,18 +598,35 @@ function toRecentMessageRow(message: DiscordMessage) {
 async function loadParentRecentMessages(params: {
   args: Args;
   readAuthHeader: string;
+  timeoutMs?: number;
 }): Promise<DiscordMessage[]> {
   if (params.args.driverMode === "openclaw") {
     return await readMessagesWithOpenclaw({
       openclawBin: params.args.openclawBin,
       target: params.args.channelId,
       limit: 20,
+      timeoutMs: params.timeoutMs,
     });
   }
   return await discordApi<DiscordMessage[]>({
     method: "GET",
     path: `/channels/${encodeURIComponent(params.args.channelId)}/messages?limit=20`,
     authHeader: params.readAuthHeader,
+    timeoutMs: params.timeoutMs,
+  });
+}
+
+async function cleanupWebhook(webhookForCleanup: WebhookForCleanup | undefined): Promise<void> {
+  if (!webhookForCleanup) {
+    return;
+  }
+  await discordWebhookApi<void>({
+    method: "DELETE",
+    webhookId: webhookForCleanup.id,
+    webhookToken: webhookForCleanup.token,
+    timeoutMs: WEBHOOK_CLEANUP_TIMEOUT_MS,
+  }).catch(() => {
+    // Best-effort cleanup only.
   });
 }
 
@@ -569,6 +683,8 @@ async function run(): Promise<SuccessResult | FailureResult> {
   }
 
   const smokeId = `acp-smoke-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const startedAt = Date.now();
+  const deadline = startedAt + args.timeoutMs;
   const ackToken = `ACP_SMOKE_ACK_${smokeId}`;
   const instruction = buildInstruction({
     smokeId,
@@ -582,12 +698,8 @@ async function run(): Promise<SuccessResult | FailureResult> {
   let sentMessageId = "";
   let setupStage: "discord-api" | "send-message" = "discord-api";
   let senderAuthorId: string | undefined;
-  let webhookForCleanup:
-    | {
-        id: string;
-        token: string;
-      }
-    | undefined;
+  let minBindingBoundAt = startedAt - 3_000;
+  let webhookForCleanup: WebhookForCleanup | undefined;
 
   try {
     if (args.driverMode === "token") {
@@ -601,14 +713,17 @@ async function run(): Promise<SuccessResult | FailureResult> {
         method: "GET",
         path: "/users/@me",
         authHeader,
+        timeoutMs: remainingTimeoutMs(deadline),
       });
       senderAuthorId = driverUser.id;
 
       setupStage = "send-message";
+      minBindingBoundAt = Date.now() - 3_000;
       const sent = await discordApi<DiscordMessage>({
         method: "POST",
         path: `/channels/${encodeURIComponent(args.channelId)}/messages`,
         authHeader,
+        timeoutMs: remainingTimeoutMs(deadline),
         body: {
           content: instruction,
           allowed_mentions: args.mentionUserId
@@ -628,6 +743,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
         method: "GET",
         path: "/users/@me",
         authHeader: botAuthHeader,
+        timeoutMs: remainingTimeoutMs(deadline),
       });
 
       setupStage = "send-message";
@@ -635,6 +751,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
         method: "POST",
         path: `/channels/${encodeURIComponent(args.channelId)}/webhooks`,
         authHeader: botAuthHeader,
+        timeoutMs: remainingTimeoutMs(deadline),
         body: {
           name: `openclaw-acp-smoke-${smokeId.slice(-8)}`,
         },
@@ -650,11 +767,13 @@ async function run(): Promise<SuccessResult | FailureResult> {
       }
       webhookForCleanup = { id: webhook.id, token: webhook.token };
 
+      minBindingBoundAt = Date.now() - 3_000;
       const sent = await discordWebhookApi<DiscordMessage>({
         method: "POST",
         webhookId: webhook.id,
         webhookToken: webhook.token,
         query: "wait=true",
+        timeoutMs: remainingTimeoutMs(deadline),
         body: {
           content: instruction,
           allowed_mentions: args.mentionUserId
@@ -666,6 +785,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       senderAuthorId = sent.author?.id;
     } else {
       setupStage = "send-message";
+      minBindingBoundAt = Date.now() - 3_000;
       const sent = await openclawCliJson<{
         payload?: {
           result?: {
@@ -685,6 +805,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
           instruction,
           "--json",
         ],
+        timeoutMs: remainingTimeoutMs(deadline),
       });
       sentMessageId = sent.payload?.result?.messageId || "";
       if (!sentMessageId) {
@@ -692,6 +813,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       }
     }
   } catch (err) {
+    await cleanupWebhook(webhookForCleanup);
     return {
       ok: false,
       stage: setupStage,
@@ -700,9 +822,6 @@ async function run(): Promise<SuccessResult | FailureResult> {
     };
   }
 
-  const startedAt = Date.now();
-
-  const deadline = startedAt + args.timeoutMs;
   let winningBinding: ThreadBindingRecord | undefined;
   let latestCandidates: ThreadBindingRecord[] = [];
 
@@ -712,7 +831,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
         const entries = await readThreadBindings(args.threadBindingsPath);
         latestCandidates = resolveCandidateBindings({
           entries,
-          minBoundAt: startedAt - 3_000,
+          minBoundAt: minBindingBoundAt,
           targetAgent: args.targetAgent,
         });
         winningBinding = latestCandidates[0];
@@ -720,14 +839,18 @@ async function run(): Promise<SuccessResult | FailureResult> {
         // Keep polling; file may not exist yet or may be mid-write.
       }
       if (!winningBinding) {
-        await sleep(args.pollMs);
+        await sleepUntilDeadline({ pollMs: args.pollMs, deadlineMs: deadline });
       }
     }
 
     if (!winningBinding?.threadId || !winningBinding?.targetSessionKey) {
       let parentRecent: DiscordMessage[] = [];
       try {
-        parentRecent = await loadParentRecentMessages({ args, readAuthHeader });
+        parentRecent = await loadParentRecentMessages({
+          args,
+          readAuthHeader,
+          timeoutMs: remainingTimeoutMs(deadline),
+        });
       } catch {
         // Best effort diagnostics only.
       }
@@ -759,11 +882,13 @@ async function run(): Promise<SuccessResult | FailureResult> {
                 openclawBin: args.openclawBin,
                 target: threadId,
                 limit: 50,
+                timeoutMs: remainingTimeoutMs(deadline),
               })
             : await discordApi<DiscordMessage[]>({
                 method: "GET",
                 path: `/channels/${encodeURIComponent(threadId)}/messages?limit=50`,
                 authHeader: readAuthHeader,
+                timeoutMs: remainingTimeoutMs(deadline),
               });
         ackMessage = threadMessages.find((message) => {
           const content = message.content || "";
@@ -777,14 +902,18 @@ async function run(): Promise<SuccessResult | FailureResult> {
         // Keep polling; thread can appear before read permissions settle.
       }
       if (!ackMessage) {
-        await sleep(args.pollMs);
+        await sleepUntilDeadline({ pollMs: args.pollMs, deadlineMs: deadline });
       }
     }
 
     if (!ackMessage) {
       let parentRecent: DiscordMessage[] = [];
       try {
-        parentRecent = await loadParentRecentMessages({ args, readAuthHeader });
+        parentRecent = await loadParentRecentMessages({
+          args,
+          readAuthHeader,
+          timeoutMs: remainingTimeoutMs(deadline),
+        });
       } catch {
         // Best effort diagnostics only.
       }
@@ -832,15 +961,7 @@ async function run(): Promise<SuccessResult | FailureResult> {
       },
     };
   } finally {
-    if (webhookForCleanup) {
-      await discordWebhookApi<void>({
-        method: "DELETE",
-        webhookId: webhookForCleanup.id,
-        webhookToken: webhookForCleanup.token,
-      }).catch(() => {
-        // Best-effort cleanup only.
-      });
-    }
+    await cleanupWebhook(webhookForCleanup);
   }
 }
 
@@ -868,6 +989,8 @@ export const testing = {
   parseDriverMode,
   parseNumber,
   redactDiscordApiPath,
+  remainingTimeoutMs,
+  requestDiscordJson,
   resolveStateDir,
   safeErrorMessage,
 };

@@ -42,7 +42,7 @@ const config = {
         api: "openai-responses",
         apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
         baseUrl: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
-        agentRuntime: { id: "pi" },
+        agentRuntime: { id: "openclaw" },
         timeoutSeconds,
         models: [
           {
@@ -65,7 +65,7 @@ const config = {
       model: { primary: modelRef, fallbacks: [] },
       models: {
         [modelRef]: {
-          agentRuntime: { id: "pi" },
+          agentRuntime: { id: "openclaw" },
           params: { transport: "sse", openaiWsWarmup: false },
         },
       },

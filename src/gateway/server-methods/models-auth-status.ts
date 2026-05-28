@@ -17,7 +17,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import {
   clearCurrentProviderAuthState,
-  warmCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
 } from "../../agents/model-provider-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
@@ -331,8 +331,8 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
     out.add(id);
     if (mode === "oauth") {
       // Store normalized id so lookups against `AuthProviderHealth.provider`
-      // (which is already normalized by buildAuthHealthSummary) match even
-      // when the config uses an alias like `z.ai` that normalizes to `zai`.
+      // (which is already normalized by buildAuthHealthSummary) match despite
+      // case-only differences in config provider keys.
       expectsOAuth.add(normalizeProviderId(id));
     }
   }
@@ -391,7 +391,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       await refreshActiveSecretsRuntimeSnapshot();
       invalidateModelAuthStatusCache();
       clearCurrentProviderAuthState();
-      void warmCurrentProviderAuthState(context.getRuntimeConfig()).catch((err) => {
+      void warmCurrentProviderAuthStateOffMainThread(context.getRuntimeConfig()).catch((err) => {
         log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
       });
       const { runIds: abortedRunIds } = abortChatRunsForProvider(

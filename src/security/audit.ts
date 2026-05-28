@@ -643,7 +643,13 @@ function findClaudeCliBackendConfig(
     return backends[directKey];
   }
   for (const [key, backend] of Object.entries(backends)) {
-    if (normalizeProviderId(key) === "claude-cli") {
+    const normalizedKey = normalizeProviderId(key);
+    const command = normalizeOptionalLowercaseString(backend.command);
+    if (
+      normalizedKey === "claude-cli" ||
+      normalizedKey === "anthropic-cli" ||
+      command === "claude"
+    ) {
       return backend;
     }
   }

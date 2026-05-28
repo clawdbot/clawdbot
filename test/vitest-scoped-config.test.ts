@@ -60,6 +60,7 @@ import { createSecretsVitestConfig } from "./vitest/vitest.secrets.config.ts";
 import { createSharedCoreVitestConfig } from "./vitest/vitest.shared-core.config.ts";
 import { sharedVitestConfig } from "./vitest/vitest.shared.config.ts";
 import { createTasksVitestConfig } from "./vitest/vitest.tasks.config.ts";
+import { createToolingIsolatedVitestConfig } from "./vitest/vitest.tooling-isolated.config.ts";
 import { createToolingVitestConfig } from "./vitest/vitest.tooling.config.ts";
 import { createTuiVitestConfig } from "./vitest/vitest.tui.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
@@ -853,7 +854,15 @@ describe("scoped vitest configs", () => {
   it("keeps tooling tests in their own lane", () => {
     const testConfig = requireTestConfig(defaultToolingConfig);
     expect(testConfig.include).toEqual(["test/**/*.test.ts", "src/scripts/**/*.test.ts"]);
+    expect(testConfig.exclude).toContain("test/scripts/openclaw-e2e-instance.test.ts");
     expect(testConfig.include).not.toContain("src/config/doc-baseline.integration.test.ts");
+  });
+
+  it("runs shell helper tooling tests isolated from shared mocks", () => {
+    const testConfig = requireTestConfig(createToolingIsolatedVitestConfig({}));
+    expect(testConfig.include).toEqual(["test/scripts/openclaw-e2e-instance.test.ts"]);
+    expect(testConfig.isolate).toBe(true);
+    expect(testConfig.runner).toBeUndefined();
   });
 
   it("normalizes acp include patterns relative to the scoped dir", () => {

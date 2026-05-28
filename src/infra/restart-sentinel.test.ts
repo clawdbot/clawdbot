@@ -367,9 +367,20 @@ describe("restart sentinel message dedup", () => {
     expect(result).toContain("Reason: /restart");
   });
 
-  it("formats the non-interactive doctor command", () => {
-    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toContain(
-      "openclaw doctor --non-interactive",
+  it("formats the non-interactive doctor command as actionability guidance", () => {
+    expect(formatDoctorNonInteractiveHint({ PATH: "/usr/bin:/bin" })).toBe(
+      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+    );
+  });
+
+  it("keeps profile-aware doctor guidance actionable outside constrained delivery surfaces", () => {
+    expect(
+      formatDoctorNonInteractiveHint({
+        OPENCLAW_PROFILE: "isolated",
+        PATH: "/usr/bin:/bin",
+      }),
+    ).toBe(
+      "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
     );
   });
 });

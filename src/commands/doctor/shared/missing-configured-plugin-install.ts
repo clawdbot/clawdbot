@@ -114,20 +114,13 @@ function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
   }
 }
 
-function addConfiguredAgentRuntimePluginIds(
-  ids: Set<string>,
-  cfg: OpenClawConfig,
-  env?: NodeJS.ProcessEnv,
-): void {
-  for (const runtime of collectConfiguredRuntimePluginIds(cfg, env ?? process.env, {
-    includeEnvRuntime: false,
-    includeLegacyAgentRuntimes: false,
-  })) {
+function addConfiguredAgentRuntimePluginIds(ids: Set<string>, cfg: OpenClawConfig): void {
+  for (const runtime of collectConfiguredRuntimePluginIds(cfg)) {
     addConfiguredPluginId(ids, runtime);
   }
 }
 
-function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): Set<string> {
+function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
   if (plugins?.enabled === false) {
@@ -147,7 +140,7 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv
       ids.add(installEntry.pluginId);
     }
   }
-  addConfiguredAgentRuntimePluginIds(ids, cfg, env);
+  addConfiguredAgentRuntimePluginIds(ids, cfg);
   return ids;
 }
 
@@ -233,8 +226,7 @@ function collectDownloadableInstallCandidates(params: {
   configuredChannelOwnerPluginIds?: ReadonlyMap<string, ReadonlySet<string>>;
   blockedPluginIds?: ReadonlySet<string>;
 }): DownloadableInstallCandidate[] {
-  const configuredPluginIds =
-    params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg, params.env);
+  const configuredPluginIds = params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg);
   const configuredChannelIds =
     params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg, params.env);
   const candidates = new Map<string, DownloadableInstallCandidate>();
@@ -1029,7 +1021,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
     env: params.env,
-    pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
+    pluginIds: collectConfiguredPluginIds(params.cfg),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
     blockedPluginIds: collectBlockedPluginIds(params.cfg),
     ...(params.baselineRecords ? { baselineRecords: params.baselineRecords } : {}),

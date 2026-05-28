@@ -136,6 +136,23 @@ describe("Mattermost model picker", () => {
     expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
   });
 
+  it("does not coerce partial page strings in signed picker contexts", () => {
+    expect(
+      parseMattermostModelPickerContext({
+        oc_model_picker: true,
+        action: "list",
+        ownerUserId: "user-1",
+        provider: "openai",
+        page: "2next",
+      }),
+    ).toEqual({
+      action: "list",
+      ownerUserId: "user-1",
+      provider: "openai",
+      page: 1,
+    });
+  });
+
   it("falls back to the routed agent default model when no override is stored", () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
     try {

@@ -1,10 +1,10 @@
-import { runMatrixQaLive } from "./runners/contract/runtime.js";
-import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
 import {
   printLiveTransportQaArtifacts,
-  resolveLiveTransportQaRunOptions,
   startLiveTransportQaOutputTee,
-} from "./shared/live-transport-cli.runtime.js";
+} from "openclaw/plugin-sdk/qa-runtime";
+import { runMatrixQaLive } from "./runners/contract/runtime.js";
+import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
+import { resolveLiveTransportQaRunOptions } from "./shared/live-transport-cli.runtime.js";
 
 const RUN_NODE_OUTPUT_LOG_ENV = "OPENCLAW_RUN_NODE_OUTPUT_LOG";
 

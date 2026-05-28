@@ -35,11 +35,11 @@ vi.mock("../logger.js", () => ({
   logWarn: noWarnLog,
 }));
 
-vi.mock("../agents/pi-tools.js", () => ({
+vi.mock("../agents/agent-tools.js", () => ({
   resolveToolLoopDetectionConfig,
 }));
 
-vi.mock("../agents/pi-tools.before-tool-call.js", () => ({
+vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook,
 }));
 

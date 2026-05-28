@@ -33,8 +33,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "vercel-ai-gateway",
+        "envVars": ["AI_GATEWAY_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

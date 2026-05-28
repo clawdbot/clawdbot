@@ -57,10 +57,13 @@ export {
   listRegisteredMemoryEmbeddingProviderAdapters,
   listRegisteredMemoryEmbeddingProviders,
 } from "../plugins/memory-embedding-provider-runtime.js";
-export {
-  clearMemoryEmbeddingProviders,
-  registerMemoryEmbeddingProvider,
-} from "../plugins/memory-embedding-providers.js";
+export { clearMemoryEmbeddingProviders } from "../plugins/memory-embedding-providers.js";
+/**
+ * @deprecated New embedding providers should use `api.registerEmbeddingProvider(...)`
+ * and `contracts.embeddingProviders`. This memory-specific registrar remains
+ * available only for compatibility while existing providers migrate.
+ */
+export { registerMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
 export type {
   MemoryEmbeddingBatchChunk,
   MemoryEmbeddingBatchOptions,

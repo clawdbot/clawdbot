@@ -1,4 +1,4 @@
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
+import type { ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { describe, expect, it } from "vitest";
 import { cloneFirstTemplateModel, matchesExactOrPrefix } from "./provider-model-helpers.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";

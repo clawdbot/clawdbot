@@ -106,8 +106,13 @@
       "deepseek": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "deepseek": ["DEEPSEEK_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "deepseek",
+        "envVars": ["DEEPSEEK_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

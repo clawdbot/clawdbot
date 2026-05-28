@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "./runtime/index.js";
+import type { ExtensionContext } from "./sessions/index.js";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const compactionMocks = vi.hoisted(() => {
@@ -25,10 +25,8 @@ const compactionMocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("@earendil-works/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
-    "@earendil-works/pi-coding-agent",
-  );
+vi.mock("./sessions/index.js", async () => {
+  const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
   return {
     ...actual,
     estimateTokens: compactionMocks.estimateTokens,

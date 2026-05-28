@@ -101,7 +101,7 @@ function writeOpenWebUiConfig([openaiApiKey]) {
       path: "models.providers.openai.timeoutSeconds",
       value: Number.parseInt(process.env.OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS ?? "900", 10),
     },
-    { path: "models.providers.openai.agentRuntime", value: { id: "pi" } },
+    { path: "models.providers.openai.agentRuntime", value: { id: "openclaw" } },
     { path: "gateway.controlUi.enabled", value: false },
     { path: "gateway.mode", value: "local" },
     { path: "gateway.bind", value: "lan" },

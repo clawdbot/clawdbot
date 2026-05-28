@@ -210,6 +210,27 @@ describe("xAI OAuth", () => {
     expect(refreshed.expires).toBe(121_000);
   });
 
+  it("does not coerce partial xAI expires_in values", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        access_token: "access-2",
+        expires_in: "120s",
+      }),
+    );
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
+
+    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+
+    expect(refreshed.expires).toBe(100);
+  });
+
   it("prints the authorize URL through plain prompter output so terminal link detection keeps it whole", async () => {
     waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "AUTHCODE", state: "state-1" });
     stubSuccessfulXaiOAuthNetwork();

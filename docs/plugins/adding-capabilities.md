@@ -121,11 +121,10 @@ is intentionally broader than memory: tools, search, retrieval, importers, or
 future feature plugins can consume embeddings without depending on the memory
 engine.
 
-For memory-engine-specific adapters, keep using `memoryEmbeddingProviders`.
-Those adapters own memory indexing details such as query/document split,
-runtime metadata, and local memory engine setup. Do not make a generic
-embedding provider depend on memory-owned modules unless the provider is only
-usable by memory.
+Memory search can consume generic `embeddingProviders`. The older
+`memoryEmbeddingProviders` contract is deprecated compatibility while existing
+memory-specific providers migrate; new reusable embedding providers should use
+`embeddingProviders`.
 
 ## Review checklist
 

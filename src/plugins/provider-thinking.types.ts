@@ -10,15 +10,25 @@ export type ProviderThinkingPolicyContext = {
   modelId: string;
 };
 
+export type ProviderThinkingModelCompat = {
+  thinkingFormat?: string;
+  supportedReasoningEfforts?: readonly string[] | null;
+};
+
 /**
  * Provider-owned default thinking policy input.
  *
  * `reasoning` is the merged catalog hint for the selected model when one is
  * available. Providers can use it to keep "reasoning model => low" behavior
  * without re-reading the catalog themselves.
+ *
+ * `compat` carries model-level request contract facts for the selected model
+ * when available. Providers can use it to expose model-specific thinking
+ * profiles only when the configured payload style supports them.
  */
 export type ProviderDefaultThinkingPolicyContext = ProviderThinkingPolicyContext & {
   reasoning?: boolean;
+  compat?: ProviderThinkingModelCompat | null;
 };
 
 export type ProviderThinkingLevelId =

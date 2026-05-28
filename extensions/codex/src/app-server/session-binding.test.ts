@@ -51,7 +51,7 @@ describe("codex app-server session binding", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("round-trips the thread binding beside the PI session file", async () => {
+  it("round-trips the thread binding beside the session file", async () => {
     const sessionFile = path.join(tempDir, "session.json");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-123",
@@ -60,6 +60,7 @@ describe("codex app-server session binding", () => {
       modelProvider: "openai",
       dynamicToolsFingerprint: "tools-v1",
       userMcpServersFingerprint: "user-mcp-v1",
+      nativeHookRelayGeneration: "generation-v1",
     });
 
     const binding = await readCodexAppServerBinding(sessionFile);
@@ -72,6 +73,7 @@ describe("codex app-server session binding", () => {
     expect(binding?.modelProvider).toBe("openai");
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
+    expect(binding?.nativeHookRelayGeneration).toBe("generation-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
   });

@@ -47,7 +47,7 @@ That split is intentional. A harness runs a prepared attempt; it does not pick
 providers, replace channel delivery, or silently switch models.
 
 The prepared attempt also includes `params.runtimePlan`, an OpenClaw-owned
-policy bundle for runtime decisions that must stay shared across PI and native
+policy bundle for runtime decisions that must stay shared across OpenClaw and native
 harnesses:
 
 - `runtimePlan.tools.normalize(...)` and
@@ -59,7 +59,7 @@ harnesses:
 - `runtimePlan.outcome.classifyRunResult(...)` for model fallback classification
 - `runtimePlan.observability` for resolved provider/model/harness metadata
 
-Harnesses may use the plan for decisions that need to match PI behavior, but
+Harnesses may use the plan for decisions that need to match OpenClaw behavior, but
 should still treat it as host-owned attempt state. Do not mutate it or use it to
 switch providers/models inside a turn.
 
@@ -107,14 +107,13 @@ OpenClaw chooses a harness after provider/model resolution:
 2. Provider-scoped runtime policy comes next.
 3. `auto` asks registered harnesses if they support the resolved
    provider/model.
-4. If no registered harness matches, OpenClaw uses PI unless PI fallback is
-   disabled.
+4. If no registered harness matches, OpenClaw uses its embedded runtime.
 
-Plugin harness failures surface as run failures. In `auto` mode, PI fallback is
+Plugin harness failures surface as run failures. In `auto` mode, embedded fallback is
 only used when no registered plugin harness supports the resolved
 provider/model. Once a plugin harness has claimed a run, OpenClaw does not
-replay that same turn through PI because that can change auth/runtime semantics
-or duplicate side effects.
+replay that same turn through another runtime because that can change
+auth/runtime semantics or duplicate side effects.
 
 Whole-session and whole-agent runtime pins are ignored by selection. That
 includes stale session `agentHarnessId` values, `agents.defaults.agentRuntime`,
@@ -164,14 +163,14 @@ Codex `0.124.0`, while pinning OpenClaw to the newer tested stable line.
 Bundled plugins can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before PI or Codex feeds
+seam is for async tool-result transforms that must run before OpenClaw or Codex feeds
 tool output back into the model.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
 middleware, but new result transforms should use the runtime-neutral API.
-The Pi-only `api.registerEmbeddedExtensionFactory(...)` hook has been removed;
-Pi tool-result transforms must use runtime-neutral middleware.
+The embedded-runner-only `api.registerEmbeddedExtensionFactory(...)` hook has been removed;
+embedded tool-result transforms must use runtime-neutral middleware.
 
 ### Terminal outcome classification
 
@@ -199,17 +198,17 @@ visible transcript mirror, tool policy, approvals, media delivery, and session
 selection. Use provider/model `agentRuntime.id: "codex"` when you need to prove
 that only the Codex app-server path can claim the run. Explicit plugin runtimes
 fail closed; Codex app-server selection failures and runtime failures are not
-retried through PI.
+retried through another runtime.
 
 ## Runtime strictness
 
 By default, OpenClaw uses `auto` provider/model runtime policy: registered
-plugin harnesses can claim a provider/model pair, and PI handles the turn when
-none match. OpenAI agent refs on the official OpenAI provider default to Codex.
+plugin harnesses can claim a provider/model pair, and the embedded runtime
+handles the turn when none match. OpenAI agent refs on the official OpenAI provider default to Codex.
 Use an explicit provider/model plugin runtime such as
 `agentRuntime.id: "codex"` when missing harness selection should fail instead
-of routing through PI. Selected plugin harness failures always fail hard. This
-does not block an explicit provider/model `agentRuntime.id: "pi"`.
+of routing through the embedded runtime. Selected plugin harness failures always
+fail hard. This does not block an explicit provider/model `agentRuntime.id: "openclaw"`.
 
 For Codex-only embedded runs:
 
@@ -305,7 +304,7 @@ The OpenClaw transcript remains the compatibility layer for:
 
 - channel-visible session history
 - transcript search and indexing
-- switching back to the built-in PI harness on a later turn
+- switching back to the built-in OpenClaw harness on a later turn
 - generic `/new`, `/reset`, and session deletion behavior
 
 If your harness stores a sidecar binding, implement `reset(...)` so OpenClaw can
@@ -318,12 +317,12 @@ When a harness executes a dynamic tool call, return the tool result back through
 the harness result shape instead of sending channel media yourself.
 
 This keeps text, image, video, music, TTS, approval, and messaging-tool outputs
-on the same delivery path as PI-backed runs.
+on the same delivery path as OpenClaw-backed runs.
 
 ## Current limitations
 
 - The public import path is generic, but some attempt/result type aliases still
-  carry `Pi` names for compatibility.
+  carry legacy names for compatibility.
 - Third-party harness installation is experimental. Prefer provider plugins
   until you need a native session runtime.
 - Harness switching is supported across turns. Do not switch harnesses in the

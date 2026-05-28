@@ -14,6 +14,7 @@ import {
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -79,14 +80,15 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
   });
 }
 
-function parseOptionalInt(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return value;
+function parseOptionalInt(value: unknown, flag: string): number | undefined {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
   }
-  if (typeof value === "string" && value.trim()) {
-    return Number.parseInt(value, 10);
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a non-negative integer.`);
   }
-  return undefined;
+  return parsed;
 }
 
 function parseOptionalDelimitedInput(value: unknown): string[] | undefined {
@@ -116,7 +118,7 @@ function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
     input.secretFile ??= readOptionalString(input.tokenFile);
   }
 
-  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit);
+  input.initialSyncLimit = parseOptionalInt(opts.initialSyncLimit, "--initial-sync-limit");
   input.groupChannels = parseOptionalDelimitedInput(opts.groupChannels);
   input.dmAllowlist = parseOptionalDelimitedInput(opts.dmAllowlist);
   return input as ChannelSetupInput;

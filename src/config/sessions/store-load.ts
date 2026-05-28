@@ -10,6 +10,7 @@ import {
   normalizeSessionDeliveryFields,
 } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { hydrateSessionStoreSkillPromptRefs } from "./skill-prompt-blobs.js";
 import {
   cloneSessionStoreRecord,
   cloneSessionStoreSnapshot,
@@ -309,7 +310,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
 
 // resolvedSkills carries the full parsed Skill[] (including each SKILL.md body)
 // and is only used as an in-turn cache by the runtime — see
-// src/agents/pi-embedded-runner/skills-runtime.ts. Persisting it bloats
+// src/agents/embedded-agent-runner/skills-runtime.ts. Persisting it bloats
 // sessions.json by orders of magnitude when many sessions are active. Strip
 // it from every entry that flows through normalize, so neither the in-memory
 // store reloaded from disk nor the JSON serialized back to disk carries it.
@@ -398,9 +399,10 @@ export function loadSessionStore(
     }
   }
 
+  const hydratedPromptRefs = hydrateSessionStoreSkillPromptRefs({ storePath, store });
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
-  if (migrated || normalized) {
+  if (hydratedPromptRefs || migrated || normalized) {
     serializedFromDisk = undefined;
   }
   if (opts.runMaintenance) {
@@ -448,6 +450,7 @@ export function loadSessionStore(
       mtimeMs,
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
+      cloneSerialized: serializedFromDisk,
       takeOwnership: serializedFromDisk !== undefined,
     });
   }

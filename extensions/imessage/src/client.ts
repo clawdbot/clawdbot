@@ -88,7 +88,7 @@ export class IMessageRpcClient {
     if (isTestEnv()) {
       throw new Error("Refusing to start imsg rpc in test environment; mock iMessage RPC client");
     }
-    const args = ["rpc"];
+    const args = ["rpc", "--json"];
     if (this.dbPath) {
       args.push("--db", this.dbPath);
     }

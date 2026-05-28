@@ -1,5 +1,7 @@
 {
   "id": "discord",
+  "name": "Discord",
+  "description": "OpenClaw Discord channel plugin for channels, DMs, commands, and app events.",
   "activation": {
     "onStartup": false
   },

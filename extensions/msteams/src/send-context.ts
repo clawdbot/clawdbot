@@ -7,6 +7,11 @@ import {
   type PluginRuntime,
 } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import {
+  describeBotFrameworkServiceUrlHost,
+  isAllowedBotFrameworkServiceUrl,
+  normalizeBotFrameworkServiceUrl,
+} from "./bot-framework-service-url.js";
 import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
 import type {
   MSTeamsConversationStore,
@@ -161,13 +166,35 @@ export async function resolveMSTeamsSendContext(params: {
   }
 
   const { conversationId, ref } = found;
+  const core = getMSTeamsRuntime();
+  const log = core.logging.getChildLogger({ name: "msteams:send" });
+
+  if (ref.serviceUrl && !isAllowedBotFrameworkServiceUrl(ref.serviceUrl)) {
+    try {
+      await store.remove(conversationId);
+    } catch (err) {
+      log.warn?.("failed to remove blocked msteams conversation reference", {
+        conversationId,
+        error: formatUnknownError(err),
+      });
+    }
+    throw new Error(
+      `Stored Microsoft Teams conversation reference has blocked serviceUrl host: ${describeBotFrameworkServiceUrlHost(ref.serviceUrl)}. ` +
+        `The bot must receive a new message from this conversation before it can send proactively.`,
+    );
+  }
+  const safeRef = ref.serviceUrl
+    ? { ...ref, serviceUrl: normalizeBotFrameworkServiceUrl(ref.serviceUrl) }
+    : ref;
 
   // Safety check: when the caller targeted a specific user (DM), verify the
   // resolved conversation is actually a personal DM.  Without this guard a
   // stale or mismatched conversation store could route a private DM reply
   // into a shared channel or group chat -- see #54520.
   if (recipient.type === "user") {
-    const resolvedType = normalizeLowercaseStringOrEmpty(ref.conversation?.conversationType ?? "");
+    const resolvedType = normalizeLowercaseStringOrEmpty(
+      safeRef.conversation?.conversationType ?? "",
+    );
     if (resolvedType && resolvedType !== "personal") {
       throw new Error(
         `Conversation reference for user:${recipient.id} resolved to a ${resolvedType} ` +
@@ -176,8 +203,6 @@ export async function resolveMSTeamsSendContext(params: {
       );
     }
   }
-  const core = getMSTeamsRuntime();
-  const log = core.logging.getChildLogger({ name: "msteams:send" });
 
   const { sdk, app } = await loadMSTeamsSdkWithAuth(creds);
   const adapter = createMSTeamsAdapter(app, sdk);
@@ -187,7 +212,7 @@ export async function resolveMSTeamsSendContext(params: {
 
   // Determine conversation type from stored reference
   const storedConversationType = normalizeLowercaseStringOrEmpty(
-    ref.conversation?.conversationType ?? "",
+    safeRef.conversation?.conversationType ?? "",
   );
   let conversationType: MSTeamsConversationType;
   if (storedConversationType === "personal") {
@@ -201,7 +226,7 @@ export async function resolveMSTeamsSendContext(params: {
   const replyStyle = resolveMSTeamsProactiveReplyStyle({
     cfg: msteamsCfg,
     conversationId,
-    ref,
+    ref: safeRef,
     conversationType,
   });
 
@@ -219,13 +244,13 @@ export async function resolveMSTeamsSendContext(params: {
   // be used directly with Graph /chats/{chatId} endpoints — the Graph API requires the
   // `19:xxx@thread.tacv2` or `19:xxx@unq.gbl.spaces` format.
   // We check the cached value first, then resolve via Graph API and cache for future sends.
-  let graphChatId: string | null | undefined = ref.graphChatId ?? undefined;
+  let graphChatId: string | null | undefined = safeRef.graphChatId ?? undefined;
   if (graphChatId === undefined && sharePointSiteId) {
     // Only resolve when SharePoint is configured (the only place chatId matters currently)
     try {
       const resolved = await resolveGraphChatId({
         botFrameworkConversationId: conversationId,
-        userAadObjectId: ref.user?.aadObjectId,
+        userAadObjectId: safeRef.user?.aadObjectId,
         tokenProvider,
       });
       graphChatId = resolved;
@@ -235,7 +260,7 @@ export async function resolveMSTeamsSendContext(params: {
       // (network, 401, rate limit) should be retried on subsequent sends rather than
       // permanently blocking file uploads for this conversation.
       if (resolved) {
-        await store.upsert(conversationId, { ...ref, graphChatId: resolved });
+        await store.upsert(conversationId, { ...safeRef, graphChatId: resolved });
       } else {
         log.warn?.("could not resolve Graph chat ID; file uploads may fail for this conversation", {
           conversationId,
@@ -256,7 +281,7 @@ export async function resolveMSTeamsSendContext(params: {
   return {
     appId: creds.appId,
     conversationId,
-    ref,
+    ref: safeRef,
     adapter: adapter as unknown as MSTeamsAdapter,
     log,
     conversationType,

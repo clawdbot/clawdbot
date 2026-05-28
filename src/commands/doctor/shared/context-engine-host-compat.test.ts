@@ -59,14 +59,14 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
 }
 
 describe("doctor context-engine host compatibility", () => {
-  it("collects native Codex and Pi as compatible agent-run hosts", () => {
+  it("collects native Codex and OpenClaw as compatible agent-run hosts", () => {
     const hosts = collectConfiguredContextEngineAgentRunHosts({
       cfg: {
         agents: {
           defaults: {
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "pi" } },
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
             },
           },
         },
@@ -75,7 +75,7 @@ describe("doctor context-engine host compatibility", () => {
 
     expect(hosts.map((host) => host.host.id).toSorted()).toEqual([
       "codex-app-server",
-      "pi-embedded",
+      "openclaw-embedded",
     ]);
   });
 

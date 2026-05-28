@@ -94,10 +94,12 @@ const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
   agentId?: string;
+  cachePath: string;
   config?: OpenClawConfig;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   running: boolean;
+  sessionsDir: string;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -370,25 +372,23 @@ async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile)
 
 async function listUsageCountedTranscriptFileStats(
   agentId?: string,
-  params?: { minMtimeMs?: number },
+  params?: { minMtimeMs?: number; sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
+  const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
   const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
   const tasks = entries
     .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
-    .map(
-      (entry) => async (): Promise<UsageCostTranscriptFile | undefined> => {
-        const filePath = path.join(sessionsDir, entry.name);
-        const stats = await fs.promises.stat(filePath).catch(() => null);
-        if (!stats) {
-          return undefined;
-        }
-        if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
-          return undefined;
-        }
-        return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
-      },
-    );
+    .map((entry) => async (): Promise<UsageCostTranscriptFile | undefined> => {
+      const filePath = path.join(sessionsDir, entry.name);
+      const stats = await fs.promises.stat(filePath).catch(() => null);
+      if (!stats) {
+        return undefined;
+      }
+      if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
+        return undefined;
+      }
+      return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
+    });
   const { results } = await runTasksWithConcurrency({
     tasks,
     limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
@@ -398,8 +398,9 @@ async function listUsageCountedTranscriptFileStats(
 
 async function listUsageCountedTranscriptFiles(
   agentId?: string,
+  params?: { sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
-  return await listUsageCountedTranscriptFileStats(agentId);
+  return await listUsageCountedTranscriptFileStats(agentId, params);
 }
 
 function isUsageCostCacheEntryFresh(params: {
@@ -1496,14 +1497,16 @@ async function scanUsageFileForCache(params: {
   };
 }
 
-export async function refreshCostUsageCache(params?: {
+async function refreshCostUsageCacheForPath(params?: {
   config?: OpenClawConfig;
   agentId?: string;
+  cachePath?: string;
   maxFiles?: number;
+  sessionsDir?: string;
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  const cachePath = resolveUsageCostCachePath(params?.agentId);
+  const cachePath = params?.cachePath ?? resolveUsageCostCachePath(params?.agentId);
   const lock = await acquireUsageCostCacheRefreshLock(cachePath);
   if (!lock.acquired) {
     return "busy";
@@ -1511,7 +1514,9 @@ export async function refreshCostUsageCache(params?: {
   try {
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
-    const files = await listUsageCountedTranscriptFiles(params?.agentId);
+    const files = await listUsageCountedTranscriptFiles(params?.agentId, {
+      sessionsDir: params?.sessionsDir,
+    });
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
     const refreshStartMs = params?.startMs;
     const refreshFiles =
@@ -1563,6 +1568,16 @@ export async function refreshCostUsageCache(params?: {
   } finally {
     await lock.release();
   }
+}
+
+export async function refreshCostUsageCache(params?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  maxFiles?: number;
+  sessionFiles?: string[];
+  startMs?: number;
+}): Promise<UsageCostRefreshResult> {
+  return await refreshCostUsageCacheForPath(params);
 }
 
 export async function loadCostUsageSummaryFromCache(params: {
@@ -1621,7 +1636,7 @@ export async function loadCostUsageSummaryFromCache(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     pricingFingerprint,
-    refreshing: usageCostRefreshes.has(params.agentId ?? "main") || refreshRunning,
+    refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
   });
 }
 
@@ -1696,7 +1711,8 @@ export async function loadSessionCostSummaryFromCache(params: {
       refreshRequested = true;
     }
   }
-  const refreshRunning = await isUsageCostCacheRefreshRunning(cachePath);
+  const refreshRunning =
+    usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
   let summary = stale ? null : (entry?.sessionSummary ?? null);
   if (!summary && params.refreshMode === "sync-when-empty") {
     summary = await loadSessionCostSummary({
@@ -1758,8 +1774,8 @@ export function requestCostUsageCacheRefresh(params?: {
   agentId?: string;
   sessionFiles?: string[];
 }): void {
-  const agentId = params?.agentId ?? "main";
-  const existing = usageCostRefreshes.get(agentId);
+  const cachePath = resolveUsageCostCachePath(params?.agentId);
+  const existing = usageCostRefreshes.get(cachePath);
   if (existing) {
     mergeUsageCostRefreshRequest(existing, params);
     return;
@@ -1767,14 +1783,16 @@ export function requestCostUsageCacheRefresh(params?: {
 
   const state: UsageCostRefreshState = {
     agentId: params?.agentId,
+    cachePath,
     config: params?.config,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     running: false,
+    sessionsDir: path.dirname(cachePath),
   };
   mergeUsageCostRefreshRequest(state, params);
-  usageCostRefreshes.set(agentId, state);
-  scheduleUsageCostRefresh(agentId, state);
+  usageCostRefreshes.set(cachePath, state);
+  scheduleUsageCostRefresh(cachePath, state);
 }
 
 function mergeUsageCostRefreshRequest(
@@ -1801,7 +1819,7 @@ function mergeUsageCostRefreshRequest(
 }
 
 function scheduleUsageCostRefresh(
-  agentId: string,
+  refreshKey: string,
   state: UsageCostRefreshState,
   delayMs = 0,
 ): void {
@@ -1810,14 +1828,14 @@ function scheduleUsageCostRefresh(
   }
   const timer = setTimeout(() => {
     state.timer = undefined;
-    void runQueuedUsageCostRefresh(agentId, state);
+    void runQueuedUsageCostRefresh(refreshKey, state);
   }, delayMs);
   timer.unref?.();
   state.timer = timer;
 }
 
 async function runQueuedUsageCostRefresh(
-  agentId: string,
+  refreshKey: string,
   state: UsageCostRefreshState,
 ): Promise<void> {
   state.running = true;
@@ -1830,9 +1848,11 @@ async function runQueuedUsageCostRefresh(
         state.pendingSessionFiles.clear();
       }
       state.fullRefreshRequested = false;
-      const result = await refreshCostUsageCache({
+      const result = await refreshCostUsageCacheForPath({
+        cachePath: state.cachePath,
         config: state.config,
         agentId: state.agentId,
+        sessionsDir: state.sessionsDir,
         sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
       });
       if (result === "busy") {
@@ -1852,9 +1872,9 @@ async function runQueuedUsageCostRefresh(
   } finally {
     state.running = false;
     if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-      scheduleUsageCostRefresh(agentId, state, retryDelayMs);
+      scheduleUsageCostRefresh(refreshKey, state, retryDelayMs);
     } else {
-      usageCostRefreshes.delete(agentId);
+      usageCostRefreshes.delete(refreshKey);
     }
   }
 }

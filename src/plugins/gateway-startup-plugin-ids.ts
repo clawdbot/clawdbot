@@ -1,4 +1,5 @@
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -10,6 +11,8 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
 } from "../memory-host-sdk/dreaming.js";
+import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { buildModelCatalogMergeKey } from "../model-catalog/refs.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
@@ -45,6 +48,16 @@ type GenerationProviderContractKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 type ConfiguredGenerationProviderIds = Record<GenerationProviderContractKey, ReadonlySet<string>>;
+const CORE_BUILT_IN_MODEL_APIS = new Set([
+  "anthropic-messages",
+  "azure-openai-responses",
+  "google-generative-ai",
+  "google-vertex",
+  "mistral-conversations",
+  "openai-codex-responses",
+  "openai-completions",
+  "openai-responses",
+]);
 
 function isConfigActivationValueEnabled(value: unknown): boolean {
   if (value === false) {
@@ -254,15 +267,136 @@ function listModelProviderRefs(value: unknown): string[] {
   return refs;
 }
 
+function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
+  return listModelProviderRefs(value)
+    .map((ref) => {
+      const slashIndex = ref.indexOf("/");
+      if (slashIndex <= 0 || slashIndex >= ref.length - 1) {
+        return undefined;
+      }
+      return {
+        providerId: normalizeProviderId(ref.slice(0, slashIndex)),
+        modelId: ref.slice(slashIndex + 1).trim(),
+      };
+    })
+    .filter((entry): entry is { providerId: string; modelId: string } =>
+      Boolean(entry?.providerId && entry.modelId),
+    );
+}
+
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
   return new Set(
     listModelProviderRefs(value)
       .map((ref) => {
         const slashIndex = ref.indexOf("/");
-        return slashIndex > 0 ? normalizeOptionalLowercaseString(ref.slice(0, slashIndex)) : "";
+        return slashIndex > 0 ? normalizeProviderId(ref.slice(0, slashIndex)) : "";
       })
       .filter((providerId): providerId is string => Boolean(providerId)),
   );
+}
+
+type ManifestModelProviderLookup = {
+  modelApis: ReadonlyMap<string, string>;
+  providerIds: ReadonlySet<string>;
+};
+
+function buildManifestModelProviderLookup(
+  manifestRegistry: PluginManifestRegistry,
+): ManifestModelProviderLookup {
+  const modelApis = new Map(
+    planManifestModelCatalogRows({ registry: manifestRegistry }).rows.flatMap((row) =>
+      row.api ? [[row.mergeKey, row.api] as const] : [],
+    ),
+  );
+  return {
+    modelApis,
+    providerIds: new Set(
+      manifestRegistry.plugins.flatMap((plugin) => plugin.providers.map(normalizeProviderId)),
+    ),
+  };
+}
+
+function collectConfiguredAgentModelProviderIds(
+  config: OpenClawConfig,
+  manifestRegistry: PluginManifestRegistry,
+): ReadonlySet<string> {
+  const modelIdsByProvider = new Map<string, Set<string>>();
+  const manifestModelProviders = buildManifestModelProviderLookup(manifestRegistry);
+  const addModelProviderRefs = (value: unknown) => {
+    for (const { providerId, modelId } of listModelProviderRefParts(value)) {
+      const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
+      modelIds.add(modelId);
+      modelIdsByProvider.set(providerId, modelIds);
+    }
+  };
+  const addModelMapProviderIds = (models: unknown) => {
+    if (!isRecord(models)) {
+      return;
+    }
+    for (const modelRef of Object.keys(models)) {
+      addModelProviderRefs(modelRef);
+    }
+  };
+
+  const defaults = config.agents?.defaults;
+  addModelProviderRefs(defaults?.model);
+  addModelMapProviderIds(defaults?.models);
+
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
+    if (!isRecord(agent)) {
+      continue;
+    }
+    addModelProviderRefs(agent.model);
+    addModelMapProviderIds(agent.models);
+  }
+
+  return new Set(
+    [...modelIdsByProvider.entries()]
+      .filter(([providerId, modelIds]) => {
+        return [...modelIds].some((modelId) =>
+          configuredModelProviderNeedsRuntimePlugin({
+            config,
+            manifestModelProviders,
+            providerId,
+            modelId,
+          }),
+        );
+      })
+      .map(([providerId]) => providerId),
+  );
+}
+
+function configuredModelProviderNeedsRuntimePlugin(params: {
+  config: OpenClawConfig;
+  manifestModelProviders: ManifestModelProviderLookup;
+  providerId: string;
+  modelId: string;
+}): boolean {
+  const providerConfig = params.config.models?.providers?.[params.providerId];
+  const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
+  const modelApi =
+    configuredModel?.api ??
+    providerConfig?.api ??
+    params.manifestModelProviders.modelApis.get(
+      buildModelCatalogMergeKey(params.providerId, params.modelId),
+    );
+  if (typeof modelApi === "string") {
+    return !CORE_BUILT_IN_MODEL_APIS.has(modelApi);
+  }
+  return params.manifestModelProviders.providerIds.has(params.providerId);
+}
+
+function manifestOwnsConfiguredModelProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredModelProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredModelProviderIds.size === 0) {
+    return false;
+  }
+  return (params.manifest?.providers ?? []).some((providerId) => {
+    return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
+  });
 }
 
 function collectConfiguredGenerationProviderIds(
@@ -317,6 +451,55 @@ function canStartConfiguredGenerationProviderPlugin(params: {
     !manifestOwnsConfiguredGenerationProvider({
       manifest: params.manifest,
       configuredGenerationProviderIds: params.configuredGenerationProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
+}
+
+function canStartConfiguredModelProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredModelProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredModelProvider({
+      manifest: params.manifest,
+      configuredModelProviderIds: params.configuredModelProviderIds,
     })
   ) {
     return false;
@@ -783,15 +966,16 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
     platform: params.platform,
   });
   const requiredAgentHarnessRuntimes = new Set(
-    collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env, {
-      includeEnvRuntime: false,
-      includeLegacyAgentRuntimes: false,
-    }),
+    collectConfiguredAgentHarnessRuntimes(activationSourceConfig),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
   const configuredWebSearchProviderIds =
     collectConfiguredWebSearchProviderIds(activationSourceConfig);
+  const configuredModelProviderIds = collectConfiguredAgentModelProviderIds(
+    activationSourceConfig,
+    params.manifestRegistry,
+  );
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
@@ -870,6 +1054,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredWebSearchProviderIds,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredModelProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredModelProviderIds,
           platform: params.platform,
         })
       ) {

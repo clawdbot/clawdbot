@@ -19,7 +19,7 @@ describe("shared/node-match", () => {
     expect(resolveNodeMatches(nodes, "mac studio")).toEqual([nodes[0]]);
     expect(resolveNodeMatches(nodes, "  Mac---Studio!! ")).toEqual([nodes[0]]);
     expect(resolveNodeMatches(nodes, "pi-456")).toEqual([nodes[1]]);
-    expect(resolveNodeMatches(nodes, "pi")).toStrictEqual([]);
+    expect(resolveNodeMatches(nodes, "openclaw")).toStrictEqual([]);
     expect(resolveNodeMatches(nodes, "   ")).toStrictEqual([]);
   });
 

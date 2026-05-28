@@ -23,13 +23,13 @@ type AgentCommandFn = (...args: unknown[]) => Promise<void>;
 type SendWhatsAppFn = (...args: unknown[]) => Promise<{ messageId: string; toJid: string }>;
 export type RunBtwSideQuestionFn = (...args: unknown[]) => Promise<unknown>;
 type DispatchInboundMessageFn = (...args: unknown[]) => Promise<unknown>;
-type CompactEmbeddedPiSessionFn = (...args: unknown[]) => Promise<unknown>;
+type CompactEmbeddedAgentSessionFn = (...args: unknown[]) => Promise<unknown>;
 
 const GATEWAY_TEST_CONFIG_ROOT_KEY = Symbol.for("openclaw.gatewayTestHelpers.configRoot");
 
 type GatewayTestHoistedState = {
   testTailnetIPv4: { value: string | undefined };
-  piSdkMock: {
+  agentDiscoveryMock: {
     enabled: boolean;
     discoverCalls: number;
     models: Array<{
@@ -52,7 +52,7 @@ type GatewayTestHoistedState = {
     abortCalls: string[];
     waitCalls: string[];
     waitResults: Map<string, boolean>;
-    compactEmbeddedPiSession: Mock<CompactEmbeddedPiSessionFn>;
+    compactEmbeddedAgentSession: Mock<CompactEmbeddedAgentSessionFn>;
   };
   testTailscaleWhois: { value: TailscaleWhoisIdentity | null };
   getReplyFromConfig: Mock<GetReplyFromConfigFn>;
@@ -86,7 +86,7 @@ const gatewayTestHoisted = vi.hoisted(() => {
   }
   const created: GatewayTestHoistedState = {
     testTailnetIPv4: { value: undefined },
-    piSdkMock: {
+    agentDiscoveryMock: {
       enabled: false,
       discoverCalls: 0,
       models: [],
@@ -102,7 +102,7 @@ const gatewayTestHoisted = vi.hoisted(() => {
       abortCalls: [],
       waitCalls: [],
       waitResults: new Map<string, boolean>(),
-      compactEmbeddedPiSession: vi.fn().mockResolvedValue({
+      compactEmbeddedAgentSession: vi.fn().mockResolvedValue({
         ok: true,
         compacted: true,
         result: {
@@ -146,7 +146,7 @@ export function getGatewayTestHoistedState(): GatewayTestHoistedState {
 
 export const testTailnetIPv4 = gatewayTestHoisted.testTailnetIPv4;
 export const testTailscaleWhois = gatewayTestHoisted.testTailscaleWhois;
-export const piSdkMock = gatewayTestHoisted.piSdkMock;
+export const agentDiscoveryMock = gatewayTestHoisted.agentDiscoveryMock;
 export const cronIsolatedRun = gatewayTestHoisted.cronIsolatedRun;
 export const agentCommand = gatewayTestHoisted.agentCommand;
 export const runBtwSideQuestion = gatewayTestHoisted.runBtwSideQuestion;

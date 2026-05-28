@@ -31,7 +31,7 @@ describe("tokenjuice bundled plugin", () => {
     expect(manifest.enabledByDefault).toBeUndefined();
   });
 
-  it("registers tokenjuice tool result middleware for Pi and Codex runtimes", () => {
+  it("registers tokenjuice tool result middleware for OpenClaw and Codex runtimes", () => {
     const registerAgentToolResultMiddleware = vi.fn();
 
     plugin.register(
@@ -50,6 +50,6 @@ describe("tokenjuice bundled plugin", () => {
     expect(tokenjuiceFactory).toHaveBeenCalledTimes(1);
     const registration = registerAgentToolResultMiddleware.mock.calls[0];
     expect(typeof registration?.[0]).toBe("function");
-    expect(registration?.[1]).toEqual({ runtimes: ["pi", "codex"] });
+    expect(registration?.[1]).toEqual({ runtimes: ["openclaw", "codex"] });
   });
 });

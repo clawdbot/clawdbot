@@ -13,6 +13,7 @@
   "qa-channel-protocol",
   "qa-lab",
   "qa-runtime",
+  "reply-payload-testing",
   "ssrf-runtime-internal",
   "test-env",
   "test-fixtures",

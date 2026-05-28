@@ -1,7 +1,12 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import { buildTelegramInteractiveButtons } from "./button-types.js";
 import { describeTelegramInteractiveButtonBehavior } from "./button-types.test-helpers.js";
-import { resolveTelegramTargetChatType } from "./inline-buttons.js";
+import {
+  isTelegramInlineButtonsEnabled,
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramTargetChatType,
+} from "./inline-buttons.js";
 
 describe("resolveTelegramTargetChatType", () => {
   it("returns 'direct' for positive numeric IDs", () => {
@@ -83,5 +88,55 @@ describe("buildTelegramInteractiveButtons callback rewrites", () => {
         },
       ],
     ]);
+  });
+});
+
+describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () => {
+  // Embedded prompt prep calls this from raw config before the active runtime
+  // snapshot has resolved channel credentials. Read-only account inspection
+  // keeps SecretRef-backed config readable without resolving the token.
+  it("preserves the default inline-buttons scope when botToken is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramInlineButtonsScope({ cfg })).toBe("allowlist");
+    expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(true);
+  });
+
+  it('preserves configured "off" when botToken is an unresolved SecretRef', () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+          capabilities: { inlineButtons: "off" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramInlineButtonsScope({ cfg })).toBe("off");
+    expect(isTelegramInlineButtonsEnabled({ cfg })).toBe(false);
+  });
+
+  it("preserves scoped account inline-buttons config when the token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              botToken: { source: "exec", provider: "default", id: "telegram-ops" },
+              capabilities: { inlineButtons: "all" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveTelegramInlineButtonsScope({ cfg, accountId: "ops" })).toBe("all");
+    expect(isTelegramInlineButtonsEnabled({ cfg, accountId: "ops" })).toBe(true);
   });
 });

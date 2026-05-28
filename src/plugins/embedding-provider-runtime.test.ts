@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearEmbeddingProviders,
   registerEmbeddingProvider,
@@ -50,6 +51,7 @@ describe("embedding provider runtime resolution", () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("capability")]);
 
     expect(runtimeModule.listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
       "registered",
       "capability",
     ]);
@@ -61,13 +63,43 @@ describe("embedding provider runtime resolution", () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("ollama")]);
     mocks.resolvePluginCapabilityProvider.mockReturnValue(createCapabilityAdapter("ollama"));
 
-    expect(runtimeModule.listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["ollama"]);
+    expect(runtimeModule.listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "ollama",
+    ]);
     expect(runtimeModule.getEmbeddingProvider("ollama")?.id).toBe("ollama");
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
     expect(mocks.resolvePluginCapabilityProvider).toHaveBeenCalledWith({
       key: "embeddingProviders",
       providerId: "ollama",
       cfg: undefined,
+    });
+  });
+
+  it("keeps OpenAI-compatible available as an explicit core provider", () => {
+    expect(runtimeModule.getEmbeddingProvider("openai-compatible")?.id).toBe("openai-compatible");
+  });
+
+  it("maps configured OpenAI-compatible provider ids to the core adapter", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "tenant-embeddings": {
+            api: "openai-responses",
+            baseUrl: "http://127.0.0.1:11434/v1",
+            models: [],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(runtimeModule.getEmbeddingProvider("tenant-embeddings", cfg)?.id).toBe(
+      "openai-compatible",
+    );
+    expect(mocks.resolvePluginCapabilityProvider).not.toHaveBeenCalledWith({
+      key: "embeddingProviders",
+      providerId: "tenant-embeddings",
+      cfg,
     });
   });
 
@@ -82,7 +114,10 @@ describe("embedding provider runtime resolution", () => {
     mocks.resolvePluginCapabilityProviders.mockReturnValue([createCapabilityAdapter("openai")]);
 
     expect(runtimeModule.getEmbeddingProvider("openai")).toStrictEqual(registered);
-    expect(runtimeModule.listEmbeddingProviders().map((adapter) => adapter.id)).toEqual(["openai"]);
+    expect(runtimeModule.listEmbeddingProviders().map((adapter) => adapter.id)).toEqual([
+      "openai-compatible",
+      "openai",
+    ]);
     expect(mocks.resolvePluginCapabilityProviders).toHaveBeenCalledTimes(1);
   });
 });

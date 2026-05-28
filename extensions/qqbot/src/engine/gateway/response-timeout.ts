@@ -7,7 +7,7 @@
  *   QQBot reply path abort at ~5 minutes with "LLM request timed out",
  *   despite the direct ollama call to the same model working. The
  *   embedded-runner / idle-timeout layer already honors longer
- *   provider timeouts (see `src/agents/pi-embedded-runner/run/llm-idle-timeout.ts`),
+ *   provider timeouts (see `src/agents/embedded-agent-runner/run/llm-idle-timeout.ts`),
  *   but the QQBot outbound dispatcher held an independent hardcoded
  *   `RESPONSE_TIMEOUT = 300_000` watchdog that quietly undercut the
  *   configured ceiling.
@@ -34,7 +34,7 @@ export const DEFAULT_RESPONSE_TIMEOUT_MS = 300_000;
 /**
  * Upper bound to keep the watchdog inside the safe `setTimeout` range
  * (approximately 24.8 days). Mirrors `MAX_SAFE_TIMEOUT_MS` in
- * `src/agents/pi-embedded-runner/run/llm-idle-timeout.ts`.
+ * `src/agents/embedded-agent-runner/run/llm-idle-timeout.ts`.
  */
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 

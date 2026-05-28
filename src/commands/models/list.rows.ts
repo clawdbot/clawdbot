@@ -1,5 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import {
   shouldSuppressBuiltInModel,
@@ -8,6 +6,8 @@ import {
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import type { Model } from "../../llm/types.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -17,11 +17,12 @@ import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
 import { toModelRow } from "./list.model-row.js";
 import type { ConfiguredEntry, ModelRow } from "./list.types.js";
+import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 import { isLocalBaseUrl, modelKey } from "./shared.js";
 
 type ConfiguredByKey = Map<string, ConfiguredEntry>;
 type ModelCatalogModule = typeof import("../../agents/model-catalog.js");
-type ModelResolverModule = typeof import("../../agents/pi-embedded-runner/model.js");
+type ModelResolverModule = typeof import("../../agents/embedded-agent-runner/model.js");
 type ProviderCatalogModule = typeof import("./list.provider-catalog.js");
 
 type RowFilter = {
@@ -46,7 +47,7 @@ const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
   () => import("../../agents/model-catalog.js"),
 );
 const modelResolverModuleLoader = createLazyImportLoader<ModelResolverModule>(
-  () => import("../../agents/pi-embedded-runner/model.js"),
+  () => import("../../agents/embedded-agent-runner/model.js"),
 );
 const providerCatalogModuleLoader = createLazyImportLoader<ProviderCatalogModule>(
   () => import("./list.provider-catalog.js"),
@@ -64,11 +65,26 @@ function loadProviderCatalogModule(): Promise<ProviderCatalogModule> {
   return providerCatalogModuleLoader.load();
 }
 
-function matchesRowFilter(filter: RowFilter, model: { provider: string; baseUrl?: string }) {
-  if (filter.provider && normalizeProviderId(model.provider) !== filter.provider) {
+function matchesProviderFilter(context: RowBuilderContext, provider: string): boolean {
+  const providerFilter = context.filter.provider;
+  if (!providerFilter) {
+    return true;
+  }
+  const canonicalProvider = canonicalizeModelCatalogProviderAlias(provider, {
+    cfg: context.cfg,
+    metadataSnapshot: context.metadataSnapshot,
+  });
+  return normalizeProviderId(canonicalProvider) === providerFilter;
+}
+
+function matchesRowFilter(
+  context: RowBuilderContext,
+  model: { provider: string; baseUrl?: string },
+) {
+  if (!matchesProviderFilter(context, model.provider)) {
     return false;
   }
-  if (filter.local && !isLocalBaseUrl(model.baseUrl ?? "")) {
+  if (context.filter.local && !isLocalBaseUrl(model.baseUrl ?? "")) {
     return false;
   }
   return true;
@@ -163,7 +179,7 @@ async function appendVisibleRow(params: {
   if (params.seenKeys?.has(params.key)) {
     return false;
   }
-  if (!matchesRowFilter(params.context.filter, params.model)) {
+  if (!matchesRowFilter(params.context, params.model)) {
     return false;
   }
   const normalizedModel = normalizeListRowWithProviderPlugin({
@@ -280,7 +296,7 @@ function toFallbackConfiguredListModel(entry: ConfiguredEntry, cfg: OpenClawConf
 
 export async function appendDiscoveredRows(params: {
   rows: ModelRow[];
-  models: Model<Api>[];
+  models: Model[];
   modelRegistry?: ModelRegistry;
   context: RowBuilderContext;
   resolveWithRegistry?: boolean;
@@ -438,10 +454,7 @@ export async function appendCatalogSupplementRows(params: {
     metadataSnapshot: params.context.metadataSnapshot,
   });
   for (const entry of catalog) {
-    if (
-      params.context.filter.provider &&
-      normalizeProviderId(entry.provider) !== params.context.filter.provider
-    ) {
+    if (!matchesProviderFilter(params.context, entry.provider)) {
       continue;
     }
     const key = modelKey(entry.provider, entry.id);
@@ -483,7 +496,7 @@ export async function appendProviderCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
   staticOnly?: boolean;
-  catalogModels?: readonly Model<Api>[];
+  catalogModels?: readonly Model[];
 }): Promise<number> {
   let appended = 0;
   let catalogModels = params.catalogModels;
@@ -525,10 +538,7 @@ export async function appendConfiguredRows(params: {
     ? (await loadModelResolverModule()).resolveModelWithRegistry
     : undefined;
   for (const entry of params.entries) {
-    if (
-      params.context.filter.provider &&
-      normalizeProviderId(entry.ref.provider) !== params.context.filter.provider
-    ) {
+    if (!matchesProviderFilter(params.context, entry.ref.provider)) {
       continue;
     }
     const resolvedModel =

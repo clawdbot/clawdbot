@@ -11,7 +11,7 @@ import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 // Inline computeContextHash to avoid importing memory-flush.js (which
-// triggers the full agent import chain and hits the missing pi-ai/oauth
+// triggers the full agent import chain and hits the missing shared model runtime/oauth
 // package in test environments).  This mirrors the implementation in
 // src/auto-reply/reply/memory-flush.ts exactly.
 function computeContextHash(messages: Array<{ role?: string; content?: unknown }>): string {

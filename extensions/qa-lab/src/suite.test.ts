@@ -260,12 +260,12 @@ describe("qa suite", () => {
     expect(
       qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
         providerMode: "mock-openai",
-        forcedRuntime: "pi",
+        forcedRuntime: "openclaw",
         mockBaseUrl: "http://127.0.0.1:44080",
       }),
     ).toEqual({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "pi",
+      OPENCLAW_QA_FORCE_RUNTIME: "openclaw",
     });
   });
 
@@ -383,7 +383,7 @@ describe("qa suite", () => {
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
         modelRef: "mock-openai/gpt-5.5",
         providerMode: "mock-openai",
-        forcedRuntime: "pi",
+        forcedRuntime: "openclaw",
       }),
     ).toBe("mock-openai/gpt-5.5");
   });

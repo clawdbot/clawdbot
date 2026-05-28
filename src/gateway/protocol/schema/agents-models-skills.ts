@@ -43,7 +43,7 @@ export const AgentSummarySchema = Type.Object(
       Type.Object(
         {
           id: NonEmptyString,
-          fallback: Type.Optional(Type.Union([Type.Literal("pi"), Type.Literal("none")])),
+          fallback: Type.Optional(Type.Union([Type.Literal("openclaw"), Type.Literal("none")])),
           source: Type.Union([
             Type.Literal("env"),
             Type.Literal("agent"),
@@ -357,6 +357,13 @@ export const SkillsDetailParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SkillsSecurityVerdictsParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsDetailResultSchema = Type.Object(
   {
     skill: Type.Union([
@@ -411,6 +418,65 @@ export const SkillsDetailResultSchema = Type.Object(
         Type.Null(),
       ]),
     ),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsSecurityVerdictsResultSchema = Type.Object(
+  {
+    schema: Type.Literal("openclaw.skills.security-verdicts.v1"),
+    items: Type.Array(
+      Type.Object(
+        {
+          registry: NonEmptyString,
+          ok: Type.Boolean(),
+          decision: NonEmptyString,
+          reasons: Type.Array(Type.String()),
+          requestedSlug: NonEmptyString,
+          requestedVersion: NonEmptyString,
+          slug: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+          version: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+          displayName: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          publisherHandle: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          publisherDisplayName: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          createdAt: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+          checkedAt: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+          skillUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          securityAuditUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          securityStatus: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          securityPassed: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+          error: Type.Optional(
+            Type.Object(
+              {
+                code: Type.Optional(Type.String()),
+                message: Type.Optional(Type.String()),
+              },
+              { additionalProperties: false },
+            ),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsSkillCardParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    skillKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsSkillCardResultSchema = Type.Object(
+  {
+    schema: Type.Literal("openclaw.skills.skill-card.v1"),
+    skillKey: NonEmptyString,
+    path: NonEmptyString,
+    sizeBytes: Type.Integer({ minimum: 0 }),
+    content: Type.String(),
   },
   { additionalProperties: false },
 );
@@ -527,11 +593,21 @@ export const ToolsEffectiveGroupSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ToolsEffectiveNoticeSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    severity: Type.Union([Type.Literal("info"), Type.Literal("warning")]),
+    message: Type.String(),
+  },
+  { additionalProperties: false },
+);
+
 export const ToolsEffectiveResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
     profile: NonEmptyString,
     groups: Type.Array(ToolsEffectiveGroupSchema),
+    notices: Type.Optional(Type.Array(ToolsEffectiveNoticeSchema)),
   },
   { additionalProperties: false },
 );

@@ -1,6 +1,6 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
-import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
+import type { ModelRegistry } from "../../llm/model-registry.js";
+import type { Model } from "../../llm/types.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -11,6 +11,7 @@ import { formatErrorWithStack } from "./list.errors.js";
 import { printModelTable } from "./list.table.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
+import { canonicalizeModelCatalogProviderAlias } from "./provider-aliases.js";
 import { DEFAULT_PROVIDER, ensureFlagCompatibility } from "./shared.js";
 
 const DISPLAY_MODEL_PARSE_OPTIONS = { allowPluginNormalization: false } as const;
@@ -52,7 +53,7 @@ export async function modelsListCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const providerFilter = (() => {
+  const parsedProviderFilter = (() => {
     const raw = opts.provider?.trim();
     if (!raw) {
       return undefined;
@@ -67,7 +68,7 @@ export async function modelsListCommand(
     const parsed = parseModelRef(`${raw}/_`, DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
     return parsed?.provider ?? normalizeLowercaseStringOrEmpty(raw);
   })();
-  if (providerFilter === null) {
+  if (parsedProviderFilter === null) {
     return;
   }
   const [
@@ -92,6 +93,12 @@ export async function modelsListCommand(
     workspaceDir,
     env: process.env,
   });
+  const providerFilter = parsedProviderFilter
+    ? canonicalizeModelCatalogProviderAlias(parsedProviderFilter, {
+        cfg,
+        metadataSnapshot,
+      })
+    : undefined;
   const authIndex = createModelListAuthIndex({
     cfg,
     authStore,
@@ -100,11 +107,11 @@ export async function modelsListCommand(
   });
 
   let modelRegistry: ModelRegistry | undefined;
-  let registryModels: Model<Api>[] = [];
+  let registryModels: Model[] = [];
   let discoveredKeys = new Set<string>();
   let availableKeys: Set<string> | undefined;
   let availabilityErrorMessage: string | undefined;
-  const { entries } = resolveConfiguredEntries(cfg);
+  const { entries } = resolveConfiguredEntries(cfg, metadataSnapshot);
   const configuredByKey = new Map(entries.map((entry) => [entry.key, entry]));
   const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
   const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;

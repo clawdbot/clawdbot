@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  ensureDeviceToken,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -14,6 +18,7 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -279,7 +284,11 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
-  async function withPairedOperatorDeviceToken<T>(params: { fn: (token: string) => Promise<T> }) {
+  async function withPairedOperatorDeviceToken<T>(params: {
+    issuerGeneration?: string;
+    browserMetadata?: boolean;
+    fn: (token: string) => Promise<T>;
+  }) {
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
     vi.stubEnv("OPENCLAW_HOME", tempHome);
     try {
@@ -289,15 +298,31 @@ describe("handleControlUiHttpRequest", () => {
         publicKey: "test-public-key",
         role: "operator",
         scopes: ["operator.read"],
-        clientId: "openclaw-control-ui",
-        clientMode: "webchat",
+        ...(params.browserMetadata
+          ? {
+              clientId: "openclaw-control-ui",
+              clientMode: "webchat",
+            }
+          : {}),
       });
       const approved = await approveDevicePairing(requested.request.requestId, {
         callerScopes: ["operator.read"],
       });
       expect(approved?.status).toBe("approved");
-      const operatorToken =
+      let operatorToken =
         approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      if (params.issuerGeneration) {
+        const issued = await ensureDeviceToken({
+          deviceId,
+          role: "operator",
+          scopes: ["operator.read"],
+          issuer: {
+            kind: "shared-gateway-auth",
+            generation: params.issuerGeneration,
+          },
+        });
+        operatorToken = issued?.token;
+      }
       expect(typeof operatorToken).toBe("string");
       return await params.fn(operatorToken ?? "");
     } finally {
@@ -563,6 +588,39 @@ describe("handleControlUiHttpRequest", () => {
               url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
               method: "GET",
               auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
+  it("accepts shared-gateway issuer tagged device tokens on assistant media requests", async () => {
+    const auth = {
+      mode: "token",
+      token: "shared-token",
+      allowTailscale: false,
+    } satisfies ResolvedGatewayAuth;
+    const issuerGeneration = resolveSharedGatewaySessionGeneration(auth);
+    expect(typeof issuerGeneration).toBe("string");
+    await withPairedOperatorDeviceToken({
+      issuerGeneration,
+      browserMetadata: true,
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-issued-device-token-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+              method: "GET",
+              auth,
               headers: {
                 authorization: `Bearer ${operatorToken}`,
               },

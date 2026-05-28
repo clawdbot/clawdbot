@@ -278,14 +278,14 @@ describe("managed npm root", () => {
         {
           name: "openclaw",
           dependencies: {
-            "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+            "managed-runtime": "3.1024.0",
             "node-domexception": "npm:@nolyfill/domexception@1.0.28",
           },
           optionalDependencies: {
             "optional-runtime": "2.0.0",
           },
           overrides: {
-            "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
+            "managed-runtime": "$managed-runtime",
             nested: {
               "optional-runtime": "$optional-runtime",
               alias: "$node-domexception",
@@ -300,7 +300,7 @@ describe("managed npm root", () => {
     );
 
     await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({
-      "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+      "managed-runtime": "3.1024.0",
       nested: {
         "optional-runtime": "2.0.0",
         alias: "npm:@nolyfill/domexception@1.0.28",

@@ -5,11 +5,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  queueRuntimeContextForNextTurn,
+  buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
-} from "../../dist/agents/pi-embedded-runner/run/runtime-context-prompt.js";
+} from "../../dist/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 
 type TranscriptEntry = {
   type?: string;
@@ -74,20 +74,8 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
     "runtime context was not extracted",
   );
 
-  await queueRuntimeContextForNextTurn({
-    runtimeContext: promptSubmission.runtimeContext,
-    session: {
-      sendCustomMessage: async (message, options) => {
-        assert(options?.deliverAs === "nextTurn", "runtime context was not queued for next turn");
-        sessionManager.appendCustomMessageEntry(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-        );
-      },
-    },
-  });
+  const runtimeContextMessage = buildRuntimeContextCustomMessage(promptSubmission.runtimeContext);
+  assert(runtimeContextMessage, "runtime custom message was not built");
   sessionManager.appendMessage({
     role: "user",
     content: promptSubmission.prompt,
@@ -101,11 +89,14 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
 
   const entries = await readJsonl(sessionFile);
   const customEntry = entries.find((entry) => entry.type === "custom_message");
-  assert(customEntry, "hidden runtime custom message was not persisted");
-  assert(customEntry.customType === "openclaw.runtime-context", "unexpected custom message type");
-  assert(customEntry.display === false, "runtime custom message should be hidden");
+  assert(!customEntry, "runtime custom message should not be persisted without its user turn");
   assert(
-    customEntry.content?.includes("secret docker context"),
+    runtimeContextMessage.customType === "openclaw.runtime-context",
+    "unexpected custom message type",
+  );
+  assert(!runtimeContextMessage.display, "runtime custom message should be hidden");
+  assert(
+    runtimeContextMessage.content.includes("secret docker context"),
     "runtime custom message lost context",
   );
 

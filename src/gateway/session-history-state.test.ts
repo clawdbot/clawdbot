@@ -217,6 +217,26 @@ describe("SessionHistorySseState", () => {
     ).toBe("Cursor-visible reply.");
   });
 
+  test("does not coerce partial cursor values", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "first" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "second" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+      cursor: "seq:2next",
+    });
+
+    expect(snapshot.history.messages.map((message) => message["__openclaw"]?.seq)).toEqual([1, 2]);
+  });
+
   test("requests refresh when silent control reply completes multiple message-tool mirrors", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
       target: { sessionId: "sess-main" },

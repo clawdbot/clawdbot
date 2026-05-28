@@ -46,49 +46,21 @@ See [Active Memory](/concepts/active-memory) for the activation model, plugin-ow
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                                                                                                                                        |
-| ---------- | --------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at one of those adapters |
-| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                               |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                         |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                    |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
+| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | `"openai"`       | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `openai-compatible`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at a memory embedding adapter or OpenAI-compatible model API |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                        |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                  |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
 
-### Auto-detection order
-
-When `provider` is not set, OpenClaw selects the first available:
-
-<Steps>
-  <Step title="local">
-    Selected if `memorySearch.local.modelPath` is configured and the file exists.
-  </Step>
-  <Step title="github-copilot">
-    Selected if a GitHub Copilot token can be resolved (env var or auth profile).
-  </Step>
-  <Step title="openai">
-    Selected if an OpenAI key can be resolved.
-  </Step>
-  <Step title="gemini">
-    Selected if a Gemini key can be resolved.
-  </Step>
-  <Step title="voyage">
-    Selected if a Voyage key can be resolved.
-  </Step>
-  <Step title="mistral">
-    Selected if a Mistral key can be resolved.
-  </Step>
-  <Step title="deepinfra">
-    Selected if a DeepInfra key can be resolved.
-  </Step>
-  <Step title="bedrock">
-    Selected if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
-  </Step>
-</Steps>
-
-`ollama` is supported but not auto-detected (set it explicitly).
+When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
+explicitly to use Gemini, Voyage, Mistral, DeepInfra, Bedrock, GitHub Copilot,
+Ollama, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
+Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
 ### Custom provider ids
 
-`memorySearch.provider` can point at a custom `models.providers.<id>` entry. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+`memorySearch.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
 
 ```json5
 {
@@ -136,7 +108,8 @@ Codex OAuth covers chat/completions only and does not satisfy embedding requests
 
 ## Remote endpoint config
 
-For custom OpenAI-compatible endpoints or overriding provider defaults:
+Use `provider: "openai-compatible"` for a generic OpenAI-compatible
+`/v1/embeddings` server that should not inherit global OpenAI chat credentials.
 
 <ParamField path="remote.baseUrl" type="string">
   Custom API base URL.
@@ -153,7 +126,7 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
   agents: {
     defaults: {
       memorySearch: {
-        provider: "openai",
+        provider: "openai-compatible",
         model: "text-embedding-3-small",
         remote: {
           baseUrl: "https://api.example.com/v1/",
@@ -195,10 +168,10 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
       agents: {
         defaults: {
           memorySearch: {
-            provider: "openai",
+            provider: "openai-compatible",
             remote: {
               baseUrl: "https://embeddings.example/v1",
-              apiKey: "env:EMBEDDINGS_API_KEY",
+              apiKey: "${EMBEDDINGS_API_KEY}",
             },
             model: "asymmetric-embedder",
             queryInputType: "query",
@@ -295,7 +268,7 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     openclaw memory index --force --agent main
     ```
 
-    If `provider` is `auto`, `local` is selected only when `local.modelPath` points to an existing local file. `hf:` and HTTP(S) model references can still be used explicitly with `provider: "local"`, but they do not make `auto` select local before the model is available on disk.
+    Set `provider: "local"` explicitly for local GGUF embeddings. `hf:` and HTTP(S) model references are supported for explicit local configs, but they do not change the default provider.
 
   </Accordion>
 </AccordionGroup>

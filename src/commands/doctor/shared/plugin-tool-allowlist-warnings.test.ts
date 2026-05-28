@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import {
-  collectBundledProviderAllowlistPolicyWarnings,
-  collectPluginToolAllowlistWarnings,
-} from "./plugin-tool-allowlist-warnings.js";
+import { collectPluginToolAllowlistWarnings } from "./plugin-tool-allowlist-warnings.js";
 
 const manifestRegistry: PluginManifestRegistry = {
   diagnostics: [],
@@ -269,7 +266,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
-  it("prefers canonical provider policy over an alias when checking active profiles", () => {
+  it("uses exact provider policy when checking active profiles", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
         agents: {
@@ -290,9 +287,7 @@ describe("collectPluginToolAllowlistWarnings", () => {
       manifestRegistry,
     });
 
-    expect(warnings).toEqual([
-      '- mcp.servers defines 1 MCP server ("outlook"), but tools.sandbox.tools.alsoAllow does not include "bundle-mcp", "group:plugins", or a matching server-prefixed MCP tool name/glob such as "<server>__*". Sandboxed agents will filter bundled MCP tools before provider requests. Add "bundle-mcp" to tools.sandbox.tools.alsoAllow (or use "group:plugins" / server globs) if those MCP tools should be visible; use tools.sandbox.tools.allow: [] only when you intentionally want no sandbox allow gate.',
-    ]);
+    expect(warnings).toStrictEqual([]);
   });
 
   it("uses plural grammar when multiple sandbox allow sources hide MCP servers", () => {
@@ -501,34 +496,4 @@ describe("collectPluginToolAllowlistWarnings", () => {
 
     expect(warnings).toStrictEqual([]);
   });
-
-  it("warns when restrictive plugins.allow leaves bundled provider discovery in explicit compat mode", () => {
-    const warnings = collectBundledProviderAllowlistPolicyWarnings({
-      cfg: {
-        plugins: {
-          allow: ["telegram"],
-          bundledDiscovery: "compat",
-        },
-      },
-    });
-
-    expect(warnings).toEqual([
-      '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
-    ]);
-  });
-
-  it.each([
-    { name: "default", plugins: { allow: ["telegram"] } },
-    {
-      name: "explicit allowlist",
-      plugins: { allow: ["telegram"], bundledDiscovery: "allowlist" as const },
-    },
-  ])(
-    "does not warn when bundled provider discovery follows the allowlist ($name)",
-    ({ plugins }) => {
-      const warnings = collectBundledProviderAllowlistPolicyWarnings({ cfg: { plugins } });
-
-      expect(warnings).toStrictEqual([]);
-    },
-  );
 });

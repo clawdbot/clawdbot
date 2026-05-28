@@ -377,7 +377,6 @@ export async function applyAuthChoiceLoadedPluginProvider(
       ...(manifestAuthChoice
         ? {
             onlyPluginIds: [manifestAuthChoice.pluginId],
-            providerRefs: [manifestAuthChoice.providerId],
           }
         : {}),
     });

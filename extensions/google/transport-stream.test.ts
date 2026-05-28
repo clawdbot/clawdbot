@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -308,10 +308,10 @@ describe("google transport stream", () => {
             {
               content: {
                 parts: [
-                  { thought: true, text: "draft", thoughtSignature: "sig_1" },
+                  { thought: true, text: "draft", thoughtSignature: "c2lnXzE=" },
                   { text: "answer" },
                   {
-                    thoughtSignature: "call_sig_1",
+                    thoughtSignature: "Y2FsbF9zaWdfMQ==",
                     functionCall: { name: "lookup", args: { q: "hello" } },
                   },
                 ],
@@ -416,14 +416,14 @@ describe("google transport stream", () => {
     expect(result.content[0]).toEqual({
       type: "thinking",
       thinking: "draft",
-      thinkingSignature: "sig_1",
+      thinkingSignature: "c2lnXzE=",
     });
     expect(result.content[1]?.type).toBe("text");
     expect(result.content[1]).toHaveProperty("text", "answer");
     expect(result.content[2]?.type).toBe("toolCall");
     expect(result.content[2]).toHaveProperty("name", "lookup");
     expect(result.content[2]).toHaveProperty("arguments", { q: "hello" });
-    expect(result.content[2]).toHaveProperty("thoughtSignature", "call_sig_1");
+    expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
   it("merges tool-call thought signatures from sibling SSE parts", async () => {
@@ -437,7 +437,7 @@ describe("google transport stream", () => {
                   {
                     functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
                   },
-                  { thoughtSignature: "call_sig_merged_1" },
+                  { thoughtSignature: "Y2FsbF9zaWdfbWVyZ2VkXzE=" },
                 ],
               },
               finishReason: "STOP",
@@ -467,7 +467,7 @@ describe("google transport stream", () => {
         id: "call_1",
         name: "lookup",
         arguments: { q: "hello" },
-        thoughtSignature: "call_sig_merged_1",
+        thoughtSignature: "Y2FsbF9zaWdfbWVyZ2VkXzE=",
       },
     ]);
   });
@@ -483,7 +483,7 @@ describe("google transport stream", () => {
                   {
                     functionCall: { id: "call_1", name: "lookup", args: { q: "hello" } },
                   },
-                  { thought: true, thoughtSignature: "thought_sig_after_call" },
+                  { thought: true, thoughtSignature: "dGhvdWdodF9zaWdfYWZ0ZXJfY2FsbA==" },
                   { thought: true, text: "draft" },
                   { text: "answer" },
                 ],
@@ -518,7 +518,7 @@ describe("google transport stream", () => {
     expect(result.content[1]).toEqual({
       type: "thinking",
       thinking: "draft",
-      thinkingSignature: "thought_sig_after_call",
+      thinkingSignature: "dGhvdWdodF9zaWdfYWZ0ZXJfY2FsbA==",
     });
     expect(result.content[2]).toEqual({ type: "text", text: "answer" });
   });
@@ -984,7 +984,7 @@ describe("google transport stream", () => {
               id: "call_1",
               name: "lookup",
               arguments: { q: "hello" },
-              thoughtSignature: "call_sig_1",
+              thoughtSignature: "Y2FsbF9zaWdfMQ==",
             },
           ],
         },
@@ -995,7 +995,7 @@ describe("google transport stream", () => {
       role: "model",
       parts: [
         {
-          thoughtSignature: "call_sig_1",
+          thoughtSignature: "Y2FsbF9zaWdfMQ==",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
@@ -1010,7 +1010,7 @@ describe("google transport stream", () => {
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_replay_1" }),
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfcmVwbGF5XzE=" }),
         toolResultTurn(),
         googleToolCallAssistantTurn({ timestamp: 2 }),
       ],
@@ -1022,7 +1022,7 @@ describe("google transport stream", () => {
       role: "model",
       parts: [
         {
-          thoughtSignature: "call_sig_replay_1",
+          thoughtSignature: "Y2FsbF9zaWdfcmVwbGF5XzE=",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
@@ -1040,7 +1040,7 @@ describe("google transport stream", () => {
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_alias_1" }),
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfYWxpYXNfMQ==" }),
         toolResultTurn(),
         googleToolCallAssistantTurn({ timestamp: 2 }),
       ],
@@ -1050,7 +1050,7 @@ describe("google transport stream", () => {
       role: "model",
       parts: [
         {
-          thoughtSignature: "call_sig_alias_1",
+          thoughtSignature: "Y2FsbF9zaWdfYWxpYXNfMQ==",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
@@ -1079,12 +1079,12 @@ describe("google transport stream", () => {
             {
               type: "thinking",
               thinking: "plan",
-              thinkingSignature: "think_sig_alias_1",
+              thinkingSignature: "dGhpbmtfc2lnX2FsaWFzXzE=",
             },
             {
               type: "text",
               text: "answer",
-              textSignature: "text_sig_alias_1",
+              textSignature: "dGV4dF9zaWdfYWxpYXNfMQ==",
             },
           ],
         },
@@ -1097,11 +1097,11 @@ describe("google transport stream", () => {
         {
           thought: true,
           text: "plan",
-          thoughtSignature: "think_sig_alias_1",
+          thoughtSignature: "dGhpbmtfc2lnX2FsaWFzXzE=",
         },
         {
           text: "answer",
-          thoughtSignature: "text_sig_alias_1",
+          thoughtSignature: "dGV4dF9zaWdfYWxpYXNfMQ==",
         },
       ],
     });
@@ -1115,7 +1115,7 @@ describe("google transport stream", () => {
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        googleToolCallAssistantTurn({ thoughtSignature: "opaque.sig-url_safe~1" }),
+        googleToolCallAssistantTurn({ thoughtSignature: "b3BhcXVlLnNpZy11cmxfc2FmZX4x" }),
         toolResultTurn(),
         googleToolCallAssistantTurn({ timestamp: 2 }),
       ],
@@ -1125,7 +1125,7 @@ describe("google transport stream", () => {
       role: "model",
       parts: [
         {
-          thoughtSignature: "opaque.sig-url_safe~1",
+          thoughtSignature: "b3BhcXVlLnNpZy11cmxfc2FmZX4x",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
@@ -1140,11 +1140,11 @@ describe("google transport stream", () => {
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_first_1" }),
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfZmlyc3RfMQ==" }),
         toolResultTurn(),
         googleToolCallAssistantTurn({
           timestamp: 2,
-          thoughtSignature: "call_sig_second_1",
+          thoughtSignature: "Y2FsbF9zaWdfc2Vjb25kXzE=",
         }),
       ],
     } as never);
@@ -1154,7 +1154,7 @@ describe("google transport stream", () => {
     expect(modelTurns[0]).toMatchObject({
       parts: [
         {
-          thoughtSignature: "call_sig_first_1",
+          thoughtSignature: "Y2FsbF9zaWdfZmlyc3RfMQ==",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
@@ -1162,7 +1162,7 @@ describe("google transport stream", () => {
     expect(modelTurns[1]).toMatchObject({
       parts: [
         {
-          thoughtSignature: "call_sig_second_1",
+          thoughtSignature: "Y2FsbF9zaWdfc2Vjb25kXzE=",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
@@ -1181,7 +1181,7 @@ describe("google transport stream", () => {
         toolResultTurn(),
         googleToolCallAssistantTurn({
           timestamp: 2,
-          thoughtSignature: "call_sig_future_1",
+          thoughtSignature: "Y2FsbF9zaWdfZnV0dXJlXzE=",
         }),
       ],
     } as never);
@@ -1199,7 +1199,7 @@ describe("google transport stream", () => {
     expect(modelTurns[1]).toMatchObject({
       parts: [
         {
-          thoughtSignature: "call_sig_future_1",
+          thoughtSignature: "Y2FsbF9zaWdfZnV0dXJlXzE=",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
@@ -1214,7 +1214,7 @@ describe("google transport stream", () => {
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_replay_1" }),
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfcmVwbGF5XzE=" }),
         toolResultTurn(),
         googleToolCallAssistantTurn({ timestamp: 2, args: { q: "hello-again" } }),
       ],
@@ -1247,7 +1247,7 @@ describe("google transport stream", () => {
           model: "claude-sonnet-4",
           id: "call_foreign",
           // Plausible-looking base64 from a non-Gemini provider.
-          thoughtSignature: "msg_01XFDUDYJgAACcnSM2TTgQsA",
+          thoughtSignature: "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
         }),
         toolResultTurn("call_foreign"),
         {
@@ -1270,7 +1270,9 @@ describe("google transport stream", () => {
         },
       ],
     });
-    expect(firstModelTurn.parts[0].thoughtSignature).not.toBe("msg_01XFDUDYJgAACcnSM2TTgQsA");
+    expect(firstModelTurn.parts[0].thoughtSignature).not.toBe(
+      "bXNnXzAxWEZEVURZSmdBQUNjblNNMlRUZ1FzQQ==",
+    );
   });
 
   it("does not replay prior Gemini thought signatures onto a later foreign route", () => {
@@ -1281,7 +1283,7 @@ describe("google transport stream", () => {
 
     const params = buildGoogleGenerativeAiParams(model, {
       messages: [
-        googleToolCallAssistantTurn({ thoughtSignature: "call_sig_google_1" }),
+        googleToolCallAssistantTurn({ thoughtSignature: "Y2FsbF9zaWdfZ29vZ2xlXzE=" }),
         toolResultTurn(),
         googleToolCallAssistantTurn({
           provider: "anthropic",
@@ -1302,7 +1304,7 @@ describe("google transport stream", () => {
         },
       ],
     });
-    expect(modelTurns[1]?.parts[0].thoughtSignature).not.toBe("call_sig_google_1");
+    expect(modelTurns[1]?.parts[0].thoughtSignature).not.toBe("Y2FsbF9zaWdfZ29vZ2xlXzE=");
   });
 
   it("replaces invalid Gemini tool-call sentinel signatures with the skip fallback", () => {
@@ -1362,7 +1364,7 @@ describe("google transport stream", () => {
               id: "call_math",
               name: "math_eval",
               arguments: { expression: "17*23" },
-              thoughtSignature: "real_sig_1",
+              thoughtSignature: "cmVhbF9zaWdfMQ==",
             },
             {
               type: "toolCall",
@@ -1384,7 +1386,7 @@ describe("google transport stream", () => {
     const parts = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts;
     expect(parts).toHaveLength(3);
     expect(parts[0]).toMatchObject({
-      thoughtSignature: "real_sig_1",
+      thoughtSignature: "cmVhbF9zaWdfMQ==",
       functionCall: { name: "math_eval", args: { expression: "17*23" } },
     });
     expect(parts[1]).toMatchObject({
@@ -1418,7 +1420,7 @@ describe("google transport stream", () => {
               id: "call_1",
               name: "lookup",
               arguments: { q: "hello" },
-              thoughtSignature: "foreign_sig",
+              thoughtSignature: "Zm9yZWlnbl9zaWc=",
             },
           ],
         },
@@ -1429,7 +1431,7 @@ describe("google transport stream", () => {
       role: "model",
       parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
     });
-    expect(JSON.stringify(params.contents)).not.toContain("foreign_sig");
+    expect(JSON.stringify(params.contents)).not.toContain("Zm9yZWlnbl9zaWc=");
     expect(JSON.stringify(params.contents)).not.toContain("skip_thought_signature_validator");
   });
 
@@ -1748,8 +1750,8 @@ describe("google transport stream", () => {
             {
               content: {
                 parts: [
-                  { thought: true, text: "draft", thoughtSignature: "sig_1" },
-                  { thoughtSignature: "sig_2" },
+                  { thought: true, text: "draft", thoughtSignature: "c2lnXzE=" },
+                  { thoughtSignature: "c2lnXzI=" },
                   { text: "answer" },
                 ],
               },
@@ -1789,7 +1791,7 @@ describe("google transport stream", () => {
     const result = await stream.result();
 
     expect(result.content).toEqual([
-      { type: "thinking", thinking: "draft", thinkingSignature: "sig_2" },
+      { type: "thinking", thinking: "draft", thinkingSignature: "c2lnXzI=" },
       { type: "text", text: "answer" },
     ]);
     expect(events.map((event) => event.type)).toEqual([
@@ -1815,7 +1817,7 @@ describe("google transport stream", () => {
             {
               content: {
                 parts: [
-                  { thoughtSignature: "sig_1" },
+                  { thoughtSignature: "c2lnXzE=" },
                   { thought: true, text: "draft" },
                   { text: "answer" },
                 ],
@@ -1852,7 +1854,7 @@ describe("google transport stream", () => {
     const result = await stream.result();
 
     expect(result.content).toEqual([
-      { type: "thinking", thinking: "draft", thinkingSignature: "sig_1" },
+      { type: "thinking", thinking: "draft", thinkingSignature: "c2lnXzE=" },
       { type: "text", text: "answer" },
     ]);
   });

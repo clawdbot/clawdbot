@@ -316,4 +316,132 @@ describe("telegramMessageActions", () => {
       }
     }
   });
+
+  // Regression for #75433: prompt discovery reads raw config before the active
+  // runtime snapshot has resolved SecretRefs. Treat SecretRef-backed accounts
+  // as configured and keep advertising config-derived actions.
+  it("describes discovery when botToken is an unresolved SecretRef instead of crashing the embedded run", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+          actions: {
+            reactions: true,
+            poll: false,
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("react");
+    expect(discovery?.actions).not.toContain("poll");
+  });
+
+  it("describes scoped account discovery when Telegram account token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              botToken: { source: "exec", provider: "default", id: "telegram-ops" },
+              actions: {
+                reactions: false,
+                poll: true,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "ops",
+    });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("poll");
+    expect(discovery?.actions).not.toContain("react");
+  });
+
+  it("matches runtime account-key normalization during SecretRef-tolerant discovery", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            "Carey Notifications": {
+              botToken: { source: "exec", provider: "default", id: "telegram-carey" },
+              actions: {
+                poll: true,
+                reactions: false,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "carey-notifications",
+    });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("poll");
+    expect(discovery?.actions).not.toContain("react");
+  });
+
+  it("does not discover unknown scoped accounts via channel-level fallback in multi-account config", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "tok-channel",
+          accounts: {
+            work: { botToken: "tok-work" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      telegramMessageActions.describeMessageTool?.({
+        cfg,
+        accountId: "unknown",
+      })?.actions,
+    ).toEqual([]);
+  });
+
+  it("keeps healthy Telegram accounts discoverable when a sibling token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            unresolved: {
+              botToken: { source: "exec", provider: "default", id: "telegram-unresolved" },
+              actions: {
+                reactions: false,
+                poll: false,
+              },
+            },
+            healthy: {
+              botToken: "tok-healthy",
+              actions: {
+                reactions: true,
+                poll: false,
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+
+    expect(discovery?.actions).toContain("send");
+    expect(discovery?.actions).toContain("react");
+    expect(discovery?.actions).not.toContain("poll");
+  });
 });

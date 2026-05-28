@@ -458,4 +458,40 @@ describe("isMaintainerTeamMember", () => {
       isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
     ).rejects.toThrow(/500/);
   });
+
+  it("aborts stalled membership fetches", async () => {
+    const fetch = vi.fn((_url: string, init: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+      });
+    });
+
+    await expect(
+      isMaintainerTeamMember({
+        fetch: fetch as typeof globalThis.fetch,
+        login: "u",
+        org: "o",
+        timeoutMs: 5,
+        token: "t",
+      }),
+    ).rejects.toThrow(/maintainer membership lookup for u timed out after 5ms/);
+  });
+
+  it("times out stalled membership response bodies", async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => new Promise(() => {}),
+    });
+
+    await expect(
+      isMaintainerTeamMember({
+        fetch: fetch as typeof globalThis.fetch,
+        login: "u",
+        org: "o",
+        timeoutMs: 5,
+        token: "t",
+      }),
+    ).rejects.toThrow(/maintainer membership response for u timed out after 5ms/);
+  });
 });

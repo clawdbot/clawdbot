@@ -32,6 +32,7 @@ const runtimeMocks = vi.hoisted(() => ({
   getActivePluginChannelRegistryVersion: vi.fn(() => 1),
   getActivePluginRegistryVersion: vi.fn(() => 1),
   resolveRuntimeConfigCacheKey: vi.fn(() => "runtime:1:test"),
+  resolveAgentDir: vi.fn(() => "/tmp/agents/main/agent"),
   resolveEffectiveToolInventory: vi.fn(() => ({
     agentId: "main",
     profile: "coding",
@@ -55,6 +56,16 @@ const runtimeMocks = vi.hoisted(() => ({
   resolveReplyToMode: vi.fn(() => "first"),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai", model: "gpt-4.1" })),
+  resolveEffectiveToolInventoryRuntimeModelContext: vi.fn(() => ({
+    modelApi: "openai-responses",
+    runtimeModel: {
+      id: "gpt-4.1",
+      name: "GPT 4.1",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    },
+  })),
 }));
 
 vi.mock("./tools-effective.runtime.js", () => runtimeMocks);
@@ -184,6 +195,22 @@ describe("tools.effective handler", () => {
     expect(inventoryParams?.messageProvider).toBe("telegram");
     expect(inventoryParams?.modelProvider).toBe("openai");
     expect(inventoryParams?.modelId).toBe("gpt-4.1");
+    expect(inventoryParams?.agentDir).toBe("/tmp/agents/main/agent");
+    expect(inventoryParams?.modelApi).toBe("openai-responses");
+    expect(inventoryParams?.runtimeModel).toMatchObject({
+      id: "gpt-4.1",
+      api: "openai-responses",
+      provider: "openai",
+    });
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        agentDir: "/tmp/agents/main/agent",
+        modelProvider: "openai",
+        modelId: "gpt-4.1",
+      }),
+    );
   });
 
   it("serves repeated requests from the fresh inventory cache", async () => {
@@ -193,6 +220,7 @@ describe("tools.effective handler", () => {
     await second.invoke();
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
     expect(firstRespondCall(first.respond)?.[0]).toBe(true);
     expect(firstRespondCall(second.respond)?.[0]).toBe(true);
   });
@@ -206,6 +234,27 @@ describe("tools.effective handler", () => {
     await second.invoke();
 
     expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(2);
+    expect(firstRespondCall(second.respond)?.[0]).toBe(true);
+  });
+
+  it("does not resolve runtime model context for fresh inventory cache hits", async () => {
+    const first = createInvokeParams({ sessionKey: "main:abc" });
+    await first.invoke();
+
+    runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext.mockReturnValueOnce({
+      modelApi: "openai-completions",
+      runtimeModel: {
+        id: "gpt-4.1",
+        name: "GPT 4.1",
+        provider: "openai",
+        api: "openai-completions",
+      },
+    } as never);
+    const second = createInvokeParams({ sessionKey: "main:abc" });
+    await second.invoke();
+
+    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.resolveEffectiveToolInventoryRuntimeModelContext).toHaveBeenCalledTimes(1);
     expect(firstRespondCall(second.respond)?.[0]).toBe(true);
   });
 

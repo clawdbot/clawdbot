@@ -309,6 +309,10 @@ describe("runCliRespawnPlan", () => {
       vi.advanceTimersByTime(1_000);
 
       expect(kill).toHaveBeenCalledWith(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+      expect(exit).not.toHaveBeenCalled();
+
+      child.emit("exit", null, "SIGKILL");
+
       expect(exit).toHaveBeenCalledWith(1);
     } finally {
       vi.useRealTimers();

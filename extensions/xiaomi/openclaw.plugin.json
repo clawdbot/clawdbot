@@ -73,8 +73,13 @@
   "contracts": {
     "speechProviders": ["xiaomi"]
   },
-  "providerAuthEnvVars": {
-    "xiaomi": ["XIAOMI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "xiaomi",
+        "envVars": ["XIAOMI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

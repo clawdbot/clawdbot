@@ -23,7 +23,6 @@ import { resolveProviderUsageAuthWithPlugin } from "../plugins/provider-runtime.
 import { resolveProviderAuthEnvVarCandidates } from "../secrets/provider-env-vars.js";
 import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
-import { resolveLegacyPiAgentAccessToken } from "./provider-usage.shared.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -349,10 +348,6 @@ function hasAuthProfileCredentialSource(params: {
   return false;
 }
 
-function resolveLegacyPiAgentProviderIds(provider: UsageProviderId): string[] {
-  return provider === "zai" ? ["z-ai", "zai"] : [provider];
-}
-
 export async function resolveProviderAuths(params: {
   providers: UsageProviderId[];
   auth?: ProviderAuth[];
@@ -426,11 +421,7 @@ export async function resolveProviderAuths(params: {
       ...stateBase,
       allowAuthProfileStore,
     };
-    const hasLegacyPiAgentCredentialSource = Boolean(
-      resolveLegacyPiAgentAccessToken(stateBase.env, resolveLegacyPiAgentProviderIds(provider)),
-    );
-    const hasPluginCredentialSource =
-      hasDirectCredentialSource || allowAuthProfileStore || hasLegacyPiAgentCredentialSource;
+    const hasPluginCredentialSource = hasDirectCredentialSource || allowAuthProfileStore;
 
     if (hasPluginCredentialSource) {
       const pluginAuth = await resolveProviderUsageAuthViaPlugin({

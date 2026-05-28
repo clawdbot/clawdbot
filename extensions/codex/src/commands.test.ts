@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
+import type { JsonValue } from "./app-server/protocol.js";
 import {
   readRecentCodexRateLimits,
   resetCodexRateLimitCacheForTests,
@@ -594,6 +595,28 @@ describe("codex command", () => {
     });
   });
 
+  it("rejects partial Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn();
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5x"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn();
+
+    const result = await handleCodexCommand(createContext("sessions --host mb-m5 --limit 5.5"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(result.text).toBe("Usage: /codex sessions --host <node> [filter] [--limit <n>]");
+    expect(listCodexCliSessionsOnNode).not.toHaveBeenCalled();
+  });
+
   it("binds the current conversation to a Codex CLI node session", async () => {
     const requestConversationBinding = vi.fn(async () => ({
       status: "bound" as const,
@@ -888,6 +911,62 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
     expect(result.text).not.toContain("@here");
+  });
+
+  it("summarizes Codex status skill groups by enabled nested skills", async () => {
+    const deps = createDeps({
+      readCodexStatusProbes: vi.fn(async () => ({
+        models: { ok: true as const, value: { models: [] } },
+        account: { ok: true as const, value: {} },
+        limits: { ok: true as const, value: { rateLimits: null, rateLimitsByLimitId: null } },
+        mcps: { ok: true as const, value: { data: [] } },
+        skills: {
+          ok: true as const,
+          value: {
+            data: [
+              {
+                cwd: "/repo-a",
+                skills: [
+                  {
+                    name: "enabled-one",
+                    description: "",
+                    path: "/repo-a/.codex/skills/enabled-one/SKILL.md",
+                    scope: "repo" as const,
+                    enabled: true,
+                  },
+                  {
+                    name: "disabled-one",
+                    description: "",
+                    path: "/repo-a/.codex/skills/disabled-one/SKILL.md",
+                    scope: "repo" as const,
+                    enabled: false,
+                  },
+                ],
+                errors: [],
+              },
+              {
+                cwd: "/repo-b",
+                skills: [
+                  {
+                    name: "enabled-two",
+                    description: "",
+                    path: "/repo-b/.codex/skills/enabled-two/SKILL.md",
+                    scope: "repo" as const,
+                    enabled: true,
+                  },
+                ],
+                errors: [{ path: "/repo-b/bad/SKILL.md", message: "bad skill" }],
+              },
+            ],
+          },
+        },
+      })),
+    });
+
+    const result = await handleCodexCommand(createContext("status"), { deps });
+
+    expect(result.text).toContain("Skills: 2");
+    expect(result.text).not.toContain("Skills: 1");
   });
 
   it("summarizes generated Codex rate-limit payloads", async () => {
@@ -3063,17 +3142,118 @@ describe("codex command", () => {
     const codexControlRequest = vi
       .fn()
       .mockResolvedValueOnce({ data: [{ name: "<@U123> [mcp](https://evil)" }] })
-      .mockResolvedValueOnce({ data: [{ id: "skill_1 @here" }] });
+      .mockResolvedValueOnce({
+        data: [
+          {
+            cwd: "/repo",
+            skills: [
+              {
+                name: "skill_1 @here",
+                description: "",
+                path: "/repo/.codex/skills/skill_1/SKILL.md",
+                scope: "repo",
+                enabled: true,
+              },
+            ],
+            errors: [],
+          },
+        ],
+      });
     const deps = createDeps({ codexControlRequest });
 
     const mcp = await handleCodexCommand(createContext("mcp"), { deps });
     const skills = await handleCodexCommand(createContext("skills"), { deps });
 
     expect(mcp.text).toContain("&lt;\uff20U123&gt; \uff3bmcp\uff3d\uff08https://evil\uff09");
-    expect(skills.text).toContain("skill\uff3f1 \uff20here");
+    expect(skills.text).toContain("- `skill\uff3f1 \uff20here`");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("<@U123>");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("[mcp](https://evil)");
     expect(`${mcp.text}\n${skills.text}`).not.toContain("@here");
+  });
+
+  it("formats every Codex skill as a code-styled bullet and tolerates malformed entries", async () => {
+    const malformedSkillEntries: JsonValue[] = [
+      null,
+      { description: "missing name" },
+      {
+        name: "final-skill",
+        description: "Final skill",
+        path: "/repo-b/.codex/skills/final-skill/SKILL.md",
+        scope: "repo",
+        enabled: true,
+      },
+    ];
+    const codexControlRequest = vi.fn(async () => ({
+      data: [
+        {
+          cwd: "/repo-a",
+          skills: Array.from({ length: 26 }, (_, index) => ({
+            name: `skill-${index + 1}`,
+            description: `Skill ${index + 1}`,
+            path: `/repo-a/.codex/skills/skill-${index + 1}/SKILL.md`,
+            scope: "repo",
+            enabled: true,
+          })).concat({
+            name: "disabled-skill",
+            description: "Disabled skill",
+            path: "/repo-a/.codex/skills/disabled-skill/SKILL.md",
+            scope: "repo",
+            enabled: false,
+          }),
+          errors: [{ path: "/repo-a/bad/SKILL.md", message: "bad skill" }],
+        },
+        {
+          cwd: "/repo-b",
+          skills: malformedSkillEntries,
+          errors: [],
+        },
+        "malformed group",
+      ],
+    }));
+    const deps = createDeps({ codexControlRequest });
+
+    const result = await handleCodexCommand(createContext("skills"), { deps });
+
+    expect(result.text).toContain("- `skill-1`");
+    expect(result.text).toContain("- `skill-26`");
+    expect(result.text).toContain("- `&lt;unknown&gt;`");
+    expect(result.text).toContain("- `final-skill`");
+    expect(result.text).not.toContain("Workspace:");
+    expect(result.text).not.toContain("Error:");
+    expect(result.text).not.toContain("More skills available");
+    expect(result.text).not.toContain("Skill 1");
+    expect(result.text).not.toContain("/repo-a/.codex/skills");
+    expect(result.text).not.toContain("disabled-skill");
+  });
+
+  it("reports Codex skill load errors when no skills render", async () => {
+    const codexControlRequest = vi.fn(async () => ({
+      data: [
+        {
+          cwd: "/repo-a",
+          skills: [
+            {
+              name: "disabled-skill",
+              description: "Disabled skill",
+              path: "/repo-a/.codex/skills/disabled-skill/SKILL.md",
+              scope: "repo",
+              enabled: false,
+            },
+          ],
+          errors: [
+            { path: "/repo-a/bad/SKILL.md", message: "bad skill <@U123>" },
+            { path: "/repo-a/other/SKILL.md", message: "other bad skill @here" },
+          ],
+        },
+      ],
+    }));
+    const deps = createDeps({ codexControlRequest });
+
+    const result = await handleCodexCommand(createContext("skills"), { deps });
+
+    expect(result.text).toBe("Codex skills: none returned (2 load errors).");
+    expect(result.text).not.toContain("<@U123>");
+    expect(result.text).not.toContain("@here");
   });
 
   it("returns sanitized command failures instead of leaking app-server errors", async () => {

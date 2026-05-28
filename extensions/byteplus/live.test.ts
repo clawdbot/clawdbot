@@ -1,4 +1,4 @@
-import { completeSimple, type Model } from "@earendil-works/pi-ai";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,

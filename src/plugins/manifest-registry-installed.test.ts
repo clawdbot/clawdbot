@@ -6,7 +6,10 @@ import {
   writePersistedInstalledPluginIndex,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
+import {
+  loadPluginManifestRegistryForInstalledIndex,
+  resolveInstalledManifestRegistryIndexFingerprint,
+} from "./manifest-registry-installed.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -70,7 +73,106 @@ function createIndex(rootDir: string): InstalledPluginIndex {
   };
 }
 
+function fileSignature(filePath: string) {
+  const stat = fs.statSync(filePath);
+  return {
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    ctimeMs: stat.ctimeMs,
+  };
+}
+
+function createIndexWithFileSignatures(rootDir: string): InstalledPluginIndex {
+  const index = createIndex(rootDir);
+  return {
+    ...index,
+    plugins: index.plugins.map((record) => {
+      record.manifestFile = fileSignature(record.manifestPath);
+      return record;
+    }),
+  };
+}
+
+function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const object = value as object;
+  if (seen.has(object)) {
+    return value;
+  }
+  seen.add(object);
+  for (const child of Object.values(value)) {
+    deepFreeze(child, seen);
+  }
+  return Object.freeze(value);
+}
+
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
+  it("reuses frozen installed-index fingerprints when file signatures are persisted", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = deepFreeze(createIndexWithFileSignatures(rootDir));
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    const nextMtime = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, nextMtime, nextMtime);
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).toBe(first);
+  });
+
+  it("recomputes installed-index fingerprints for mutable index objects", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithFileSignatures(rootDir);
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+    const record = index.plugins[0];
+    if (!record) {
+      throw new Error("expected index record");
+    }
+    record.manifestHash = "changed";
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).not.toBe(first);
+  });
+
+  it("does not cache shallow-frozen installed-index fingerprints with mutable nested records", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithFileSignatures(rootDir);
+    const record = index.plugins[0];
+    if (!record) {
+      throw new Error("expected index record");
+    }
+    Object.freeze(index.installRecords);
+    Object.freeze(index.diagnostics);
+    Object.freeze(record);
+    Object.freeze(index.plugins);
+    Object.freeze(index);
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    const agentHarnesses = record.startup.agentHarnesses as string[];
+    agentHarnesses.push("changed");
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).not.toBe(first);
+  });
+
+  it("does not cache frozen installed-index fingerprints that depend on live file state", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = deepFreeze(createIndex(rootDir));
+    const first = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    const nextMtime = new Date(Date.now() + 5000);
+    fs.utimesSync(manifestPath, nextMtime, nextMtime);
+    const second = resolveInstalledManifestRegistryIndexFingerprint(index);
+
+    expect(second).not.toBe(first);
+  });
+
   it("reconstructs installed-index manifest registries when manifest files change", () => {
     const rootDir = makeTempDir();
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");

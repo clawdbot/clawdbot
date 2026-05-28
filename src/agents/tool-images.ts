@@ -1,5 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import type { ImageContent } from "@earendil-works/pi-ai";
+import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { canonicalizeBase64 } from "../media/base64.js";
 import {
@@ -14,6 +13,7 @@ import {
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
   type ImageSanitizationLimits,
 } from "./image-sanitization.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 type ToolContentBlock = AgentToolResult<unknown>["content"][number];
 type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;

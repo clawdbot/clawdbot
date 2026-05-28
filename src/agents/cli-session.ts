@@ -32,6 +32,7 @@ export function getCliSessionBinding(
       authEpochVersion: fromBindings?.authEpochVersion,
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       promptToolNamesHash: normalizeOptionalString(fromBindings?.promptToolNamesHash),
+      cwdHash: normalizeOptionalString(fromBindings?.cwdHash),
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
       mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
     };
@@ -91,6 +92,9 @@ export function setCliSessionBinding(
       ...(normalizeOptionalString(binding.promptToolNamesHash)
         ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
         : {}),
+      ...(normalizeOptionalString(binding.cwdHash)
+        ? { cwdHash: normalizeOptionalString(binding.cwdHash) }
+        : {}),
       ...(normalizeOptionalString(binding.mcpConfigHash)
         ? { mcpConfigHash: normalizeOptionalString(binding.mcpConfigHash) }
         : {}),
@@ -135,11 +139,12 @@ export function resolveCliSessionReuse(params: {
   authEpochVersion: number;
   extraSystemPromptHash?: string;
   promptToolNamesHash?: string;
+  cwdHash?: string;
   mcpConfigHash?: string;
   mcpResumeHash?: string;
 }): {
   sessionId?: string;
-  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
+  invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "cwd" | "mcp";
 } {
   const binding = params.binding;
   const sessionId = normalizeOptionalString(binding?.sessionId);
@@ -153,6 +158,7 @@ export function resolveCliSessionReuse(params: {
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
   const currentPromptToolNamesHash = normalizeOptionalString(params.promptToolNamesHash);
+  const currentCwdHash = normalizeOptionalString(params.cwdHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
   const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
@@ -180,6 +186,10 @@ export function resolveCliSessionReuse(params: {
   const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);
   if (storedPromptToolNamesHash !== currentPromptToolNamesHash) {
     return { invalidatedReason: "system-prompt" };
+  }
+  const storedCwdHash = normalizeOptionalString(binding?.cwdHash);
+  if (storedCwdHash !== undefined && storedCwdHash !== currentCwdHash) {
+    return { invalidatedReason: "cwd" };
   }
   const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
   if (storedMcpResumeHash && currentMcpResumeHash) {

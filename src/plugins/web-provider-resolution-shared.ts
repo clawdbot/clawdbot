@@ -148,7 +148,6 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
 }): {
   config: PluginLoadOptions["config"];
   activationSourceConfig?: PluginLoadOptions["config"];
@@ -160,7 +159,6 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
     compatMode: {
-      allowlist: params.config === undefined ? false : params.bundledAllowlistCompat,
       enablement: "always",
       vitest: params.config !== undefined,
     },

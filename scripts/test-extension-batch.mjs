@@ -22,9 +22,11 @@ function printUsage() {
 }
 
 export function parseExtensionIds(rawArgs) {
-  const separatorIndex = rawArgs.indexOf("--");
-  const args = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : [...rawArgs];
-  const separatorPassthroughArgs = separatorIndex >= 0 ? rawArgs.slice(separatorIndex + 1) : [];
+  const normalizedArgs = rawArgs[0] === "--" ? rawArgs.slice(1) : rawArgs;
+  const separatorIndex = normalizedArgs.indexOf("--");
+  const args = separatorIndex >= 0 ? normalizedArgs.slice(0, separatorIndex) : [...normalizedArgs];
+  const separatorPassthroughArgs =
+    separatorIndex >= 0 ? normalizedArgs.slice(separatorIndex + 1) : [];
   const extensionIds = [];
 
   while (args[0] && !args[0].startsWith("-")) {

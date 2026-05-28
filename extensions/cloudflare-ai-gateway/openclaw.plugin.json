@@ -17,8 +17,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "cloudflare-ai-gateway",
+        "envVars": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

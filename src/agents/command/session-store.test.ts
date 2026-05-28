@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
-import type { EmbeddedPiRunResult } from "../pi-embedded.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import {
   clearCliSessionInStore,
   recordCliCompactionInStore,
@@ -169,7 +169,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         },
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           agentMeta: {
@@ -210,7 +210,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           agentMeta: {
@@ -262,7 +262,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           executionTrace: { runner: "cli" },
@@ -313,7 +313,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 1,
           agentMeta: {
@@ -588,6 +588,47 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("reuses a completed run entry while the session is still fresh", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:terminal-cli-session";
+      const existingSessionId = "terminal-cli-session-old";
+      const now = Date.now();
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: existingSessionId,
+              updatedAt: now,
+              status: "done",
+              startedAt: now - 1_000,
+              endedAt: now - 100,
+              runtimeMs: 900,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const result = resolveSession({
+        cfg: {
+          session: {
+            store: storePath,
+            mainKey: "main",
+          },
+        } as OpenClawConfig,
+        sessionKey,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.sessionId).toBe(existingSessionId);
+      expect(result.sessionEntry?.status).toBe("done");
+      expect(result.sessionEntry?.endedAt).toBe(now - 100);
+    });
+  });
+
   it("preserves previous totalTokens when provider returns no usage data (#67667)", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -604,7 +645,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -650,7 +691,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -738,7 +779,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -901,7 +942,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -969,7 +1010,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
               compactionTokensAfter: 0,
             },
           },
-        } as EmbeddedPiRunResult,
+        } as EmbeddedAgentRunResult,
       });
 
       expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
@@ -1054,7 +1095,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
 
       // Simulate a run with 10k input + 5k output tokens
       // Cost = (10000 * 10 + 5000 * 30) / 1e6 = $0.25
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1224,7 +1265,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
       // Heartbeat turn uses a different model
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1342,7 +1383,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: freshVisibleEntry }, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           aborted: true,
@@ -1414,7 +1455,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
       // Heartbeat turn uses a different, smaller model
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1459,7 +1500,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1506,7 +1547,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
       // Heartbeat turn uses a different provider
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {
@@ -1556,7 +1597,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
       };
       await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
 
-      const result: EmbeddedPiRunResult = {
+      const result: EmbeddedAgentRunResult = {
         meta: {
           durationMs: 500,
           agentMeta: {

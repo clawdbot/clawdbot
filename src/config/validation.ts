@@ -2,7 +2,6 @@ import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
-import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
   normalizePluginsConfig,
   normalizePluginId,
@@ -31,6 +30,10 @@ import {
   isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
+import {
+  formatUnsafeGatewayTailscaleNoAuthMessage,
+  isUnsafeGatewayTailscaleNoAuth,
+} from "../shared/gateway-tailscale-auth-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
@@ -854,6 +857,19 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
   ];
 }
 
+function validateGatewayTailscaleAuth(config: OpenClawConfig): ConfigValidationIssue[] {
+  const tailscaleMode = config.gateway?.tailscale?.mode ?? "off";
+  if (!isUnsafeGatewayTailscaleNoAuth({ authMode: config.gateway?.auth?.mode, tailscaleMode })) {
+    return [];
+  }
+  return [
+    {
+      path: "gateway.auth.mode",
+      message: formatUnsafeGatewayTailscaleNoAuthMessage(tailscaleMode),
+    },
+  ];
+}
+
 /**
  * Validates config without applying runtime defaults.
  * Use this when you need the raw validated config (e.g., for writing back to file).
@@ -913,6 +929,10 @@ export function validateConfigObjectRaw(
   const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
   if (gatewayTailscaleBindIssues.length > 0) {
     return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  const gatewayTailscaleAuthIssues = validateGatewayTailscaleAuth(validatedConfig);
+  if (gatewayTailscaleAuthIssues.length > 0) {
+    return { ok: false, issues: gatewayTailscaleAuthIssues };
   }
   return {
     ok: true,
@@ -1133,17 +1153,8 @@ function validateConfigObjectWithPluginsBase(
       return compatConfig ?? config;
     }
 
-    const allow = config.plugins?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) {
-      compatConfig = config;
-      return config;
-    }
-
-    compatConfig = withBundledPluginAllowlistCompat({
-      config,
-      pluginIds: [...ensureCompatPluginIds()],
-    });
-    return compatConfig ?? config;
+    compatConfig = config;
+    return config;
   };
 
   const ensureRegistry = (): RegistryInfo => {

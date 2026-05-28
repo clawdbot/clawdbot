@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReadPermissions,
+  githubJson,
   normalizeRepo,
   parsePermissionKeys,
   parseRepoArg,
+  readBoundedGitHubErrorText,
+  resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
 
 describe("gh-read helpers", () => {
@@ -48,5 +51,53 @@ describe("gh-read helpers", () => {
       "contents",
       "issues",
     ]);
+  });
+
+  it("aborts stalled GitHub API fetches at the request timeout", async () => {
+    let signal: AbortSignal | undefined;
+    const request = githubJson("/app", "token", undefined, {
+      timeoutMs: 5,
+      fetchImpl: ((_url, init) => {
+        signal = init?.signal ?? undefined;
+        return new Promise(() => {});
+      }) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(/GitHub API GET \/app exceeded timeout/u);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("times out stalled GitHub API response body reads", async () => {
+    const response = {
+      ok: true,
+      status: 200,
+      json: () => new Promise(() => {}),
+    } as Response;
+    const request = githubJson("/app/installations", "token", undefined, {
+      timeoutMs: 5,
+      fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(/GitHub API GET \/app\/installations exceeded timeout/u);
+  });
+
+  it("bounds GitHub API error response bodies", async () => {
+    const tail = "tail-sentinel-should-not-appear";
+    const response = new Response(`${"x".repeat(5000)}${tail}`, {
+      status: 500,
+    });
+
+    const text = await readBoundedGitHubErrorText(response);
+
+    expect(text).toContain("[truncated]");
+    expect(text).not.toContain(tail);
+    expect(text.length).toBeLessThan(4200);
+  });
+
+  it("rejects invalid GitHub API timeout values", () => {
+    expect(resolveGitHubFetchTimeoutMs("1000")).toBe(1000);
+    expect(() => resolveGitHubFetchTimeoutMs("1s")).toThrow(
+      /OPENCLAW_GH_READ_FETCH_TIMEOUT_MS must be an integer/u,
+    );
   });
 });

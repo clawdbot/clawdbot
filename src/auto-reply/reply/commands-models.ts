@@ -3,6 +3,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
 import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
@@ -10,10 +11,7 @@ import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibilit
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
-import {
-  isCliRuntimeProvider,
-  listLegacyRuntimeModelProviderAliases,
-} from "../../agents/model-runtime-aliases.js";
+import { isCliRuntimeProvider } from "../../agents/model-runtime-aliases.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -79,17 +77,20 @@ type ParsedModelsCommand =
 
 function isModelsBrowseVisibleProvider(provider: string): boolean {
   const normalized = normalizeProviderId(provider);
-  return isCliRuntimeProvider(normalized) || isModelPickerVisibleProvider(normalized);
+  return (
+    isCliRuntimeProvider(normalized, { includeSetupRegistry: true }) ||
+    isModelPickerVisibleProvider(normalized)
+  );
 }
 
 function usesUnfilteredCatalogModels(provider: string): boolean {
-  return isCliRuntimeProvider(provider);
+  return isCliRuntimeProvider(provider, { includeSetupRegistry: true });
 }
 
 function normalizeRuntimeChoiceId(runtime: string | undefined): string {
   const normalized = normalizeLowercaseStringOrEmpty(runtime);
   if (!normalized || normalized === "auto" || normalized === "default") {
-    return "pi";
+    return "openclaw";
   }
   return normalized;
 }
@@ -106,8 +107,8 @@ function buildRuntimeChoice(params: {
     id,
     label,
     description:
-      id === "pi"
-        ? "Use the built-in OpenClaw Pi runtime."
+      id === "openclaw"
+        ? "Use the built-in OpenClaw runtime."
         : params.cli
           ? `Run ${params.provider} models through ${label}.`
           : `Use the ${label} runtime selected by the effective harness policy.`,
@@ -290,8 +291,16 @@ export async function buildModelsProviderData(
   }
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
-  for (const alias of listLegacyRuntimeModelProviderAliases()) {
-    const provider = normalizeProviderId(alias.provider);
+  const runtimeBindings = [
+    { provider: "openai", runtime: "codex", cli: false },
+    ...listCliRuntimeModelBackendBindings().map((binding) => ({
+      provider: binding.provider,
+      runtime: binding.runtime,
+      cli: true,
+    })),
+  ];
+  for (const binding of runtimeBindings) {
+    const provider = normalizeProviderId(binding.provider);
     const defaultModelId =
       provider === normalizeProviderId(resolvedDefault.provider)
         ? resolvedDefault.model
@@ -304,14 +313,14 @@ export async function buildModelsProviderData(
         modelId: defaultModelId,
       }),
     ];
-    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "pi" }));
+    addRuntimeChoice(choices, buildRuntimeChoice({ cfg, provider, runtime: "openclaw" }));
     addRuntimeChoice(
       choices,
       buildRuntimeChoice({
         cfg,
         provider,
-        runtime: alias.runtime,
-        cli: alias.cli,
+        runtime: binding.runtime,
+        cli: binding.cli,
       }),
     );
     runtimeChoicesByProvider.set(provider, choices);
@@ -336,8 +345,8 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
       continue;
     }
     if (lower.startsWith("page=")) {
-      const value = Number.parseInt(lower.slice("page=".length), 10);
-      if (Number.isFinite(value) && value > 0) {
+      const value = parsePositiveIntegerToken(lower.slice("page=".length));
+      if (value !== undefined) {
         page = value;
       }
       continue;
@@ -355,8 +364,8 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
     const lower = normalizeLowercaseStringOrEmpty(token);
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
       const rawValue = lower.slice(lower.indexOf("=") + 1);
-      const value = Number.parseInt(rawValue, 10);
-      if (Number.isFinite(value) && value > 0) {
+      const value = parsePositiveIntegerToken(rawValue);
+      if (value !== undefined) {
         pageSize = Math.min(PAGE_SIZE_MAX, value);
       }
     }
@@ -369,6 +378,15 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
     pageSize,
     all,
   };
+}
+
+function parsePositiveIntegerToken(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function parseModelsArgs(raw: string): ParsedModelsCommand {

@@ -6,22 +6,30 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEEPINFRA_BASE_URL,
-  DEEPINFRA_IMAGE_MODELS,
-  DEFAULT_DEEPINFRA_IMAGE_MODEL,
+  DEEPINFRA_IMAGE_FALLBACK_MODELS,
   DEFAULT_DEEPINFRA_IMAGE_SIZE,
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
+import type { DeepInfraSurfaceModel } from "./provider-models.js";
 
 const DEEPINFRA_IMAGE_SIZES = ["512x512", "1024x1024", "1024x1792", "1792x1024"] as const;
 const MAX_DEEPINFRA_INPUT_IMAGES = 1;
 
-export function buildDeepInfraImageGenerationProvider(): ImageGenerationProvider {
+// First entry of imageGenModels is the default; rest fill the allowlist.
+// No catalog supplied -> DEEPINFRA_IMAGE_FALLBACK_MODELS.
+export function buildDeepInfraImageGenerationProvider(options?: {
+  imageGenModels?: readonly DeepInfraSurfaceModel[];
+}): ImageGenerationProvider {
+  const ids = options?.imageGenModels && options.imageGenModels.length > 0
+    ? options.imageGenModels.map((model) => model.id)
+    : [...DEEPINFRA_IMAGE_FALLBACK_MODELS];
+  const defaultModel = ids[0] ?? DEEPINFRA_IMAGE_FALLBACK_MODELS[0];
   return createOpenAiCompatibleImageGenerationProvider({
     id: "deepinfra",
     label: "DeepInfra",
-    defaultModel: DEFAULT_DEEPINFRA_IMAGE_MODEL,
-    models: [...DEEPINFRA_IMAGE_MODELS],
+    defaultModel,
+    models: ids,
     capabilities: {
       generate: {
         maxCount: 4,

@@ -5,6 +5,7 @@ import {
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import {
   ErrorCodes,
@@ -20,6 +21,17 @@ let loggedSlowModelsListCatalog = false;
 
 function resolveModelsListView(params: Record<string, unknown>): ModelsListView {
   return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
+}
+
+function omitRuntimeModelParams(entry: ModelCatalogEntry): ModelCatalogEntry {
+  const { params: _params, ...rest } = entry as ModelCatalogEntry & {
+    params?: Record<string, unknown>;
+  };
+  return rest;
+}
+
+function omitRuntimeModelParamsFromCatalog(catalog: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  return catalog.map(omitRuntimeModelParams);
 }
 
 export const modelsHandlers: GatewayRequestHandlers = {
@@ -56,7 +68,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         },
       });
       if (view === "all") {
-        respond(true, { models: catalog }, undefined);
+        respond(true, { models: omitRuntimeModelParamsFromCatalog(catalog) }, undefined);
         return;
       }
       const models = await resolveVisibleModelCatalog({
@@ -67,7 +79,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         view,
         runtimeAuthDiscovery: false,
       });
-      respond(true, { models }, undefined);
+      respond(true, { models: omitRuntimeModelParamsFromCatalog(models) }, undefined);
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
     }

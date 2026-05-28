@@ -1,4 +1,4 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import {
   jsonResult,
@@ -10,12 +10,18 @@ import {
   resolvePollMaxSelections,
   resolveReactionMessageId,
 } from "openclaw/plugin-sdk/channel-actions";
+import {
+  buildOutboundSessionContext,
+  sendDurableMessageBatch,
+  type DurableMessageBatchSendResult,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   createTelegramActionGate,
@@ -56,6 +62,7 @@ export const telegramActionRuntime = {
   pinMessageTelegram,
   reactMessageTelegram,
   searchStickers,
+  sendDurableMessageBatch,
   sendMessageTelegram,
   sendPollTelegram,
   sendStickerTelegram,
@@ -257,37 +264,42 @@ function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
   } as const;
 }
 
-async function maybePinTelegramActionSend(params: {
-  args: Record<string, unknown>;
-  cfg: OpenClawConfig;
-  accountId?: string;
-  to: string;
-  messageId?: string;
-  gatewayClientScopes?: readonly string[];
-}) {
-  const pin = normalizeTelegramDeliveryPin(params.args);
-  if (!pin) {
-    return;
-  }
-  if (!params.messageId) {
-    if (pin.required) {
-      throw new Error("Telegram delivery pin requested, but no message id was returned.");
-    }
-    return;
-  }
-  try {
-    await telegramActionRuntime.pinMessageTelegram(params.to, params.messageId, {
-      cfg: params.cfg,
-      accountId: params.accountId,
-      notify: pin.notify,
-      verbose: false,
-      gatewayClientScopes: params.gatewayClientScopes,
-    });
-  } catch (err) {
-    if (pin.required) {
-      throw err;
-    }
-  }
+function buildTelegramActionSendPayload(params: {
+  content: string;
+  mediaUrls: string[];
+  asVoice?: boolean;
+  pin?: ReturnType<typeof normalizeTelegramDeliveryPin>;
+  buttons?: ReturnType<typeof resolveTelegramButtonsFromParams>;
+  quoteText?: string;
+}): ReplyPayload {
+  const telegramData =
+    params.buttons || params.quoteText
+      ? {
+          ...(params.buttons ? { buttons: params.buttons } : {}),
+          ...(params.quoteText ? { quoteText: params.quoteText } : {}),
+        }
+      : undefined;
+  return {
+    text: params.content,
+    ...(params.mediaUrls.length > 0 ? { mediaUrls: params.mediaUrls } : {}),
+    ...(params.asVoice === true ? { audioAsVoice: true } : {}),
+    ...(params.pin ? { delivery: { pin: params.pin } } : {}),
+    ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
+  };
+}
+
+function getLastDurableTelegramActionResult(
+  result: Extract<DurableMessageBatchSendResult, { status: "sent" }>,
+): { messageId?: string; chatId?: string } {
+  const lastResult = result.results.at(-1);
+  const receipt = result.receipt;
+  return {
+    messageId:
+      lastResult?.messageId ??
+      receipt.primaryPlatformMessageId ??
+      receipt.platformMessageIds.at(-1),
+    chatId: lastResult?.chatId,
+  };
 }
 
 export async function handleTelegramAction(
@@ -455,10 +467,7 @@ export async function handleTelegramAction(
     }
     const sendOptions = {
       cfg,
-      token,
       accountId: accountId ?? undefined,
-      mediaLocalRoots: options?.mediaLocalRoots,
-      mediaReadFile: options?.mediaReadFile,
       gatewayClientScopes: options?.gatewayClientScopes,
       replyToMessageId: replyToMessageId ?? undefined,
       messageThreadId: messageThreadId ?? undefined,
@@ -470,34 +479,49 @@ export async function handleTelegramAction(
         readBooleanParam(params, "asDocument") ??
         false,
     };
-    let result: Awaited<ReturnType<typeof telegramActionRuntime.sendMessageTelegram>>;
-    if (!firstMediaUrl) {
-      result = await telegramActionRuntime.sendMessageTelegram(to, content, {
-        ...sendOptions,
-        buttons,
-      });
-    } else {
-      result = await telegramActionRuntime.sendMessageTelegram(to, content, {
-        ...sendOptions,
-        mediaUrl: firstMediaUrl,
-        buttons,
-      });
-      for (const mediaUrl of mediaUrls.slice(1)) {
-        result = await telegramActionRuntime.sendMessageTelegram(to, "", {
-          ...sendOptions,
-          mediaUrl,
-        });
-      }
-    }
-    notifyVisibleOutboundSuccess(to, messageThreadId);
-    await maybePinTelegramActionSend({
-      args: params,
-      cfg,
-      accountId: accountId ?? undefined,
-      to,
-      messageId: result.messageId,
-      gatewayClientScopes: options?.gatewayClientScopes,
+    const payload = buildTelegramActionSendPayload({
+      content,
+      mediaUrls,
+      asVoice: sendOptions.asVoice,
+      pin: normalizeTelegramDeliveryPin(params),
+      buttons,
+      quoteText,
     });
+    const mediaAccess =
+      options?.mediaLocalRoots || options?.mediaReadFile
+        ? {
+            ...(options.mediaLocalRoots ? { localRoots: options.mediaLocalRoots } : {}),
+            ...(options.mediaReadFile ? { readFile: options.mediaReadFile } : {}),
+          }
+        : undefined;
+    const outboundSession = buildOutboundSessionContext({
+      cfg,
+      sessionKey: options?.sessionKey,
+      requesterAccountId: accountId,
+    });
+    const durableResult = await telegramActionRuntime.sendDurableMessageBatch({
+      cfg,
+      channel: "telegram",
+      to,
+      accountId: accountId ?? undefined,
+      payloads: [payload],
+      replyToId: replyToMessageId == null ? undefined : String(replyToMessageId),
+      threadId: messageThreadId,
+      forceDocument: sendOptions.forceDocument,
+      silent: sendOptions.silent,
+      durability: "required",
+      gatewayClientScopes: options?.gatewayClientScopes,
+      ...(mediaAccess ? { mediaAccess } : {}),
+      ...(outboundSession ? { session: outboundSession } : {}),
+    });
+    if (durableResult.status === "failed" || durableResult.status === "partial_failed") {
+      throw durableResult.error;
+    }
+    if (durableResult.status === "suppressed") {
+      throw new Error("Telegram sendMessage was suppressed before delivery.");
+    }
+    const result = getLastDurableTelegramActionResult(durableResult);
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
       ok: true,
       messageId: result.messageId,

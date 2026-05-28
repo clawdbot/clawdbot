@@ -153,6 +153,42 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(timeoutSpy).toHaveBeenCalledOnce();
     expect(timeoutSpy).toHaveBeenCalledWith(180_000);
   });
+
+  it("bounds large provider error response bodies", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchSpy = vi.fn(async () => {
+      return new Response(body, {
+        status: 500,
+        statusText: "Internal Server Error",
+        headers: { "Trace-Id": "trace-123" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const error = await minimaxUnderstandImage({
+      apiKey: "minimax-test-key",
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to throw an Error");
+    }
+    expect(error.message).toContain("MiniMax VLM request failed");
+    expect(error.message).toContain("Trace-Id: trace-123");
+    expect(error.message).not.toContain("tail-marker");
+    expect(error.message.length).toBeLessThan(520);
+    expect(canceled).toBe(true);
+  });
 });
 
 describe("isMinimaxVlmModel", () => {

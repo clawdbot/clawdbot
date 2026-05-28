@@ -103,7 +103,7 @@ function parseJsonLines<T>(raw: string): T[] {
 }
 
 describe("mirrorCodexAppServerTranscript", () => {
-  it("mirrors user, assistant, and tool result messages into the Pi transcript", async () => {
+  it("mirrors user, assistant, and tool result messages into the embedded-agent transcript", async () => {
     const sessionFile = await createTempSessionFile();
     const userMessage = makeAgentUserMessage({
       content: [{ type: "text", text: "hello" }],

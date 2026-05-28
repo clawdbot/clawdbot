@@ -128,6 +128,44 @@ describe("models.list", () => {
     }
   });
 
+  it("does not expose runtime params from catalog rows", async () => {
+    const respond = vi.fn();
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-redact-params",
+        method: "models.list",
+        params: { view: "all" },
+      },
+      params: { view: "all" },
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        loadGatewayModelCatalog: vi.fn(() =>
+          Promise.resolve([
+            {
+              id: "qwen-local",
+              name: "Qwen Local",
+              provider: "vllm",
+              params: { qwenThinkingFormat: "chat-template" },
+            },
+          ]),
+        ),
+        logGateway: {
+          debug: vi.fn(),
+        },
+      } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm" }] },
+      undefined,
+    );
+  });
+
   it("loads the full catalog for provider-scoped configured view and filters only providers", async () => {
     const catalog = [
       { id: "claude-test", name: "Claude Test", provider: "anthropic" },

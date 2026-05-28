@@ -4,7 +4,6 @@ import { mistralMediaUnderstandingProvider } from "./media-understanding-provide
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { applyMistralConfig, MISTRAL_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildMistralProvider } from "./provider-catalog.js";
-import { contributeMistralResolvedModelCompat } from "./provider-compat.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 
 const PROVIDER_ID = "mistral";
@@ -45,8 +44,6 @@ export default defineSingleProviderPluginEntry({
     matchesContextOverflowError: ({ errorMessage }) =>
       /\bmistral\b.*(?:input.*too long|token limit.*exceeded)/i.test(errorMessage),
     normalizeResolvedModel: ({ model }) => applyMistralModelCompat(model),
-    contributeResolvedModelCompat: ({ modelId, model }) =>
-      contributeMistralResolvedModelCompat({ modelId, model }),
     resolveThinkingProfile: ({ modelId }) =>
       modelId === MISTRAL_SMALL_LATEST_ID || modelId === MISTRAL_MEDIUM_3_5_ID
         ? { levels: [{ id: "off" }, { id: "high" }], defaultLevel: "off" }

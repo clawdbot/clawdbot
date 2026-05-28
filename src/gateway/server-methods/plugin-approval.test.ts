@@ -233,39 +233,6 @@ describe("createPluginApprovalHandlers", () => {
       expect(responseCall(opts.respond as unknown as MockCallSource).error).toBeUndefined();
     });
 
-    it("keeps plugin approvals pending without an approval route when requested", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
-      const opts = createMockOptions(
-        "plugin.approval.request",
-        {
-          title: "Sensitive action",
-          description: "Desc",
-          twoPhase: true,
-          keepPendingWithoutRoute: true,
-        },
-        {
-          respond,
-          context: createNoExecApprovalContext(),
-        },
-      );
-
-      const handlerPromise = handlers["plugin.approval.request"](opts);
-
-      await vi.waitFor(() => {
-        const accepted = acceptedResult(respond as unknown as MockCallSource);
-        expect(accepted.status).toBe("accepted");
-        expect(accepted.id).toBeTypeOf("string");
-      });
-
-      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
-      expect(manager.getSnapshot(approvalId)).not.toBeNull();
-      manager.resolve(approvalId, "allow-once");
-      await handlerPromise;
-
-      expect(responseResult(respond as unknown as MockCallSource, 1).decision).toBe("allow-once");
-    });
-
     it("passes caller connId to hasExecApprovalClients to exclude self", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const hasExecApprovalClients = vi.fn().mockReturnValue(false);
@@ -375,55 +342,6 @@ describe("createPluginApprovalHandlers", () => {
       expect(responseError(opts.respond as unknown as MockCallSource).code).toBeTypeOf("string");
     });
 
-    it("rejects command approval actions that carry approval decisions", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.request", {
-        title: "T",
-        description: "D",
-        actions: [
-          {
-            kind: "command",
-            label: "Verify externally",
-            style: "primary",
-            decision: "allow-once",
-            commandTemplate: "/agentkit approve {id}",
-          },
-        ],
-      });
-
-      await handlers["plugin.approval.request"](opts);
-
-      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
-      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
-        "command actions must not include decision",
-      );
-    });
-
-    it("rejects decision approval actions outside allowed decisions", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.request", {
-        title: "T",
-        description: "D",
-        allowedDecisions: ["deny"],
-        actions: [
-          {
-            kind: "decision",
-            label: "Allow once",
-            style: "primary",
-            decision: "allow-once",
-            commandTemplate: "/approve {id} allow-once",
-          },
-        ],
-      });
-
-      await handlers["plugin.approval.request"](opts);
-
-      expect(responseCall(opts.respond as unknown as MockCallSource).ok).toBe(false);
-      expect(responseError(opts.respond as unknown as MockCallSource).message).toContain(
-        "decision allow-once is not in allowedDecisions",
-      );
-    });
-
     it("generates plugin-prefixed IDs", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const respond = vi.fn();
@@ -504,64 +422,6 @@ describe("createPluginApprovalHandlers", () => {
         "allow-once",
         "deny",
       ]);
-      manager.resolve(approvalId, "deny");
-      await handlerPromise;
-    });
-
-    it("stores plugin approval action templates as expanded commands", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const respond = vi.fn();
-      const opts = createMockOptions(
-        "plugin.approval.request",
-        {
-          title: "T",
-          description: "D",
-          actions: [
-            {
-              kind: "command",
-              label: "Open AgentKit",
-              style: "primary",
-              commandTemplate: "/agentkit approve {id}",
-            },
-            {
-              kind: "decision",
-              label: "Deny",
-              style: "danger",
-              decision: "deny",
-              commandTemplate: "/agentkit deny {id}",
-            },
-          ],
-          twoPhase: true,
-        },
-        { respond },
-      );
-
-      const handlerPromise = handlers["plugin.approval.request"](opts);
-      await vi.waitFor(() => {
-        const accepted = acceptedResult(respond as unknown as MockCallSource);
-        expect(accepted.status).toBe("accepted");
-        expect(accepted.id).toBeTypeOf("string");
-      });
-
-      const approvalId = acceptedApprovalId(respond as unknown as MockCallSource);
-      const expectedActions = [
-        {
-          kind: "command",
-          label: "Open AgentKit",
-          style: "primary",
-          command: `/agentkit approve ${approvalId}`,
-        },
-        {
-          kind: "decision",
-          label: "Deny",
-          style: "danger",
-          decision: "deny",
-          command: `/agentkit deny ${approvalId}`,
-        },
-      ];
-      expect(manager.getSnapshot(approvalId)?.request.actions).toEqual(expectedActions);
-      expect(broadcastCall(opts).payload.request).toMatchObject({ actions: expectedActions });
-
       manager.resolve(approvalId, "deny");
       await handlerPromise;
     });

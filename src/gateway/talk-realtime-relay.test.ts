@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   setActiveEmbeddedRun,
   testing as embeddedRunTesting,
-} from "../agents/pi-embedded-runner/runs.js";
+} from "../agents/embedded-agent-runner/runs.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type { RealtimeVoiceBridgeCreateRequest } from "../talk/provider-types.js";
 import {

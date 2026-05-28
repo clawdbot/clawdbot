@@ -394,6 +394,7 @@ const TARGET_KEYS = [
   "models.providers.*.contextWindow",
   "models.providers.*.contextTokens",
   "models.providers.*.maxTokens",
+  "models.providers.*.region",
   "models.providers.*.headers",
   "models.providers.*.models",
   "agents",

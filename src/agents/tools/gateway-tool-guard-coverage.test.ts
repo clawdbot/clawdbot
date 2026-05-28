@@ -276,16 +276,16 @@ describe("gateway config mutation guard coverage", () => {
     );
   });
 
-  it("blocks per-agent embeddedPi override under agents.list[]", () => {
+  it("blocks per-agent embeddedAgent override under agents.list[]", () => {
     expectBlocked(
       {
         agents: {
-          list: [{ id: "worker", embeddedPi: { executionContract: "strict-agentic" } }],
+          list: [{ id: "worker", embeddedAgent: { executionContract: "strict-agentic" } }],
         },
       },
       {
         agents: {
-          list: [{ id: "worker", embeddedPi: { executionContract: "none" } }],
+          list: [{ id: "worker", embeddedAgent: { executionContract: "none" } }],
         },
       },
     );

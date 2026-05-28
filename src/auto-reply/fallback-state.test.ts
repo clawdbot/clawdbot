@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import {
   buildFallbackNotice,
   resolveActiveFallbackState,
@@ -19,6 +20,20 @@ const activeFallbackState: FallbackNoticeState = {
   fallbackNoticeReason: "rate limit",
 };
 
+function registerAnthropicCliBackendForTest(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
+}
+
 function resolveDemoFallbackTransition(
   overrides: Partial<Parameters<typeof resolveFallbackTransition>[0]> = {},
 ) {
@@ -34,6 +49,10 @@ function resolveDemoFallbackTransition(
 }
 
 describe("fallback-state", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+  });
+
   it.each([
     {
       name: "treats fallback as active only when state matches selected and active refs",
@@ -123,6 +142,8 @@ describe("fallback-state", () => {
   });
 
   it("does not treat a CLI runtime alias as a model fallback", () => {
+    registerAnthropicCliBackendForTest();
+
     const resolved = resolveFallbackTransition({
       selectedProvider: "anthropic",
       selectedModel: "claude-opus-4-7",
@@ -144,6 +165,8 @@ describe("fallback-state", () => {
   });
 
   it("does not build a fallback notice for equivalent CLI runtime aliases", () => {
+    registerAnthropicCliBackendForTest();
+
     expect(
       buildFallbackNotice({
         selectedProvider: "anthropic",

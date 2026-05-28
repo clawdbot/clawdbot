@@ -295,6 +295,7 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "subagent",
   "system",
   "media",
+  "mediaUnderstanding",
   "tts",
   "stt",
   "channel",
@@ -302,6 +303,10 @@ const LAZY_RUNTIME_REFLECTION_KEYS = [
   "logging",
   "state",
   "modelAuth",
+  "imageGeneration",
+  "videoGeneration",
+  "musicGeneration",
+  "llm",
 ] as const satisfies readonly (keyof PluginRuntime)[];
 
 function createPluginCandidatesFromManifestRegistry(

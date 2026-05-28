@@ -242,7 +242,7 @@ describe("doctor stale plugin config helpers", () => {
         },
         list: [
           {
-            id: "pi",
+            id: "openclaw",
             heartbeat: {
               target: "missing-chat-plugin",
             },

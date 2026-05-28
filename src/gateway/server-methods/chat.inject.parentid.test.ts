@@ -17,7 +17,7 @@ function readTranscriptLines(transcriptPath: string): string[] {
 // Guardrail: Gateway-injected assistant transcript messages must attach to the
 // current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
-  it("appends a Pi session entry that includes parentId", async () => {
+  it("appends a agent session entry that includes parentId", async () => {
     const { dir, transcriptPath } = createTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-",
       sessionId: "sess-1",

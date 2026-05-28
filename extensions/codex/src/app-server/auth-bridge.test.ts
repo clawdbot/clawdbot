@@ -40,13 +40,6 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@earendil-works/pi-ai/oauth", () => ({
-  getOAuthApiKey: vi.fn(),
-  getOAuthProviders: () => [],
-  loginOpenAICodex: vi.fn(),
-  refreshOpenAICodexToken: oauthMocks.refreshOpenAICodexToken,
-}));
-
 vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-runtime")>();
   return {

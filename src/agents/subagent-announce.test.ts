@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
@@ -20,16 +20,18 @@ const resolveAgentIdFromSessionKeyMock = vi.fn((sessionKey: string) => {
 const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp/sessions.json");
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
 const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw subagent reply");
-const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
-const queueEmbeddedPiMessageWithOutcomeMock = vi.fn(
-  (sessionId: string, _text: string, _options?: unknown): EmbeddedPiQueueMessageOutcome => ({
+const isEmbeddedAgentRunActiveMock = vi.fn((_sessionId: string) => false);
+const queueEmbeddedAgentMessageWithOutcomeMock = vi.fn(
+  (sessionId: string, _text: string, _options?: unknown): EmbeddedAgentQueueMessageOutcome => ({
     queued: false,
     sessionId,
     reason: "not_streaming" as const,
     gatewayHealth: "live" as const,
   }),
 );
-const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
+const waitForEmbeddedAgentRunEndMock = vi.fn(
+  async (_sessionId: string, _timeoutMs?: number) => true,
+);
 let mockConfig: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
   session: {
     mainKey: "main",
@@ -57,7 +59,7 @@ vi.mock("./subagent-announce.runtime.js", () => ({
     params: Record<string, unknown>,
     options?: { timeoutMs?: number },
   ) => callGatewayMock({ method, params, timeoutMs: options?.timeoutMs }),
-  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
+  isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
   getRuntimeConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
   readSessionMessagesAsync: vi.fn(async () => []),
@@ -67,8 +69,8 @@ vi.mock("./subagent-announce.runtime.js", () => ({
     resolveAgentIdFromSessionKeyMock(sessionKey),
   resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
   resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
-  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
-    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
+  waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
 
 vi.mock("./tools/agent-step.js", () => ({
@@ -84,9 +86,9 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
       resolveAgentIdFromSessionKeyMock(sessionKey),
     resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
     resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
-    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
-      queueEmbeddedPiMessageWithOutcomeMock(sessionId, text, options),
+    isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
+    queueEmbeddedAgentMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
+      queueEmbeddedAgentMessageWithOutcomeMock(sessionId, text, options),
   }),
 );
 
@@ -117,8 +119,8 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       params.requesterSessionOrigin?.provider ??
       params.requesterSessionOrigin?.channel;
 
-    if (sessionId && queueChannel === "discord" && isEmbeddedPiRunActiveMock(sessionId)) {
-      queueEmbeddedPiMessageWithOutcomeMock(
+    if (sessionId && queueChannel === "discord" && isEmbeddedAgentRunActiveMock(sessionId)) {
+      queueEmbeddedAgentMessageWithOutcomeMock(
         sessionId,
         `[Internal task completion event]\n${params.triggerMessage}`,
         { steeringMode: "all" },
@@ -198,7 +200,7 @@ import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
 function requireQueuedMessageCall() {
-  const call = queueEmbeddedPiMessageWithOutcomeMock.mock.calls[0];
+  const call = queueEmbeddedAgentMessageWithOutcomeMock.mock.calls[0];
   if (!call) {
     throw new Error("expected queued message call");
   }
@@ -267,14 +269,16 @@ describe("subagent announce seam flow", () => {
     resolveStorePathMock.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeyMock.mockReset().mockImplementation(() => "agent:main:main");
     readLatestAssistantReplyMock.mockReset().mockResolvedValue("raw subagent reply");
-    isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
-    queueEmbeddedPiMessageWithOutcomeMock.mockReset().mockImplementation((sessionId: string) => ({
-      queued: false,
-      sessionId,
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    }));
-    waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
+    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
+    queueEmbeddedAgentMessageWithOutcomeMock
+      .mockReset()
+      .mockImplementation((sessionId: string) => ({
+        queued: false,
+        sessionId,
+        reason: "not_streaming",
+        gatewayHealth: "live",
+      }));
+    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
     mockConfig = {
       session: {
         mainKey: "main",
@@ -381,8 +385,8 @@ describe("subagent announce seam flow", () => {
         origin: { provider: "discord" },
       },
     }));
-    isEmbeddedPiRunActiveMock.mockReturnValue(true);
-    queueEmbeddedPiMessageWithOutcomeMock.mockImplementation((sessionId: string) => ({
+    isEmbeddedAgentRunActiveMock.mockReturnValue(true);
+    queueEmbeddedAgentMessageWithOutcomeMock.mockImplementation((sessionId: string) => ({
       queued: true,
       sessionId,
       target: "embedded_run",

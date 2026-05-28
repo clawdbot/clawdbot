@@ -1,5 +1,5 @@
 import {
-  DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   parseNonNegativeByteSize,
   resolveCronStyleNow,
   SILENT_REPLY_TOKEN,
@@ -113,7 +113,7 @@ export function buildMemoryFlushPlan(
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
   const reserveTokensFloor =
     normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
-    DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR;
+    DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
 
   const { timeLine, userTimezone } = resolveCronStyleNow(cfg ?? {}, nowMs);
   const dateStamp = formatDateStampInTimezone(nowMs, userTimezone);

@@ -1,7 +1,7 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 export type WritableStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;

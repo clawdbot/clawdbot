@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -53,6 +53,12 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
       "    fi",
       "  done",
       "fi",
+      'for arg in "$@"; do',
+      '  if [ "$arg" = "--artifact-glob" ] || [ "$arg" = "-artifact-glob" ]; then',
+      "    mkdir -p .crabbox/runs/run_fake",
+      '    printf "%s\\n" "fake artifact" > .crabbox/runs/run_fake/fake-artifacts.tgz',
+      "  fi",
+      "done",
       'script_path=""',
       'previous_arg=""',
       'for arg in "$@"; do',
@@ -91,6 +97,10 @@ function writeFakeCrabbox(binDir: string, helpText: string): string {
     "const scriptIndex = args.findIndex((arg) => arg === '--script' || arg === '-script');",
     "const scriptPath = scriptIndex >= 0 ? args[scriptIndex + 1] : '';",
     "const scriptContent = scriptPath ? require('node:fs').readFileSync(scriptPath, 'utf8') : '';",
+    "if (args.includes('--artifact-glob') || args.includes('-artifact-glob')) {",
+    "  require('node:fs').mkdirSync('.crabbox/runs/run_fake', { recursive: true });",
+    "  require('node:fs').writeFileSync('.crabbox/runs/run_fake/fake-artifacts.tgz', 'fake artifact\\n');",
+    "}",
     "console.log(JSON.stringify({ args, cwd: process.cwd(), scriptContent }));",
   ].join("\n");
   writeFileSync(helperPath, `${helperScript}\n`, "utf8");
@@ -386,11 +396,9 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
   });
 
   it("keeps explicit provider env overrides for Windows runs", () => {
-    const result = runWrapper(
-      azureProviderHelp,
-      ["run", "--target", "windows", "--", "echo ok"],
-      { env: { CRABBOX_PROVIDER: "aws" } },
-    );
+    const result = runWrapper(azureProviderHelp, ["run", "--target", "windows", "--", "echo ok"], {
+      env: { CRABBOX_PROVIDER: "aws" },
+    });
 
     expect(result.status).toBe(0);
     expect(parseFakeCrabboxOutput(result).args).toEqual([
@@ -2232,6 +2240,40 @@ describe.concurrent("scripts/crabbox-wrapper", () => {
     );
     expect(output.args).toContain(path.join(repoRoot, ".artifacts/stderr.log"));
     expect(output.args).toContain(`/tmp/proof=${path.join(repoRoot, ".artifacts/proof")}`);
+  });
+
+  it("preserves artifact-glob downloads from temporary sparse-sync checkouts", () => {
+    const preservedDir = path.join(repoRoot, ".crabbox", "runs", "run_fake");
+    rmSync(preservedDir, { recursive: true, force: true });
+
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--blacksmith-ref",
+        "main",
+        "--artifact-glob",
+        ".artifacts/proof/**",
+        "--",
+        "echo ok",
+      ],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(result.stderr).toContain("preserved");
+    expect(statSync(path.join(preservedDir, "fake-artifacts.tgz")).isFile()).toBe(true);
+    rmSync(preservedDir, { recursive: true, force: true });
   });
 
   it("uses the temporary full checkout for sparse sync-only runs", () => {

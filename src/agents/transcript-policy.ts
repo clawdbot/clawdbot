@@ -6,8 +6,8 @@ import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
@@ -303,6 +303,7 @@ export function resolveTranscriptPolicy(params: {
     (provider
       ? resolveProviderRuntimePlugin({
           provider,
+          modelId: params.modelId,
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,

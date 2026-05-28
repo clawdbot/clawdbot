@@ -60,7 +60,7 @@ describe("qa tool coverage report", () => {
         capabilityLayer: "codex-native-workspace",
         required: true,
         fixtureCount: 1,
-        pi: "not-run",
+        openclaw: "not-run",
         codex: "not-run",
         drift: "not-run",
       }),
@@ -95,8 +95,8 @@ describe("qa tool coverage report", () => {
               scenarioId: "tool-read",
               drift: "none",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
                   finalText: "",
@@ -124,8 +124,8 @@ describe("qa tool coverage report", () => {
               drift: "tool-result-shape",
               driftDetails: "tool result differs",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "write", argsHash: "a", resultHash: "r1" }],
                   finalText: "",
@@ -147,7 +147,7 @@ describe("qa tool coverage report", () => {
           },
         ],
         run: {
-          runtimePair: ["pi", "codex"],
+          runtimePair: ["openclaw", "codex"],
         },
       },
       generatedAt: "2026-05-10T00:00:00.000Z",
@@ -185,8 +185,8 @@ describe("qa tool coverage report", () => {
               scenarioId: "tool-optional",
               drift: "tool-call-shape",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [],
                   finalText: "",
@@ -245,8 +245,8 @@ describe("qa tool coverage report", () => {
               drift: "tool-call-shape",
               driftDetails: "searchable discovery was report-only",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                   finalText: "",
@@ -308,8 +308,8 @@ describe("qa tool coverage report", () => {
               drift: "tool-result-shape",
               driftDetails: "runtime envelopes differ",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r1" }],
                   finalText: "",
@@ -362,8 +362,8 @@ describe("qa tool coverage report", () => {
               drift: "tool-call-shape",
               driftDetails: "Codex emitted no web_search call",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                   finalText: "",
@@ -389,9 +389,7 @@ describe("qa tool coverage report", () => {
     });
 
     expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
-      "web-search missing codex tool call web_search",
-    ]);
+    expect(report.failures).toEqual(["web-search missing codex tool call web_search"]);
   });
 
   it("fails required OpenClaw dynamic tool coverage when the fixture failure mode is preserved", () => {
@@ -417,8 +415,8 @@ describe("qa tool coverage report", () => {
               drift: "failure-mode",
               driftDetails: "at least one runtime failed",
               cells: {
-                pi: {
-                  runtime: "pi",
+                openclaw: {
+                  runtime: "openclaw",
                   transcriptBytes: "",
                   toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
                   finalText: "",

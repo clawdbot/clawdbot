@@ -112,6 +112,47 @@
           "minHostVersion": ">=2026.5.1-beta.1"
         }
       }
+    },
+    {
+      "name": "@openclaw/pixverse-provider",
+      "description": "OpenClaw PixVerse video provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "pixverse",
+          "label": "PixVerse"
+        },
+        "providers": [
+          {
+            "id": "pixverse",
+            "name": "PixVerse",
+            "docs": "/providers/pixverse",
+            "categories": ["cloud", "video"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "pixverse-api-key",
+                "choiceLabel": "PixVerse API key",
+                "choiceHint": "Wizard prompts for International or CN endpoint.",
+                "groupId": "pixverse",
+                "groupLabel": "PixVerse",
+                "groupHint": "Video generation",
+                "optionKey": "pixverseApiKey",
+                "cliFlag": "--pixverse-api-key",
+                "cliOption": "--pixverse-api-key <key>",
+                "cliDescription": "PixVerse API key",
+                "onboardingScopes": ["image-generation"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/pixverse-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.26"
+        }
+      }
     }
   ]
 }

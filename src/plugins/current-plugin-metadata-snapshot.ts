@@ -12,6 +12,7 @@ import {
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
 type CurrentPluginMetadataSnapshotState = ReturnType<typeof getCurrentPluginMetadataSnapshotState>;
+let currentPluginMetadataConfigIdentityCache = new WeakSet<OpenClawConfig>();
 
 export function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
@@ -40,6 +41,7 @@ export function setCurrentPluginMetadataSnapshot(
     workspaceDir?: string;
   } = {},
 ): void {
+  currentPluginMetadataConfigIdentityCache = new WeakSet();
   const compatiblePolicyHashes = snapshot
     ? options.compatibleConfigs?.map((config) => resolveInstalledPluginIndexPolicyHash(config))
     : undefined;
@@ -66,9 +68,25 @@ export function setCurrentPluginMetadataSnapshot(
     compatiblePolicyHashes,
     compatibleConfigFingerprints,
   );
+  if (!snapshot) {
+    return;
+  }
+  if (options.config) {
+    const policyHash = resolveInstalledPluginIndexPolicyHash(options.config);
+    if (
+      policyHash === snapshot.policyHash ||
+      Boolean(compatiblePolicyHashes?.includes(policyHash))
+    ) {
+      currentPluginMetadataConfigIdentityCache.add(options.config);
+    }
+  }
+  for (const config of options.compatibleConfigs ?? []) {
+    currentPluginMetadataConfigIdentityCache.add(config);
+  }
 }
 
 export function clearCurrentPluginMetadataSnapshot(): void {
+  currentPluginMetadataConfigIdentityCache = new WeakSet();
   clearCurrentPluginMetadataSnapshotState();
 }
 
@@ -79,6 +97,7 @@ export function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetada
 export function restoreCurrentPluginMetadataSnapshotState(
   state: CurrentPluginMetadataSnapshotState,
 ): void {
+  currentPluginMetadataConfigIdentityCache = new WeakSet();
   setCurrentPluginMetadataSnapshotState(
     state.snapshot,
     state.configFingerprint,
@@ -106,30 +125,45 @@ export function getCurrentPluginMetadataSnapshot(
   if (!snapshot) {
     return undefined;
   }
-  const requestedPolicyHash = params.config
-    ? resolveInstalledPluginIndexPolicyHash(params.config)
-    : undefined;
-  if (requestedPolicyHash && snapshot.policyHash !== requestedPolicyHash) {
-    const compatiblePolicies = new Set(compatiblePolicyHashes ?? []);
-    if (!compatiblePolicies.has(requestedPolicyHash)) {
-      return undefined;
-    }
-  }
+  const env = params.env ?? process.env;
   const requestedWorkspaceDir =
     params.workspaceDir ??
     (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
-  if (params.config) {
+  if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
+    return undefined;
+  }
+  if (
+    requestedWorkspaceDir !== undefined &&
+    (snapshot.workspaceDir ?? "") !== (requestedWorkspaceDir ?? "")
+  ) {
+    return undefined;
+  }
+  const canReuseCachedConfig = Boolean(
+    params.config && currentPluginMetadataConfigIdentityCache.has(params.config),
+  );
+  if (canReuseCachedConfig && params.requireDefaultDiscoveryContext !== true) {
+    return snapshot;
+  }
+  const requestedPolicyHash =
+    params.config && !canReuseCachedConfig
+      ? resolveInstalledPluginIndexPolicyHash(params.config)
+      : undefined;
+  if (requestedPolicyHash && snapshot.policyHash !== requestedPolicyHash) {
+    if (!compatiblePolicyHashes?.includes(requestedPolicyHash)) {
+      return undefined;
+    }
+  }
+  if (params.config && !canReuseCachedConfig) {
     const requestedConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(params.config, {
-      env: params.env,
+      env,
       index: snapshot.index,
       policyHash: requestedPolicyHash,
       workspaceDir: requestedWorkspaceDir,
     });
-    const compatibleFingerprints = new Set(compatibleConfigFingerprints ?? []);
     const fingerprintMatches =
       configFingerprint === requestedConfigFingerprint ||
       snapshot.configFingerprint === requestedConfigFingerprint ||
-      compatibleFingerprints.has(requestedConfigFingerprint);
+      Boolean(compatibleConfigFingerprints?.includes(requestedConfigFingerprint));
     if (!fingerprintMatches) {
       return undefined;
     }
@@ -144,23 +178,13 @@ export function getCurrentPluginMetadataSnapshot(
         workspaceDir: requestedWorkspaceDir,
       },
     );
-    const compatibleFingerprints = new Set(compatibleConfigFingerprints ?? []);
     const fingerprintMatches =
       configFingerprint === defaultDiscoveryConfigFingerprint ||
       snapshot.configFingerprint === defaultDiscoveryConfigFingerprint ||
-      compatibleFingerprints.has(defaultDiscoveryConfigFingerprint);
+      Boolean(compatibleConfigFingerprints?.includes(defaultDiscoveryConfigFingerprint));
     if (!fingerprintMatches) {
       return undefined;
     }
-  }
-  if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
-    return undefined;
-  }
-  if (
-    requestedWorkspaceDir !== undefined &&
-    (snapshot.workspaceDir ?? "") !== (requestedWorkspaceDir ?? "")
-  ) {
-    return undefined;
   }
   return snapshot;
 }

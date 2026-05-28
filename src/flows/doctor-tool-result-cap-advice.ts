@@ -1,7 +1,7 @@
 import {
   calculateMaxToolResultCharsWithCap,
   resolveAutoLiveToolResultMaxChars,
-} from "../agents/pi-embedded-runner/tool-result-truncation.js";
+} from "../agents/embedded-agent-runner/tool-result-truncation.js";
 
 export type ToolResultCapDoctorAdviceParams = {
   contextWindowTokens: number;

@@ -17,12 +17,11 @@ successCriteria:
   - Scenario details preserve the observed compaction count for review context.
 docsRefs:
   - docs/help/testing.md
-  - docs/help/gpt55-codex-agentic-parity.md
 codeRefs:
   - extensions/qa-lab/src/suite.ts
   - extensions/qa-lab/src/mock-openai-server.ts
-  - src/agents/pi-embedded-subscribe.ts
-  - src/agents/pi-embedded-subscribe.handlers.lifecycle.ts
+  - src/agents/embedded-agent-subscribe.ts
+  - src/agents/embedded-agent-subscribe.handlers.lifecycle.ts
 execution:
   kind: flow
   summary: Verify a mutating tool step keeps replay-unsafety explicit through compaction or retry pressure.

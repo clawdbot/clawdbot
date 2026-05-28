@@ -41,6 +41,7 @@ function makeInboundCtx(overrides: Partial<FinalizedMsgContext> = {}): Finalized
     SenderE164: "+15551234567",
     MessageThreadId: 42,
     MediaPath: "/tmp/audio.ogg",
+    MediaUrl: "https://cdn.example.com/audio.ogg",
     MediaType: "audio/ogg",
     GroupSubject: "ops",
     GroupChannel: "ops-room",
@@ -198,7 +199,14 @@ describe("message hook mappers", () => {
       parentSpanId: "3333333333333333",
     };
     const canonical = {
-      ...deriveInboundMessageHookContext(makeInboundCtx({ TopicName: "Deployments" })),
+      ...deriveInboundMessageHookContext(
+        makeInboundCtx({
+          TopicName: "Deployments",
+          MediaPaths: ["/tmp/audio.ogg", "/tmp/photo.jpg"],
+          MediaUrls: ["https://cdn.example.com/audio.ogg", "https://cdn.example.com/photo.jpg"],
+          MediaTypes: ["audio/ogg", "image/jpeg"],
+        }),
+      ),
       runId: "run-1",
       trace,
       callDepth: 2,
@@ -245,6 +253,15 @@ describe("message hook mappers", () => {
     expect(receivedMetadata?.senderName).toBe("User One");
     expect(receivedMetadata?.threadId).toBe(42);
     expect(receivedMetadata?.topicName).toBe("Deployments");
+    expect(receivedMetadata?.mediaPath).toBe("/tmp/audio.ogg");
+    expect(receivedMetadata?.mediaUrl).toBe("https://cdn.example.com/audio.ogg");
+    expect(receivedMetadata?.mediaType).toBe("audio/ogg");
+    expect(receivedMetadata?.mediaPaths).toEqual(["/tmp/audio.ogg", "/tmp/photo.jpg"]);
+    expect(receivedMetadata?.mediaUrls).toEqual([
+      "https://cdn.example.com/audio.ogg",
+      "https://cdn.example.com/photo.jpg",
+    ]);
+    expect(receivedMetadata?.mediaTypes).toEqual(["audio/ogg", "image/jpeg"]);
     const internalReceived = toInternalMessageReceivedContext(canonical);
     const { metadata: internalMetadata, ...internalReceivedBase } = internalReceived;
     expect(internalReceivedBase).toEqual({

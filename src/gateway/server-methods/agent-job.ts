@@ -39,6 +39,7 @@ type AgentRunSnapshot = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   ts: number;
@@ -134,6 +135,22 @@ function getPendingAgentRunTimeout(runId: string) {
   return {
     snapshot: pending.snapshot,
     dueAt: pending.dueAt,
+  };
+}
+
+function createPendingErrorTimeoutSnapshot(snapshot: AgentRunSnapshot): AgentRunSnapshot {
+  // Keep this non-terminal: the retry grace can still be canceled by a later
+  // lifecycle start, so omit terminal fields such as endedAt and stopReason.
+  return {
+    runId: snapshot.runId,
+    status: "timeout",
+    startedAt: snapshot.startedAt,
+    error: snapshot.error,
+    pendingError: true,
+    ...(snapshot.providerStarted !== undefined
+      ? { providerStarted: snapshot.providerStarted }
+      : {}),
+    ts: Date.now(),
   };
 }
 
@@ -383,7 +400,10 @@ export async function waitForAgentJob(params: {
     });
     removeWaiter = addAgentRunWaiter(runId);
 
-    const timer = setSafeTimeout(() => finish(null), timeoutMs);
+    const timer = setSafeTimeout(() => {
+      const pendingError = getPendingAgentRunError(runId);
+      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
+    }, timeoutMs);
     onAbort = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
   });

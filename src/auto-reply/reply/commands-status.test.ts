@@ -44,10 +44,10 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../agents/harness/builtin-pi.js", () => ({
-  createPiAgentHarness: () => ({
-    id: "pi",
-    label: "OpenClaw Pi",
+vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
+  createOpenClawAgentHarness: () => ({
+    id: "openclaw",
+    label: "OpenClaw Default",
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: async () => {
       throw new Error("not used in status tests");
@@ -562,7 +562,7 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalizeTestText(text)).toContain("Uptime: gateway 2h 5m · system 4d 3h");
   });
 
-  it("shows the effective non-PI embedded harness in /status", async () => {
+  it("shows the effective non-OpenClaw embedded harness in /status", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -719,7 +719,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses Codex OAuth auth labels for explicit OpenAI PI auth order", async () => {
+  it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {
         const authPath = path.join(
@@ -760,7 +760,7 @@ describe("buildStatusReply subagent summary", () => {
               defaults: {
                 models: {
                   "openai/gpt-5.5": {
-                    agentRuntime: { id: "pi" },
+                    agentRuntime: { id: "openclaw" },
                   },
                 },
               },
@@ -772,7 +772,7 @@ describe("buildStatusReply subagent summary", () => {
             },
           },
           sessionEntry: {
-            sessionId: "sess-status-openai-pi-codex-oauth",
+            sessionId: "sess-status-openai-agent-codex-oauth",
             updatedAt: 0,
           },
           sessionKey: "agent:main:main",
@@ -782,7 +782,7 @@ describe("buildStatusReply subagent summary", () => {
           provider: "openai",
           model: "gpt-5.5",
           contextTokens: 32_000,
-          resolvedHarness: "pi",
+          resolvedHarness: "openclaw",
           resolvedFastMode: false,
           resolvedVerboseLevel: "off",
           resolvedReasoningLevel: "off",
@@ -1079,7 +1079,7 @@ describe("buildStatusReply subagent summary", () => {
     }
   });
 
-  it("keeps /status on a session-pinned PI harness after config changes", async () => {
+  it("keeps /status on a session-pinned OpenClaw harness after config changes", async () => {
     registerStatusCodexHarness();
 
     const text = await buildStatusText({
@@ -1092,10 +1092,10 @@ describe("buildStatusReply subagent summary", () => {
         },
       },
       sessionEntry: {
-        sessionId: "sess-status-pinned-pi",
+        sessionId: "sess-status-pinned-agent",
         updatedAt: 0,
         fastMode: true,
-        agentHarnessId: "pi",
+        agentHarnessId: "openclaw",
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",

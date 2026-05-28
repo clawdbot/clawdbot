@@ -135,9 +135,9 @@ export type LlmCompleteResult = {
   };
 };
 
-type RuntimeRunEmbeddedPiAgent = (
-  params: import("../../agents/pi-embedded-runner/run/params.js").RunEmbeddedPiAgentParams,
-) => Promise<import("../../agents/pi-embedded-runner/types.js").EmbeddedPiRunResult>;
+type RuntimeRunEmbeddedAgent = (
+  params: import("../../agents/embedded-agent-runner/run/params.js").RunEmbeddedAgentParams,
+) => Promise<import("../../agents/embedded-agent-runner/types.js").EmbeddedAgentRunResult>;
 
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
@@ -197,8 +197,9 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    runEmbeddedAgent: RuntimeRunEmbeddedPiAgent;
-    runEmbeddedPiAgent: RuntimeRunEmbeddedPiAgent;
+    runEmbeddedAgent: RuntimeRunEmbeddedAgent;
+    /** @deprecated Use runEmbeddedAgent. */
+    runEmbeddedPiAgent: RuntimeRunEmbeddedAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
@@ -326,13 +327,13 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
-      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
-      model: import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
+      model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;

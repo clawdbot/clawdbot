@@ -145,8 +145,9 @@ export function resolveCommandResolutionFromArgv(
   argv: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
 ): CommandResolution | null {
-  const plan = resolveExecWrapperTrustPlan(argv);
+  const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
   const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {

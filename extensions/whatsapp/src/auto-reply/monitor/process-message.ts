@@ -80,7 +80,7 @@ const WHATSAPP_MESSAGE_RECEIVED_HOOK_LIMITS = {
 
 type WhatsAppMessageReceivedHookConfig = {
   pluginHooks?: {
-    messageReceived?: unknown;
+    messageReceived?: boolean;
   };
   accounts?: Record<string, unknown>;
 };
@@ -90,7 +90,10 @@ function readWhatsAppMessageReceivedHookOptIn(value: unknown): boolean | undefin
     return undefined;
   }
   const pluginHooks = (value as WhatsAppMessageReceivedHookConfig).pluginHooks;
-  return pluginHooks?.messageReceived === true ? true : undefined;
+  if (pluginHooks?.messageReceived === undefined) {
+    return undefined;
+  }
+  return pluginHooks.messageReceived;
 }
 
 function shouldEmitWhatsAppMessageReceivedHooks(params: {
@@ -104,6 +107,7 @@ function shouldEmitWhatsAppMessageReceivedHooks(params: {
     params.accountId && channelConfig?.accounts
       ? channelConfig.accounts[params.accountId]
       : undefined;
+
   return (
     readWhatsAppMessageReceivedHookOptIn(accountConfig) ??
     readWhatsAppMessageReceivedHookOptIn(channelConfig) ??

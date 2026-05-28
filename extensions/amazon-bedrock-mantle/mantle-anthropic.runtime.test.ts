@@ -1,11 +1,11 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMantleAnthropicStreamFn,
   resolveMantleAnthropicBaseUrl,
 } from "./mantle-anthropic.runtime.js";
 
-function createTestModel(): Model<Api> {
+function createTestModel(): Model {
   return {
     id: "anthropic.claude-opus-4-7",
     name: "Claude Opus 4.7",
@@ -20,7 +20,7 @@ function createTestModel(): Model<Api> {
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: 1_000_000,
     maxTokens: 128_000,
-  } as Model<Api>;
+  } as Model;
 }
 
 function createTestDeps() {
@@ -47,7 +47,7 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 
 function expectFirstStreamCall(
   deps: ReturnType<typeof createTestDeps>,
-  model: Model<Api>,
+  model: Model,
   context: unknown,
 ) {
   expect(mockCallArg(deps.stream, 0, 0)).toBe(model);

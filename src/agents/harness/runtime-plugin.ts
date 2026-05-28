@@ -3,15 +3,27 @@ import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
-import { normalizeUniqueStringEntries } from "../../shared/string-normalization.js";
+import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
 
-function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
-  if (config?.plugins?.bundledDiscovery === "compat") {
-    return false;
+function dedupePluginIds(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const pluginId = value.trim();
+    if (!pluginId || seen.has(pluginId)) {
+      continue;
+    }
+    seen.add(pluginId);
+    result.push(pluginId);
   }
+  return result;
+}
+
+function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
   const allow = config?.plugins?.allow ?? [];
   return allow.length > 0 && !allow.includes(pluginId);
 }
@@ -24,8 +36,8 @@ function resolveCodexHarnessPluginIds(params: {
   if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
     return ["codex"];
   }
-  const providerOwnerPluginIds = normalizeUniqueStringEntries(
-    resolveOwningPluginIdsForProvider({
+  const providerOwnerPluginIds = dedupePluginIds(
+    resolveOwningPluginIdsForProviderRef({
       provider: params.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -34,7 +46,7 @@ function resolveCodexHarnessPluginIds(params: {
   if (providerOwnerPluginIds.length === 0) {
     return ["codex"];
   }
-  const safeProviderOwnerPluginIds = normalizeUniqueStringEntries([
+  const safeProviderOwnerPluginIds = dedupePluginIds([
     ...resolveBundledProviderCompatPluginIds({
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -46,7 +58,7 @@ function resolveCodexHarnessPluginIds(params: {
       workspaceDir: params.workspaceDir,
     }),
   ]);
-  return normalizeUniqueStringEntries([
+  return dedupePluginIds([
     "codex",
     ...providerOwnerPluginIds.filter(
       (pluginId) => pluginId !== "codex" && safeProviderOwnerPluginIds.includes(pluginId),
@@ -65,10 +77,7 @@ function withRuntimePluginIdsAllowed(params: {
   if (restrictiveAllowlistOmitsPlugin(params.config, params.requiredPluginId)) {
     return params.config;
   }
-  const allow = normalizeUniqueStringEntries([
-    ...(params.config?.plugins?.allow ?? []),
-    ...params.pluginIds,
-  ]);
+  const allow = dedupePluginIds([...(params.config?.plugins?.allow ?? []), ...params.pluginIds]);
   return {
     ...params.config,
     plugins: {
@@ -87,7 +96,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   agentHarnessRuntimeOverride?: string;
   workspaceDir: string;
 }): Promise<void> {
-  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
   const policy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.modelId,
@@ -96,9 +105,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     sessionKey: params.sessionKey,
   });
   const runtime =
-    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
-      ? runtimeOverride
-      : policy.runtime;
+    runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride) ? runtimeOverride : policy.runtime;
   if (runtime !== "codex") {
     return;
   }

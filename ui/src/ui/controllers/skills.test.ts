@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   installSkill,
+  loadSkills,
+  loadSkillCard,
   loadClawHubDetail,
   saveSkillApiKey,
   searchClawHub,
@@ -40,6 +42,13 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn> 
     clawhubDetailError: null,
     clawhubInstallSlug: null,
     clawhubInstallMessage: null,
+    clawhubVerdicts: {},
+    clawhubVerdictsLoading: false,
+    clawhubVerdictsError: null,
+    skillCardContents: {},
+    skillCardContentKeys: {},
+    skillCardLoadingKey: null,
+    skillCardErrors: {},
   };
   return { state, request };
 }
@@ -67,6 +76,300 @@ function mockSkillMutationRequests(request: ReturnType<typeof vi.fn>, installMes
     return {};
   });
 }
+
+describe("loadSkills", () => {
+  it("does not request ClawHub verdicts when no installed skills are linked", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValueOnce({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [{ name: "Local", skillKey: "local", source: "workspace" }],
+    });
+
+    await loadSkills(state);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith("skills.status", {});
+    expect(state.clawhubVerdicts).toEqual({});
+    expect(state.clawhubVerdictsError).toBeNull();
+  });
+
+  it("requests one bulk ClawHub verdict batch for linked installed skills", async () => {
+    const { state, request } = createState();
+    request.mockImplementation(async (method: string) => {
+      if (method === "skills.status") {
+        return {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [
+            {
+              name: "AgentReceipt",
+              skillKey: "agentreceipt",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "agentreceipt",
+                installedVersion: "1.2.3",
+                installedAt: 123,
+              },
+            },
+            { name: "Local", skillKey: "local", source: "workspace" },
+          ],
+        };
+      }
+      if (method === "skills.securityVerdicts") {
+        return {
+          schema: "openclaw.skills.security-verdicts.v1",
+          items: [
+            {
+              registry: "https://clawhub.ai",
+              ok: true,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              slug: "agentreceipt",
+              version: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await loadSkills(state);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenNthCalledWith(1, "skills.status", {});
+    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", {});
+    expect(state.clawhubVerdicts).toEqual({
+      "https://clawhub.ai\u0000agentreceipt\u00001.2.3": expect.objectContaining({
+        ok: true,
+        decision: "pass",
+        securityStatus: "clean",
+        securityPassed: true,
+      }),
+    });
+    expect(state.clawhubVerdictsLoading).toBe(false);
+    expect(state.clawhubVerdictsError).toBeNull();
+  });
+
+  it("does not keep skills loading while the optional verdict refresh is pending", async () => {
+    const { state, request } = createState();
+    let resolveVerdicts: (value: unknown) => void = () => {
+      throw new Error("expected verdict request to be pending");
+    };
+    request.mockImplementation((method: string) => {
+      if (method === "skills.status") {
+        return Promise.resolve({
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          skills: [
+            {
+              name: "AgentReceipt",
+              skillKey: "agentreceipt",
+              source: "workspace",
+              clawhub: {
+                status: "linked",
+                valid: true,
+                registry: "https://clawhub.ai",
+                slug: "agentreceipt",
+                installedVersion: "1.2.3",
+                installedAt: 123,
+              },
+            },
+          ],
+        });
+      }
+      if (method === "skills.securityVerdicts") {
+        return new Promise((resolve) => {
+          resolveVerdicts = resolve;
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    await loadSkills(state);
+
+    expect(state.skillsLoading).toBe(false);
+    expect(state.clawhubVerdictsLoading).toBe(true);
+
+    resolveVerdicts({ schema: "openclaw.skills.security-verdicts.v1", items: [] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(state.clawhubVerdictsLoading).toBe(false);
+  });
+
+  it("drops cached Skill Card content when refreshed card metadata changes", async () => {
+    const { state, request } = createState();
+    state.skillCardContents = { agentreceipt: "old card" };
+    state.skillCardContentKeys = {
+      agentreceipt: "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u00001.2.3",
+    };
+    request.mockResolvedValueOnce({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [
+        {
+          name: "AgentReceipt",
+          description: "Trust card fixture",
+          skillKey: "agentreceipt",
+          source: "workspace",
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "agentreceipt",
+            installedVersion: "1.2.4",
+            installedAt: 456,
+          },
+          skillCard: {
+            present: true,
+            path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+            sizeBytes: 34,
+          },
+        },
+      ],
+    });
+
+    await loadSkills(state);
+
+    expect(state.skillCardContents.agentreceipt).toBeUndefined();
+    expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
+  });
+});
+
+describe("loadSkillCard", () => {
+  it("loads local Skill Card content on demand", async () => {
+    const { state, request } = createState();
+    request.mockResolvedValueOnce({
+      schema: "openclaw.skills.skill-card.v1",
+      skillKey: "agentreceipt",
+      path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+      sizeBytes: 34,
+      content: "# AgentReceipt\n\nLocal trust card.\n",
+    });
+    state.skillsReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [
+        {
+          name: "AgentReceipt",
+          description: "Trust card fixture",
+          skillKey: "agentreceipt",
+          source: "workspace",
+          filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
+          baseDir: "/tmp/workspace/skills/agentreceipt",
+          always: false,
+          disabled: false,
+          blockedByAllowlist: false,
+          eligible: true,
+          requirements: { bins: [], env: [], config: [], os: [] },
+          missing: { bins: [], env: [], config: [], os: [] },
+          configChecks: [],
+          install: [],
+          skillCard: {
+            present: true,
+            path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+            sizeBytes: 34,
+          },
+        },
+      ],
+    };
+
+    await loadSkillCard(state, "agentreceipt");
+
+    expect(request).toHaveBeenCalledWith("skills.skillCard", { skillKey: "agentreceipt" });
+    expect(state.skillCardContents.agentreceipt).toBe("# AgentReceipt\n\nLocal trust card.\n");
+    expect(state.skillCardContentKeys.agentreceipt).toBe(
+      "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u0000",
+    );
+    expect(state.skillCardLoadingKey).toBeNull();
+    expect(state.skillCardErrors).toEqual({});
+  });
+
+  it("does not cache stale Skill Card content after local metadata changes mid-request", async () => {
+    const { state, request } = createState();
+    let resolveCard: (value: unknown) => void = () => {
+      throw new Error("expected card request to be pending");
+    };
+    request.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveCard = resolve;
+        }),
+    );
+    state.skillsReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [
+        {
+          name: "AgentReceipt",
+          description: "Trust card fixture",
+          skillKey: "agentreceipt",
+          source: "workspace",
+          filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
+          baseDir: "/tmp/workspace/skills/agentreceipt",
+          always: false,
+          disabled: false,
+          blockedByAllowlist: false,
+          eligible: true,
+          requirements: { bins: [], env: [], config: [], os: [] },
+          missing: { bins: [], env: [], config: [], os: [] },
+          configChecks: [],
+          install: [],
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "agentreceipt",
+            installedVersion: "1.2.3",
+            installedAt: 123,
+          },
+          skillCard: {
+            present: true,
+            path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+            sizeBytes: 34,
+          },
+        },
+      ],
+    };
+
+    const pending = loadSkillCard(state, "agentreceipt");
+    state.skillsReport = {
+      ...state.skillsReport,
+      skills: [
+        {
+          ...state.skillsReport.skills[0],
+          clawhub: {
+            status: "linked",
+            valid: true,
+            registry: "https://clawhub.ai",
+            slug: "agentreceipt",
+            installedVersion: "1.2.4",
+            installedAt: 456,
+          },
+        },
+      ],
+    };
+    resolveCard({
+      schema: "openclaw.skills.skill-card.v1",
+      skillKey: "agentreceipt",
+      path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+      sizeBytes: 34,
+      content: "old card",
+    });
+    await pending;
+
+    expect(state.skillCardContents.agentreceipt).toBeUndefined();
+    expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
+  });
+});
 
 describe("searchClawHub", () => {
   it("clears stale query state immediately when the input changes", () => {

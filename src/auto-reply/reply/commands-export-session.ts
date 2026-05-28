@@ -1,11 +1,12 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  FileEntry as PiSessionFileEntry,
-  SessionEntry as PiSessionEntry,
-  SessionHeader,
-} from "@earendil-works/pi-coding-agent";
+import {
+  migrateSessionEntries,
+  type FileEntry as SessionFileEntry,
+  type SessionEntry as AgentSessionEntry,
+  type SessionHeader,
+} from "../../agents/sessions/session-manager.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { isRecord } from "../../shared/record-coerce.js";
 import type { ReplyPayload } from "../types.js";
@@ -22,7 +23,7 @@ const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 
 
 interface SessionData {
   header: SessionHeader | null;
-  entries: PiSessionEntry[];
+  entries: AgentSessionEntry[];
   leafId: string | null;
   systemPrompt?: string;
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
@@ -41,11 +42,6 @@ type SessionExportWarningSummary = {
 
 async function loadTemplate(fileName: string): Promise<string> {
   return await fsp.readFile(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
-}
-
-async function migratePiSessionEntries(fileEntries: PiSessionFileEntry[]): Promise<void> {
-  const { migrateSessionEntries } = await import("@earendil-works/pi-coding-agent");
-  migrateSessionEntries(fileEntries);
 }
 
 function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
@@ -76,7 +72,7 @@ async function generateHtml(sessionData: SessionData): Promise<string> {
     loadTemplate(path.join("vendor", "highlight.min.js")),
   ]);
 
-  // Use pi-mono dark theme colors (matching their theme/dark.json)
+  // Use the bundled dark session-export palette
   const themeVars = `
     --cyan: #00d7ff;
     --blue: #5f87ff;
@@ -161,7 +157,7 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
 
-function isSessionFileEntry(value: unknown): value is PiSessionFileEntry {
+function isSessionFileEntry(value: unknown): value is SessionFileEntry {
   if (!isRecord(value) || typeof value.type !== "string") {
     return false;
   }
@@ -173,10 +169,10 @@ function isSessionFileEntry(value: unknown): value is PiSessionFileEntry {
 }
 
 function parseSessionEntriesWithWarnings(content: string): {
-  entries: PiSessionFileEntry[];
+  entries: SessionFileEntry[];
   warnings: SessionExportJsonlWarning[];
 } {
-  const entries: PiSessionFileEntry[] = [];
+  const entries: SessionFileEntry[] = [];
   const warnings: SessionExportJsonlWarning[] = [];
   const rows = content.split(/\r?\n/u);
   for (const [index, rawLine] of rows.entries()) {
@@ -241,16 +237,16 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
 
 async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   header: SessionHeader | null;
-  entries: PiSessionEntry[];
+  entries: AgentSessionEntry[];
   leafId: string | null;
   warnings: SessionExportWarningSummary[];
 }> {
   const raw = await fsp.readFile(sessionFile, "utf-8");
   const { entries: fileEntries, warnings } = parseSessionEntriesWithWarnings(raw);
-  await migratePiSessionEntries(fileEntries);
+  migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter((entry): entry is PiSessionEntry => entry.type !== "session");
+  const entries = fileEntries.filter((entry): entry is AgentSessionEntry => entry.type !== "session");
   const lastEntry = entries.at(-1);
   const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
   return { header, entries, leafId, warnings: summarizeSessionExportWarnings(warnings) };

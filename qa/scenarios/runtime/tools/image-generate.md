@@ -8,7 +8,7 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.image-generate
-objective: Verify image_generate preserves arguments and result shape across Pi and Codex.
+objective: Verify image_generate preserves arguments and result shape across OpenClaw and Codex.
 successCriteria:
   - Effective tools expose image_generate after QA image-generation config is applied.
   - The mock provider plans exactly one happy-path image_generate call.
@@ -35,7 +35,7 @@ execution:
       codexDefaultImpact: P4
       qaImpact: P1
       action: hard gate in the standard direct-loading tier
-      reason: image_generate is an OpenClaw integration tool and must stay visible and callable under Pi and Codex direct runtime parity.
+      reason: image_generate is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
     promptSnippet: "target=image_generate"
     failurePromptSnippet: "failure target=image_generate"
 ```

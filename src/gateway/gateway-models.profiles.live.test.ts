@@ -7,14 +7,12 @@ import path from "node:path";
 import {
   clampThinkingLevel,
   type Api,
-  getModels,
-  getProviders,
-  type KnownProvider,
   type Model,
   type ModelThinkingLevel,
-} from "@earendil-works/pi-ai";
+} from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
+import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -44,7 +42,6 @@ import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
@@ -71,7 +68,10 @@ const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
 const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
-const THINKING_LEVEL = GATEWAY_LIVE_SMOKE ? "low" : "high";
+const THINKING_LEVEL = resolveGatewayLiveThinkingLevel({
+  raw: process.env.OPENCLAW_LIVE_GATEWAY_THINKING,
+  smoke: GATEWAY_LIVE_SMOKE,
+});
 const ENABLE_EXTRA_TOOL_PROBES = !GATEWAY_LIVE_SMOKE;
 const ENABLE_EXTRA_IMAGE_PROBES = !GATEWAY_LIVE_SMOKE;
 const THINKING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\s*>/i;
@@ -245,7 +245,7 @@ function resolveGatewayLiveModelTimeoutMs(
   liveModelTimeoutRaw = process.env.OPENCLAW_LIVE_MODEL_TIMEOUT_MS,
   stepTimeoutMs = GATEWAY_LIVE_PROBE_TIMEOUT_MS,
 ): number {
-  const requested = toInt(gatewayModelTimeoutRaw, toInt(liveModelTimeoutRaw, 120_000));
+  const requested = toInt(gatewayModelTimeoutRaw, toInt(liveModelTimeoutRaw, 300_000));
   return Math.max(stepTimeoutMs, requested);
 }
 
@@ -704,6 +704,10 @@ describe("resolveGatewayLiveModelTimeoutMs", () => {
     expect(resolveGatewayLiveModelTimeoutMs("", "45000", 30_000)).toBe(45_000);
   });
 
+  it("defaults to the release live model budget", () => {
+    expect(resolveGatewayLiveModelTimeoutMs("", undefined, 90_000)).toBe(300_000);
+  });
+
   it("never goes below the probe timeout", () => {
     expect(resolveGatewayLiveModelTimeoutMs("45000", undefined, 90_000)).toBe(90_000);
   });
@@ -858,7 +862,7 @@ describe("resolveGatewayLiveMaxModels", () => {
   });
 });
 
-function createGatewayLiveTestModel(provider: string, id: string): Model<Api> {
+function createGatewayLiveTestModel(provider: string, id: string): Model {
   return {
     provider,
     id,
@@ -869,7 +873,7 @@ function createGatewayLiveTestModel(provider: string, id: string): Model<Api> {
     contextWindow: 1_000,
     maxTokens: 100,
     reasoning: false,
-  } as Model<Api>;
+  } as Model;
 }
 
 describe("resolveExplicitLiveModelCandidates", () => {
@@ -1008,6 +1012,13 @@ describe("providerScopedModelRegistryProviders", () => {
 });
 
 describe("resolveGatewayLiveModelThinkingLevel", () => {
+  it("allows release lanes to lower gateway live thinking without smoke mode", () => {
+    expect(resolveGatewayLiveThinkingLevel({ raw: "low", smoke: false })).toBe("low");
+    expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: false })).toBe("high");
+    expect(resolveGatewayLiveThinkingLevel({ raw: undefined, smoke: true })).toBe("low");
+    expect(resolveGatewayLiveThinkingLevel({ raw: "wat", smoke: false })).toBe("high");
+  });
+
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
@@ -1031,14 +1042,14 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
 });
 
 describe("buildLiveGatewayConfig", () => {
-  it("pins selected live gateway models to the Pi runtime", () => {
+  it("pins selected live gateway models to the OpenClaw runtime", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {},
       candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
     });
 
     expect(cfg.agents?.defaults?.models?.["openai/gpt-5.5"]).toEqual({
-      agentRuntime: { id: "pi" },
+      agentRuntime: { id: "openclaw" },
     });
   });
 });
@@ -1833,7 +1844,7 @@ async function requestGatewayAgentText(params: {
 type GatewayModelSuiteParams = {
   label: string;
   cfg: OpenClawConfig;
-  candidates: Array<Model<Api>>;
+  candidates: Array<Model>;
   allowNotFoundSkip: boolean;
   extraToolProbes: boolean;
   extraImageProbes: boolean;
@@ -1842,20 +1853,15 @@ type GatewayModelSuiteParams = {
 };
 
 type LiveModelRegistry = {
-  find(provider: string, modelId: string): Model<Api> | null | undefined;
-  getAll(): Array<Model<Api>>;
+  find(provider: string, modelId: string): Model | null | undefined;
+  getAll(): Array<Model>;
 };
-
-function resolveKnownProvider(provider: string): KnownProvider | undefined {
-  const normalized = provider.trim();
-  return getProviders().find((knownProvider) => knownProvider === normalized);
-}
 
 function toGatewayLiveModel(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
   modelConfig: NonNullable<ModelProviderConfig["models"]>[number];
-}): Model<Api> | null {
+}): Model | null {
   const id = params.modelConfig.id?.trim();
   const api = params.modelConfig.api ?? params.providerConfig.api;
   const baseUrl = params.modelConfig.baseUrl ?? params.providerConfig.baseUrl;
@@ -1888,7 +1894,7 @@ function toGatewayLiveModel(params: {
 async function loadProviderScopedConfiguredModels(params: {
   agentDir: string;
   providerList: readonly string[];
-}): Promise<Array<Model<Api>>> {
+}): Promise<Array<Model>> {
   const modelsPath = path.join(params.agentDir, "models.json");
   let parsed: { providers?: Record<string, ModelProviderConfig> };
   try {
@@ -1900,7 +1906,7 @@ async function loadProviderScopedConfiguredModels(params: {
   }
 
   const providers = parsed.providers ?? {};
-  const models: Array<Model<Api>> = [];
+  const models: Array<Model> = [];
   const seen = new Set<string>();
   for (const rawProvider of params.providerList) {
     const normalizedProvider = normalizeProviderId(rawProvider);
@@ -1927,42 +1933,14 @@ async function loadProviderScopedConfiguredModels(params: {
   return models;
 }
 
-function loadProviderScopedBuiltInModels(providerList: readonly string[]): Array<Model<Api>> {
-  const models: Array<Model<Api>> = [];
-  const seen = new Set<string>();
-  for (const rawProvider of providerList) {
-    const provider = normalizeProviderId(rawProvider);
-    if (!provider) {
-      continue;
-    }
-    const knownProvider = resolveKnownProvider(provider);
-    if (!knownProvider) {
-      continue;
-    }
-    for (const model of getModels(knownProvider)) {
-      const key = `${normalizeProviderId(model.provider)}/${model.id.toLowerCase()}`;
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      models.push(model);
-    }
-  }
-  return models;
-}
-
 async function loadProviderScopedModels(params: {
   agentDir: string;
   providerList: readonly string[];
-}): Promise<Array<Model<Api>>> {
-  const configured = await loadProviderScopedConfiguredModels(params);
-  if (configured.length > 0) {
-    return configured;
-  }
-  return loadProviderScopedBuiltInModels(params.providerList);
+}): Promise<Array<Model>> {
+  return await loadProviderScopedConfiguredModels(params);
 }
 
-function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegistry {
+function createStaticLiveModelRegistry(models: Array<Model>): LiveModelRegistry {
   return {
     find(provider, modelId) {
       const normalizedProvider = normalizeProviderId(provider);
@@ -1977,6 +1955,65 @@ function createStaticLiveModelRegistry(models: Array<Model<Api>>): LiveModelRegi
       return models;
     },
   };
+}
+
+function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["models"]>[number] {
+  return {
+    id: model.id,
+    name: model.name,
+    api: model.api as ModelProviderConfig["api"],
+    baseUrl: model.baseUrl,
+    input: model.input ?? ["text"],
+    reasoning: model.reasoning,
+    cost: model.cost,
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    ...(model.compat ? { compat: model.compat } : {}),
+  };
+}
+
+function mergeLiveProviderConfig(params: {
+  base: ModelProviderConfig | undefined;
+  discovered: ModelProviderConfig;
+}): ModelProviderConfig {
+  const baseModels = params.base?.models ?? [];
+  const discoveredModels = params.discovered.models ?? [];
+  const mergedModels = new Map<string, NonNullable<ModelProviderConfig["models"]>[number]>();
+  for (const model of discoveredModels) {
+    if (model.id) {
+      mergedModels.set(model.id, model);
+    }
+  }
+  for (const model of baseModels) {
+    if (model.id) {
+      mergedModels.set(model.id, model);
+    }
+  }
+  return {
+    ...params.discovered,
+    ...params.base,
+    api: params.base?.api ?? params.discovered.api,
+    baseUrl: params.base?.baseUrl ?? params.discovered.baseUrl,
+    models: [...mergedModels.values()],
+  };
+}
+
+function buildLiveProviderConfigs(candidates: Array<Model>): Record<string, ModelProviderConfig> {
+  const providers: Record<string, ModelProviderConfig> = {};
+  for (const model of candidates) {
+    const existing = providers[model.provider];
+    if (existing) {
+      existing.models ??= [];
+      existing.models.push(toLiveModelConfig(model));
+      continue;
+    }
+    providers[model.provider] = {
+      api: model.api as ModelProviderConfig["api"],
+      baseUrl: model.baseUrl,
+      models: [toLiveModelConfig(model)],
+    };
+  }
+  return providers;
 }
 
 function parseExplicitLiveModelRef(
@@ -2009,11 +2046,11 @@ function resolveExplicitLiveModelCandidates(params: {
   modelFilter: Set<string> | null;
   providerFilter: Set<string> | null;
   targetMatcher: ReturnType<typeof createLiveTargetMatcher>;
-}): Array<Model<Api>> | null {
+}): Array<Model> | null {
   if (!params.modelFilter || params.modelFilter.size === 0) {
     return null;
   }
-  const candidates: Array<Model<Api>> = [];
+  const candidates: Array<Model> = [];
   const seen = new Set<string>();
   for (const raw of params.modelFilter) {
     const ref = parseExplicitLiveModelRef(raw, params.providerFilter);
@@ -2041,7 +2078,7 @@ function resolveExplicitLiveModelCandidates(params: {
 
 function resolveGatewayLiveModelThinkingLevel(params: {
   cfg: OpenClawConfig;
-  model: Model<Api>;
+  model: Model;
   requestedLevel: string;
 }): string {
   const { model, requestedLevel } = params;
@@ -2073,16 +2110,36 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   return clampThinkingLevel(model, normalized);
 }
 
+function resolveGatewayLiveThinkingLevel(params: { raw?: string; smoke: boolean }): string {
+  const raw = params.raw?.trim().toLowerCase();
+  if (!raw) {
+    return params.smoke ? "low" : "high";
+  }
+  return ["off", "minimal", "low", "medium", "high", "xhigh"].includes(raw)
+    ? raw
+    : params.smoke
+      ? "low"
+      : "high";
+}
+
 function buildLiveGatewayConfig(params: {
   cfg: OpenClawConfig;
-  candidates: Array<Model<Api>>;
+  candidates: Array<Model>;
   providerOverrides?: Record<string, ModelProviderConfig>;
 }): OpenClawConfig {
   const providerOverrides = params.providerOverrides ?? {};
   const lmstudioProvider = params.cfg.models?.providers?.lmstudio;
   const baseProviders = params.cfg.models?.providers ?? {};
+  const candidateProviders = buildLiveProviderConfigs(params.candidates);
+  const discoveredProviders = Object.fromEntries(
+    Object.entries(candidateProviders).map(([provider, discovered]) => [
+      provider,
+      mergeLiveProviderConfig({ base: baseProviders[provider], discovered }),
+    ]),
+  );
   const nextProviders = {
     ...baseProviders,
+    ...discoveredProviders,
     ...(lmstudioProvider
       ? {
           lmstudio: {
@@ -2113,7 +2170,7 @@ function buildLiveGatewayConfig(params: {
         models: Object.fromEntries(
           params.candidates.map((m) => [
             `${m.provider}/${m.id}`,
-            { agentRuntime: { id: "pi" as const } },
+            { agentRuntime: { id: "openclaw" as const } },
           ]),
         ),
       },
@@ -2205,7 +2262,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     disableBonjour: process.env.OPENCLAW_DISABLE_BONJOUR,
     logLevel: process.env.OPENCLAW_LOG_LEVEL,
     agentDir: process.env.OPENCLAW_AGENT_DIR,
-    piAgentDir: process.env.PI_CODING_AGENT_DIR,
     stateDir: process.env.OPENCLAW_STATE_DIR,
   };
   let tempAgentDir: string | undefined;
@@ -2246,7 +2302,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
   process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
-  process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -2972,7 +3027,6 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.OPENCLAW_DISABLE_BONJOUR = previous.disableBonjour;
     process.env.OPENCLAW_LOG_LEVEL = previous.logLevel;
     process.env.OPENCLAW_AGENT_DIR = previous.agentDir;
-    process.env.PI_CODING_AGENT_DIR = previous.piAgentDir;
     process.env.OPENCLAW_STATE_DIR = previous.stateDir;
   }
 }
@@ -2993,16 +3047,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         );
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
         logProgress("[all-models] preparing models.json");
-        await withGatewayLiveSetupTimeout(
+        const modelsJsonResult = await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, undefined, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
-            providerDiscoveryEntriesOnly: true,
           }),
           "[all-models] prepare models.json",
         );
+        const agentDir = modelsJsonResult.agentDir;
 
-        const agentDir = resolveDefaultAgentDir(cfg);
         const rawModels = process.env.OPENCLAW_LIVE_GATEWAY_MODELS?.trim();
         const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
         const useExplicit = Boolean(rawModels) && !useModern;
@@ -3015,7 +3068,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
         let authProfileStore: AuthProfileStore | undefined;
         let modelRegistry: LiveModelRegistry;
-        let all: Array<Model<Api>>;
+        let all: Array<Model>;
         if (providerScopedModelProviders) {
           logProgress("[all-models] loading provider-scoped model refs");
           all = await withGatewayLiveSetupTimeout(
@@ -3098,7 +3151,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           wantedCount: wanted.length,
         });
 
-        const candidates: Array<Model<Api>> = [];
+        const candidates: Array<Model> = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
           if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
@@ -3231,8 +3284,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const agentDir = resolveDefaultAgentDir(cfg);
     const authStorage = discoverAuthStorage(agentDir);
     const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model<Api> | null;
-    const zai = modelRegistry.find("zai", "glm-5.1") as Model<Api> | null;
+    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
+    const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
 
     if (!anthropic || !zai) {
       return;

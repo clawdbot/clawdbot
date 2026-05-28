@@ -4454,28 +4454,6 @@ td.data-table-key-col {
   gap: 8px;
 }
 
-.exec-approval-command-action {
-  flex: 1 1 100%;
-  display: grid;
-  gap: 6px;
-  padding: 10px 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--secondary);
-  font-size: 13px;
-}
-
-.exec-approval-command-action span {
-  font-weight: 500;
-}
-
-.exec-approval-command-action code {
-  font-family: var(--mono);
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--muted);
-}
-
 /* ===========================================
    Agents
    =========================================== */

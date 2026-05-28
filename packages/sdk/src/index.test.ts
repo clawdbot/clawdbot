@@ -174,6 +174,24 @@ describe("OpenClaw SDK", () => {
     expect(result.error).toBeUndefined();
   });
 
+  it("keeps pending-error wait deadlines non-terminal", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_pending_error",
+        error: "429 RESOURCE_EXHAUSTED",
+        pendingError: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_pending_error");
+
+    expect(result.runId).toBe("run_pending_error");
+    expect(result.status).toBe("accepted");
+    expect(result.error?.message).toBe("429 RESOURCE_EXHAUSTED");
+  });
+
   it("maps terminal runtime timeout snapshots to timed_out", async () => {
     const transport = new FakeTransport({
       "agent.wait": {

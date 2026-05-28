@@ -26,7 +26,7 @@ vi.mock("./outbound.js", () => ({
 function createRuntime(): PluginRuntime {
   return createPluginRuntimeMock({
     agent: {
-      runEmbeddedPiAgent: vi.fn().mockResolvedValue({
+      runEmbeddedAgent: vi.fn().mockResolvedValue({
         payloads: [{ text: "service bot online" }],
         meta: {},
       }),
@@ -177,7 +177,7 @@ describe("handleClickClackInbound", () => {
     });
 
     expect(runtime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
-    expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
     const completionRequest = (runtime.llm.complete as LlmCompleteMock).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");

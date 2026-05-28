@@ -12,8 +12,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "together": ["TOGETHER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "together",
+        "envVars": ["TOGETHER_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

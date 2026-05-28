@@ -27,11 +27,11 @@ describe("DeepInfra provider config", () => {
     });
 
     it("DEEPINFRA_DEFAULT_MODEL_REF includes provider prefix", () => {
-      expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V3.2");
+      expect(DEEPINFRA_DEFAULT_MODEL_REF).toBe("deepinfra/deepseek-ai/DeepSeek-V4-Flash");
     });
 
-    it("DEEPINFRA_DEFAULT_MODEL_ID is deepseek-ai/DeepSeek-V3.2", () => {
-      expect(DEEPINFRA_DEFAULT_MODEL_ID).toBe("deepseek-ai/DeepSeek-V3.2");
+    it("DEEPINFRA_DEFAULT_MODEL_ID is deepseek-ai/DeepSeek-V4-Flash", () => {
+      expect(DEEPINFRA_DEFAULT_MODEL_ID).toBe("deepseek-ai/DeepSeek-V4-Flash");
     });
   });
 

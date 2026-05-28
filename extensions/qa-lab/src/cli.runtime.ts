@@ -169,25 +169,33 @@ function normalizeQaOptionalModelRef(input: string | undefined) {
   return model && model.length > 0 ? model : undefined;
 }
 
+function normalizeQaRuntimeId(value: string): RuntimeId | undefined {
+  if (value === "openclaw" || value === "codex") {
+    return value;
+  }
+  return undefined;
+}
+
 function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] | undefined {
   if (!value?.trim()) {
     return undefined;
   }
-  const parts = value
+  const runtimes = value
     .split(",")
     .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
-  if (parts.length !== 2) {
-    throw new Error('--runtime-pair must use exactly two runtimes, e.g. "pi,codex".');
+    .filter(Boolean)
+    .map(normalizeQaRuntimeId);
+  if (runtimes.length !== 2) {
+    throw new Error('--runtime-pair must use exactly two runtimes, e.g. "openclaw,codex".');
   }
-  const [left, right] = parts;
-  if ((left !== "pi" && left !== "codex") || (right !== "pi" && right !== "codex")) {
-    throw new Error('--runtime-pair only supports "pi" and "codex".');
+  const [left, right] = runtimes;
+  if (!left || !right) {
+    throw new Error('--runtime-pair only supports "openclaw" and "codex".');
   }
   if (left === right) {
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
-  return ["pi", "codex"];
+  return ["openclaw", "codex"];
 }
 
 function parseQaRuntimeParityTierFilters(input: string[] | undefined): QaRuntimeParityTier[] {
@@ -913,9 +921,9 @@ export async function runQaJsonlReplayCommand(opts: {
   providerMode?: QaProviderModeInput;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
-  const runtimePair = parseQaRuntimePair(opts.runtimePair) ?? ["pi", "codex"];
-  if (runtimePair[0] !== "pi" || runtimePair[1] !== "codex") {
-    throw new Error('--runtime-pair for jsonl-replay must be "pi,codex".');
+  const runtimePair = parseQaRuntimePair(opts.runtimePair) ?? ["openclaw", "codex"];
+  if (runtimePair[0] !== "openclaw" || runtimePair[1] !== "codex") {
+    throw new Error('--runtime-pair for jsonl-replay must be "openclaw,codex".');
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode ?? "mock-openai");
   if (providerMode !== "mock-openai") {

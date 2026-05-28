@@ -16,24 +16,9 @@
       "class": "core-runtime",
       "risk": ["native", "terminal"]
     },
-    "@earendil-works/pi-agent-core": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "agent-runtime"]
-    },
-    "@earendil-works/pi-ai": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "provider-sdk-fanout"]
-    },
-    "@earendil-works/pi-coding-agent": {
-      "owner": "capability:agent-runtime-pi",
-      "class": "default-runtime-initially",
-      "risk": ["large-transitive-cone", "agent-runtime"]
-    },
     "@earendil-works/pi-tui": {
       "owner": "capability:tui-pi",
-      "class": "default-runtime-initially",
+      "class": "tui-runtime",
       "risk": ["tui-runtime"]
     },
     "@modelcontextprotocol/sdk": {

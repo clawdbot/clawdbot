@@ -20,6 +20,55 @@ describe("gateway tailscale bind validation", () => {
     expect(funnelRes.ok).toBe(true);
   });
 
+  it("rejects explicit no-auth when tailscale serve or funnel exposes the gateway", () => {
+    const serveRes = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        auth: { mode: "none" },
+        tailscale: { mode: "serve" },
+      },
+    });
+    expect(serveRes.ok).toBe(false);
+    if (!serveRes.ok) {
+      expect(serveRes.issues).toEqual([
+        {
+          path: "gateway.auth.mode",
+          message:
+            "gateway.auth.mode=none cannot be used with gateway.tailscale.mode=serve; configure token, password, or trusted-proxy auth before exposing the gateway through Tailscale",
+        },
+      ]);
+    }
+
+    const funnelRes = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        auth: { mode: "none" },
+        tailscale: { mode: "funnel" },
+      },
+    });
+    expect(funnelRes.ok).toBe(false);
+    if (!funnelRes.ok) {
+      expect(funnelRes.issues).toEqual([
+        {
+          path: "gateway.auth.mode",
+          message:
+            "gateway.tailscale.mode=funnel requires gateway.auth.mode=password; auth.mode=none cannot be used when exposing the gateway through Tailscale Funnel",
+        },
+      ]);
+    }
+  });
+
+  it("allows explicit no-auth for loopback-only gateway config", () => {
+    const res = validateConfigObject({
+      gateway: {
+        bind: "loopback",
+        auth: { mode: "none" },
+        tailscale: { mode: "off" },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts custom loopback bind host with tailscale serve/funnel", () => {
     const res = validateConfigObject({
       gateway: {

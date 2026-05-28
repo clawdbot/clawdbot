@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
-import { piSdkMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
   setupGatewaySessionsTestHarness,
@@ -99,7 +99,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     logGateway: { debug: vi.fn() },
-    loadGatewayModelCatalog: async () => piSdkMock.models,
+    loadGatewayModelCatalog: async () => agentDiscoveryMock.models,
     getRuntimeConfig: getRuntimeConfig,
   } as never;
   async function directSessionReq<TPayload = unknown>(
@@ -343,8 +343,8 @@ test("lists and patches session store via sessions.* RPC", async () => {
     "agent:main:subagent:one",
   );
 
-  piSdkMock.enabled = true;
-  piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+  agentDiscoveryMock.enabled = true;
+  agentDiscoveryMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
   const modelPatched = await directSessionReq<{
     ok: true;
     entry: {

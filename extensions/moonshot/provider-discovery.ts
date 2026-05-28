@@ -5,6 +5,7 @@ const moonshotProviderDiscovery: ProviderPlugin = {
   id: "moonshot",
   label: "Moonshot",
   docsPath: "/providers/moonshot",
+  aliases: ["moonshotai", "moonshot-ai"],
   auth: [],
   staticCatalog: {
     order: "simple",

@@ -26,8 +26,10 @@ let requesterDepthResolver: (sessionKey?: string) => number = () => 0;
 let subagentSessionRunActive = true;
 let shouldIgnorePostCompletion = false;
 let pendingDescendantRuns = 0;
-const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
-const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
+const isEmbeddedAgentRunActiveMock = vi.fn((_sessionId: string) => false);
+const waitForEmbeddedAgentRunEndMock = vi.fn(
+  async (_sessionId: string, _timeoutMs?: number) => true,
+);
 let fallbackRequesterResolution: {
   requesterSessionKey: string;
   requesterOrigin?: { channel?: string; to?: string; accountId?: string };
@@ -87,8 +89,8 @@ vi.mock("./subagent-announce-delivery.runtime.js", () =>
     resolveAgentIdFromSessionKey: () => "main",
     resolveMainSessionKey: () => "agent:main:main",
     resolveStorePath: () => "/tmp/sessions-main.json",
-    isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessageWithOutcome: (sessionId: string) => ({
+    isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
+    queueEmbeddedAgentMessageWithOutcome: (sessionId: string) => ({
       queued: false,
       sessionId,
       reason: "not_streaming",
@@ -196,9 +198,9 @@ vi.mock("./subagent-announce.runtime.js", () => ({
   resolveAgentIdFromSessionKey: () => "main",
   resolveStorePath: () => "/tmp/sessions-main.json",
   resolveMainSessionKey: () => "agent:main:main",
-  isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-  waitForEmbeddedPiRunEnd: (sessionId: string, timeoutMs?: number) =>
-    waitForEmbeddedPiRunEndMock(sessionId, timeoutMs),
+  isEmbeddedAgentRunActive: (sessionId: string) => isEmbeddedAgentRunActiveMock(sessionId),
+  waitForEmbeddedAgentRunEnd: (sessionId: string, timeoutMs?: number) =>
+    waitForEmbeddedAgentRunEndMock(sessionId, timeoutMs),
 }));
 vi.mock("./subagent-announce.registry.runtime.js", () => ({
   countActiveDescendantRuns: () => 0,
@@ -293,8 +295,8 @@ describe("subagent announce timeout config", () => {
     subagentSessionRunActive = true;
     shouldIgnorePostCompletion = false;
     pendingDescendantRuns = 0;
-    isEmbeddedPiRunActiveMock.mockReset().mockReturnValue(false);
-    waitForEmbeddedPiRunEndMock.mockReset().mockResolvedValue(true);
+    isEmbeddedAgentRunActiveMock.mockReset().mockReturnValue(false);
+    waitForEmbeddedAgentRunEndMock.mockReset().mockResolvedValue(true);
     fallbackRequesterResolution = null;
   });
 

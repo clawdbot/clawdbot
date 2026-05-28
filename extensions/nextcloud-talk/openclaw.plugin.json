@@ -1,5 +1,7 @@
 {
   "id": "nextcloud-talk",
+  "name": "Nextcloud Talk",
+  "description": "OpenClaw Nextcloud Talk channel plugin for conversations.",
   "activation": {
     "onStartup": false
   },

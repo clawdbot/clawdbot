@@ -20,6 +20,7 @@ type ResetSessionEntry = {
   space?: string;
   spawnedBy?: string;
   spawnedWorkspaceDir?: string;
+  spawnedCwd?: string;
   parentSessionKey?: string;
   forkedFromParent?: boolean;
   spawnDepth?: number;
@@ -432,6 +433,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
         space: "hq",
         spawnedBy: "agent:main:main",
         spawnedWorkspaceDir: "/tmp/child-workspace",
+        spawnedCwd: "/tmp/task-repo",
         parentSessionKey: "agent:main:main",
         forkedFromParent: true,
         spawnDepth: 2,
@@ -495,6 +497,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(reset.payload?.entry.space).toBe("hq");
   expect(reset.payload?.entry.spawnedBy).toBe("agent:main:main");
   expect(reset.payload?.entry.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+  expect(reset.payload?.entry.spawnedCwd).toBe("/tmp/task-repo");
   expect(reset.payload?.entry.parentSessionKey).toBe("agent:main:main");
   expect(reset.payload?.entry.forkedFromParent).toBe(true);
   expect(reset.payload?.entry.spawnDepth).toBe(2);
@@ -551,6 +554,7 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
   expect(store["agent:main:subagent:child"]?.space).toBe("hq");
   expect(store["agent:main:subagent:child"]?.spawnedBy).toBe("agent:main:main");
   expect(store["agent:main:subagent:child"]?.spawnedWorkspaceDir).toBe("/tmp/child-workspace");
+  expect(store["agent:main:subagent:child"]?.spawnedCwd).toBe("/tmp/task-repo");
   expect(store["agent:main:subagent:child"]?.parentSessionKey).toBe("agent:main:main");
   expect(store["agent:main:subagent:child"]?.forkedFromParent).toBe(true);
   expect(store["agent:main:subagent:child"]?.spawnDepth).toBe(2);

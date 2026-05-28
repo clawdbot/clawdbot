@@ -6,8 +6,13 @@
   "enabledByDefault": true,
   "name": "Inworld",
   "description": "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).",
-  "providerAuthEnvVars": {
-    "inworld": ["INWORLD_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "inworld",
+        "envVars": ["INWORLD_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "speechProviders": ["inworld"]

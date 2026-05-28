@@ -82,6 +82,22 @@ function parseMemoryCliNumberOption(value: string, flag: string): number {
   return parsed;
 }
 
+function parseMemoryCliPositiveIntegerOption(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw invalidCliArgument(`${flag} must be a non-negative integer.`);
+  }
+  return parsed;
+}
+
 export function registerMemoryCli(program: Command) {
   const memory = program
     .command("memory")
@@ -160,7 +176,7 @@ export function registerMemoryCli(program: Command) {
     .option("--query <text>", "Search query (alternative to positional argument)")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--max-results <n>", "Max results", (value: string) =>
-      parseMemoryCliNumberOption(value, "--max-results"),
+      parseMemoryCliPositiveIntegerOption(value, "--max-results"),
     )
     .option("--min-score <n>", "Minimum score", (value: string) =>
       parseMemoryCliNumberOption(value, "--min-score"),
@@ -175,7 +191,7 @@ export function registerMemoryCli(program: Command) {
     .description("Rank short-term recalls and optionally append top entries to MEMORY.md")
     .option("--agent <id>", "Agent id (default: default agent)")
     .option("--limit <n>", "Max candidates", (value: string) =>
-      parseMemoryCliNumberOption(value, "--limit"),
+      parseMemoryCliPositiveIntegerOption(value, "--limit"),
     )
     .option(
       "--min-score <n>",
@@ -185,12 +201,12 @@ export function registerMemoryCli(program: Command) {
     .option(
       "--min-recall-count <n>",
       `Minimum recall count (default: ${DEFAULT_PROMOTION_MIN_RECALL_COUNT})`,
-      (value: string) => parseMemoryCliNumberOption(value, "--min-recall-count"),
+      (value: string) => parseMemoryCliNonNegativeIntegerOption(value, "--min-recall-count"),
     )
     .option(
       "--min-unique-queries <n>",
       `Minimum distinct query count (default: ${DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES})`,
-      (value: string) => parseMemoryCliNumberOption(value, "--min-unique-queries"),
+      (value: string) => parseMemoryCliNonNegativeIntegerOption(value, "--min-unique-queries"),
     )
     .option("--apply", "Append selected candidates to MEMORY.md", false)
     .option("--include-promoted", "Include already promoted candidates", false)

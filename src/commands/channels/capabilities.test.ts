@@ -178,6 +178,32 @@ describe("channelsCapabilitiesCommand", () => {
     ]);
   });
 
+  it("rejects malformed timeouts before capability probes", async () => {
+    const probeAccount = vi.fn(async () => ({ ok: true }));
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxb-bot",
+      },
+      probe: { ok: true },
+    });
+    plugin.status = { ...plugin.status, probeAccount };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await expect(
+      channelsCapabilitiesCommand({ channel: "slack", timeout: "10s" }, runtime),
+    ).rejects.toThrow('Received: "10s"');
+    expect(probeAccount).not.toHaveBeenCalled();
+  });
+
   it("prints Teams Graph permission hints when present", async () => {
     const plugin = buildPlugin({
       id: "msteams",

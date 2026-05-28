@@ -4,8 +4,13 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providerAuthEnvVars": {
-    "runway": ["RUNWAYML_API_SECRET", "RUNWAY_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "runway",
+        "envVars": ["RUNWAYML_API_SECRET", "RUNWAY_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

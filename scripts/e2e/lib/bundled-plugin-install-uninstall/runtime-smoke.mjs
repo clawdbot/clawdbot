@@ -11,6 +11,10 @@ const OUTPUT_CAPTURE_CHARS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_OUTPUT_CHARS,
   1024 * 1024,
 );
+const LOG_SCAN_BYTES = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_LOG_SCAN_BYTES,
+  256 * 1024,
+);
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
@@ -29,6 +33,13 @@ const HTTP_PROBE_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS,
   5000,
 );
+const GATEWAY_READY_LOG_NEEDLE = Buffer.from("[gateway] ready");
+const READY_OFFSET_LOG_NEEDLES = [
+  GATEWAY_READY_LOG_NEEDLE,
+  Buffer.from("listening on ws://"),
+  Buffer.from("[gateway] http server listening"),
+];
+const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
 
 function readPositiveInt(raw, fallback) {
   const parsed = Number.parseInt(String(raw || ""), 10);
@@ -42,6 +53,132 @@ function readJson(file) {
 function writeJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function readFileChunk(file, startOffset, maxBytes) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: stat.size };
+  }
+
+  const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
+  const safeStartOffset = Math.min(Math.max(0, Math.floor(Number(startOffset) || 0)), stat.size);
+  const bytesToRead = Math.min(safeMaxBytes, stat.size - safeStartOffset);
+  if (bytesToRead <= 0) {
+    return { buffer: Buffer.alloc(0), startOffset: safeStartOffset, size: stat.size };
+  }
+
+  const buffer = Buffer.alloc(bytesToRead);
+  const fd = fs.openSync(file, "r");
+  try {
+    const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, safeStartOffset);
+    return { buffer: buffer.subarray(0, bytesRead), startOffset: safeStartOffset, size: stat.size };
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function readFileTailBuffer(file, maxBytes = LOG_SCAN_BYTES) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return { buffer: Buffer.alloc(0), startOffset: 0, size: 0 };
+  }
+  const safeMaxBytes = Math.max(1, Math.floor(Number(maxBytes) || LOG_SCAN_BYTES));
+  const startOffset = Math.max(0, stat.size - safeMaxBytes);
+  return readFileChunk(file, startOffset, safeMaxBytes);
+}
+
+export function readFileTail(file, maxBytes = LOG_SCAN_BYTES) {
+  return readFileTailBuffer(file, maxBytes).buffer.toString("utf8");
+}
+
+function findFirstNeedleOffset(file, needles) {
+  let stat;
+  try {
+    stat = fs.statSync(file);
+  } catch {
+    return 0;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return 0;
+  }
+
+  const carryBytes = Math.max(0, ...needles.map((needle) => needle.length - 1));
+  const chunk = Buffer.alloc(Math.min(LOG_SCAN_BYTES, stat.size));
+  const fd = fs.openSync(file, "r");
+  let carry = Buffer.alloc(0);
+  let offset = 0;
+  try {
+    while (offset < stat.size) {
+      const bytesToRead = Math.min(chunk.length, stat.size - offset);
+      const bytesRead = fs.readSync(fd, chunk, 0, bytesToRead, offset);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const view = chunk.subarray(0, bytesRead);
+      const combined = carry.length > 0 ? Buffer.concat([carry, view]) : view;
+      const combinedOffset = offset - carry.length;
+      const indexes = needles
+        .map((needle) => combined.indexOf(needle))
+        .filter((index) => index >= 0);
+      if (indexes.length > 0) {
+        return combinedOffset + Math.min(...indexes);
+      }
+      carry = combined.subarray(Math.max(0, combined.length - carryBytes));
+      offset += bytesRead;
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return 0;
+}
+
+export function createReadyLogScanner(file) {
+  const carryBytes = GATEWAY_READY_LOG_NEEDLE.length - 1;
+  let carry = Buffer.alloc(0);
+  let offset = 0;
+  let seen = false;
+
+  return () => {
+    if (seen) {
+      return true;
+    }
+    let stat;
+    try {
+      stat = fs.statSync(file);
+    } catch {
+      return false;
+    }
+    if (!stat.isFile() || stat.size <= 0) {
+      return false;
+    }
+    if (stat.size < offset) {
+      carry = Buffer.alloc(0);
+      offset = 0;
+    }
+    while (offset < stat.size) {
+      const { buffer } = readFileChunk(file, offset, LOG_SCAN_BYTES);
+      if (buffer.length === 0) {
+        break;
+      }
+      const combined = carry.length > 0 ? Buffer.concat([carry, buffer]) : buffer;
+      const matched = combined.includes(GATEWAY_READY_LOG_NEEDLE);
+      if (matched) {
+        seen = true;
+        return true;
+      }
+      carry = combined.subarray(Math.max(0, combined.length - carryBytes));
+      offset += buffer.length;
+    }
+    return false;
+  };
 }
 
 function manifestPath(pluginDir, pluginRoot) {
@@ -278,6 +415,7 @@ async function stopGateway(child) {
 async function waitForReady(params) {
   const started = Date.now();
   let lastError = "";
+  const readyLogSeen = createReadyLogScanner(params.logPath);
   while (Date.now() - started < READY_TIMEOUT_MS) {
     if (params.child.exitCode !== null) {
       throw new Error(`gateway exited before ready\n${tailFile(params.logPath)}`);
@@ -291,17 +429,12 @@ async function waitForReady(params) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    if (logShowsGatewayReady(params.logPath) && (await httpOk(params.port, "/healthz"))) {
+    if (readyLogSeen() && (await httpOk(params.port, "/healthz"))) {
       return;
     }
     await delay(250);
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(params.logPath)}`);
-}
-
-function logShowsGatewayReady(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  return log.includes("[gateway] ready");
 }
 
 async function fetchHttpProbeStatus(port, pathName, options = {}) {
@@ -638,7 +771,7 @@ function assertSpeechProviderVisible(payload, provider, label) {
 }
 
 async function runWatchdog(options) {
-  const readyIndex = findReadyLogIndex(options.logPath);
+  const readyOffset = findReadyLogOffset(options.logPath);
   await delay(WATCHDOG_MS);
   if (options.child.exitCode !== null) {
     throw new Error(
@@ -646,24 +779,39 @@ async function runWatchdog(options) {
     );
   }
   await retryRpcCall("health", {}, options);
-  assertNoPostReadyRuntimeDepsWork(options.logPath, readyIndex);
+  assertNoPostReadyRuntimeDepsWork(options.logPath, readyOffset);
   await assertNoPackageManagerChildren(options.child.pid);
 }
 
-function findReadyLogIndex(logPath) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const candidates = ["[gateway] ready", "listening on ws://", "[gateway] http server listening"];
-  const indexes = candidates.map((needle) => log.indexOf(needle)).filter((index) => index >= 0);
-  return indexes.length > 0 ? Math.min(...indexes) : 0;
+export function findReadyLogOffset(logPath) {
+  return findFirstNeedleOffset(logPath, READY_OFFSET_LOG_NEEDLES);
 }
 
-function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
-  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  const postReady = log.slice(Math.max(0, readyIndex));
-  const forbidden = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
-  const match = forbidden.find((pattern) => pattern.test(postReady));
-  if (match) {
-    throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(postReady)}`);
+export function assertNoPostReadyRuntimeDepsWork(logPath, readyOffset) {
+  let stat;
+  try {
+    stat = fs.statSync(logPath);
+  } catch {
+    return;
+  }
+  if (!stat.isFile() || stat.size <= 0) {
+    return;
+  }
+
+  let offset = Math.min(Math.max(0, Math.floor(Number(readyOffset) || 0)), stat.size);
+  let carry = "";
+  while (offset < stat.size) {
+    const { buffer } = readFileChunk(logPath, offset, LOG_SCAN_BYTES);
+    if (buffer.length === 0) {
+      break;
+    }
+    const text = carry + buffer.toString("utf8");
+    const match = FORBIDDEN_POST_READY_DEPS_WORK.find((pattern) => pattern.test(text));
+    if (match) {
+      throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(text)}`);
+    }
+    carry = text.slice(-256);
+    offset += buffer.length;
   }
 }
 
@@ -831,10 +979,7 @@ export function createIsolatedStateEnv(label) {
 }
 
 function tailFile(file) {
-  if (!fs.existsSync(file)) {
-    return "";
-  }
-  return tailText(fs.readFileSync(file, "utf8"));
+  return tailText(readFileTail(file));
 }
 
 function tailText(text) {

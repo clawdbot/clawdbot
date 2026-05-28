@@ -1,10 +1,6 @@
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import {
-  normalizeStringEntries,
-  normalizeUniqueStringEntries,
-} from "../shared/string-normalization.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
@@ -77,7 +73,20 @@ function isAgentsBootstrapName(name: string | undefined): boolean {
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {
-  return normalizeUniqueStringEntries(signatures);
+  if (!Array.isArray(signatures) || signatures.length === 0) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const signature of signatures) {
+    const value = normalizeOptionalString(signature) ?? "";
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
 }
 
 function appendSeenSignature(signatures: string[], signature: string): string[] {
@@ -336,7 +345,7 @@ export function appendBootstrapPromptWarning(
     preserveExactPrompt?: string;
   },
 ): string {
-  const normalizedLines = normalizeStringEntries(warningLines);
+  const normalizedLines = (warningLines ?? []).map((line) => line.trim()).filter(Boolean);
   if (normalizedLines.length === 0) {
     return prompt;
   }

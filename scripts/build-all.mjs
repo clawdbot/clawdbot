@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
@@ -82,7 +83,7 @@ export const BUILD_ALL_STEPS = [
         "scripts/lib/copy-assets.ts",
         "src/auto-reply/reply/export-html",
       ],
-      outputs: ["dist/export-html"],
+      outputs: ["dist/auto-reply/reply/export-html"],
     },
   },
   {
@@ -398,6 +399,32 @@ export function restoreBuildAllStepCacheOutputs(cacheState, params = {}) {
   return true;
 }
 
+export function formatBuildAllDuration(durationMs) {
+  const clampedMs = Math.max(0, durationMs);
+  if (clampedMs < 1000) {
+    return `${Math.round(clampedMs)}ms`;
+  }
+  if (clampedMs < 10000) {
+    return `${(clampedMs / 1000).toFixed(2)}s`;
+  }
+  return `${(clampedMs / 1000).toFixed(1)}s`;
+}
+
+export function formatBuildAllTimingSummary(timings) {
+  if (timings.length === 0) {
+    return "[build-all] phase timings: no phases ran";
+  }
+  const totalMs = timings.reduce((sum, timing) => sum + timing.durationMs, 0);
+  const phases = timings
+    .toSorted((left, right) => right.durationMs - left.durationMs)
+    .map((timing) => {
+      const status = timing.status === "ran" ? "" : ` (${timing.status})`;
+      return `${timing.label}${status} ${formatBuildAllDuration(timing.durationMs)}`;
+    })
+    .join("; ");
+  return `[build-all] phase timings: total ${formatBuildAllDuration(totalMs)}; slowest ${phases}`;
+}
+
 function isMainModule() {
   const argv1 = process.argv[1];
   if (!argv1) {
@@ -408,23 +435,43 @@ function isMainModule() {
 
 if (isMainModule()) {
   const profile = process.argv[2] ?? "full";
+  const timings = [];
+  let exitCode = 0;
   for (const step of resolveBuildAllSteps(profile)) {
+    const startedAt = performance.now();
     const cacheState = resolveBuildAllStepCacheState(step);
     if (process.env.OPENCLAW_BUILD_CACHE !== "0" && cacheState.fresh) {
       restoreBuildAllStepCacheOutputs(cacheState);
-      console.error(`[build-all] ${step.label} (cached)`);
+      const durationMs = performance.now() - startedAt;
+      timings.push({ label: step.label, status: "cached", durationMs });
+      console.error(`[build-all] ${step.label} (cached) ${formatBuildAllDuration(durationMs)}`);
       continue;
     }
     console.error(`[build-all] ${step.label}`);
     const invocation = resolveBuildAllStep(step);
     const result = spawnSync(invocation.command, invocation.args, invocation.options);
+    const durationMs = performance.now() - startedAt;
     if (typeof result.status === "number") {
       if (result.status !== 0) {
-        process.exit(result.status);
+        timings.push({ label: step.label, status: "failed", durationMs });
+        console.error(
+          `[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`,
+        );
+        exitCode = result.status;
+        break;
       }
       writeBuildAllStepCacheStamp(step, resolveBuildAllStepCacheState(step));
+      timings.push({ label: step.label, status: "ran", durationMs });
+      console.error(`[build-all] ${step.label} done in ${formatBuildAllDuration(durationMs)}`);
       continue;
     }
-    process.exit(1);
+    timings.push({ label: step.label, status: "failed", durationMs });
+    console.error(`[build-all] ${step.label} failed after ${formatBuildAllDuration(durationMs)}`);
+    exitCode = 1;
+    break;
+  }
+  console.error(formatBuildAllTimingSummary(timings));
+  if (exitCode !== 0) {
+    process.exit(exitCode);
   }
 }

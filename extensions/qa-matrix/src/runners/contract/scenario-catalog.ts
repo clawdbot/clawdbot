@@ -1,3 +1,4 @@
+import { type QaProviderModeInput } from "../../run-config.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
   selectLiveTransportScenarios,
@@ -113,6 +114,7 @@ export type MatrixQaE2eeScenarioId = Extract<MatrixQaScenarioId, `matrix-e2ee-${
 
 export type MatrixQaScenarioDefinition = LiveTransportScenarioDefinition<MatrixQaScenarioId> & {
   configOverrides?: MatrixQaConfigOverrides;
+  providerMode?: QaProviderModeInput;
   topology?: MatrixQaTopologySpec;
 };
 
@@ -454,6 +456,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     timeoutMs: 75_000,
     title: "Matrix block streaming preserves completed quiet preview blocks",
     topology: MATRIX_QA_BLOCK_ROOM_TOPOLOGY,
+    providerMode: "mock-openai",
     configOverrides: {
       agentDefaults: {
         blockStreamingChunk: {
@@ -1227,6 +1230,7 @@ const MATRIX_QA_MEDIA_PROFILE_SCENARIO_IDS = [
 ] satisfies MatrixQaScenarioId[];
 
 const MATRIX_QA_EXPLICIT_ONLY_SCENARIO_IDS = new Set<MatrixQaScenarioId>([
+  "matrix-room-block-streaming",
   "matrix-subagent-thread-spawn",
 ]);
 

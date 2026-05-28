@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/diagnostics-otel",
-  "version": "2026.5.26",
+  "version": "2026.5.28",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/diagnostics-otel",
-      "version": "2026.5.26",
+      "version": "2026.5.28",
       "dependencies": {
         "@opentelemetry/api": "1.9.1",
         "@opentelemetry/api-logs": "0.218.0",

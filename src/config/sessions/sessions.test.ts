@@ -17,7 +17,12 @@ import {
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
-import { clearSessionStoreCacheForTest, loadSessionStore, updateSessionStore } from "./store.js";
+import {
+  clearSessionStoreCacheForTest,
+  loadSessionStore,
+  updateSessionStore,
+  updateSessionStoreEntry,
+} from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
 
@@ -349,6 +354,7 @@ describe("session store writer queue", () => {
   it("drops non-object persisted session entries on load", async () => {
     const { storePath } = await makeTmpStore({
       "agent:main:good": { sessionId: "s-good", updatedAt: Date.now() },
+      "agent:main:null": null,
       "agent:main:string": "not-a-session-entry",
       "agent:main:array": [{ sessionId: "s-array", updatedAt: Date.now() }],
     } as unknown as Record<string, SessionEntry>);
@@ -356,6 +362,7 @@ describe("session store writer queue", () => {
     const store = loadSessionStore(storePath, { skipCache: true });
 
     expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:null"]).toBeUndefined();
     expect(store["agent:main:string"]).toBeUndefined();
     expect(store["agent:main:array"]).toBeUndefined();
   });
@@ -530,6 +537,120 @@ describe("session store writer queue", () => {
     writeSpy.mockRestore();
   });
 
+  it("skips unchanged writes after persisting blobbed skills prompts", async () => {
+    const key = "agent:main:no-op-blobbed-save";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "s-noop-blobbed",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: `<available_skills>\n${"shared prompt\n".repeat(200)}</available_skills>`,
+          skills: [{ name: "demo" }],
+          version: 1,
+        },
+      },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        store[key].displayName = "saved once";
+      },
+      { skipMaintenance: true },
+    );
+    writeSpy.mockClear();
+
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // Intentionally no-op mutation after the disk JSON has prompt refs.
+      },
+      { skipMaintenance: true },
+    );
+
+    const storeWrites = writeSpy.mock.calls.filter(([targetPath]) => targetPath === storePath);
+    expect(storeWrites).toHaveLength(0);
+    writeSpy.mockClear();
+
+    await updateSessionStore(
+      storePath,
+      async () => {
+        // The first unchanged save must not clear the serialized comparison cache.
+      },
+      { skipMaintenance: true },
+    );
+
+    const secondStoreWrites = writeSpy.mock.calls.filter(
+      ([targetPath]) => targetPath === storePath,
+    );
+    expect(secondStoreWrites).toHaveLength(0);
+    writeSpy.mockRestore();
+  });
+
+  it("keeps unchanged entry saves from clearing blobbed store comparison cache", async () => {
+    const now = Date.now();
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const key = "agent:main:no-op-blobbed-entry-save";
+    let writeSpy:
+      | {
+          mock: { calls: WriteTextAtomicCall[] };
+          mockClear: () => void;
+          mockRestore: () => void;
+        }
+      | undefined;
+    try {
+      const { storePath } = await makeTmpStore({
+        [key]: {
+          sessionId: "s-noop-blobbed-entry",
+          updatedAt: now,
+          displayName: "entry",
+          skillsSnapshot: {
+            prompt: `<available_skills>\n${"entry prompt\n".repeat(200)}</available_skills>`,
+            skills: [{ name: "demo" }],
+            version: 1,
+          },
+        },
+      });
+
+      writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+      await updateSessionStore(
+        storePath,
+        async (store) => {
+          store[key].displayName = "saved once";
+        },
+        { skipMaintenance: true },
+      );
+      writeSpy.mockClear();
+
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey: key,
+        update: async (entry) => ({ displayName: entry.displayName, updatedAt: entry.updatedAt }),
+        skipMaintenance: true,
+      });
+      expect(
+        writeSpy.mock.calls.filter((call: WriteTextAtomicCall) => call[0] === storePath),
+      ).toHaveLength(0);
+      writeSpy.mockClear();
+
+      await updateSessionStore(
+        storePath,
+        async () => {
+          // The unchanged entry save must leave the serialized comparison cache hot.
+        },
+        { skipMaintenance: true },
+      );
+      expect(
+        writeSpy.mock.calls.filter((call: WriteTextAtomicCall) => call[0] === storePath),
+      ).toHaveLength(0);
+    } finally {
+      writeSpy?.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("caches unchanged session stores from persisted JSON shape", async () => {
     const key = "agent:main:no-op-cache";
     const { storePath } = await makeTmpStore({
@@ -568,6 +689,7 @@ describe("session store writer queue", () => {
       mtimeMs: 1,
       sizeBytes: serialized.length,
       serialized,
+      cloneSerialized: serialized,
       takeOwnership: true,
     });
     store[key].sessionId = "mutated-cache-object";
@@ -603,6 +725,7 @@ describe("session store writer queue", () => {
     expect(writtenText).toBeTypeOf("string");
     expect(writeOptions?.durable).toBe(false);
     expect(writeOptions?.mode).toBe(0o600);
+    expect(writeOptions?.beforeRename).toBeTypeOf("function");
     writeSpy.mockRestore();
   });
 

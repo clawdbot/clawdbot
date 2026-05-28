@@ -57,15 +57,11 @@ type PreparedMatrixTarget = {
   threadId?: string;
 };
 type MatrixApprovalMetadataAction = {
-  kind: PendingApprovalView["actions"][number]["kind"];
-  decision?: ExecApprovalReplyDecision;
+  decision: ExecApprovalReplyDecision;
   label: string;
   style: PendingApprovalView["actions"][number]["style"];
   command: string;
 };
-type MutablePluginApprovalActions = Array<
-  NonNullable<PluginApprovalRequest["request"]["actions"]>[number]
->;
 type MatrixApprovalMetadataBase = {
   version: 1;
   type: "approval.request";
@@ -260,8 +256,7 @@ function buildMatrixApprovalMetadata(params: {
     metadata: params.view.metadata,
     allowedDecisions: Array.from(params.allowedDecisions),
     actions: params.view.actions.map((action) => ({
-      kind: action.kind,
-      ...(action.kind === "decision" ? { decision: action.decision } : {}),
+      decision: action.decision,
       label: action.label,
       style: action.style,
       command: action.command,
@@ -295,52 +290,11 @@ function buildMatrixApprovalMetadata(params: {
   };
 }
 
-function listDecisionActions(view: PendingApprovalView): ExecApprovalReplyDecision[] {
-  return view.actions.flatMap((action) => (action.kind === "decision" ? [action.decision] : []));
-}
-
-function listPluginApprovalActionDescriptors(
-  view: PendingApprovalView,
-): NonNullable<PluginApprovalRequest["request"]["actions"]> | undefined {
-  if (view.approvalKind !== "plugin") {
-    return undefined;
-  }
-
-  const actions: MutablePluginApprovalActions = [];
-  for (const action of view.actions) {
-    if (
-      (action.kind !== "command" && action.kind !== "decision") ||
-      !action.command.trim() ||
-      !action.label.trim()
-    ) {
-      continue;
-    }
-    if (action.kind === "command") {
-      actions.push({
-        kind: "command",
-        label: action.label,
-        style: action.style,
-        command: action.command,
-      });
-      continue;
-    }
-    actions.push({
-      kind: "decision",
-      label: action.label,
-      style: action.style,
-      command: action.command,
-      decision: action.decision,
-    });
-  }
-  return actions.length > 0 ? actions : undefined;
-}
-
 function buildPendingApprovalContent(params: {
   view: PendingApprovalView;
   nowMs: number;
 }): PendingApprovalContent {
-  const allowedDecisions = listDecisionActions(params.view);
-  const pluginActions = listPluginApprovalActionDescriptors(params.view);
+  const allowedDecisions = params.view.actions.map((action) => action.decision);
   const payload =
     params.view.approvalKind === "plugin"
       ? buildPluginApprovalPendingReplyPayload({
@@ -353,7 +307,6 @@ function buildPendingApprovalContent(params: {
               toolName: params.view.toolName ?? undefined,
               pluginId: params.view.pluginId ?? undefined,
               agentId: params.view.agentId ?? undefined,
-              actions: pluginActions,
             },
             createdAtMs: 0,
             expiresAtMs: params.view.expiresAtMs,

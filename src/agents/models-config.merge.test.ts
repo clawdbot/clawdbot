@@ -180,6 +180,37 @@ describe("models-config merge helpers", () => {
     expect(merged["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
   });
 
+  it("drops stale invalid existing providers that would poison models.json", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        openai: createConfigProvider(),
+      },
+      existingProviders: {
+        "claude-cli": {
+          api: "anthropic-messages",
+          models: [
+            createModel({
+              id: "claude-sonnet-4-6",
+              name: "Claude Sonnet",
+              reasoning: true,
+            }),
+          ],
+        } as unknown as ExistingProviderConfig,
+        "auth-only": {
+          baseUrl: "https://auth.example/v1",
+          api: "openai-responses",
+          apiKey: preservedApiKey,
+          models: [],
+        } as ExistingProviderConfig,
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["claude-cli"]).toBeUndefined();
+    expect(merged["auth-only"]?.apiKey).toBe(preservedApiKey);
+    expect(merged.openai).toBeDefined();
+  });
+
   it("preserves non-empty existing apiKey and baseUrl from models.json", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {

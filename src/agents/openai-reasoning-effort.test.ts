@@ -25,7 +25,7 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "medium" })).toBe("medium");
   });
 
-  it("does not downgrade xhigh when Pi compat metadata declares it explicitly", () => {
+  it("does not downgrade xhigh when model compat metadata declares it explicitly", () => {
     const model = {
       provider: "openai-codex",
       id: "gpt-5.5",

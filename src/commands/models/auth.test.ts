@@ -10,7 +10,6 @@ type AuthRunCall = {
 
 type ResolvePluginProvidersCall = {
   activate?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
@@ -55,6 +54,7 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   openUrl: vi.fn(),
   isRemoteEnvironment: vi.fn(() => false),
+  validateAnthropicSetupToken: vi.fn<() => string | undefined>(() => undefined),
   loadAuthProfileStoreForRuntime: vi.fn(),
   listProfilesForProvider: vi.fn(),
   promoteAuthProfileInOrder: vi.fn(),
@@ -170,7 +170,7 @@ vi.mock("../../plugins/provider-oauth-flow.js", () => ({
 }));
 
 vi.mock("../auth-token.js", () => ({
-  validateAnthropicSetupToken: vi.fn(() => undefined),
+  validateAnthropicSetupToken: mocks.validateAnthropicSetupToken,
 }));
 
 vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) => {
@@ -356,6 +356,8 @@ describe("modelsAuthLoginCommand", () => {
     mocks.clackPassword.mockReset();
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
+    mocks.validateAnthropicSetupToken.mockReset();
+    mocks.validateAnthropicSetupToken.mockReturnValue(undefined);
     mocks.upsertAuthProfileWithLock.mockReset();
     mocks.upsertAuthProfileWithLock.mockResolvedValue({ version: 1, profiles: {} });
     mocks.promoteAuthProfileInOrder.mockReset();
@@ -820,7 +822,6 @@ describe("modelsAuthLoginCommand", () => {
     ) as ResolvePluginProvidersCall;
     expect(providerResolutionCall.config).toEqual({});
     expect(providerResolutionCall.workspaceDir).toBe("/tmp/openclaw/workspace");
-    expect(providerResolutionCall.bundledProviderAllowlistCompat).toBe(true);
     expect(providerResolutionCall.bundledProviderVitestCompat).toBe(true);
     expect(providerResolutionCall.includeUntrustedWorkspacePlugins).toBe(false);
     expect(providerResolutionCall.providerRefs).toEqual(["anthropic"]);

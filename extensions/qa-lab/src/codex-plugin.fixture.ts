@@ -118,7 +118,7 @@ function formatPinnedNewRemediation(pluginVersion: string, hostVersion: string) 
   return `Codex plugin version ${pluginVersion} requires a newer OpenClaw host than ${hostVersion}. Upgrade OpenClaw or install a codex plugin version pinned to ${hostVersion}.`;
 }
 
-function collectStalePiRuntimePins(config: unknown): string[] {
+function collectStaleLegacyRuntimePins(config: unknown): string[] {
   if (!config || typeof config !== "object") {
     return [];
   }
@@ -128,11 +128,17 @@ function collectStalePiRuntimePins(config: unknown): string[] {
       list?: Record<string, { agentRuntime?: { id?: unknown } }>;
     };
   };
-  const hasDefaultsPin = root.agents?.defaults?.agentRuntime?.id === "pi";
-  const hasAgentPin = Object.values(root.agents?.list ?? {}).some(
-    (entry) => entry.agentRuntime?.id === "pi",
-  );
-  return hasDefaultsPin || hasAgentPin ? ["agentRuntime.id=pi"] : [];
+  const markers = new Set<string>();
+  const collectRuntimePin = (value: unknown) => {
+    if (value === "openclaw") {
+      markers.add(`agentRuntime.id=${value}`);
+    }
+  };
+  collectRuntimePin(root.agents?.defaults?.agentRuntime?.id);
+  for (const entry of Object.values(root.agents?.list ?? {})) {
+    collectRuntimePin(entry.agentRuntime?.id);
+  }
+  return [...markers].toSorted();
 }
 
 export async function seedCodexPluginAt(
@@ -189,7 +195,7 @@ export function evaluateCodexPluginLifecycle(params: {
   const selectedAuthProfileId =
     authSelection.status === "ready" ? authSelection.profileId : undefined;
   const tokenRoute = authSelection.status === "ready" ? "codex-oauth" : "unavailable";
-  const removedRuntimePins = params.doctorFix ? collectStalePiRuntimePins(params.config) : [];
+  const removedRuntimePins = params.doctorFix ? collectStaleLegacyRuntimePins(params.config) : [];
 
   if (!params.plugin.installed) {
     return {

@@ -15,6 +15,7 @@ import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
+import { parsePort } from "../shared/parse-port.js";
 
 function resolveInstallDaemonFlag(
   command: unknown,
@@ -191,8 +192,7 @@ export function registerOnboardCommand(program: Command): void {
       const installDaemon = resolveInstallDaemonFlag(commandRuntime, {
         installDaemon: Boolean(opts.installDaemon),
       });
-      const gatewayPort =
-        typeof opts.gatewayPort === "string" ? Number.parseInt(opts.gatewayPort, 10) : undefined;
+      const gatewayPort = parsePort(opts.gatewayPort);
       const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
         opts as Record<string, unknown>,
       );
@@ -224,10 +224,7 @@ export function registerOnboardCommand(program: Command): void {
               : opts.customImageInput === true
                 ? true
                 : undefined,
-          gatewayPort:
-            typeof gatewayPort === "number" && Number.isFinite(gatewayPort)
-              ? gatewayPort
-              : undefined,
+          gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,
           gatewayToken: opts.gatewayToken as string | undefined,

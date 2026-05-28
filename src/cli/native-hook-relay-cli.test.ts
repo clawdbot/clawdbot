@@ -79,6 +79,64 @@ describe("native hook relay CLI", () => {
     expect(stderr.text()).toBe("err");
   });
 
+  it("rejects malformed timeouts before reading relay input", async () => {
+    const invokeBridge = vi.fn();
+    const callGateway = vi.fn();
+    const stdout = createWritableTextBuffer();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        timeout: "5000ms",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stdout,
+        stderr,
+        invokeBridge: invokeBridge as never,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stdout.text()).toBe("");
+    expect(stderr.text()).toContain("invalid native hook timeout");
+    expect(stderr.text()).toContain('Received: "5000ms"');
+    expect(invokeBridge).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional timeouts before gateway fallback", async () => {
+    const invokeBridge = vi.fn();
+    const callGateway = vi.fn();
+    const stderr = createWritableTextBuffer();
+
+    const exitCode = await runNativeHookRelayCli(
+      {
+        provider: "codex",
+        relayId: "relay-1",
+        generation: "generation-1",
+        event: "pre_tool_use",
+        timeout: "1.5",
+      },
+      {
+        stdin: createReadableTextStream("{}"),
+        stderr,
+        invokeBridge: invokeBridge as never,
+        callGateway: callGateway as never,
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(stderr.text()).toContain('Received: "1.5"');
+    expect(invokeBridge).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
   it("renders unavailable output for legacy relay commands without a generation", async () => {
     const invokeBridge = vi.fn(async () => {
       throw new Error("generation must be non-empty string");

@@ -280,6 +280,17 @@ describe("live tool probe utils", () => {
         expected: true,
       },
       {
+        name: "retries alternate exec readback retry wording",
+        params: {
+          text: "Let me try again with a slightly different approach:",
+          nonce: "nonce-c",
+          provider: "minimax-portal",
+          attempt: 0,
+          maxAttempts: 3,
+        },
+        expected: true,
+      },
+      {
         name: "retries eventual-consistency exec readback output",
         params: {
           text: "The file creation command succeeded, but the file wasn't found immediately after. Let me verify the file exists and read it again.",

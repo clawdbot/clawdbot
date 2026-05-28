@@ -3,11 +3,11 @@ import * as inspector from "node:inspector";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
+import { resolveModelAsync } from "../../src/agents/embedded-agent-runner/model.js";
 import {
   ensureOpenClawModelsJson,
   resetModelsJsonReadyCacheForTest,
 } from "../../src/agents/models-config.js";
-import { resolveModelAsync } from "../../src/agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 
 type Options = {

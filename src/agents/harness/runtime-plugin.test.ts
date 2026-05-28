@@ -16,6 +16,7 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveActivatableProviderOwnerPluginIds: mocks.resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds: mocks.resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider: mocks.resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: mocks.resolveOwningPluginIdsForProvider,
 }));
 
 describe("ensureSelectedAgentHarnessPlugin", () => {
@@ -199,46 +200,6 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
-  it("honors bundled discovery compat when a legacy allowlist omits the Codex harness", async () => {
-    await ensureSelectedAgentHarnessPlugin({
-      provider: "openai-codex",
-      modelId: "gpt-5.5-pro",
-      config: {
-        plugins: {
-          allow: ["telegram"],
-          bundledDiscovery: "compat",
-          entries: {
-            telegram: { enabled: true },
-          },
-        },
-      } as OpenClawConfig,
-      workspaceDir: "/tmp/workspace",
-    });
-
-    expect(mocks.resolveOwningPluginIdsForProvider).toHaveBeenCalledWith({
-      provider: "openai-codex",
-      config: expect.any(Object),
-      workspaceDir: "/tmp/workspace",
-    });
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "all",
-        workspaceDir: "/tmp/workspace",
-        onlyPluginIds: ["codex", "openai"],
-        config: expect.objectContaining({
-          plugins: expect.objectContaining({
-            allow: ["telegram", "codex", "openai"],
-            entries: expect.objectContaining({
-              codex: expect.objectContaining({ enabled: true }),
-              openai: expect.objectContaining({ enabled: true }),
-              telegram: expect.objectContaining({ enabled: true }),
-            }),
-          }),
-        }),
-      }),
-    );
-  });
-
   it("keeps a Codex scoped load narrow when the provider has no owner plugin", async () => {
     mocks.resolveOwningPluginIdsForProvider.mockReturnValueOnce(undefined);
 
@@ -260,7 +221,7 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
-  it("keeps custom OpenAI-compatible providers on Pi when no runtime override is set", async () => {
+  it("keeps custom OpenAI-compatible providers on embedded OpenClaw when no runtime override is set", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai",
       modelId: "gpt-5.5",

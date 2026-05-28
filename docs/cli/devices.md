@@ -71,6 +71,11 @@ matching client IPs can be approved before they appear in this list. That policy
 is disabled by default and never applies to operator/browser clients or upgrade
 requests.
 
+Approving node or other non-operator device roles requires `operator.admin`.
+`operator.pairing` is enough for operator-device approvals only when the
+requested operator scopes stay within the caller's own scopes. See
+[Operator scopes](/gateway/operator-scopes) for the approval-time checks.
+
 ```
 openclaw devices approve
 openclaw devices approve <requestId>
@@ -169,7 +174,8 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 - Token rotation returns a new token (sensitive). Treat it like a secret.
 - These commands require `operator.pairing` (or `operator.admin`) scope. Some
   approvals also require the caller to hold the operator scopes that the target
-  device would mint or inherit; see [Operator scopes](/gateway/operator-scopes).
+  device would mint or inherit. Non-operator device roles require
+  `operator.admin`; see [Operator scopes](/gateway/operator-scopes).
 - `gateway.nodes.pairing.autoApproveCidrs` is an opt-in Gateway policy for
   fresh node device pairing only; it does not change CLI approval authority.
 - Token rotation and revocation stay inside the approved pairing role set and

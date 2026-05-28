@@ -3,7 +3,7 @@ import { analyzeBootstrapBudget } from "../../agents/bootstrap-budget.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
-} from "../../agents/pi-embedded-helpers/bootstrap.js";
+} from "../../agents/embedded-agent-helpers/bootstrap.js";
 import { buildSystemPromptReport } from "../../agents/system-prompt-report.js";
 import {
   resolveFreshSessionTotalTokens,

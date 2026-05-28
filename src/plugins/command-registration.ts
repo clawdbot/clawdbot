@@ -5,6 +5,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
+import { normalizeAgentPromptSurfaceKind } from "./agent-prompt-surface-kind.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -263,8 +264,8 @@ function normalizeAgentPromptGuidance(
       text: entry.text.trim(),
     };
     if (entry.surfaces) {
-      normalized.surfaces = entry.surfaces.map(
-        (surface) => surface.trim() as AgentPromptSurfaceKind,
+      normalized.surfaces = entry.surfaces.map((surface) =>
+        normalizeAgentPromptSurfaceKind(surface.trim() as AgentPromptSurfaceKind),
       );
     }
     return normalized;

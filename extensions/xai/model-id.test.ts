@@ -11,7 +11,7 @@ describe("normalizeXaiModelId", () => {
     );
   });
 
-  it("maps older fast and 4.20 ids to the current canonical ids", () => {
+  it("maps older fast and 4.20 ids to the current OpenClaw-backed ids", () => {
     expect(normalizeXaiModelId("grok-code-fast-1")).toBe("grok-build-0.1");
     expect(normalizeXaiModelId("grok-code-fast")).toBe("grok-build-0.1");
     expect(normalizeXaiModelId("grok-code-fast-1-0825")).toBe("grok-build-0.1");

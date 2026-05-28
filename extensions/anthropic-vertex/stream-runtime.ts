@@ -1,17 +1,24 @@
 import { AnthropicVertex as AnthropicVertexSdk } from "@anthropic-ai/vertex-sdk";
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  streamAnthropic as streamAnthropicDefault,
-  type AnthropicOptions,
+  stream as streamDefault,
   type Model,
-} from "@earendil-works/pi-ai";
+  type ProviderStreamOptions,
+} from "openclaw/plugin-sdk/llm";
 import {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { resolveAnthropicVertexClientRegion, resolveAnthropicVertexProjectId } from "./region.js";
 
-type AnthropicVertexEffort = NonNullable<AnthropicOptions["effort"]>;
+type AnthropicVertexTransportOptions = ProviderStreamOptions & {
+  client?: unknown;
+  thinkingEnabled?: boolean;
+  thinkingBudgetTokens?: number;
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+};
+
+type AnthropicVertexEffort = NonNullable<AnthropicVertexTransportOptions["effort"]>;
 type AnthropicVertexAdaptiveEffort = AnthropicVertexEffort | "xhigh";
 type AnthropicVertexClientOptions = {
   baseURL?: string;
@@ -21,12 +28,12 @@ type AnthropicVertexClientOptions = {
 
 export type AnthropicVertexStreamDeps = {
   AnthropicVertex: new (options: AnthropicVertexClientOptions) => unknown;
-  streamAnthropic: typeof streamAnthropicDefault;
+  streamAnthropic: typeof streamDefault;
 };
 
 const defaultAnthropicVertexStreamDeps: AnthropicVertexStreamDeps = {
   AnthropicVertex: AnthropicVertexSdk as AnthropicVertexStreamDeps["AnthropicVertex"],
-  streamAnthropic: streamAnthropicDefault,
+  streamAnthropic: streamDefault,
 };
 
 function isClaudeOpus47Model(modelId: string): boolean {
@@ -85,9 +92,9 @@ function resolveAnthropicVertexMaxTokens(params: {
 
 function createAnthropicVertexOnPayload(params: {
   model: { api: string; baseUrl?: string; provider: string };
-  cacheRetention: AnthropicOptions["cacheRetention"] | undefined;
-  onPayload: AnthropicOptions["onPayload"] | undefined;
-}): NonNullable<AnthropicOptions["onPayload"]> {
+  cacheRetention: ProviderStreamOptions["cacheRetention"] | undefined;
+  onPayload: ProviderStreamOptions["onPayload"] | undefined;
+}): NonNullable<ProviderStreamOptions["onPayload"]> {
   const policy = resolveAnthropicPayloadPolicy({
     provider: params.model.provider,
     api: params.model.api,
@@ -114,10 +121,10 @@ function createAnthropicVertexOnPayload(params: {
 }
 
 /**
- * Create a StreamFn that routes through pi-ai's `streamAnthropic` with an
+ * Create a StreamFn that routes through OpenClaw's generic model stream with an
  * injected `AnthropicVertex` client.  All streaming, message conversion, and
- * event handling is handled by pi-ai — we only supply the GCP-authenticated
- * client and map SimpleStreamOptions → AnthropicOptions.
+ * event handling is handled by the shared model runtime - we only supply the GCP-authenticated
+ * client and provider transport options.
  */
 export function createAnthropicVertexStreamFn(
   projectId: string | undefined,
@@ -141,8 +148,8 @@ export function createAnthropicVertexStreamFn(
       modelMaxTokens: transportModel.maxTokens,
       requestedMaxTokens: options?.maxTokens,
     });
-    const opts: AnthropicOptions = {
-      client: client as AnthropicOptions["client"],
+    const opts: AnthropicVertexTransportOptions = {
+      client,
       temperature: options?.temperature,
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,

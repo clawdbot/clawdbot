@@ -13,7 +13,7 @@ export type GatewayAgentModel = {
 
 export type GatewayAgentRuntime = {
   id: string;
-  fallback?: "pi" | "none";
+  fallback?: "openclaw" | "none";
   source: "env" | "agent" | "defaults" | "model" | "provider" | "implicit" | "session-key";
 };
 

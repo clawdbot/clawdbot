@@ -2,7 +2,7 @@
 summary: "How OpenClaw separates model providers, models, channels, and agent runtimes"
 title: "Agent runtimes"
 read_when:
-  - You are choosing between PI, Codex, ACP, or another native agent runtime
+  - You are choosing between OpenClaw, Codex, ACP, or another native agent runtime
   - You are confused by provider/model/runtime labels in status or config
   - You are documenting support parity for a native harness
 ---
@@ -18,7 +18,7 @@ configuration. They are different layers:
 | ------------- | ------------------------------------- | ------------------------------------------------------------------- |
 | Provider      | `openai`, `anthropic`, `openai-codex` | How OpenClaw authenticates, discovers models, and names model refs. |
 | Model         | `gpt-5.5`, `claude-opus-4-6`          | The model selected for the agent turn.                              |
-| Agent runtime | `pi`, `codex`, `claude-cli`           | The low level loop or backend that executes the prepared turn.      |
+| Agent runtime | `openclaw`, `codex`, `claude-cli`     | The low level loop or backend that executes the prepared turn.      |
 | Channel       | Telegram, Discord, Slack, WhatsApp    | Where messages enter and leave OpenClaw.                            |
 
 You will also see the word **harness** in code. A harness is the implementation
@@ -32,7 +32,7 @@ runtime policy where needed.
 There are two runtime families:
 
 - **Embedded harnesses** run inside OpenClaw's prepared agent loop. Today this
-  is the built-in `pi` runtime plus registered plugin harnesses such as
+  is the built-in `openclaw` runtime plus registered plugin harnesses such as
   `codex`.
 - **CLI backends** run a local CLI process while keeping the model ref
   canonical. For example, `anthropic/claude-opus-4-7` with
@@ -89,10 +89,10 @@ This is the agent-facing decision tree:
    native `/codex` command surface when the bundled `codex` plugin is enabled.
 2. If the user asks for **Codex as the embedded runtime** or wants the normal
    subscription-backed Codex agent experience, use `openai/<model>`.
-3. If the user explicitly chooses **PI for an OpenAI model**, keep the model ref
+3. If the user explicitly chooses **OpenClaw for an OpenAI model**, keep the model ref
    as `openai/<model>` and set provider/model runtime policy to
-   `agentRuntime.id: "pi"`. A selected `openai-codex` auth profile is routed
-   internally through PI's legacy Codex-auth transport.
+   `agentRuntime.id: "openclaw"`. A selected `openai-codex` auth profile is routed
+   internally through OpenClaw's Codex-auth transport.
 4. If legacy config still contains **`openai-codex/*` model refs**, repair it to
    `openai/<model>` with `openclaw doctor --fix`; doctor keeps the Codex auth
    route by adding provider/model-scoped `agentRuntime.id: "codex"` where the
@@ -119,15 +119,15 @@ contract, see [Codex harness runtime](/plugins/codex-harness-runtime#v1-support-
 
 Different runtimes own different amounts of the loop.
 
-| Surface                     | OpenClaw PI embedded                    | Codex app-server                                                            |
-| --------------------------- | --------------------------------------- | --------------------------------------------------------------------------- |
-| Model loop owner            | OpenClaw through the PI embedded runner | Codex app-server                                                            |
-| Canonical thread state      | OpenClaw transcript                     | Codex thread, plus OpenClaw transcript mirror                               |
-| OpenClaw dynamic tools      | Native OpenClaw tool loop               | Bridged through the Codex adapter                                           |
-| Native shell and file tools | PI/OpenClaw path                        | Codex-native tools, bridged through native hooks where supported            |
-| Context engine              | Native OpenClaw context assembly        | OpenClaw projects assembled context into the Codex turn                     |
-| Compaction                  | OpenClaw or selected context engine     | Codex-native compaction, with OpenClaw notifications and mirror maintenance |
-| Channel delivery            | OpenClaw                                | OpenClaw                                                                    |
+| Surface                     | OpenClaw embedded                             | Codex app-server                                                            |
+| --------------------------- | --------------------------------------------- | --------------------------------------------------------------------------- |
+| Model loop owner            | OpenClaw through the OpenClaw embedded runner | Codex app-server                                                            |
+| Canonical thread state      | OpenClaw transcript                           | Codex thread, plus OpenClaw transcript mirror                               |
+| OpenClaw dynamic tools      | Native OpenClaw tool loop                     | Bridged through the Codex adapter                                           |
+| Native shell and file tools | OpenClaw path                                 | Codex-native tools, bridged through native hooks where supported            |
+| Context engine              | Native OpenClaw context assembly              | OpenClaw projects assembled context into the Codex turn                     |
+| Compaction                  | OpenClaw or selected context engine           | Codex-native compaction, with OpenClaw notifications and mirror maintenance |
+| Channel delivery            | OpenClaw                                      | OpenClaw                                                                    |
 
 This ownership split is the main design rule:
 
@@ -149,7 +149,7 @@ OpenClaw chooses an embedded runtime after provider and model resolution:
    `models.providers.<provider>.agentRuntime`.
 3. In `auto` mode, registered plugin runtimes can claim supported provider/model
    pairs.
-4. If no runtime claims a turn in `auto` mode, OpenClaw uses PI as the
+4. If no runtime claims a turn in `auto` mode, OpenClaw uses `openclaw` as the
    compatibility runtime. Use an explicit runtime id when the run must be
    strict.
 
@@ -161,7 +161,7 @@ legacy runtime model refs where OpenClaw can preserve the intent.
 
 Explicit provider/model plugin runtimes fail closed. For example,
 `agentRuntime.id: "codex"` on a provider or model means Codex or a clear
-selection/runtime error; it is never silently routed back to PI.
+selection/runtime error; it is never silently routed back to OpenClaw.
 
 CLI backend aliases are different from embedded harness ids. The preferred
 Claude CLI form is:
@@ -191,10 +191,10 @@ backend.
 
 `auto` mode is intentionally conservative for most providers. OpenAI agent
 models are the exception: unset runtime and `auto` both resolve to the Codex
-harness. Explicit PI runtime config remains an opt-in compatibility route for
+harness. Explicit OpenClaw runtime config remains an opt-in compatibility route for
 `openai/*` agent turns; when paired with a selected `openai-codex` auth profile,
-OpenClaw routes PI internally through the legacy Codex-auth transport while
-keeping the public model ref as `openai/*`. Stale OpenAI PI session pins are
+OpenClaw routes that path internally through the Codex-auth transport while
+keeping the public model ref as `openai/*`. Stale OpenAI runtime session pins are
 ignored by runtime selection and can be cleaned with `openclaw doctor --fix`.
 
 If `openclaw doctor` warns that the `codex` plugin is enabled while
@@ -203,7 +203,7 @@ If `openclaw doctor` warns that the `codex` plugin is enabled while
 
 ## Compatibility contract
 
-When a runtime is not PI, it should document what OpenClaw surfaces it supports.
+When a runtime is not OpenClaw, it should document what OpenClaw surfaces it supports.
 Use this shape for runtime docs:
 
 | Question                               | Why it matters                                                                                    |
@@ -215,7 +215,7 @@ Use this shape for runtime docs:
 | Do native tool hooks work?             | Shell, patch, and runtime-owned tools need native hook support for policy and observation.        |
 | Does the context engine lifecycle run? | Memory and context plugins depend on assemble, ingest, after-turn, and compaction lifecycle.      |
 | What compaction data is exposed?       | Some plugins only need notifications, while others need kept/dropped metadata.                    |
-| What is intentionally unsupported?     | Users should not assume PI equivalence where the native runtime owns more state.                  |
+| What is intentionally unsupported?     | Users should not assume OpenClaw equivalence where the native runtime owns more state.            |
 
 The Codex runtime support contract is documented in
 [Codex harness runtime](/plugins/codex-harness-runtime#v1-support-contract).

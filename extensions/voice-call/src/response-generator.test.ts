@@ -64,7 +64,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       sessionStore[params.sessionKey] = { ...params.entry };
     },
   );
-  const runEmbeddedPiAgent = vi.fn(async () => ({
+  const runEmbeddedAgent = vi.fn(async () => ({
     payloads,
     meta: { durationMs: 12, aborted: false },
   }));
@@ -97,7 +97,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     resolveThinkingDefault: () => "off",
     resolveAgentTimeoutMs: () => 30_000,
     ensureAgentWorkspace: async () => {},
-    runEmbeddedPiAgent,
+    runEmbeddedAgent,
     session: {
       resolveStorePath,
       loadSessionStore: () => sessionStore,
@@ -112,7 +112,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
 
   return {
     runtime,
-    runEmbeddedPiAgent,
+    runEmbeddedAgent,
     saveSessionStore,
     updateSessionStore,
     patchSessionEntry,
@@ -125,8 +125,8 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
   };
 }
 
-function requireEmbeddedAgentArgs(runEmbeddedPiAgent: ReturnType<typeof vi.fn>) {
-  const calls = runEmbeddedPiAgent.mock.calls as unknown[][];
+function requireEmbeddedAgentArgs(runEmbeddedAgent: ReturnType<typeof vi.fn>) {
+  const calls = runEmbeddedAgent.mock.calls as unknown[][];
   const firstCall = requireFirstMockCall(
     calls,
     "voice response generator embedded agent invocation",
@@ -174,15 +174,15 @@ async function runGenerateVoiceResponse(
 
 describe("generateVoiceResponse", () => {
   it("suppresses reasoning payloads and reads structured spoken output", async () => {
-    const { runtime, runEmbeddedPiAgent } = createAgentRuntime([
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
       { text: "Reasoning: hidden", isReasoning: true },
       { text: '{"spoken":"Hello from JSON."}' },
     ]);
     const { result } = await runGenerateVoiceResponse([], { runtime });
 
     expect(result.text).toBe("Hello from JSON.");
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
     expect(args.provider).toBe("together");
     expect(args.model).toBe("Qwen/Qwen2.5-7B-Instruct-Turbo");
@@ -223,7 +223,7 @@ describe("generateVoiceResponse", () => {
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
-    const { runtime, runEmbeddedPiAgent, patchSessionEntry, sessionStore } = createAgentRuntime([
+    const { runtime, runEmbeddedAgent, patchSessionEntry, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Pinned model works."}' },
     ]);
     sessionStore["voice:15550001111"] = {
@@ -268,14 +268,14 @@ describe("generateVoiceResponse", () => {
       replaceEntry: true,
     });
     expect((patchSessionEntryCall[0] as { update?: unknown }).update).toBeTypeOf("function");
-    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-4.1-nano");
     expect(args.sessionKey).toBe("voice:15550001111");
   });
 
   it("uses the persisted per-call session key for classic responses", async () => {
-    const { runtime, runEmbeddedPiAgent, sessionStore } = createAgentRuntime([
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Fresh call context."}' },
     ]);
     const voiceConfig = VoiceCallConfigSchema.parse({
@@ -299,7 +299,7 @@ describe("generateVoiceResponse", () => {
     expect(perCallSessionEntry?.sessionId).toBeTypeOf("string");
     expect(perCallSessionEntry?.sessionId).not.toBe("");
     expect(sessionStore["voice:15550001111"]).toBeUndefined();
-    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.sessionKey).toBe("voice:call:call-123");
     expect(args.sandboxSessionKey).toBe("agent:main:voice:call:call-123");
   });
@@ -307,7 +307,7 @@ describe("generateVoiceResponse", () => {
   it("uses the main agent workspace when voice config omits agentId", async () => {
     const {
       runtime,
-      runEmbeddedPiAgent,
+      runEmbeddedAgent,
       resolveAgentDir,
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
@@ -342,7 +342,7 @@ describe("generateVoiceResponse", () => {
         agentId: "main",
       },
     );
-    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.agentDir).toBe("/tmp/openclaw/agents/main");
     expect(args.agentId).toBe("main");
     expect(args.sandboxSessionKey).toBe("agent:main:voice:15550001111");
@@ -353,7 +353,7 @@ describe("generateVoiceResponse", () => {
   it("uses the configured voice response agent workspace", async () => {
     const {
       runtime,
-      runEmbeddedPiAgent,
+      runEmbeddedAgent,
       resolveAgentDir,
       resolveAgentWorkspaceDir,
       resolveAgentIdentity,
@@ -392,7 +392,7 @@ describe("generateVoiceResponse", () => {
         agentId: "voice",
       },
     );
-    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.agentDir).toBe("/tmp/openclaw/agents/voice");
     expect(args.agentId).toBe("voice");
     expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
@@ -401,7 +401,7 @@ describe("generateVoiceResponse", () => {
   });
 
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
-    const { runtime, runEmbeddedPiAgent } = createAgentRuntime([
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([
       { text: '{"spoken":"No tools needed."}' },
     ]);
     const coreConfig = {
@@ -430,7 +430,7 @@ describe("generateVoiceResponse", () => {
     });
 
     expect(result.text).toBe("No tools needed.");
-    const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.agentId).toBe("voice");
     expect(args.toolsAllow).toStrictEqual([]);
   });

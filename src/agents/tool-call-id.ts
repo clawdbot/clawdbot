@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentMessage } from "./runtime/index.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";

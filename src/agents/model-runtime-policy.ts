@@ -228,7 +228,7 @@ export function resolveModelRuntimePolicy(params: {
 }): ResolvedModelRuntimePolicy {
   if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
     const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
-    if (forcedRuntime === "pi" || forcedRuntime === "codex") {
+    if (forcedRuntime === "openclaw" || forcedRuntime === "codex") {
       return { policy: { id: forcedRuntime }, source: "model" };
     }
   }

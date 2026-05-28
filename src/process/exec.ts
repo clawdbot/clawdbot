@@ -351,7 +351,7 @@ export async function runCommandWithTimeout(
       ? { shell: true }
       : {}),
   });
-  // Spawn with inherited stdin (TTY) so tools like `pi` stay interactive when needed.
+  // Spawn with inherited stdin (TTY) so interactive tools stay usable when needed.
   return await new Promise((resolve, reject) => {
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];

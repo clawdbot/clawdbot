@@ -497,6 +497,24 @@ describe("anthropic provider replay hooks", () => {
     ).toBe(false);
   });
 
+  it("resolves dated modern Claude refs without discovery templates", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "anthropic",
+      modelId: "claude-opus-4.7-20260219",
+      modelRegistry: createModelRegistry([]),
+    } as ProviderResolveDynamicModelContext);
+
+    expectFields(resolved, {
+      provider: "anthropic",
+      id: "claude-opus-4.7-20260219",
+      api: "anthropic-messages",
+      input: ["text", "image"],
+      reasoning: true,
+    });
+  });
+
   it("does not forward-compat case-mismatched Anthropic model ids", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 

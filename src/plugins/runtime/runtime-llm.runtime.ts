@@ -1,9 +1,9 @@
-import type { Api, Message } from "@earendil-works/pi-ai";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { Api, Message } from "../../llm/types.js";
 import { getChildLogger } from "../../logging.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { asFiniteNumber } from "../../shared/number-coercion.js";
@@ -423,7 +423,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
         preferredProfile,
         allowBundledStaticCatalogFallback: true,
         allowMissingApiKeyModes: ["aws-sdk"],
-        skipPiDiscovery: true,
+        skipAgentDiscovery: true,
       });
 
       if ("error" in prepared) {

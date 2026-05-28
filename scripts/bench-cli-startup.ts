@@ -2,12 +2,16 @@ import { spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type CommandCase = {
   id: string;
   name: string;
   args: string[];
   presets: readonly string[];
+  expectedExitCodes?: readonly number[];
+  expectedNonzeroOutputIncludes?: readonly string[];
   firstOutputBudgetMs?: number;
   exitBudgetMs?: number;
 };
@@ -44,6 +48,8 @@ type SuiteResult = {
     id: string;
     name: string;
     args: string[];
+    expectedExitCodes?: number[];
+    expectedNonzeroOutputIncludes?: string[];
     contract: {
       firstOutputBudgetMs: number | null;
       exitBudgetMs: number | null;
@@ -305,8 +311,22 @@ const COMMAND_CASES: readonly CommandCase[] = [
     firstOutputBudgetMs: 2_500,
     exitBudgetMs: 6_000,
   },
-  { id: "health", name: "health", args: ["health"], presets: ["startup", "real"] },
-  { id: "healthJson", name: "health --json", args: ["health", "--json"], presets: ["startup"] },
+  {
+    id: "health",
+    name: "health",
+    args: ["health"],
+    presets: ["startup", "real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ["Gateway target:"],
+  },
+  {
+    id: "healthJson",
+    name: "health --json",
+    args: ["health", "--json"],
+    presets: ["startup"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
+  },
   {
     id: "statusJson",
     name: "status --json",
@@ -362,12 +382,16 @@ const COMMAND_CASES: readonly CommandCase[] = [
     name: "gateway health --json",
     args: ["gateway", "health", "--json"],
     presets: ["real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
     id: "configGetGatewayPort",
     name: "config get gateway.port",
     args: ["config", "get", "gateway.port"],
     presets: ["real"],
+    expectedExitCodes: [0, 1],
+    expectedNonzeroOutputIncludes: ["Config path not found: gateway.port"],
   },
 ] as const;
 
@@ -376,7 +400,11 @@ function parseFlagValue(flag: string): string | undefined {
   if (idx === -1) {
     return undefined;
   }
-  return process.argv[idx + 1];
+  const value = process.argv[idx + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return value;
 }
 
 function hasFlag(flag: string): boolean {
@@ -393,15 +421,12 @@ function parseRepeatableFlag(flag: string): string[] {
   return values;
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
-  }
-  return parsed;
+function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number, label = "value"): number {
+  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
 }
 
 function parsePresets(raw: string | undefined): string[] {
@@ -747,6 +772,38 @@ function printDelta(primary: SuiteResult, secondary: SuiteResult): void {
   }
 }
 
+export function collectFailedSamples(result: SuiteResult): string[] {
+  const failures: string[] = [];
+  for (const commandCase of result.cases) {
+    if (commandCase.samples.length === 0) {
+      failures.push(`${result.entry} ${commandCase.id}: no measured samples`);
+      continue;
+    }
+    for (const [sampleIndex, sample] of commandCase.samples.entries()) {
+      const label = `${result.entry} ${commandCase.id} sample ${sampleIndex + 1}`;
+      const expectedExitCodes = new Set(commandCase.expectedExitCodes ?? [0]);
+      if (sample.signal !== null) {
+        failures.push(`${label}: exited via signal ${sample.signal}`);
+      } else if (!expectedExitCodes.has(sample.exitCode ?? -1)) {
+        failures.push(`${label}: exited with code ${String(sample.exitCode)}`);
+      } else if (sample.exitCode !== 0) {
+        const output = `${sample.stdoutTail ?? ""}\n${sample.stderrTail ?? ""}`;
+        const missing = (commandCase.expectedNonzeroOutputIncludes ?? []).filter(
+          (snippet) => !output.includes(snippet),
+        );
+        if (missing.length > 0) {
+          failures.push(
+            `${label}: exited with expected code ${String(
+              sample.exitCode,
+            )} but output did not match expected clean-state markers (${missing.join(", ")})`,
+          );
+        }
+      }
+    }
+  }
+  return failures;
+}
+
 async function buildSuiteResult(params: {
   entry: string;
   options: CliOptions;
@@ -768,6 +825,12 @@ async function buildSuiteResult(params: {
       id: commandCase.id,
       name: commandCase.name,
       args: commandCase.args,
+      ...(commandCase.expectedExitCodes && commandCase.expectedExitCodes.some((code) => code !== 0)
+        ? { expectedExitCodes: [...commandCase.expectedExitCodes] }
+        : {}),
+      ...(commandCase.expectedNonzeroOutputIncludes
+        ? { expectedNonzeroOutputIncludes: [...commandCase.expectedNonzeroOutputIncludes] }
+        : {}),
       contract:
         commandCase.firstOutputBudgetMs != null || commandCase.exitBudgetMs != null
           ? {
@@ -795,9 +858,9 @@ function parseOptions(): CliOptions {
     cases,
     entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
     entrySecondary: parseFlagValue("--entry-secondary"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS),
-    warmup: parsePositiveInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
+    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
+    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
     json: hasFlag("--json"),
     output: parseFlagValue("--output"),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),
@@ -864,6 +927,10 @@ async function main(): Promise<void> {
       primary,
       secondary: secondary ?? null,
     };
+    const failures = [
+      ...collectFailedSamples(primary),
+      ...(secondary ? collectFailedSamples(secondary) : []),
+    ];
 
     if (options.output) {
       mkdirSync(path.dirname(options.output), { recursive: true });
@@ -872,6 +939,12 @@ async function main(): Promise<void> {
 
     if (options.json) {
       console.log(JSON.stringify(report, null, 2));
+      if (failures.length > 0) {
+        process.exitCode = 1;
+        for (const failure of failures) {
+          console.error(`[startup-bench] ${failure}`);
+        }
+      }
       return;
     }
 
@@ -894,9 +967,28 @@ async function main(): Promise<void> {
       printSuite(secondary);
       printDelta(primary, secondary);
     }
+
+    if (failures.length > 0) {
+      process.exitCode = 1;
+      console.error("\nFailed startup benchmark samples:");
+      for (const failure of failures) {
+        console.error(`- ${failure}`);
+      }
+    }
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
-await main();
+export const testing = {
+  collectFailedSamples,
+  parseNonNegativeInt,
+  parsePositiveInt,
+};
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.stack : String(error));
+    process.exit(1);
+  });
+}

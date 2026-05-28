@@ -339,7 +339,7 @@ DOCKER_RUN_ARGS+=(--rm -t \
   -e COREPACK_HOME="$DOCKER_CACHE_CONTAINER_DIR/node/corepack" \
   -e NPM_CONFIG_CACHE="$DOCKER_CACHE_CONTAINER_DIR/npm" \
   -e npm_config_cache="$DOCKER_CACHE_CONTAINER_DIR/npm" \
-  -e NODE_OPTIONS=--disable-warning=ExperimentalWarning \
+  -e NODE_OPTIONS="$(openclaw_live_container_node_options)" \
   -e OPENCLAW_AGENT_HARNESS_FALLBACK=none \
   -e OPENCLAW_DOCKER_AUTH_PRESTAGED="$DOCKER_AUTH_PRESTAGED" \
   -e OPENCLAW_CODEX_APP_SERVER_BIN="${OPENCLAW_CODEX_APP_SERVER_BIN:-codex}" \

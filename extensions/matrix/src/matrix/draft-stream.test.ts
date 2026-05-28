@@ -202,6 +202,7 @@ describe("createMatrixDraftStream", () => {
       .mockImplementation((text: string) => (text ? [text] : []));
     convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
     sendModuleMocks.editMessageMatrix.mockClear();
+    sendModuleMocks.sendSingleTextMessageMatrix.mockClear();
   });
 
   afterEach(() => {
@@ -220,6 +221,11 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(sentContentAt(0).msgtype).toBe("m.text");
+    expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[2]).toMatchObject({
+      includeMentions: false,
+      live: true,
+      msgtype: "m.text",
+    });
     expect(stream.eventId()).toBe("$evt1");
   });
 

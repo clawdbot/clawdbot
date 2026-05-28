@@ -1,4 +1,4 @@
-import { streamOpenAIResponses, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
+import { stream as streamModel, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
 import { buildCopilotDynamicHeaders } from "./stream.js";
@@ -195,7 +195,7 @@ describeLive("github-copilot connection-bound Responses IDs live", () => {
     };
     let capturedPayload: Record<string, unknown> | undefined;
 
-    const wrappedStream = wrapCopilotOpenAIResponsesStream(streamOpenAIResponses as never);
+    const wrappedStream = wrapCopilotOpenAIResponsesStream(streamModel as never);
     if (!wrappedStream) {
       throw new Error("expected Copilot Responses stream wrapper");
     }

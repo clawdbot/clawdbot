@@ -1,8 +1,3 @@
-import {
-  legacyRuntimeModelAliasRequiresRuntimePolicy,
-  listLegacyRuntimeModelProviderAliases,
-  migrateLegacyRuntimeModelRef,
-} from "../../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -16,6 +11,11 @@ import {
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
+import {
+  legacyRuntimeModelAliasRequiresRuntimePolicy,
+  listLegacyRuntimeModelProviderAliases,
+  migrateLegacyRuntimeModelRef,
+} from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 export function normalizeLegacyCommandsConfig(
@@ -217,7 +217,7 @@ function resolveLegacyWholeAgentRuntimePolicy(raw: unknown):
     return undefined;
   }
   const runtime = normalizeOptionalLowercaseString(raw.id);
-  if (!runtime || runtime === "auto" || runtime === "pi") {
+  if (!runtime || runtime === "auto" || runtime === "openclaw") {
     return undefined;
   }
   const alias = listLegacyRuntimeModelProviderAliases().find(

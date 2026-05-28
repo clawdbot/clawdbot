@@ -216,6 +216,27 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("spawnedCwd" in patch) {
+    const raw = patch.spawnedCwd;
+    if (raw === null) {
+      if (existing?.spawnedCwd) {
+        return invalid("spawnedCwd cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!supportsSpawnLineage(storeKey)) {
+        return invalid("spawnedCwd is only supported for subagent:* or acp:* sessions");
+      }
+      const trimmed = normalizeOptionalString(raw) ?? "";
+      if (!trimmed) {
+        return invalid("invalid spawnedCwd: empty");
+      }
+      if (existing?.spawnedCwd && existing.spawnedCwd !== trimmed) {
+        return invalid("spawnedCwd cannot be changed once set");
+      }
+      next.spawnedCwd = trimmed;
+    }
+  }
+
   if ("spawnDepth" in patch) {
     const raw = patch.spawnDepth;
     if (raw === null) {

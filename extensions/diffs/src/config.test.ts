@@ -1,11 +1,12 @@
 import fs from "node:fs";
+import os from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   validateJsonSchemaValue,
   type JsonSchemaObject,
 } from "openclaw/plugin-sdk/json-schema-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_DIFFS_PLUGIN_SECURITY,
   DEFAULT_DIFFS_TOOL_DEFAULTS,
@@ -15,10 +16,14 @@ import {
   resolveDiffsPluginSecurity,
   resolveDiffsPluginViewerBaseUrl,
 } from "./config.js";
+import { resolveDiffsLanguagePackAvailability } from "./plugin.js";
+import { ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
 import { buildViewerUrl, normalizeViewerBaseUrl } from "./url.js";
 import {
+  getServedLanguagePackViewerAsset,
   getServedViewerAsset,
   resolveViewerRuntimeFileUrl,
+  LANGUAGE_PACK_VIEWER_LOADER_PATH,
   VIEWER_LOADER_PATH,
   VIEWER_RUNTIME_PATH,
 } from "./viewer-assets.js";
@@ -41,6 +46,10 @@ const FULL_DEFAULTS = {
   mode: "file",
   ttlSeconds: 21_600,
 } as const;
+
+beforeAll(async () => {
+  await ensureCuratedViewerRuntimeForTests();
+});
 
 function compileManifestConfigSchema() {
   const manifest = JSON.parse(
@@ -520,9 +529,53 @@ describe("viewer assets", () => {
     expect(String(runtime?.body)).toContain('style.gap="6px"');
   });
 
+  it("serves the optional language-pack loader only when its generated runtime is present", async () => {
+    const loader = await getServedLanguagePackViewerAsset(LANGUAGE_PACK_VIEWER_LOADER_PATH);
+
+    if (!loader) {
+      expect(loader).toBeNull();
+      return;
+    }
+    expect(loader.contentType).toBe("text/javascript; charset=utf-8");
+    expect(String(loader.body)).toContain(`./viewer-runtime.js?v=`);
+  });
+
   it("returns null for unknown asset paths", async () => {
     await expect(getServedViewerAsset("/plugins/diffs/assets/not-real.js")).resolves.toBeNull();
   });
+});
+
+describe("resolveDiffsLanguagePackAvailability", () => {
+  it.each(["assets", "dist/assets"])(
+    "requires both the sibling language-pack manifest and generated runtime asset in %s",
+    (assetDir) => {
+      const root = fs.mkdtempSync(join(os.tmpdir(), "openclaw-diffs-language-pack-"));
+      try {
+        const diffsRoot = join(root, "diffs");
+        const languagePackRoot = join(root, "diffs-language-pack");
+        fs.mkdirSync(diffsRoot, { recursive: true });
+        fs.mkdirSync(languagePackRoot, { recursive: true });
+        fs.writeFileSync(
+          join(languagePackRoot, "openclaw.plugin.json"),
+          '{"id":"diffs-language-pack"}\n',
+        );
+        const api = {
+          rootDir: diffsRoot,
+          config: { plugins: {} },
+          runtime: { config: { current: () => ({ plugins: {} }) } },
+        } as Parameters<typeof resolveDiffsLanguagePackAvailability>[0];
+
+        expect(resolveDiffsLanguagePackAvailability(api)).toBe(false);
+
+        fs.mkdirSync(join(languagePackRoot, assetDir), { recursive: true });
+        fs.writeFileSync(join(languagePackRoot, assetDir, "viewer-runtime.js"), "export {};\n");
+
+        expect(resolveDiffsLanguagePackAvailability(api)).toBe(true);
+      } finally {
+        fs.rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });
 
 describe("parseViewerPayloadJson", () => {

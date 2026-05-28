@@ -278,4 +278,46 @@ describe("registerDirectoryCli", () => {
       ),
     ).toBe(true);
   });
+
+  it.each([
+    ["peers list", ["directory", "peers", "list", "--channel", "slack", "--limit", "5x"]],
+    ["groups list", ["directory", "groups", "list", "--channel", "slack", "--limit", "5x"]],
+    [
+      "group members",
+      [
+        "directory",
+        "groups",
+        "members",
+        "--channel",
+        "slack",
+        "--group-id",
+        "group-1",
+        "--limit",
+        "5x",
+      ],
+    ],
+  ])("rejects partial directory limit for %s", async (_label, args) => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: {
+          listPeers: vi.fn().mockResolvedValue([]),
+          listGroups: vi.fn().mockResolvedValue([]),
+          listGroupMembers: vi.fn().mockResolvedValue([]),
+        },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await expect(program.parseAsync(args, { from: "user" })).rejects.toThrow("exit:1");
+
+    expect(runtimeErrors().join("\n")).toContain("--limit must be a positive integer.");
+    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+  });
 });

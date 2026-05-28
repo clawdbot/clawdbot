@@ -27,6 +27,7 @@ vi.mock("../../plugins/providers.js", () => ({
   resolveBundledProviderCompatPluginIds:
     providerDiscoveryMocks.resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProvider: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef: providerDiscoveryMocks.resolveOwningPluginIdsForProvider,
 }));
 
 vi.mock("../../plugins/contracts/registry.js", () => ({

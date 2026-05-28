@@ -44,9 +44,13 @@ vi.mock("../../infra/fs-safe.js", () => ({
   pathExists: hoisted.pathExistsMock,
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", () => ({
-  migrateSessionEntries: hoisted.migrateSessionEntriesMock,
-}));
+vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/sessions/session-manager.js")>();
+  return {
+    ...actual,
+    migrateSessionEntries: hoisted.migrateSessionEntriesMock,
+  };
+});
 
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
@@ -61,7 +65,7 @@ vi.mock("node:fs", async () => {
       if (filePath.includes("/export-html/")) {
         return actual.readFileSync(filePath, "utf8");
       }
-      return "";
+      return actual.readFileSync(filePath, "utf8");
     }),
   };
   return {

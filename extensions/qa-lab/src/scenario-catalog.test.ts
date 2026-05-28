@@ -156,8 +156,8 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
   });
 
-  it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {
-    const scenario = readQaScenarioById("codex-pi-shaped-read-vocabulary");
+  it("loads the Codex legacy Read vocabulary live parity canary", () => {
+    const scenario = readQaScenarioById("codex-legacy-read-tool-vocabulary");
     const config = readQaScenarioExecutionConfig(scenario.id) as
       | {
           runtimeParityComparison?: string;
@@ -167,11 +167,11 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
-    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-pi-shaped-read-vocabulary.md");
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-legacy-read-tool-vocabulary.md");
     expect(scenario.runtimeParityTier).toBe("live-only");
     expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
-    expect(config?.fixtureFile).toBe("PI_SHAPED_READ_FIXTURE.txt");
-    expect(config?.expectedMarker).toBe("PI_SHAPED_READ_OK");
+    expect(config?.fixtureFile).toBe("LEGACY_READ_TOOL_FIXTURE.txt");
+    expect(config?.expectedMarker).toBe("LEGACY_READ_TOOL_OK");
     expect(config?.unavailableNeedles).toContain("not in my available tool surface");
   });
 
@@ -283,12 +283,7 @@ describe("qa scenario catalog", () => {
       pluginRelation: "older",
     });
     expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
-      matrixCells: [
-        "oauth-only",
-        "mixed-no-pin",
-        "mixed-defaults-pi-pin",
-        "mixed-main-agent-pi-pin",
-      ],
+      matrixCells: ["oauth-only", "mixed-no-pin"],
     });
   });
 

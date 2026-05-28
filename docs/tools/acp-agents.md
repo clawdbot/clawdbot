@@ -11,7 +11,7 @@ sidebarTitle: "ACP agents"
 ---
 
 [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) sessions
-let OpenClaw run external coding harnesses (for example Pi, Claude Code,
+let OpenClaw run external coding harnesses (for example Claude Code,
 Cursor, Copilot, Droid, OpenClaw ACP, OpenCode, Gemini CLI, and other
 supported ACPX harnesses) through an ACP backend plugin.
 
@@ -109,7 +109,6 @@ or `sessions_spawn({ runtime: "acp", agentId: "<id>" })` targets:
 | `kiro`     | Kiro CLI                                       | Adapter availability and model control depend on the installed CLI.                 |
 | `opencode` | OpenCode ACP adapter                           | Requires OpenCode CLI/provider auth.                                                |
 | `openclaw` | OpenClaw Gateway bridge through `openclaw acp` | Lets an ACP-aware harness talk back to an OpenClaw Gateway session.                 |
-| `pi`       | Pi/embedded OpenClaw runtime                   | Used for OpenClaw-native harness experiments.                                       |
 | `qwen`     | Qwen Code / Qwen CLI                           | Requires Qwen-compatible auth on the host.                                          |
 
 Custom acpx agent aliases can be configured in acpx itself, but OpenClaw
@@ -834,6 +833,13 @@ permission modes, see
 | ACP session fails early with little output                                  | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`.                                        | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |
 | ACP session stalls indefinitely after completing work                       | Harness process finished but ACP session did not report completion.                                                    | Update OpenClaw; current acpx cleanup reaps OpenClaw-owned stale wrapper and adapter processes on close and Gateway startup.                                             |
 | Harness sees `<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>`                        | Internal event envelope leaked across the ACP boundary.                                                                | Update OpenClaw and rerun the completion flow; external harnesses should receive plain completion prompts only.                                                          |
+
+<Note>
+`Command blocked by PreToolUse hook: Native hook relay unavailable` belongs to
+the native Codex hook relay, not ACP/acpx. In a bound Codex chat, start a fresh
+session with `/new` or `/reset`; if it persists, restart the Codex app-server or
+OpenClaw Gateway. See [Codex harness troubleshooting](/plugins/codex-harness#troubleshooting).
+</Note>
 
 ## Related
 

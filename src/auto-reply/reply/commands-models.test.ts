@@ -130,21 +130,40 @@ beforeEach(() => {
   normalizeProviderModelIdWithRuntimeMock.mockReset();
   modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "google", "openai"]);
   modelProviderAuthMocks.createProviderAuthChecker.mockClear();
-  setActivePluginRegistry(
-    createTestRegistry([
-      ...textSurfaceModelsTestPlugins,
-      {
-        pluginId: "telegram",
-        plugin: telegramModelsTestPlugin,
-        source: "test",
+  const registry = createTestRegistry([
+    ...textSurfaceModelsTestPlugins,
+    {
+      pluginId: "telegram",
+      plugin: telegramModelsTestPlugin,
+      source: "test",
+    },
+    {
+      pluginId: "menuonly",
+      plugin: menuOnlyModelsTestPlugin,
+      source: "test",
+    },
+  ]);
+  registry.cliBackends = [
+    {
+      pluginId: "anthropic",
+      backend: {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
       },
-      {
-        pluginId: "menuonly",
-        plugin: menuOnlyModelsTestPlugin,
-        source: "test",
+      source: "test",
+    },
+    {
+      pluginId: "google",
+      backend: {
+        id: "google-gemini-cli",
+        modelProvider: "google",
+        config: { command: "gemini" },
       },
-    ]),
-  );
+      source: "test",
+    },
+  ];
+  setActivePluginRegistry(registry);
 });
 
 function buildParams(
@@ -480,13 +499,13 @@ describe("handleModelsCommand", () => {
       description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
     });
     expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
-  it("keeps custom OpenAI-compatible providers on the Pi default runtime choice", async () => {
+  it("keeps custom OpenAI-compatible providers on the OpenClaw default runtime choice", async () => {
     const data = await buildModelsProviderData({
       models: {
         providers: {
@@ -504,9 +523,9 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -516,7 +535,7 @@ describe("handleModelsCommand", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "pi" },
+            agentRuntime: { id: "openclaw" },
             models: [],
           },
         },
@@ -537,9 +556,9 @@ describe("handleModelsCommand", () => {
       description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
     });
     expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -562,9 +581,9 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -592,9 +611,9 @@ describe("handleModelsCommand", () => {
       description: "Use the Claude CLI runtime selected by the effective harness policy.",
     });
     expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
-      id: "pi",
-      label: "OpenClaw Pi Default",
-      description: "Use the built-in OpenClaw Pi runtime.",
+      id: "openclaw",
+      label: "OpenClaw Default",
+      description: "Use the built-in OpenClaw runtime.",
     });
   });
 
@@ -671,6 +690,15 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("- openai/gpt-4.1");
     expect(result?.reply?.text).toContain("- openai/gpt-4.1-mini");
     expect(result?.reply?.text).toContain("Switch: /model <provider/model>");
+  });
+
+  it("does not coerce partial list page or limit tokens", async () => {
+    const result = await handleModelsCommand(
+      buildParams("/models openai page=2next limit=1x"),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
   });
 
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {

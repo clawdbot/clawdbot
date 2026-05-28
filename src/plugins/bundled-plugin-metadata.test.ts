@@ -39,6 +39,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "diagnostics-otel",
   "diagnostics-prometheus",
   "diffs",
+  "diffs-language-pack",
   "file-transfer",
   "google-meet",
   "llm-task",

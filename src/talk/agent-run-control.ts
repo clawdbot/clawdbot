@@ -1,9 +1,9 @@
-import type { EmbeddedPiQueueMessageOutcome } from "../agents/pi-embedded-runner/runs.js";
+import type { EmbeddedAgentQueueMessageOutcome } from "../agents/embedded-agent-runner/runs.js";
 import {
-  abortEmbeddedPiRun,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  abortEmbeddedAgentRun,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
-} from "../agents/pi-embedded-runner/runs.js";
+} from "../agents/embedded-agent-runner/runs.js";
 import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -35,12 +35,12 @@ export {
 } from "./agent-run-control-shared.js";
 
 type RealtimeVoiceAgentControlDeps = {
-  abortEmbeddedPiRun: (sessionId: string) => boolean;
-  queueEmbeddedPiMessageWithOutcomeAsync: (
+  abortEmbeddedAgentRun: (sessionId: string) => boolean;
+  queueEmbeddedAgentMessageWithOutcomeAsync: (
     sessionId: string,
     text: string,
     options?: { steeringMode?: "all"; debounceMs?: number },
-  ) => Promise<EmbeddedPiQueueMessageOutcome>;
+  ) => Promise<EmbeddedAgentQueueMessageOutcome>;
   getDiagnosticSessionActivitySnapshot: (params: {
     sessionId?: string;
     sessionKey?: string;
@@ -49,9 +49,9 @@ type RealtimeVoiceAgentControlDeps = {
 };
 
 const defaultDeps: RealtimeVoiceAgentControlDeps = {
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   getDiagnosticSessionActivitySnapshot,
-  queueEmbeddedPiMessageWithOutcomeAsync,
+  queueEmbeddedAgentMessageWithOutcomeAsync,
   resolveActiveEmbeddedRunSessionId,
 };
 
@@ -105,7 +105,7 @@ export async function controlRealtimeVoiceAgentRun(
         suppress: false,
       };
     }
-    const aborted = deps.abortEmbeddedPiRun(sessionId);
+    const aborted = deps.abortEmbeddedAgentRun(sessionId);
     const message = aborted
       ? "Cancelled the active OpenClaw run."
       : "OpenClaw could not cancel the active run.";
@@ -141,7 +141,7 @@ export async function controlRealtimeVoiceAgentRun(
   }
 
   const steerText = mode === "followup" ? buildRealtimeVoiceAgentFollowupSteeringText(text) : text;
-  const outcome = await deps.queueEmbeddedPiMessageWithOutcomeAsync(sessionId, steerText, {
+  const outcome = await deps.queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, steerText, {
     steeringMode: "all",
     debounceMs: 0,
   });

@@ -1,4 +1,4 @@
-import type { FailoverReason } from "./pi-embedded-helpers.js";
+import type { FailoverReason } from "./embedded-agent-helpers.js";
 
 export function shouldAllowCooldownProbeForReason(
   reason: FailoverReason | null | undefined,

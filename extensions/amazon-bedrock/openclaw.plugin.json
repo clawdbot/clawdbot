@@ -1,5 +1,7 @@
 {
   "id": "amazon-bedrock",
+  "name": "Amazon Bedrock",
+  "description": "OpenClaw Amazon Bedrock provider plugin with model discovery, embeddings, and guardrail support.",
   "activation": {
     "onStartup": false
   },

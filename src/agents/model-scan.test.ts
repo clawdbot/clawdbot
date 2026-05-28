@@ -102,7 +102,7 @@ describe("scanOpenRouterModels", () => {
     ).rejects.toThrow(/catalog aborted/);
   });
 
-  it("matches provider filters across canonical provider aliases", async () => {
+  it("does not match provider filters across provider id variants", async () => {
     const fetchImpl = createFetchFixture({
       data: [
         {
@@ -130,6 +130,6 @@ describe("scanOpenRouterModels", () => {
       providerFilter: "z-ai",
     });
 
-    expect(results.map((entry) => entry.id)).toEqual(["z.ai/glm-5"]);
+    expect(results.map((entry) => entry.id)).toEqual([]);
   });
 });

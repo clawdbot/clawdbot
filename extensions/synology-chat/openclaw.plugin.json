@@ -1,5 +1,7 @@
 {
   "id": "synology-chat",
+  "name": "Synology Chat",
+  "description": "Synology Chat channel plugin for OpenClaw channels and direct messages.",
   "activation": {
     "onStartup": false
   },

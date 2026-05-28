@@ -651,7 +651,7 @@ run_profile() {
       "$OPENAI_AGENT_MODEL" \
       "openai/gpt-5.5" \
       "openai/gpt-5.4-mini")"
-    openclaw --profile "$profile" config set models.providers.openai "{\"baseUrl\":\"https://api.openai.com/v1\",\"models\":[],\"timeoutSeconds\":${OPENAI_PROVIDER_TIMEOUT_SECONDS},\"agentRuntime\":{\"id\":\"pi\"}}" --strict-json >/dev/null
+    openclaw --profile "$profile" config set models.providers.openai "{\"baseUrl\":\"https://api.openai.com/v1\",\"models\":[],\"timeoutSeconds\":${OPENAI_PROVIDER_TIMEOUT_SECONDS},\"agentRuntime\":{\"id\":\"openclaw\"}}" --strict-json >/dev/null
     image_model="$(set_image_model "$profile" \
       "openai/gpt-5.4-image-2")"
   else

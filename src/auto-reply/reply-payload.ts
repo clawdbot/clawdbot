@@ -184,6 +184,10 @@ export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata |
   return replyPayloadMetadata.get(payload);
 }
 
+export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
+  return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
+}
+
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {
   const metadata = getReplyPayloadMetadata(source);
   return metadata ? setReplyPayloadMetadata(payload, metadata) : payload;

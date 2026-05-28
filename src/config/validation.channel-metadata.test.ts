@@ -320,6 +320,20 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("accepts the shipped deprecated bundledDiscovery marker", () => {
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "compat",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
+    }
+  });
+
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 

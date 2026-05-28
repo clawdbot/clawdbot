@@ -6,7 +6,7 @@ import {
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
-  runEmbeddedPiAgentMock,
+  runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -77,6 +77,6 @@ describe("runCronIsolatedAgentTurn model provider preflight", () => {
     expect(result.model).toBe("qwen3:32b");
     expect(result.sessionId).toBe("cron-session");
     expect(result.error).toContain("local provider endpoint is not reachable");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 });

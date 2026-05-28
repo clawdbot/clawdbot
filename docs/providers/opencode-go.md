@@ -18,7 +18,7 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 
 ## Built-in catalog
 
-OpenClaw sources most Go catalog rows from the bundled pi model registry and
+OpenClaw sources most Go catalog rows from the bundled OpenClaw model registry and
 supplements current upstream rows while the registry catches up. Run
 `openclaw models list --provider opencode-go` for the current model list.
 

@@ -1,13 +1,12 @@
-import { Agent, type StreamFn } from "@earendil-works/pi-agent-core";
+import { Agent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   createAssistantMessageEventStream,
   type AssistantMessage,
   type Context,
   type Model,
   type SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
-import { streamSimpleOpenAICodexResponses } from "@earendil-works/pi-ai/openai-codex-responses";
-import { streamSimpleOpenAIResponses } from "@earendil-works/pi-ai/openai-responses";
+  streamSimple,
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 
 type ResponsesModel = Model<"openai-responses"> | Model<"openai-codex-responses">;
@@ -40,7 +39,7 @@ describe("OpenAI thinking contract", () => {
     { model: openaiModel, expectedReasoning: "high" },
     { model: codexModel, expectedReasoning: "high" },
   ])(
-    "forwards enabled session thinkingLevel to pi-ai options for $model.provider/$model.id",
+    "forwards enabled session thinkingLevel to shared model runtime options for $model.provider/$model.id",
     async ({ model, expectedReasoning }) => {
       const capturedOptions: SimpleStreamOptions[] = [];
       const agent = new Agent({
@@ -75,40 +74,40 @@ describe("OpenAI thinking contract", () => {
     },
   );
 
-  it("serializes OpenAI Responses reasoning effort from pi-ai simple options", async () => {
+  it("serializes OpenAI Responses reasoning effort from shared model runtime simple options", async () => {
     const payload = await captureProviderPayload({
       model: openaiModel,
-      streamFn: streamSimpleOpenAIResponses,
+      streamFn: streamSimple,
       options: { reasoning: "high" },
     });
 
     expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
-  it("serializes Codex Responses reasoning effort from pi-ai simple options", async () => {
+  it("serializes Codex Responses reasoning effort from shared model runtime simple options", async () => {
     const payload = await captureProviderPayload({
       model: codexModel,
-      streamFn: streamSimpleOpenAICodexResponses,
+      streamFn: streamSimple,
       options: { reasoning: "high", transport: "sse" },
     });
 
     expect(payload.reasoning).toEqual({ effort: "high", summary: "auto" });
   });
 
-  it("leaves Codex Responses reasoning absent when pi-agent-core disables thinking", async () => {
+  it("leaves Codex Responses reasoning absent when agent runtime disables thinking", async () => {
     const payload = await captureProviderPayload({
       model: codexModel,
-      streamFn: streamSimpleOpenAICodexResponses,
+      streamFn: streamSimple,
       options: { transport: "sse" },
     });
 
     expect(payload).not.toHaveProperty("reasoning");
   });
 
-  it("keeps OpenAI Responses reasoning explicitly disabled when pi-agent-core disables thinking", async () => {
+  it("keeps OpenAI Responses reasoning explicitly disabled when agent runtime disables thinking", async () => {
     const payload = await captureProviderPayload({
       model: openaiModel,
-      streamFn: streamSimpleOpenAIResponses,
+      streamFn: streamSimple,
       options: {},
     });
 

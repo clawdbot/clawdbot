@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -425,6 +425,9 @@ describe("plugin-clawhub-publish.sh", () => {
       `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> ${JSON.stringify(markerPath)}
+if [[ "\${1:-}" == "--workdir" ]]; then
+  shift 2
+fi
 if [[ "\${1:-}" == "package" && "\${2:-}" == "pack" ]]; then
   pack_destination=""
   while [[ "$#" -gt 0 ]]; do
@@ -469,7 +472,11 @@ exit 0
     expect(output).toContain("Publish command: CLAWHUB_WORKDIR=");
     expect(output).toContain("Resolved ClawPack:");
     const invocations = readFileSync(markerPath, "utf8");
-    expect(invocations).toContain("package pack ./extensions/demo-plugin");
+    const resolvedRepoDir = realpathSync(repoDir);
+    expect(invocations).toContain(`--workdir ${resolvedRepoDir}`);
+    expect(invocations).toContain(
+      `package pack ${join(resolvedRepoDir, "extensions/demo-plugin")}`,
+    );
     expect(invocations).toContain("package publish ");
     expect(invocations).toContain(".tgz --tags latest");
     expect(invocations).toContain("--dry-run");

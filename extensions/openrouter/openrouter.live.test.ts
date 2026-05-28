@@ -1,5 +1,5 @@
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import OpenAI from "openai";
+import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,

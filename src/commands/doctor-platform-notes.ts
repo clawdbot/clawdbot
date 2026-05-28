@@ -235,7 +235,7 @@ export function noteStartupOptimizationHints(
 
   if (!compileCache) {
     lines.push(
-      "- NODE_COMPILE_CACHE is not set; repeated CLI runs can be slower on small hosts (Pi/VM).",
+      "- NODE_COMPILE_CACHE is not set; repeated CLI runs can be slower on small hosts (Raspberry Pi/VM).",
     );
   } else if (isTmpCompileCachePath(compileCache)) {
     lines.push(

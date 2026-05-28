@@ -1,7 +1,7 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Codex app-server harness and Codex-managed GPT model catalog.",
+  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],

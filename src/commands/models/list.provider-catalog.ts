@@ -1,4 +1,3 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
 import {
   createProviderApiKeyResolver,
@@ -8,6 +7,7 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../../plugins/provider-discovery.js";
 import {
   resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import { sortUniqueStrings } from "../../shared/string-normalization.js";
@@ -126,7 +126,7 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   if (installedIndexPluginIds) {
     return installedIndexPluginIds;
   }
-  const manifestPluginIds = resolveOwningPluginIdsForProvider({
+  const manifestPluginIds = resolveOwningPluginIdsForProviderRef({
     provider: providerFilter,
     config: params.cfg,
     env: params.env,
@@ -194,7 +194,7 @@ function modelFromProviderCatalog(params: {
   provider: string;
   providerConfig: ModelProviderConfig;
   model: ModelProviderConfig["models"][number];
-}): Model<Api> {
+}): Model {
   return {
     id: params.model.id,
     name: params.model.name || params.model.id,
@@ -209,7 +209,7 @@ function modelFromProviderCatalog(params: {
     maxTokens: params.model.maxTokens,
     headers: params.model.headers,
     compat: params.model.compat,
-  } as Model<Api>;
+  } as Model;
 }
 
 export async function loadProviderCatalogModelsForList(params: {
@@ -220,7 +220,7 @@ export async function loadProviderCatalogModelsForList(params: {
   staticOnly?: boolean;
   registryIndex?: PluginRegistrySnapshot;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<Model<Api>[]> {
+}): Promise<Model[]> {
   const env = params.env ?? process.env;
   const providerFilter = params.providerFilter ? normalizeProviderId(params.providerFilter) : "";
   const onlyPluginIds = providerFilter
@@ -264,7 +264,7 @@ export async function loadProviderCatalogModelsForList(params: {
       typeof provider.pluginId === "string" && bundledPluginIdSet.has(provider.pluginId),
   );
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
-  const rows: Model<Api>[] = [];
+  const rows: Model[] = [];
   const seen = new Set<string>();
 
   for (const order of DISCOVERY_ORDERS) {

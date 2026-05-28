@@ -2,7 +2,7 @@ import {
   isToolWrappedWithBeforeToolCallHook,
   rewrapToolWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
-} from "../agents/pi-tools.before-tool-call.js";
+} from "../agents/agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { coerceChatContentText } from "../shared/chat-content.js";

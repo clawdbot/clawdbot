@@ -104,6 +104,24 @@
       }
     },
     {
+      "name": "@openclaw/diffs-language-pack",
+      "description": "OpenClaw diffs viewer syntax highlighting language pack",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "diffs-language-pack",
+          "label": "Diff Viewer Language Pack"
+        },
+        "install": {
+          "npmSpec": "@openclaw/diffs-language-pack",
+          "clawhubSpec": "clawhub:@openclaw/diffs-language-pack",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.27"
+        }
+      }
+    },
+    {
       "name": "@openclaw/google-meet",
       "description": "OpenClaw Google Meet participant plugin",
       "source": "official",

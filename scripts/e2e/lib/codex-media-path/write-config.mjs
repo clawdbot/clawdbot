@@ -45,7 +45,6 @@ const config = {
   },
   agents: {
     defaults: {
-      agentRuntime: { id: "codex" },
       model: { primary: "codex/gpt-5.5", fallbacks: [] },
       models: {
         "codex/gpt-5.5": {
@@ -61,8 +60,12 @@ const config = {
       {
         id: "main",
         default: true,
-        agentRuntime: { id: "codex" },
         model: { primary: "codex/gpt-5.5", fallbacks: [] },
+        models: {
+          "codex/gpt-5.5": {
+            agentRuntime: { id: "codex" },
+          },
+        },
         workspace: workspaceDir,
       },
     ],

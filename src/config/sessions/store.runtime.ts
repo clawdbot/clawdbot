@@ -1,1 +1,5 @@
-export { updateSessionStore, updateSessionStoreEntry } from "./store.js";
+export {
+  applySessionStoreEntryPatch,
+  updateSessionStore,
+  updateSessionStoreEntry,
+} from "./store.js";

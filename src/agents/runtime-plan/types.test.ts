@@ -8,7 +8,7 @@ const concreteRuntimePolicyImportPatterns = [
   /from\s+["'][^"']*auto-reply(?:\/|\.js|["'])/,
   /from\s+["'](?:[^"']*\/)?config(?:\/|\.js|["'])/,
   /from\s+["'](?:[^"']*\/)?plugins(?:\/|\.js|["'])/,
-  /from\s+["'][^"']*pi-embedded-/,
+  /from\s+["'][^"']*embedded-agent-/,
   /from\s+["'][^"']*transcript-policy(?:\.[^/"']+)?(?:\/|\.js|["'])/,
   /from\s+["'][^"']*system-prompt(?:\.[^/"']+)?(?:\/|\.js|["'])/,
 ];

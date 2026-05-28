@@ -888,6 +888,59 @@ describe("deviceHandlers", () => {
     );
   });
 
+  it("allows shared-auth operator sessions to approve operator roles within caller scopes", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: "device-2",
+      publicKey: "pk-2",
+      role: "operator",
+      roles: ["operator"],
+      scopes: ["operator.pairing"],
+      ts: 100,
+    });
+    approveDevicePairingMock.mockResolvedValue({
+      status: "approved",
+      requestId: "req-1",
+      device: {
+        deviceId: "device-2",
+        publicKey: "pk-2",
+        role: "operator",
+        roles: ["operator"],
+        approvedScopes: ["operator.pairing"],
+        approvedAtMs: 100,
+        createdAtMs: 50,
+      },
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(getPendingDevicePairingMock).toHaveBeenCalledWith("req-1");
+    expect(approveDevicePairingMock).toHaveBeenCalledWith("req-1", {
+      callerScopes: ["operator.pairing"],
+    });
+    expect(opts.respond).toHaveBeenCalledWith(
+      true,
+      {
+        requestId: "req-1",
+        device: {
+          deviceId: "device-2",
+          publicKey: "pk-2",
+          role: "operator",
+          roles: ["operator"],
+          approvedAtMs: 100,
+          createdAtMs: 50,
+          tokens: undefined,
+        },
+      },
+      undefined,
+    );
+  });
+
   it("rejects approving node roles for the caller device without admin scope", async () => {
     getPendingDevicePairingMock.mockResolvedValue({
       requestId: "req-1",
@@ -901,6 +954,63 @@ describe("deviceHandlers", () => {
       "device.pair.approve",
       { requestId: "req-1" },
       { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: true }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
+  });
+
+  it("rejects approving node roles from non-admin shared-auth sessions", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: "device-1",
+      publicKey: "pk-1",
+      role: "node",
+      roles: ["node"],
+      ts: 100,
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"], "device-1", { isDeviceTokenAuth: false }) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
+  });
+
+  it("rejects approving mixed operator and node roles from non-admin sessions", async () => {
+    getPendingDevicePairingMock.mockResolvedValue({
+      requestId: "req-1",
+      deviceId: "device-2",
+      publicKey: "pk-2",
+      role: "operator",
+      roles: [" operator ", " node "],
+      scopes: ["operator.pairing"],
+      ts: 100,
+    });
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "req-1" },
+      { client: createClient(["operator.pairing"]) },
+    );
+
+    await deviceHandlers["device.pair.approve"](opts);
+
+    expect(approveDevicePairingMock).not.toHaveBeenCalled();
+    expectRespondedErrorMessage(opts, "device pairing approval denied");
+  });
+
+  it("denies unknown approvals from non-admin non-device sessions", async () => {
+    getPendingDevicePairingMock.mockResolvedValue(null);
+    const opts = createOptions(
+      "device.pair.approve",
+      { requestId: "missing" },
+      { client: createClient(["operator.pairing"]) },
     );
 
     await deviceHandlers["device.pair.approve"](opts);

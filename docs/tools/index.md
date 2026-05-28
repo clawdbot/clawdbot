@@ -29,7 +29,7 @@ only when the agent should see fewer tools or needs explicit host access.
 | Add a new integration or runtime surface    | [Plugins](#extend-capabilities)                | [Plugins](/tools/plugin) and [Build plugins](/plugins/building-plugins) |
 | Run work later or in the background         | [Automation](/automation)                      | [Automation overview](/automation)                                      |
 | Coordinate multiple agents or harnesses     | [Sub-agents](/tools/subagents)                 | [ACP agents](/tools/acp-agents) and [Agent send](/tools/agent-send)     |
-| Search a large PI tool catalog              | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                       |
+| Search a large OpenClaw tool catalog        | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                       |
 
 ## Choose tools, skills, or plugins
 
@@ -78,21 +78,21 @@ The table lists representative tools so you can recognize the surface. It is
 not the full policy reference. For exact groups, defaults, and allow/deny
 semantics, use [Tools and custom providers](/gateway/config-tools).
 
-| Category               | Use when the agent needs to...                                                | Representative tools                                                 | Read next                                                              |
-| ---------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Runtime                | Run commands, manage processes, or use provider-backed Python analysis        | `exec`, `process`, `code_execution`                                  | [Exec](/tools/exec), [Code execution](/tools/code-execution)           |
-| Files                  | Read and change workspace files                                               | `read`, `write`, `edit`, `apply_patch`                               | [Apply patch](/tools/apply-patch)                                      |
-| Web                    | Search the web, search X posts, or fetch readable page content                | `web_search`, `x_search`, `web_fetch`                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                 |
-| Browser                | Operate a browser session                                                     | `browser`                                                            | [Browser](/tools/browser)                                              |
-| Messaging and channels | Send replies or channel actions                                               | `message`                                                            | [Agent send](/tools/agent-send)                                        |
-| Sessions and agents    | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`           | [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
-| Automation             | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                          | [Automation](/automation)                                              |
-| Gateway and nodes      | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)       |
-| Media                  | Analyze, generate, or speak media                                             | `image`, `image_generate`, `music_generate`, `video_generate`, `tts` | [Media overview](/tools/media-overview)                                |
-| Large PI catalogs      | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`                   | [Tool Search](/tools/tool-search)                                      |
+| Category                | Use when the agent needs to...                                                | Representative tools                                                 | Read next                                                              |
+| ----------------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Runtime                 | Run commands, manage processes, or use provider-backed Python analysis        | `exec`, `process`, `code_execution`                                  | [Exec](/tools/exec), [Code execution](/tools/code-execution)           |
+| Files                   | Read and change workspace files                                               | `read`, `write`, `edit`, `apply_patch`                               | [Apply patch](/tools/apply-patch)                                      |
+| Web                     | Search the web, search X posts, or fetch readable page content                | `web_search`, `x_search`, `web_fetch`                                | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                 |
+| Browser                 | Operate a browser session                                                     | `browser`                                                            | [Browser](/tools/browser)                                              |
+| Messaging and channels  | Send replies or channel actions                                               | `message`                                                            | [Agent send](/tools/agent-send)                                        |
+| Sessions and agents     | Inspect sessions, delegate work, steer another run, or report status          | `sessions_*`, `subagents`, `agents_list`, `session_status`           | [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
+| Automation              | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                          | [Automation](/automation)                                              |
+| Gateway and nodes       | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)       |
+| Media                   | Analyze, generate, or speak media                                             | `image`, `image_generate`, `music_generate`, `video_generate`, `tts` | [Media overview](/tools/media-overview)                                |
+| Large OpenClaw catalogs | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`                   | [Tool Search](/tools/tool-search)                                      |
 
 <Note>
-Tool Search is an experimental PI-agent surface. Codex harness runs use
+Tool Search is an experimental OpenClaw agent surface. Codex harness runs use
 Codex-native code mode, native tool search, deferred dynamic tools, and nested
 tool calls instead of `tools.toolSearch`.
 </Note>
@@ -164,7 +164,7 @@ current turn:
    [Plugins](/tools/plugin).
 5. For delegated runs, check per-agent restrictions in
    [Per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools).
-6. For large PI catalogs, confirm whether the run uses direct tool exposure or
+6. For large OpenClaw catalogs, confirm whether the run uses direct tool exposure or
    [Tool Search](/tools/tool-search).
 
 ## Related
@@ -175,4 +175,4 @@ current turn:
 - [Plugins](/tools/plugin) for plugin installation and management
 - [Plugin SDK](/plugins/sdk-overview) for plugin author reference
 - [Skills](/tools/skills) for skill load order, gating, and config
-- [Tool Search](/tools/tool-search) for compact PI tool catalog discovery
+- [Tool Search](/tools/tool-search) for compact OpenClaw tool catalog discovery

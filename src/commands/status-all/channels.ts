@@ -95,6 +95,7 @@ const buildAccountNotes = (params: {
   cfg: OpenClawConfig;
   entry: ChannelAccountRow;
   liveCredentialAvailable?: boolean;
+  credentialResolutionSkipped?: boolean;
 }) => {
   const { plugin, cfg, entry } = params;
   const notes: string[] = [];
@@ -122,6 +123,11 @@ const buildAccountNotes = (params: {
   }
   if (params.liveCredentialAvailable) {
     notes.push("credential available in gateway runtime");
+  } else if (
+    params.credentialResolutionSkipped &&
+    hasConfiguredUnavailableCredentialStatus(entry.account)
+  ) {
+    notes.push("credential not checked");
   } else if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
     notes.push("secret unavailable in this command path");
   }
@@ -216,6 +222,7 @@ export async function buildChannelsTable(
     sourceConfig?: OpenClawConfig;
     includeSetupFallbackPlugins?: boolean;
     liveChannelStatus?: unknown;
+    credentialResolutionSkipped?: boolean;
   },
 ): Promise<{
   rows: ChannelRow[];
@@ -235,6 +242,7 @@ export async function buildChannelsTable(
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
   const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
+  const credentialResolutionSkipped = opts?.credentialResolutionSkipped === true;
   const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
     includeSetupFallbackPlugins,
@@ -270,11 +278,13 @@ export async function buildChannelsTable(
     const unavailableConfiguredAccounts = enabledAccounts.filter(
       (a) =>
         hasConfiguredUnavailableCredentialStatus(a.account) &&
+        !credentialResolutionSkipped &&
         !hasRuntimeCredentialAvailable({ liveAccounts, accountId: a.accountId }),
     );
     const accountsForTokenSummary = accounts.map((entry) =>
       hasConfiguredUnavailableCredentialStatus(entry.account) &&
-      hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId })
+      (credentialResolutionSkipped ||
+        hasRuntimeCredentialAvailable({ liveAccounts, accountId: entry.accountId }))
         ? {
             ...entry,
             account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
@@ -427,7 +437,15 @@ export async function buildChannelsTable(
             liveAccounts,
             accountId: entry.accountId,
           });
-          const notes = buildAccountNotes({ plugin, cfg, entry, liveCredentialAvailable });
+          const credentialUnknown =
+            credentialResolutionSkipped && hasConfiguredUnavailableCredentialStatus(entry.account);
+          const notes = buildAccountNotes({
+            plugin,
+            cfg,
+            entry,
+            liveCredentialAvailable,
+            credentialResolutionSkipped,
+          });
           return {
             Account: formatAccountLabel({
               accountId: entry.accountId,
@@ -437,7 +455,9 @@ export async function buildChannelsTable(
               entry.enabled &&
               (!hasConfiguredUnavailableCredentialStatus(entry.account) || liveCredentialAvailable)
                 ? "OK"
-                : "WARN",
+                : credentialUnknown
+                  ? "UNKNOWN"
+                  : "WARN",
             Notes: notes.join(" · "),
           };
         }),
@@ -496,6 +516,24 @@ export async function buildChannelsTable(
       detail: `plugin not installed - run ${hint.installCommand} or ${hint.doctorFixCommand}`,
     });
     visibleChannelIds.add(channelId);
+  }
+
+  if (!includeSetupFallbackPlugins) {
+    for (const channelId of readOnlyPlugins.missingConfiguredChannelIds.toSorted((left, right) =>
+      left.localeCompare(right),
+    )) {
+      if (visibleChannelIds.has(channelId)) {
+        continue;
+      }
+      rows.push({
+        id: channelId,
+        label: channelId,
+        enabled: true,
+        state: "setup",
+        detail: "configured; status unavailable in fast mode",
+      });
+      visibleChannelIds.add(channelId);
+    }
   }
 
   return {

@@ -404,7 +404,6 @@ export function renderShellFunction() {
   ${renderAuthProfileSecretKeyExport().join("\n  ")}
   export OPENCLAW_TEST_WORKSPACE_DIR="$OPENCLAW_TEST_STATE_HOME/workspace"
   unset OPENCLAW_AGENT_DIR
-  unset PI_CODING_AGENT_DIR
   unset OPENCLAW_SERVICE_REPAIR_POLICY
   mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
   case "$scenario" in

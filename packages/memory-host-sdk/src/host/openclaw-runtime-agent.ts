@@ -1,5 +1,5 @@
 export {
-  DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+  DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   asToolParamsRecord,
   jsonResult,
   parseAgentSessionKey,

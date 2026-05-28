@@ -8,6 +8,10 @@ import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js"
 import { messageCommand } from "../../../commands/message.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { CHANNEL_TARGET_DESCRIPTION } from "../../../infra/outbound/channel-target.js";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "../../../infra/parse-finite-number.js";
 import { runGlobalGatewayStopSafely } from "../../../plugins/hook-runner-global.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
@@ -25,6 +29,14 @@ const GATEWAY_STOP_TIMEOUT_MS = 2500;
 const ACTIONS_WITHOUT_STOP_HOOKS = new Set(["read"]);
 const ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD = new Set(["broadcast"]);
 const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_NAMES);
+const STRICT_POSITIVE_INTEGER_OPTIONS = new Map([
+  ["pollDurationHours", "--poll-duration-hours"],
+  ["pollDurationSeconds", "--poll-duration-seconds"],
+  ["durationMin", "--duration-min"],
+  ["limit", "--limit"],
+  ["autoArchiveMin", "--auto-archive-min"],
+]);
+const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([["deleteDays", "--delete-days"]]);
 
 type MessagePluginLoadOptions = { scope: PluginRegistryScope; onlyChannelIds?: string[] };
 type MessagePluginPreloadPlan =
@@ -37,6 +49,25 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
     ...rest,
     accountId: typeof account === "string" ? account : rest.accountId,
   };
+}
+
+function validateMessageNumericOptions(opts: Record<string, unknown>): void {
+  for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
+    if (opts[key] === undefined) {
+      continue;
+    }
+    if (parseStrictPositiveInteger(opts[key]) === undefined) {
+      throw new Error(`${flag} must be a positive integer.`);
+    }
+  }
+  for (const [key, flag] of STRICT_NON_NEGATIVE_INTEGER_OPTIONS) {
+    if (opts[key] === undefined) {
+      continue;
+    }
+    if (parseStrictNonNegativeInteger(opts[key]) === undefined) {
+      throw new Error(`${flag} must be a non-negative integer.`);
+    }
+  }
 }
 
 async function runPluginStopHooks(): Promise<void> {
@@ -128,6 +159,7 @@ export function createMessageCliHelpers(
     await runCommandWithRuntime(
       defaultRuntime,
       async () => {
+        validateMessageNumericOptions(opts);
         const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
         if (preloadPlan.preload) {
           ensurePluginRegistryLoaded(preloadPlan.loadOptions);

@@ -1,5 +1,5 @@
 ---
-summary: "Adds the Google Chat channel surface for sending and receiving OpenClaw messages."
+summary: "OpenClaw Google Chat channel plugin for spaces and direct messages."
 read_when:
   - You are installing, configuring, or auditing the googlechat plugin
 title: "Google Chat plugin"
@@ -7,7 +7,7 @@ title: "Google Chat plugin"
 
 # Google Chat plugin
 
-Adds the Google Chat channel surface for sending and receiving OpenClaw messages.
+OpenClaw Google Chat channel plugin for spaces and direct messages.
 
 ## Distribution
 

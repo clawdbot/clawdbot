@@ -44,7 +44,7 @@ internal fun isLoopbackGatewayHost(
   return isMappedIpv4 && address[12] == 127.toByte()
 }
 
-internal fun isPrivateLanGatewayHost(
+internal fun isLocalCleartextGatewayHost(
   rawHost: String?,
   allowEmulatorBridgeAlias: Boolean = isAndroidEmulatorRuntime(),
 ): Boolean {
