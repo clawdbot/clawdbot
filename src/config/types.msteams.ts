@@ -21,6 +21,9 @@ export type MSTeamsWebhookConfig = {
   path?: string;
 };
 
+/** Teams SDK cloud environment. Public cloud is the default. */
+export type MSTeamsCloudName = "Public" | "USGov" | "USGovDoD" | "China";
+
 /**
  * Bot Framework OAuth SSO configuration for Microsoft Teams.
  *
@@ -95,6 +98,13 @@ export type MSTeamsConfig = {
   appPassword?: SecretInput;
   /** Azure AD Tenant ID (for single-tenant bots). */
   tenantId?: string;
+  /** Teams SDK cloud environment. Default: Public. */
+  cloud?: MSTeamsCloudName;
+  /**
+   * Bot Connector service URL used by SDK proactive sends/edits/deletes.
+   * Set with `cloud` for USGov/DoD SDK clouds; set alone for GCC.
+   */
+  serviceUrl?: string;
   /**
    * Authentication type.
    * - `"secret"` (default): uses `appPassword` (client secret).

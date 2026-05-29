@@ -116,12 +116,17 @@ describe("parseTtsDirectives provider-aware routing", () => {
   });
 
   it("routes to preferred provider aliases when no provider token is declared", () => {
-    const azure = makeProvider("azure-speech", 20, ({ key, value }) => {
-      if (key === "speed") {
-        return { handled: true, overrides: { speed: Number(value) } };
-      }
-      return undefined;
-    }, { aliases: ["azure"] });
+    const azure = makeProvider(
+      "azure-speech",
+      20,
+      ({ key, value }) => {
+        if (key === "speed") {
+          return { handled: true, overrides: { speed: Number(value) } };
+        }
+        return undefined;
+      },
+      { aliases: ["azure"] },
+    );
 
     const result = parseTtsDirectives("[[tts:speed=1.5]]", fullPolicy, {
       providers: [elevenlabs, azure],
@@ -214,6 +219,24 @@ describe("parseTtsDirectives provider-aware routing", () => {
 
     expect(result.overrides.providerOverrides?.selected).toEqual({ voice: "test" });
     expect(selectedProvider).toBe("selected");
+  });
+
+  it("routes generic speakerVoice directive tokens to the selected provider", () => {
+    const result = parseTtsDirectives(
+      "[[tts:provider=elevenlabs speakerVoice=Rachel speakerVoiceId=voice-123]]",
+      fullPolicy,
+      { providers: [elevenlabs, minimax] },
+    );
+
+    expect(result.overrides.provider).toBe("elevenlabs");
+    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({
+      speakerVoice: "Rachel",
+      voice: "Rachel",
+      voiceName: "Rachel",
+      speakerVoiceId: "voice-123",
+      voiceId: "voice-123",
+    });
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("resolves explicit provider aliases without rewriting the requested provider value", () => {

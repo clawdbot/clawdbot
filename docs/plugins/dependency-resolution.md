@@ -34,34 +34,36 @@ OpenClaw owns only the plugin lifecycle:
 
 OpenClaw uses stable per-source roots:
 
-- npm packages install under `~/.openclaw/npm`
+- npm packages install into per-plugin projects under
+  `~/.openclaw/npm/projects/<encoded-package>`
 - git packages clone under `~/.openclaw/git`
 - local/path/archive installs are copied or referenced without dependency repair
 
-npm installs run in the npm root with:
+npm installs run in that per-plugin project root with:
 
 ```bash
-cd ~/.openclaw/npm
+cd ~/.openclaw/npm/projects/<encoded-package>
 npm install --omit=dev --omit=peer --legacy-peer-deps --ignore-scripts --no-audit --no-fund
 ```
 
-`openclaw plugins install npm-pack:<path.tgz>` uses that same managed npm root
-for a local npm-pack tarball. OpenClaw reads the tarball's npm metadata, adds it
-to the managed root as a copied `file:` dependency, runs the normal npm install,
-and then verifies the installed lockfile metadata before trusting the plugin.
+`openclaw plugins install npm-pack:<path.tgz>` uses that same per-plugin npm
+project root for a local npm-pack tarball. OpenClaw reads the tarball's npm
+metadata, adds it to the managed project as a copied `file:` dependency, runs
+the normal npm install, and then verifies the installed lockfile metadata before
+trusting the plugin.
 This is intended for package-acceptance and release-candidate proof where a
 local pack artifact should behave like the registry artifact it simulates.
 
-npm may hoist transitive dependencies to `~/.openclaw/npm/node_modules` beside
-the plugin package. OpenClaw scans the managed npm root before trusting the
-install and uses npm to remove npm-managed packages during uninstall, so hoisted
-runtime dependencies stay inside the managed cleanup boundary.
+npm may hoist transitive dependencies to the per-plugin project's
+`node_modules` beside the plugin package. OpenClaw scans the managed project
+root before trusting the install and removes that project during uninstall, so
+hoisted runtime dependencies stay inside that plugin's cleanup boundary.
 
 Published npm plugin packages can ship `npm-shrinkwrap.json`. npm uses that
-publishable lockfile during install, and OpenClaw's managed npm root supports it
-through the normal npm install path. OpenClaw-owned publishable plugin packages
-must include a package-local shrinkwrap generated from that plugin package's
-published dependency graph:
+publishable lockfile during install, and OpenClaw's managed npm project root
+supports it through the normal npm install path. OpenClaw-owned publishable
+plugin packages must include a package-local shrinkwrap generated from that
+plugin package's published dependency graph:
 
 ```bash
 pnpm deps:shrinkwrap:generate
@@ -87,11 +89,11 @@ instead of embedding every platform binary in the plugin tarball. The root
 
 Plugins that import `openclaw/plugin-sdk/*` declare `openclaw` as a peer
 dependency. OpenClaw does not let npm install a separate registry copy of the
-host package into the managed root, because stale host packages can affect npm
-peer resolution during later plugin installs. Managed npm installs skip npm peer
-resolution/materialization for the shared root and OpenClaw reasserts
-plugin-local `node_modules/openclaw` links for installed packages that declare
-the host peer after install, update, or uninstall.
+host package into a managed project, because stale host packages can affect npm
+peer resolution inside that plugin. Managed npm installs skip npm peer
+resolution/materialization and OpenClaw reasserts plugin-local
+`node_modules/openclaw` links for installed packages that declare the host peer
+after install or update.
 
 git installs clone or refresh the repository, then run:
 
@@ -155,7 +157,7 @@ not a supported way to prepare bundled plugin dependencies.
 | -------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
 | `npm install -g openclaw`        | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
 | Git checkout plus `pnpm install` | `extensions/<id>` workspace packages  | The pnpm workspace, including each plugin package's own dependencies |
-| `openclaw plugins install ...`   | Managed npm/git/ClawHub plugin root   | The plugin install/update flow                                       |
+| `openclaw plugins install ...`   | Managed npm project/git/ClawHub root  | The plugin install/update flow                                       |
 
 ## Legacy cleanup
 
@@ -168,4 +170,7 @@ stage directories, and package-local pnpm stores. Packaged postinstall also
 removes those global symlinks before pruning the legacy target roots so upgrades
 do not leave dangling ESM package imports.
 
-These paths are legacy debris only. New installs should not create them.
+Older npm installs also used a shared `~/.openclaw/npm/node_modules` root.
+Current install, update, uninstall, and doctor flows still recognize that legacy
+flat root only for recovery and cleanup. New npm installs should create
+per-plugin project roots instead.

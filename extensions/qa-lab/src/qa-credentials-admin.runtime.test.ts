@@ -85,6 +85,7 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(result.credential.credentialId).toBe("cred-1");
+    expect(result.credential.credentialFingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
     expect(requireFirstFetchInput(fetchImpl)).toBe(
       "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
     );
@@ -225,6 +226,7 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(result.credentials).toHaveLength(1);
+    expect(result.credentials[0]?.credentialFingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
     const bodyText = requireFirstFetchInit(fetchImpl).body;
     expect(typeof bodyText).toBe("string");
     const body = JSON.parse(bodyText as string) as Record<string, unknown>;

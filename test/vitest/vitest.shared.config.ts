@@ -173,6 +173,80 @@ export const sharedVitestConfig = {
         find: "@openclaw/whatsapp/api.js",
         replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
       },
+      {
+        find: "@openclaw/gateway-client/readiness",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "readiness.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client/timeouts",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "timeouts.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/client-info",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "client-info.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/connect-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "connect-error-details.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/schema",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/startup-unavailable",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "startup-unavailable.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/version",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "version.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/ip",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "ip.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/ipv4",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "ipv4.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/redact-sensitive-url",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "net-policy",
+          "src",
+          "redact-sensitive-url.ts",
+        ),
+      },
+      {
+        find: "@openclaw/net-policy/url-userinfo",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-userinfo.ts"),
+      },
+      {
+        find: "@openclaw/net-policy",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
+      },
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -403,7 +477,7 @@ export const sharedVitestConfig = {
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",
-        "src/gateway/protocol/**",
+        "packages/gateway-protocol/src/**",
         "src/infra/tailscale.ts",
       ],
     },

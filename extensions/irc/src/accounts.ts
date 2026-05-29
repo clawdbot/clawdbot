@@ -5,6 +5,7 @@ import {
   parseOptionalDelimitedEntries,
   tryReadSecretFileSync,
 } from "openclaw/plugin-sdk/channel-core";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -41,8 +42,8 @@ function parseIntEnv(value?: string): number | undefined {
   if (!value?.trim()) {
     return undefined;
   }
-  const parsed = Number.parseInt(value.trim(), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 65535) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined || parsed > 65535) {
     return undefined;
   }
   return parsed;

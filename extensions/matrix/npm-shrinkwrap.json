@@ -11,8 +11,8 @@
         "@matrix-org/matrix-sdk-crypto-nodejs": "0.4.0",
         "@matrix-org/matrix-sdk-crypto-wasm": "18.3.0",
         "fake-indexeddb": "6.2.5",
-        "markdown-it": "14.1.1",
-        "matrix-js-sdk": "41.6.0-rc.0",
+        "markdown-it": "14.2.0",
+        "matrix-js-sdk": "41.6.0",
         "music-metadata": "11.12.3",
         "typebox": "1.1.38",
         "zod": "4.4.3"
@@ -262,9 +262,19 @@
       }
     },
     "node_modules/linkify-it": {
-      "version": "5.0.0",
-      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.0.tgz",
-      "integrity": "sha512-5aHCbzQRADcdP+ATqnDuhhJ/MRIqDkZX5pyjFHRRysS8vZ5AbqGEoFIb6pYHPZ+L/OC2Lc+xT8uHVVR5CAK/wQ==",
+      "version": "5.0.1",
+      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.1.tgz",
+      "integrity": "sha512-wVoTjP4Q6R0NW5hiZkVJaFZPWgtXfoGF+6LucL3/FtiNjmcHhYjEr5f1Kqjirc1nBW07J/ZuRFumqr2oqccEWg==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/puzrin"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/markdown-it"
+        }
+      ],
       "license": "MIT",
       "dependencies": {
         "uc.micro": "^2.0.0"
@@ -284,14 +294,24 @@
       }
     },
     "node_modules/markdown-it": {
-      "version": "14.1.1",
-      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.1.1.tgz",
-      "integrity": "sha512-BuU2qnTti9YKgK5N+IeMubp14ZUKUUw7yeJbkjtosvHiP0AZ5c8IAgEMk79D0eC8F23r4Ac/q8cAIFdm2FtyoA==",
+      "version": "14.2.0",
+      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.2.0.tgz",
+      "integrity": "sha512-1TGiQiJVRQ3NPmZH6sx5Cfnmg6GQm9jvC1ch4TK511NjSJvjzKLzn5pPfZRNZkRPZP0HqCioSndqH8v2nRaWVQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/puzrin"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/markdown-it"
+        }
+      ],
       "license": "MIT",
       "dependencies": {
         "argparse": "^2.0.1",
         "entities": "^4.4.0",
-        "linkify-it": "^5.0.0",
+        "linkify-it": "^5.0.1",
         "mdurl": "^2.0.0",
         "punycode.js": "^2.3.1",
         "uc.micro": "^2.1.0"
@@ -307,9 +327,9 @@
       "license": "Apache-2.0"
     },
     "node_modules/matrix-js-sdk": {
-      "version": "41.6.0-rc.0",
-      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-41.6.0-rc.0.tgz",
-      "integrity": "sha512-FcTQyR+Nfh0ASEogYcX393hxGr1936Esg53Z+0f9O4SBsAxl1ZSkLXY3JfLZRLX9dNe38VVwQDQE6QuwnwV7Zw==",
+      "version": "41.6.0",
+      "resolved": "https://registry.npmjs.org/matrix-js-sdk/-/matrix-js-sdk-41.6.0.tgz",
+      "integrity": "sha512-FOEQBE9i3I+yRymMzKdDO5ptonawqrbtwxSqlkkpqaiFRnsA5zplaPZozdukt+IjBTuE2KceFY+bjFXiNi/+Eg==",
       "license": "Apache-2.0",
       "dependencies": {
         "@babel/runtime": "^7.12.5",

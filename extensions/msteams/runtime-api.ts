@@ -35,6 +35,7 @@ export type {
   GroupPolicy,
   GroupToolPolicyConfig,
   MSTeamsChannelConfig,
+  MSTeamsCloudName,
   MSTeamsConfig,
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,

@@ -11,6 +11,7 @@ const REQUIRED_MATRIX_PACKAGES = [
   "@matrix-org/matrix-sdk-crypto-wasm",
 ];
 const MIN_MATRIX_CRYPTO_NATIVE_BINDING_BYTES = 1_000_000;
+export const MATRIX_COMMAND_OUTPUT_TAIL_BYTES = 64 * 1024;
 
 type MatrixCryptoRuntimeDeps = {
   requireFn?: (id: string) => unknown;
@@ -56,7 +57,28 @@ type CommandResult = {
 
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
 
-async function runFixedCommandWithTimeout(params: {
+function appendBoundedOutputTail(current: string, chunk: Buffer | string): string {
+  const chunkBuffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+  if (chunkBuffer.byteLength >= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
+    return chunkBuffer
+      .subarray(chunkBuffer.byteLength - MATRIX_COMMAND_OUTPUT_TAIL_BYTES)
+      .toString("utf8");
+  }
+
+  const currentBuffer = Buffer.from(current);
+  const nextBytes = currentBuffer.byteLength + chunkBuffer.byteLength;
+  if (nextBytes <= MATRIX_COMMAND_OUTPUT_TAIL_BYTES) {
+    return `${current}${chunkBuffer.toString("utf8")}`;
+  }
+
+  const currentTailBytes = MATRIX_COMMAND_OUTPUT_TAIL_BYTES - chunkBuffer.byteLength;
+  const currentTail = currentBuffer.subarray(currentBuffer.byteLength - currentTailBytes);
+  return Buffer.concat([currentTail, chunkBuffer], MATRIX_COMMAND_OUTPUT_TAIL_BYTES).toString(
+    "utf8",
+  );
+}
+
+export async function runFixedCommandWithTimeout(params: {
   argv: string[];
   cwd: string;
   timeoutMs: number;
@@ -103,10 +125,10 @@ async function runFixedCommandWithTimeout(params: {
     process.once("exit", killChildOnExit);
 
     proc.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
+      stdout = appendBoundedOutputTail(stdout, chunk);
     });
     proc.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
+      stderr = appendBoundedOutputTail(stderr, chunk);
     });
 
     timer = setTimeout(() => {

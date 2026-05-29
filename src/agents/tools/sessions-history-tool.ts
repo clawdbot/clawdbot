@@ -7,12 +7,13 @@ import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { readStringValue } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { optionalPositiveIntegerSchema } from "../schema/typebox.js";
 import {
   describeSessionsHistoryTool,
   SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -25,7 +26,7 @@ import {
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
-  limit: Type.Optional(Type.Number({ minimum: 1 })),
+  limit: optionalPositiveIntegerSchema(),
   includeTools: Type.Optional(Type.Boolean()),
 });
 
@@ -247,10 +248,7 @@ export function createSessionsHistoryTool(opts?: {
         });
       }
 
-      const limit =
-        typeof params.limit === "number" && Number.isFinite(params.limit)
-          ? Math.max(1, Math.floor(params.limit))
-          : undefined;
+      const limit = readPositiveIntegerParam(params, "limit");
       const includeTools = Boolean(params.includeTools);
       const result = await gatewayCall<{ messages: Array<unknown> }>({
         method: "chat.history",

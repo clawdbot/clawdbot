@@ -231,6 +231,78 @@ describe("openclaw launcher", () => {
     expect(result.stderr).toContain("missing dist/entry.(m)js");
   });
 
+  it("prints root version without importing the runtime entry", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "1.2.3-test",
+        gitHead: "abcdef0123456789",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "throw new Error('runtime entry should not load for --version');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "--version"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("OpenClaw 1.2.3-test (abcdef0)\n");
+    expect(result.stderr).toBe("");
+  });
+
+  it("defers container-targeted root version to the runtime entry", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.2.3-test" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "--container", "demo", "--version"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+
+    const envResult = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "--version"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv({ OPENCLAW_CONTAINER: "demo" }),
+        encoding: "utf8",
+      },
+    );
+
+    expect(envResult.status).toBe(0);
+    expect(envResult.stdout).toBe("RUNTIME ENTRY\n");
+  });
+
   it("treats Bun direct optional import misses as direct launcher misses", async () => {
     const fixtureRoot = await makeLauncherProbeFixture(
       fixtureRoots,

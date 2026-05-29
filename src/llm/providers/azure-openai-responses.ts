@@ -13,6 +13,7 @@ import type {
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { headersToRecord } from "../utils/headers.js";
+import { resolveAzureDeploymentNameFromMap } from "./azure-deployment-map.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import {
   convertResponsesMessages,
@@ -29,25 +30,6 @@ const AZURE_TOOL_CALL_PROVIDERS = new Set([
   "azure-openai-responses",
 ]);
 
-function parseDeploymentNameMap(value: string | undefined): Map<string, string> {
-  const map = new Map<string, string>();
-  if (!value) {
-    return map;
-  }
-  for (const entry of value.split(",")) {
-    const trimmed = entry.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const [modelId, deploymentName] = trimmed.split("=", 2);
-    if (!modelId || !deploymentName) {
-      continue;
-    }
-    map.set(modelId.trim(), deploymentName.trim());
-  }
-  return map;
-}
-
 function resolveDeploymentName(
   model: Model<"azure-openai-responses">,
   options?: AzureOpenAIResponsesOptions,
@@ -55,10 +37,10 @@ function resolveDeploymentName(
   if (options?.azureDeploymentName) {
     return options.azureDeploymentName;
   }
-  const mappedDeployment = parseDeploymentNameMap(process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP).get(
-    model.id,
-  );
-  return mappedDeployment || model.id;
+  return resolveAzureDeploymentNameFromMap({
+    modelId: model.id,
+    deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
+  });
 }
 
 function formatAzureOpenAIError(error: unknown): string {
@@ -186,7 +168,12 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+  const reasoningEffort =
+    clampedReasoning === "off"
+      ? undefined
+      : clampedReasoning === "max"
+        ? "xhigh"
+        : clampedReasoning;
 
   return streamAzureOpenAIResponses(model, context, {
     ...base,

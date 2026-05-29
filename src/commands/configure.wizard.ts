@@ -5,6 +5,7 @@ import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
+import { parsePort } from "../cli/shared/parse-port.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { ConfigMutationConflictError } from "../config/mutate.js";
@@ -64,8 +65,7 @@ const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigMo
 );
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(typeof value === "string" ? value.trim() : value);
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parsePort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -640,7 +640,7 @@ export async function runConfigureWizard(
         }),
         runtime,
       );
-      gatewayPort = Number.parseInt(portInput, 10);
+      gatewayPort = parsePort(portInput) ?? gatewayPort;
     };
 
     if (selectedSections) {

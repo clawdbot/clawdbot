@@ -5,6 +5,7 @@ export {
   logoutWeb,
   pickWebChannel,
   readWebSelfId,
+  resolveDefaultWebAuthDir,
   WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./src/auth-store.js";

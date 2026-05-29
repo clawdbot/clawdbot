@@ -1,14 +1,4 @@
 import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
-import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
-import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
-import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
-import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
-import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -21,7 +11,17 @@ import {
   validateTalkSessionSteerParams,
   validateTalkSessionSubmitToolResultParams,
   validateTalkSessionTurnParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../talk/agent-consult-tool.js";
+import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../talk/agent-run-control-shared.js";
+import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
+import type { TalkBrain, TalkMode, TalkTransport } from "../../talk/talk-events.js";
+import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import {
   cancelTalkHandoffTurn,
@@ -261,6 +261,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           providerConfigs: realtimeConfig.providers,
           cfg: runtimeConfig,
           cfgForResolve: runtimeConfig,
+          defaultModel: realtimeConfig.model,
           noRegisteredProviderMessage: "No realtime voice provider registered",
         });
         const launchOptions = buildRealtimeVoiceLaunchOptions({
@@ -317,6 +318,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           config: runtimeConfig,
           configuredProviderId: transcriptionConfig.provider,
           providerConfigs: transcriptionConfig.providers,
+          defaultModel: transcriptionConfig.model,
         });
         const session = createTalkTranscriptionRelaySession({
           context,

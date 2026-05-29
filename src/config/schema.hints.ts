@@ -1,10 +1,10 @@
-import { z } from "zod";
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   isSensitiveUrlConfigPath,
   SENSITIVE_URL_HINT_TAG,
-} from "../shared/net/redact-sensitive-url.js";
+} from "@openclaw/net-policy/redact-sensitive-url";
+import { z } from "zod";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";

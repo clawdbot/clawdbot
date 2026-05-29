@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { Agent as HttpAgent } from "node:http";
 import { Agent as HttpsAgent } from "node:https";
-import * as httpsProxyAgent from "https-proxy-agent";
 import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   captureWsEvent,
   resolveEffectiveDebugProxyUrl,
@@ -36,9 +37,7 @@ type DiscordGatewayWebSocketCtor = new (
   url: string,
   options?: { agent?: unknown; handshakeTimeout?: number },
 ) => ws.WebSocket;
-type DiscordGatewayWebSocketAgent =
-  | InstanceType<typeof HttpsAgent>
-  | InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>;
+type DiscordGatewayWebSocketAgent = InstanceType<typeof HttpsAgent> | HttpAgent;
 const registrationPromises = new WeakMap<discordGateway.GatewayPlugin, Promise<void>>();
 type DiscordGatewayClient = Parameters<discordGateway.GatewayPlugin["registerClient"]>[0];
 type GatewayPluginTestingOptions = {
@@ -49,7 +48,7 @@ type GatewayPluginTestingOptions = {
   webSocketCtor?: DiscordGatewayWebSocketCtor;
 };
 type CreateDiscordGatewayPluginTestingOptions = GatewayPluginTestingOptions & {
-  HttpsProxyAgentCtor?: typeof httpsProxyAgent.HttpsProxyAgent;
+  createProxyAgent?: (proxyUrl: string) => HttpAgent;
 };
 type DiscordGatewayRegistrationState = {
   client?: DiscordGatewayClient;
@@ -280,9 +279,9 @@ export function createDiscordGatewayPlugin(params: {
   if (proxy) {
     try {
       validateDiscordProxyUrl(proxy);
-      const HttpsProxyAgentCtor =
-        params.testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
-      wsAgent = new HttpsProxyAgentCtor<string>(proxy);
+      wsAgent =
+        params.testing?.createProxyAgent?.(proxy) ??
+        createNodeProxyAgent({ mode: "explicit", proxyUrl: proxy, protocol: "https" });
       fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled, proxy);
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {

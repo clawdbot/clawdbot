@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
+  diagnostics?: readonly McpToolCatalogDiagnostic[];
   dispose: () => Promise<void>;
 };
 
@@ -29,6 +30,14 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  diagnostics?: readonly McpToolCatalogDiagnostic[];
+};
+
+export type McpToolCatalogDiagnostic = {
+  serverName: string;
+  safeServerName: string;
+  launchSummary: string;
+  message: string;
 };
 
 export type SessionMcpRuntime = {
@@ -40,7 +49,10 @@ export type SessionMcpRuntime = {
   lastUsedAt: number;
   activeLeases?: number;
   acquireLease?: () => () => void;
+  /** Lists tools if needed and may connect MCP transports. */
   getCatalog: () => Promise<McpToolCatalog>;
+  /** Returns the cached catalog only; must not start runtimes, connect transports, or issue tools/list. */
+  peekCatalog: () => McpToolCatalog | null;
   markUsed: () => void;
   callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
   dispose: () => Promise<void>;
@@ -55,6 +67,11 @@ export type SessionMcpRuntimeManager = {
   }) => Promise<SessionMcpRuntime>;
   bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
+  /** Looks up an existing runtime only; must not create runtimes or connect transports. */
+  peekSession: (params: {
+    sessionId?: string;
+    sessionKey?: string;
+  }) => SessionMcpRuntime | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
   disposeAll: () => Promise<void>;
   sweepIdleRuntimes: () => Promise<number>;

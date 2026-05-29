@@ -5,11 +5,11 @@
  * like command processing, session lifecycle, etc.
  */
 
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/schema.js";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { SessionsPatchParams } from "../gateway/protocol/schema/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";

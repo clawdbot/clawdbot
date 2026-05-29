@@ -1,4 +1,5 @@
 import { t } from "../i18n/index.ts";
+import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import {
   formatRelativeTimestamp,
   formatDurationHuman,
@@ -52,7 +53,7 @@ export function formatCronState(job: CronJob) {
   const state = job.state ?? {};
   const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
   const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : t("common.na");
-  const status = state.lastStatus ?? t("common.na");
+  const status = resolveCronJobLastRunStatus(job);
   return `${status} · next ${next} · last ${last}`;
 }
 

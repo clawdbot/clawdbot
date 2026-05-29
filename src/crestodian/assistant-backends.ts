@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CrestodianOverview } from "./overview.js";
 
-const CRESTODIAN_CLAUDE_CLI_MODEL = "claude-opus-4-7";
+const CRESTODIAN_CLAUDE_CLI_MODEL = "claude-opus-4-8";
 const CRESTODIAN_CODEX_MODEL = "gpt-5.5";
 
 type CrestodianLocalPlannerBackend = {

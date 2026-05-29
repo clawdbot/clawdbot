@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import {
   hasNonzeroUsage,
@@ -28,6 +28,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -111,14 +112,14 @@ function resolveOpenAiChatCompletionsLimits(
   const imageConfig = config?.images;
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_OPENAI_CHAT_COMPLETIONS_BODY_BYTES,
-    maxImageParts:
-      typeof config?.maxImageParts === "number"
-        ? Math.max(0, Math.floor(config.maxImageParts))
-        : DEFAULT_OPENAI_MAX_IMAGE_PARTS,
-    maxTotalImageBytes:
-      typeof config?.maxTotalImageBytes === "number"
-        ? Math.max(1, Math.floor(config.maxTotalImageBytes))
-        : DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
+    maxImageParts: resolveIntegerOption(config?.maxImageParts, DEFAULT_OPENAI_MAX_IMAGE_PARTS, {
+      min: 0,
+    }),
+    maxTotalImageBytes: resolveIntegerOption(
+      config?.maxTotalImageBytes,
+      DEFAULT_OPENAI_MAX_TOTAL_IMAGE_BYTES,
+      { min: 1 },
+    ),
     images: {
       allowUrl: imageConfig?.allowUrl ?? DEFAULT_OPENAI_IMAGE_LIMITS.allowUrl,
       urlAllowlist: normalizeInputHostnameAllowlist(imageConfig?.urlAllowlist),

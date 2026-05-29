@@ -383,6 +383,26 @@ describe("handleSlackMessageAction", () => {
     expect(firstInvokeCall(invoke)[1]).toEqual({});
   });
 
+  it("rejects fractional read limits before invoking Slack actions", async () => {
+    const invoke = createInvokeSpy();
+
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "read",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            limit: 2.5,
+          },
+        } as never,
+        invoke: invoke as never,
+      }),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
       handleSlackMessageAction({

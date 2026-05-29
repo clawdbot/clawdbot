@@ -1,3 +1,4 @@
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import type { CronSchedule } from "./types.js";
 
 export const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
@@ -24,7 +25,7 @@ export function normalizeCronStaggerMs(raw: unknown): number | undefined {
     typeof raw === "number"
       ? raw
       : typeof raw === "string" && raw.trim()
-        ? Number(raw)
+        ? (parseStrictNonNegativeInteger(raw) ?? Number.NaN)
         : Number.NaN;
   if (!Number.isFinite(numeric)) {
     return undefined;

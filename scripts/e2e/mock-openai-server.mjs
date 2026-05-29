@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import http from "node:http";
+import { readPositiveIntEnv } from "./lib/env-limits.mjs";
 
-const port = Number(process.env.MOCK_PORT ?? process.env.OPENCLAW_MOCK_OPENAI_PORT);
+const port =
+  process.env.MOCK_PORT != null
+    ? readPositiveIntEnv("MOCK_PORT")
+    : readPositiveIntEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
-
-if (!Number.isInteger(port) || port <= 0) {
-  throw new Error("missing valid MOCK_PORT or OPENCLAW_MOCK_OPENAI_PORT");
-}
 
 function readBody(req) {
   return new Promise((resolve, reject) => {

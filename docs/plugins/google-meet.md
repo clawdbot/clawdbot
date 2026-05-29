@@ -1124,7 +1124,7 @@ Optional overrides:
     introMessage: "Say exactly: I'm here.",
     providers: {
       google: {
-        voice: "Kore",
+        speakerVoice: "Kore",
       },
     },
   },
@@ -1141,7 +1141,7 @@ ElevenLabs for both agent-mode listening and speaking:
       providers: {
         elevenlabs: {
           modelId: "eleven_v3",
-          voiceId: "pMsXgVXv3BLzUgSXRplE",
+          speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
         },
       },
     },
@@ -1169,11 +1169,11 @@ ElevenLabs for both agent-mode listening and speaking:
 ```
 
 The persistent Meet voice comes from
-`messages.tts.providers.elevenlabs.voiceId`. Agent replies can also use
-per-reply `[[tts:voiceId=... model=eleven_v3]]` directives when TTS model
+`messages.tts.providers.elevenlabs.speakerVoiceId`. Agent replies can also use
+per-reply `[[tts:speakerVoiceId=... model=eleven_v3]]` directives when TTS model
 overrides are enabled, but config is the deterministic default for meetings.
 On join, the logs should show `transcriptionProvider=elevenlabs` and each
-spoken reply should log `provider=elevenlabs model=eleven_v3 voice=<voiceId>`.
+spoken reply should log `provider=elevenlabs model=eleven_v3 speakerVoiceId=<voiceId>`.
 
 Twilio-only config:
 

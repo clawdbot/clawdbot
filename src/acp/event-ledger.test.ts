@@ -73,6 +73,39 @@ describe("ACP event ledger", () => {
     ).resolves.toEqual({ complete: false, events: [] });
   });
 
+  it("falls back for non-finite event retention options", async () => {
+    const ledger = createInMemoryAcpEventLedger({ maxEventsPerSession: Number.NaN });
+    await ledger.startSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      cwd: "/work",
+      complete: true,
+    });
+    await ledger.recordUpdate({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "First" },
+      },
+    });
+    await ledger.recordUpdate({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Second" },
+      },
+    });
+
+    await expect(
+      ledger.readReplay({ sessionId: "session-1", sessionKey: "agent:main:work" }),
+    ).resolves.toMatchObject({
+      complete: true,
+      events: [{ seq: 1 }, { seq: 2 }],
+    });
+  });
+
   it("persists file-backed replay state across ledger instances", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
       const filePath = path.join(dir, "acp", "event-ledger.json");

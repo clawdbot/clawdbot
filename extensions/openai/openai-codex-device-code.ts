@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexAccessTokenExpiry } from "./openai-codex-auth-identity.js";
 import { trimNonEmptyString } from "./openai-codex-shared.js";
 
@@ -65,9 +66,9 @@ function normalizePositiveMilliseconds(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.trunc(value * 1000);
   }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    const seconds = Number.parseInt(value.trim(), 10);
-    return seconds > 0 ? seconds * 1000 : undefined;
+  if (typeof value === "string") {
+    const seconds = parseStrictPositiveInteger(value);
+    return seconds === undefined ? undefined : seconds * 1000;
   }
   return undefined;
 }
@@ -76,8 +77,9 @@ function normalizeTokenLifetimeMs(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
     return Math.trunc(value * 1000);
   }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    return Number.parseInt(value.trim(), 10) * 1000;
+  if (typeof value === "string") {
+    const seconds = parseStrictPositiveInteger(value);
+    return seconds === undefined ? undefined : seconds * 1000;
   }
   return undefined;
 }

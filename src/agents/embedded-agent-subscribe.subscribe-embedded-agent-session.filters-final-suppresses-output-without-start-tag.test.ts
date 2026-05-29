@@ -95,6 +95,115 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(requireFirstReplyPayload(onPartialReply).text).toBe("Hello world");
   });
 
+  it("keeps final tag literals inside streamed fenced code while enforcement is on", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "```xml\n" });
+    emitAssistantTextDelta({ emit, delta: "<final>literal</final>\n" });
+    emitAssistantTextDelta({ emit, delta: "```\n<final>Answer</final>" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Answer");
+  });
+
+  it("does not keep stale fence state after a suppressed prefix closes before final text", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "```xml\n" });
+    emitAssistantTextDelta({ emit, delta: "```\n<final>Answer" });
+    emitAssistantTextDelta({ emit, delta: "</final><think>secret</think>" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Answer");
+    expect(payloads.some((payload) => String(payload.text).includes("secret"))).toBe(false);
+  });
+
+  it("does not let suppressed inline code state hide later final tags", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "draft `" });
+    emitAssistantTextDelta({ emit, delta: "<final>Answer</final>" });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(requireFirstReplyPayload(onPartialReply).text).toBe("Answer");
+  });
+
+  it("closes hidden reasoning fences split across deltas before final text", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "<think>\n```ts\nconst hidden = true;\n``" });
+    emitAssistantTextDelta({ emit, delta: "`\n</think><final>Answer</final>" });
+
+    expect(onPartialReply).toHaveBeenCalledTimes(1);
+    expect(requireFirstReplyPayload(onPartialReply).text).toBe("Answer");
+  });
+
+  it("strips nested final tag literals after suppressed fenced prefixes", () => {
+    const { session, emit } = createStubSessionHarness();
+
+    const onAgentEvent = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      enforceFinalTag: true,
+      onAgentEvent,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "```xml\n" });
+    emitAssistantTextDelta({
+      emit,
+      delta: "```\n<final>Answer <final>literal</final></final>",
+    });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Answer literal");
+  });
+
   it("strips final tags split across streamed deltas without emitting tag remnants", () => {
     const { session, emit } = createStubSessionHarness();
 

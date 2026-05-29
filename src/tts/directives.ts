@@ -5,6 +5,7 @@ import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
+  SpeechProviderOverrides,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 } from "./provider-types.js";
@@ -80,6 +81,36 @@ function resolveDirectiveProvider(
       provider.id === normalized ||
       provider.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalized),
   );
+}
+
+function parseGenericSpeakerDirective(params: {
+  key: string;
+  value: string;
+  policy: SpeechModelOverridePolicy;
+  currentOverrides?: SpeechProviderOverrides;
+}): SpeechProviderOverrides | undefined {
+  if (!params.policy.allowVoice) {
+    return undefined;
+  }
+  switch (params.key) {
+    case "speakervoice":
+    case "speaker_voice":
+      return {
+        ...params.currentOverrides,
+        speakerVoice: params.value,
+        voice: params.value,
+        voiceName: params.value,
+      };
+    case "speakervoiceid":
+    case "speaker_voice_id":
+      return {
+        ...params.currentOverrides,
+        speakerVoiceId: params.value,
+        voiceId: params.value,
+      };
+    default:
+      return undefined;
+  }
 }
 
 function collectMarkdownCodeRanges(text: string): TextRange[] {
@@ -313,6 +344,23 @@ export function parseTtsDirectives(
       let handled = false;
       const directiveProviders = getDirectiveProviders();
       for (const provider of directiveProviders) {
+        const genericSpeakerOverrides = parseGenericSpeakerDirective({
+          key,
+          value: rawValue,
+          policy,
+          currentOverrides: overrides.providerOverrides?.[provider.id],
+        });
+        if (genericSpeakerOverrides) {
+          overrides.providerOverrides = {
+            ...overrides.providerOverrides,
+            [provider.id]: {
+              ...overrides.providerOverrides?.[provider.id],
+              ...genericSpeakerOverrides,
+            },
+          };
+          handled = true;
+          break;
+        }
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,

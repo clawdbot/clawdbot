@@ -22,6 +22,7 @@ import {
   type IMessageApprovalConversationKey,
   registerIMessageApprovalReactionTargetForOutboundMessage,
 } from "./approval-reactions.js";
+import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { rememberIMessageReplyCache } from "./monitor-reply-cache.js";
@@ -549,6 +550,31 @@ async function runIMessageCliJson(
     let stdout = "";
     let stderr = "";
     let killEscalation: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    const clearTimers = (options: { keepKillEscalation?: boolean } = {}): void => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation && !options.keepKillEscalation) {
+        clearTimeout(killEscalation);
+      }
+    };
+    const fail = (error: Error, options: { keepKillEscalation?: boolean } = {}): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers(options);
+      reject(error);
+    };
+    const succeed = (value: Record<string, unknown>): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      resolve(value);
+    };
     const timer =
       timeoutMs && timeoutMs > 0
         ? setTimeout(() => {
@@ -560,32 +586,43 @@ async function runIMessageCliJson(
                 // best-effort
               }
             }, 2000);
-            reject(new Error(`iMessage action timed out after ${timeoutMs}ms`));
+            fail(new Error(`iMessage action timed out after ${timeoutMs}ms`), {
+              keepKillEscalation: true,
+            });
           }, timeoutMs)
         : null;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      if (settled) {
+        return;
+      }
+      const appended = appendIMessageCliStdout(stdout, chunk);
+      if (!appended.ok) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // best-effort
+        }
+        fail(new Error(appended.message));
+        return;
+      }
+      stdout = appended.value;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr = appendIMessageCliStderrTail(stderr, chunk);
     });
     child.on("error", (error) => {
-      if (timer) {
-        clearTimeout(timer);
+      if (settled) {
+        clearTimers();
+        return;
       }
-      if (killEscalation) {
-        clearTimeout(killEscalation);
-      }
-      reject(error);
+      fail(error);
     });
     child.on("close", (code) => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (killEscalation) {
-        clearTimeout(killEscalation);
+      if (settled) {
+        clearTimers();
+        return;
       }
       const lines = stdout
         .split(/\r?\n/u)
@@ -606,18 +643,18 @@ async function runIMessageCliJson(
       if (code === 0 && parsed) {
         const failure = resolveIMessageCliFailure(parsed);
         if (failure) {
-          reject(new Error(failure));
+          fail(new Error(failure));
           return;
         }
-        resolve(parsed);
+        succeed(parsed);
         return;
       }
       if (parsed && typeof parsed.error === "string" && parsed.error.trim()) {
-        reject(new Error(parsed.error.trim()));
+        fail(new Error(parsed.error.trim()));
         return;
       }
       const detail = stderr.trim() || stdout.trim() || `imsg exited with code ${code}`;
-      reject(new Error(detail));
+      fail(new Error(detail));
     });
   });
 }

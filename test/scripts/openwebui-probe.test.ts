@@ -102,6 +102,18 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
     expect(result.stderr).toContain("OPENWEBUI_MODEL_ATTEMPTS must be a positive integer; got: 0");
   });
 
+  it("rejects loose response body cap env values instead of parsing prefixes", async () => {
+    const result = await runProbe("http://127.0.0.1:9", {
+      OPENWEBUI_RESPONSE_BODY_MAX_BYTES: "1mb",
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "OPENWEBUI_RESPONSE_BODY_MAX_BYTES must be a positive integer; got: 1mb",
+    );
+  });
+
   it("uses a short control-plane timeout for stalled sign-in requests", async () => {
     const sockets = new Set<Socket>();
     const server = createTcpServer((socket) => {
@@ -158,6 +170,64 @@ describe("scripts/e2e/openwebui-probe.mjs", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("Open WebUI signin timed out after 25ms");
+    } finally {
+      server.close();
+    }
+  });
+
+  it("bounds sign-in error response bodies", async () => {
+    const server = createServer((request, response) => {
+      if (request.url === "/api/v1/auths/signin") {
+        response.writeHead(500, { "content-type": "text/plain" });
+        response.end("x".repeat(64));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    const baseUrl = await listen(server);
+    try {
+      const result = await runProbe(baseUrl, {
+        OPENWEBUI_RESPONSE_BODY_MAX_BYTES: "16",
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Open WebUI signin response body exceeded 16 bytes");
+      expect(result.stderr).not.toContain("x".repeat(64));
+    } finally {
+      server.close();
+    }
+  });
+
+  it("bounds model-list error response bodies", async () => {
+    const server = createServer((request, response) => {
+      if (request.url === "/api/v1/auths/signin") {
+        response.writeHead(200, {
+          "content-type": "application/json",
+          "set-cookie": "openwebui-session=test; Path=/",
+        });
+        response.end(JSON.stringify({ token: "test-token" }));
+        return;
+      }
+      if (request.url === "/api/models") {
+        response.writeHead(502, { "content-type": "text/plain" });
+        response.end("y".repeat(96));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    const baseUrl = await listen(server);
+    try {
+      const result = await runProbe(baseUrl, {
+        OPENWEBUI_RESPONSE_BODY_MAX_BYTES: "32",
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "Open WebUI models attempt 1 response body exceeded 32 bytes",
+      );
+      expect(result.stderr).not.toContain("y".repeat(96));
     } finally {
       server.close();
     }

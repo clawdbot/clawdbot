@@ -3,6 +3,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  appendQaChildOutputTail,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+} from "./child-output.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import type {
@@ -54,11 +59,11 @@ async function callPluginToolsMcp(params: {
     cwd: params.env.gateway.tempRoot,
     env: transportEnv,
   });
-  let stderrTail = "";
+  const stderrTail = createQaChildOutputTail(MCP_STDERR_TAIL_LIMIT);
   const stderr = transport.stderr;
   if (stderr && typeof stderr.on === "function") {
     stderr.on("data", (chunk: unknown) => {
-      stderrTail = `${stderrTail}${String(chunk)}`.slice(-MCP_STDERR_TAIL_LIMIT);
+      appendQaChildOutputTail(stderrTail, chunk);
     });
   }
   const client = new Client({ name: "openclaw-qa-suite", version: "0.0.0" }, {});
@@ -85,7 +90,7 @@ async function callPluginToolsMcp(params: {
         { timeout: MCP_REQUEST_TIMEOUT_MS },
       );
     } catch (error) {
-      const tail = stderrTail.trim();
+      const tail = formatQaChildOutputTail(stderrTail, "MCP stderr").trim();
       if (!tail || !(error instanceof Error)) {
         throw error;
       }

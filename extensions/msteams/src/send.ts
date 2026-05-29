@@ -23,6 +23,11 @@ import { buildConversationReference, sendMSTeamsMessages } from "./messenger.js"
 import { setPendingUploadActivityIdFs } from "./pending-uploads-fs.js";
 import { setPendingUploadActivityId } from "./pending-uploads.js";
 import { buildMSTeamsPollCard } from "./polls.js";
+import {
+  deleteMSTeamsActivityWithReference,
+  sendMSTeamsActivityWithReference,
+  updateMSTeamsActivityWithReference,
+} from "./sdk-proactive.js";
 import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-context.js";
 
 type SendMSTeamsMessageParams = {
@@ -151,14 +156,14 @@ export async function sendMessageMSTeams(
   const messageText = convertMarkdownTables(text ?? "", tableMode);
   const ctx = await resolveMSTeamsSendContext({ cfg, to });
   const {
-    adapter,
-    appId,
+    app,
     conversationId,
     ref,
     log,
     conversationType,
     tokenProvider,
     sharePointSiteId,
+    sdkCloudOptions,
   } = ctx;
 
   log.debug?.("sending proactive message", {
@@ -212,11 +217,11 @@ export async function sendMessageMSTeams(
       log.debug?.("sending file consent card", { uploadId, fileName, size: media.buffer.length });
 
       const messageId = await sendProactiveActivity({
-        adapter,
-        appId,
+        app,
         ref,
         activity,
         errorPrefix: "msteams consent card send",
+        serviceUrlBoundary: sdkCloudOptions,
       });
 
       // Store the activity ID so the accept handler can replace the consent
@@ -298,10 +303,10 @@ export async function sendMessageMSTeams(
           attachments: [fileCardAttachment],
         };
         const messageId = await sendProactiveActivityRaw({
-          adapter,
-          appId,
+          app,
           ref,
           activity,
+          serviceUrlBoundary: sdkCloudOptions,
         });
 
         log.info("sent native file card", {
@@ -342,10 +347,10 @@ export async function sendMessageMSTeams(
         text: messageText ? `${messageText}\n\n${fileLink}` : fileLink,
       };
       const messageId = await sendProactiveActivityRaw({
-        adapter,
-        appId,
+        app,
         ref,
         activity,
+        serviceUrlBoundary: sdkCloudOptions,
       });
 
       log.info("sent message with OneDrive file link", {
@@ -383,7 +388,7 @@ async function sendTextWithMedia(
   mediaUrl: string | undefined,
 ): Promise<SendMSTeamsMessageResult> {
   const {
-    adapter,
+    app,
     appId,
     conversationId,
     ref,
@@ -398,7 +403,7 @@ async function sendTextWithMedia(
   try {
     platformMessageIds = await sendMSTeamsMessages({
       replyStyle,
-      adapter,
+      app,
       appId,
       conversationRef: ref,
       messages: [{ text: text || undefined, mediaUrl }],
@@ -409,6 +414,7 @@ async function sendTextWithMedia(
       tokenProvider,
       sharePointSiteId,
       mediaMaxBytes,
+      serviceUrlBoundary: ctx.sdkCloudOptions,
     });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
@@ -435,49 +441,37 @@ async function sendTextWithMedia(
 }
 
 type ProactiveActivityParams = {
-  adapter: MSTeamsProactiveContext["adapter"];
-  appId: string;
+  app: MSTeamsProactiveContext["app"];
   ref: MSTeamsProactiveContext["ref"];
   activity: Record<string, unknown>;
   errorPrefix: string;
+  serviceUrlBoundary: MSTeamsProactiveContext["sdkCloudOptions"];
 };
 
 type ProactiveActivityRawParams = Omit<ProactiveActivityParams, "errorPrefix">;
 
 async function sendProactiveActivityRaw({
-  adapter,
-  appId,
+  app,
   ref,
   activity,
+  serviceUrlBoundary,
 }: ProactiveActivityRawParams): Promise<string> {
   const baseRef = buildConversationReference(ref);
-  const proactiveRef = {
-    ...baseRef,
-    activityId: undefined,
-  };
-
-  let messageId = "unknown";
-  await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-    const response = await ctx.sendActivity(activity);
-    messageId = extractMessageId(response) ?? "unknown";
+  const response = await sendMSTeamsActivityWithReference(app, baseRef, activity, {
+    serviceUrlBoundary,
   });
-  return messageId;
+  return extractMessageId(response) ?? "unknown";
 }
 
 async function sendProactiveActivity({
-  adapter,
-  appId,
+  app,
   ref,
   activity,
   errorPrefix,
+  serviceUrlBoundary,
 }: ProactiveActivityParams): Promise<string> {
   try {
-    return await sendProactiveActivityRaw({
-      adapter,
-      appId,
-      ref,
-      activity,
-    });
+    return await sendProactiveActivityRaw({ app, ref, activity, serviceUrlBoundary });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
@@ -496,7 +490,7 @@ export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
   const { cfg, to, question, options, maxSelections } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
@@ -525,11 +519,11 @@ export async function sendPollMSTeams(
 
   // Send poll via proactive conversation (Adaptive Cards require direct activity send)
   const messageId = await sendProactiveActivity({
-    adapter,
-    appId,
+    app,
     ref,
     activity,
     errorPrefix: "msteams poll send",
+    serviceUrlBoundary: sdkCloudOptions,
   });
 
   log.info("sent poll", { conversationId, pollId: pollCard.pollId, messageId });
@@ -548,7 +542,7 @@ export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
   const { cfg, to, card } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
@@ -571,11 +565,11 @@ export async function sendAdaptiveCardMSTeams(
 
   // Send card via proactive conversation
   const messageId = await sendProactiveActivity({
-    adapter,
-    appId,
+    app,
     ref,
     activity,
     errorPrefix: "msteams card send",
+    serviceUrlBoundary: sdkCloudOptions,
   });
 
   log.info("sent adaptive card", { conversationId, messageId });
@@ -617,31 +611,33 @@ type DeleteMSTeamsMessageResult = {
 /**
  * Edit (update) a previously sent message in a Teams conversation.
  *
- * Uses the Bot Framework `continueConversation` → `updateActivity` flow
- * for proactive edits outside of the original turn context.
+ * Uses the Bot Framework REST API for proactive edits outside of the
+ * original turn context.
  */
 export async function editMessageMSTeams(
   params: EditMSTeamsMessageParams,
 ): Promise<EditMSTeamsMessageResult> {
   const { cfg, to, activityId, text } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
 
   log.debug?.("editing proactive message", { conversationId, activityId, textLength: text.length });
 
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = { ...baseRef, activityId: undefined };
-
   try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      await ctx.updateActivity({
+    const baseRef = buildConversationReference(ref);
+    await updateMSTeamsActivityWithReference(
+      app,
+      baseRef,
+      activityId,
+      {
         type: "message",
         id: activityId,
         text,
-      });
-    });
+      } as Record<string, unknown>,
+      { serviceUrlBoundary: sdkCloudOptions },
+    );
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);
     const hint = formatMSTeamsSendErrorHint(classification);
@@ -660,26 +656,24 @@ export async function editMessageMSTeams(
 /**
  * Delete a previously sent message in a Teams conversation.
  *
- * Uses the Bot Framework `continueConversation` → `deleteActivity` flow
- * for proactive deletes outside of the original turn context.
+ * Uses the Bot Framework REST API for proactive deletes outside of the
+ * original turn context.
  */
 export async function deleteMessageMSTeams(
   params: DeleteMSTeamsMessageParams,
 ): Promise<DeleteMSTeamsMessageResult> {
   const { cfg, to, activityId } = params;
-  const { adapter, appId, conversationId, ref, log } = await resolveMSTeamsSendContext({
+  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
 
   log.debug?.("deleting proactive message", { conversationId, activityId });
 
-  const baseRef = buildConversationReference(ref);
-  const proactiveRef = { ...baseRef, activityId: undefined };
-
   try {
-    await adapter.continueConversation(appId, proactiveRef, async (ctx) => {
-      await ctx.deleteActivity(activityId);
+    const baseRef = buildConversationReference(ref);
+    await deleteMSTeamsActivityWithReference(app, baseRef, activityId, {
+      serviceUrlBoundary: sdkCloudOptions,
     });
   } catch (err) {
     const classification = classifyMSTeamsSendError(err);

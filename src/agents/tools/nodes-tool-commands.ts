@@ -1,8 +1,12 @@
 import crypto from "node:crypto";
-import { parseTimeoutMs } from "../../cli/parse-timeout.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { jsonResult, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  readStringParam,
+} from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 import { POLICY_REDIRECT_INVOKE_COMMANDS } from "./nodes-tool-media.js";
@@ -86,21 +90,14 @@ export async function executeNodeCommandAction(params: {
     }
     case "location_get": {
       const node = readStringParam(params.input, "node", { required: true });
-      const maxAgeMs =
-        typeof params.input.maxAgeMs === "number" && Number.isFinite(params.input.maxAgeMs)
-          ? params.input.maxAgeMs
-          : undefined;
+      const maxAgeMs = readNonNegativeIntegerParam(params.input, "maxAgeMs");
       const desiredAccuracy =
         params.input.desiredAccuracy === "coarse" ||
         params.input.desiredAccuracy === "balanced" ||
         params.input.desiredAccuracy === "precise"
           ? params.input.desiredAccuracy
           : undefined;
-      const locationTimeoutMs =
-        typeof params.input.locationTimeoutMs === "number" &&
-        Number.isFinite(params.input.locationTimeoutMs)
-          ? params.input.locationTimeoutMs
-          : undefined;
+      const locationTimeoutMs = readPositiveIntegerParam(params.input, "locationTimeoutMs");
       const payload = await invokeNodeCommandPayload({
         gatewayOpts: params.gatewayOpts,
         node,
@@ -155,7 +152,7 @@ export async function executeNodeCommandAction(params: {
           });
         }
       }
-      const invokeTimeoutMs = parseTimeoutMs(params.input.invokeTimeoutMs);
+      const invokeTimeoutMs = readPositiveIntegerParam(params.input, "invokeTimeoutMs");
       const raw = await callGatewayTool("node.invoke", params.gatewayOpts, {
         nodeId,
         command: invokeCommand,

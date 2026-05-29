@@ -516,6 +516,68 @@ stderr="$(<"$TMPDIR/stderr")"
     }
   });
 
+  it("escalates Docker watchdog children that ignore parent termination", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-node-signal-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "node"),
+        `#!/bin/bash\nexec ${shellQuote(process.execPath)} "$@"\n`,
+      );
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/bash
+printf "%s\\n" "$$" >"$TMPDIR/docker-pid"
+printf "%s\\n" "$PPID" >"$TMPDIR/watchdog-pid"
+trap "" TERM
+while true; do /bin/sleep 1; done
+`,
+      );
+      chmodSync(join(binDir, "node"), 0o755);
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export DOCKER_COMMAND_TIMEOUT=30s
+export OPENCLAW_DOCKER_TIMEOUT_KILL_GRACE_MS=100
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+docker_e2e_docker_cmd run demo &
+watchdog_pid="$!"
+for ((i = 0; i < 100; i += 1)); do
+  [ -s "$TMPDIR/docker-pid" ] && [ -s "$TMPDIR/watchdog-pid" ] && break
+  /bin/sleep 0.02
+done
+[ -s "$TMPDIR/docker-pid" ]
+[ -s "$TMPDIR/watchdog-pid" ]
+kill -TERM "$(/bin/cat "$TMPDIR/watchdog-pid")"
+set +e
+wait "$watchdog_pid"
+status="$?"
+set -e
+[ "$status" = "143" ]
+docker_pid="$(/bin/cat "$TMPDIR/docker-pid")"
+for ((i = 0; i < 100; i += 1)); do
+  kill -0 "$docker_pid" 2>/dev/null || exit 0
+  /bin/sleep 0.02
+done
+echo "docker child still alive after watchdog termination" >&2
+exit 1
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses plain timeout when kill-after is unsupported", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-plain-timeout-"));
 
@@ -1041,6 +1103,28 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     for (const script of [releaseUpgrade, upgradeSurvivor, pluginCorrupt]) {
       expect(script).toContain(
         'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g',
+      );
+    }
+  });
+
+  it("keeps upgrade survivor mutable state off the host-mounted artifact tree", () => {
+    const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
+    const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
+
+    for (const script of [runner, publishedRunner]) {
+      expect(script).toContain("openclaw-upgrade-survivor-runtime");
+      expect(script).toContain("OPENCLAW_UPGRADE_SURVIVOR_TMPDIR");
+      expect(script).toContain("OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR");
+      expect(script).toContain(
+        'export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"',
+      );
+      expect(script).toContain('export NPM_CONFIG_CACHE="$npm_config_cache"');
+      expect(script).toContain('chmod 700 "$npm_config_cache" || true');
+      expect(script).not.toContain('export TMPDIR="$ARTIFACT_ROOT/tmp"');
+      expect(script).not.toContain('export TMPDIR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/tmp"');
+      expect(script).not.toContain('export npm_config_cache="$ARTIFACT_ROOT/npm-cache"');
+      expect(script).not.toContain(
+        'export npm_config_cache="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/npm-cache"',
       );
     }
   });

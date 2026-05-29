@@ -15,8 +15,8 @@ import {
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 
 export type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { logInfo, logWarn } from "../../../logger.js";
-import { isLoopbackIpAddress } from "../../../shared/net/ip.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
   getActiveManagedProxyLoopbackMode,

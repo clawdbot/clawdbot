@@ -1,5 +1,7 @@
 type QueryValue = string | number | boolean;
 
+const RATE_LIMIT_HEADER_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+
 export function createRouteKey(method: string, path: string): string {
   return `${method.toUpperCase()} ${path.split("?")[0] ?? path}`;
 }
@@ -25,7 +27,11 @@ export function readHeaderNumber(headers: Headers, name: string): number | undef
   if (!value) {
     return undefined;
   }
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  if (!RATE_LIMIT_HEADER_NUMBER_RE.test(trimmed)) {
+    return undefined;
+  }
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

@@ -216,6 +216,7 @@ export type AgentRuntimeReplyPayload = {
   };
   isError?: boolean;
   isReasoning?: boolean;
+  isReasoningSnapshot?: boolean;
   isCompactionNotice?: boolean;
   isFallbackNotice?: boolean;
   isStatusNotice?: boolean;

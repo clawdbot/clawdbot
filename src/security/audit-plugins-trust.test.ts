@@ -296,6 +296,42 @@ describe("security audit install metadata findings", () => {
         ],
       },
       {
+        name: "still warns when active npm specs are unpinned even with resolved metadata",
+        run: async () => {
+          const stateDir = await makeTmpDir("unpinned-active-spec-resolved-plugin-index");
+          await writePluginIndexInstallRecords(stateDir, {
+            "voice-call": {
+              source: "npm",
+              spec: "@openclaw/voice-call",
+              resolvedSpec: "@openclaw/voice-call@1.2.3",
+              integrity: "sha512-plugin",
+            },
+          });
+          return runInstallMetadataAudit(
+            {
+              hooks: {
+                internal: {
+                  installs: {
+                    "test-hooks": {
+                      source: "npm",
+                      spec: "@openclaw/test-hooks",
+                      resolvedSpec: "@openclaw/test-hooks@1.2.3",
+                      integrity: "sha512-hook",
+                    },
+                  },
+                },
+              },
+            },
+            stateDir,
+          );
+        },
+        expectedPresent: [
+          "plugins.installs_unpinned_npm_specs",
+          "hooks.installs_unpinned_npm_specs",
+        ],
+        expectedAbsent: ["plugins.installs_missing_integrity", "hooks.installs_missing_integrity"],
+      },
+      {
         name: "warns when install records drift from installed package versions",
         run: async () => {
           const stateDir = await makeTmpDir("drift-plugin-index");

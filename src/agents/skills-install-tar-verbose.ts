@@ -45,23 +45,26 @@ function parseTarVerboseSize(line: string): number {
 
   let dateIndex = tokens.findIndex((token) => TAR_VERBOSE_MONTHS.has(token));
   if (dateIndex > 0) {
-    const size = Number.parseInt(tokens[dateIndex - 1] ?? "", 10);
-    if (!Number.isFinite(size) || size < 0) {
-      throw new Error(`unable to parse tar entry size: ${line}`);
-    }
-    return size;
+    return parseTarSizeToken(tokens[dateIndex - 1] ?? "", line);
   }
 
   dateIndex = tokens.findIndex((token) => ISO_DATE_PATTERN.test(token));
   if (dateIndex > 0) {
-    const size = Number.parseInt(tokens[dateIndex - 1] ?? "", 10);
-    if (!Number.isFinite(size) || size < 0) {
-      throw new Error(`unable to parse tar entry size: ${line}`);
-    }
-    return size;
+    return parseTarSizeToken(tokens[dateIndex - 1] ?? "", line);
   }
 
   throw new Error(`unable to parse tar verbose metadata: ${line}`);
+}
+
+function parseTarSizeToken(raw: string, line: string): number {
+  if (!/^\d+$/.test(raw)) {
+    throw new Error(`unable to parse tar entry size: ${line}`);
+  }
+  const size = Number(raw);
+  if (!Number.isSafeInteger(size)) {
+    throw new Error(`unable to parse tar entry size: ${line}`);
+  }
+  return size;
 }
 
 export function parseTarVerboseMetadata(stdout: string): Array<{ type: string; size: number }> {

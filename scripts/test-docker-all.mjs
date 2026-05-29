@@ -627,11 +627,7 @@ function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTime
   });
 }
 
-export function appendBoundedShellCapture(
-  current,
-  chunk,
-  maxChars = SHELL_CAPTURE_MAX_CHARS,
-) {
+export function appendBoundedShellCapture(current, chunk, maxChars = SHELL_CAPTURE_MAX_CHARS) {
   const combined = `${current}${String(chunk)}`;
   if (combined.length <= maxChars) {
     return { text: combined, truncated: false };

@@ -103,6 +103,36 @@ describe("nextcloud talk room info", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("does not classify negative room types as group rooms", async () => {
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: {
+        ok: true,
+        json: async () => ({
+          ocs: {
+            data: {
+              type: -1,
+            },
+          },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      resolveNextcloudTalkRoomKind({
+        account: {
+          accountId: "acct-negative",
+          baseUrl: "https://nc.example.com",
+          config: {
+            apiUser: "bot",
+            apiPassword: "secret",
+          },
+        } as never,
+        roomToken: "room-negative",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("reads the api password from a file and logs non-ok room info responses", async () => {
     const release = vi.fn(async () => {});
     const log = vi.fn();

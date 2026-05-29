@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
-import { resolveDefaultAgentDir } from "./agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "./agent-scope.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { CONTEXT_WINDOW_RUNTIME_STATE } from "./context-runtime-state.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -32,6 +36,8 @@ type ProviderConfigEntry = {
 type ModelsConfig = { providers?: Record<string, ProviderConfigEntry | undefined> };
 
 const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
   "claude-opus-4-6",
   "claude-opus-4.6",
   "claude-opus-4-7",
@@ -158,17 +164,23 @@ export function ensureContextWindowCacheLoaded(): Promise<void> {
   }
 
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = (async () => {
+    const agentDir = resolveDefaultAgentDir(cfg);
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
     try {
-      await (await loadModelsConfigRuntime()).ensureOpenClawModelsJson(cfg);
+      await (
+        await loadModelsConfigRuntime()
+      ).ensureOpenClawModelsJson(cfg, agentDir, {
+        workspaceDir,
+      });
     } catch {
       // Continue with best-effort discovery/overrides.
     }
 
     try {
-      const agentDir = resolveDefaultAgentDir(cfg);
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir, {
         normalizeModels: false,
+        workspaceDir,
       }) as unknown as ModelRegistryLike;
       const models =
         typeof modelRegistry.getAvailable === "function"

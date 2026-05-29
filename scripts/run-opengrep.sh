@@ -46,7 +46,7 @@ if ! command -v opengrep >/dev/null 2>&1; then
 error: 'opengrep' not found on PATH.
 
 Install with one of:
-  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.19.0/install.sh | bash -s -- -v v1.19.0
+  curl -fsSL https://raw.githubusercontent.com/opengrep/opengrep/v1.22.0/install.sh | bash -s -- -v v1.22.0
   brew install opengrep/tap/opengrep
   pipx install opengrep
 

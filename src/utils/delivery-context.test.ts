@@ -261,6 +261,131 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it("prefers explicit external delivery context over stale webchat legacy fields", () => {
+    expect(
+      deliveryContextFromSession({
+        channel: "webchat",
+        deliveryContext: {
+          channel: "room-chat",
+          to: " peer-1 ",
+          accountId: " acct-1 ",
+          threadId: " thread-1 ",
+        },
+      }),
+    ).toEqual({
+      channel: "room-chat",
+      to: "peer-1",
+      accountId: "acct-1",
+      threadId: "thread-1",
+    });
+
+    expect(
+      deliveryContextFromSession({
+        channel: "webchat",
+        lastChannel: "webchat",
+        lastTo: "session:dashboard",
+        lastAccountId: "work",
+        lastThreadId: "thread-2",
+        deliveryContext: {
+          channel: "room-chat",
+          to: "peer-2",
+        },
+      }),
+    ).toEqual({
+      channel: "room-chat",
+      to: "peer-2",
+      accountId: "work",
+      threadId: "thread-2",
+    });
+
+    expect(
+      deliveryContextFromSession({
+        lastChannel: "heartbeat",
+        lastTo: "heartbeat",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+        },
+      }),
+    ).toEqual({
+      channel: "telegram",
+      to: "-100123",
+      accountId: undefined,
+    });
+
+    const routeNormalized = normalizeSessionDeliveryFields({
+      route: {
+        channel: "webchat",
+        accountId: "work",
+        target: { to: "session:dashboard" },
+        thread: { id: "thread-route" },
+      },
+      deliveryContext: {
+        channel: "room-chat",
+        to: "peer-route",
+      },
+    });
+    expect(routeNormalized.deliveryContext).toEqual({
+      channel: "room-chat",
+      to: "peer-route",
+      accountId: "work",
+      threadId: "thread-route",
+    });
+    expect(routeNormalized.route).toEqual({
+      channel: "room-chat",
+      accountId: "work",
+      target: { to: "peer-route" },
+      thread: { id: "thread-route" },
+    });
+  });
+
+  it("does not promote tool-only context over internal session delivery", () => {
+    const normalized = normalizeSessionDeliveryFields({
+      route: {
+        channel: "webchat",
+        accountId: "work",
+        target: { to: "session:dashboard" },
+      },
+      deliveryContext: {
+        channel: "sessions_send",
+        to: "session:handoff",
+      },
+    });
+
+    expect(normalized.deliveryContext).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
+      accountId: "work",
+    });
+    expect(normalized.route).toEqual({
+      channel: "webchat",
+      accountId: "work",
+      target: { to: "session:dashboard" },
+    });
+
+    const staleLegacyExternal = normalizeSessionDeliveryFields({
+      route: {
+        channel: "webchat",
+        accountId: "work",
+        target: { to: "session:dashboard" },
+      },
+      lastChannel: "room-chat",
+      lastTo: "peer-old",
+      lastAccountId: "old-workspace",
+    });
+
+    expect(staleLegacyExternal.deliveryContext).toEqual({
+      channel: "webchat",
+      to: "session:dashboard",
+      accountId: "work",
+    });
+    expect(staleLegacyExternal.route).toEqual({
+      channel: "webchat",
+      accountId: "work",
+      target: { to: "session:dashboard" },
+    });
+  });
+
   it("normalizes delivery fields, mirrors session fields, and avoids cross-channel carryover", () => {
     const normalized = normalizeSessionDeliveryFields({
       deliveryContext: {

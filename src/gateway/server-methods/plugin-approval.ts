@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validatePluginApprovalRequestParams,
+  validatePluginApprovalResolveParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
@@ -9,13 +16,6 @@ import {
 } from "../../infra/plugin-approvals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validatePluginApprovalRequestParams,
-  validatePluginApprovalResolveParams,
-} from "../protocol/index.js";
 import {
   handleApprovalResolve,
   handleApprovalWaitDecision,

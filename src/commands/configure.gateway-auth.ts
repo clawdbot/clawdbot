@@ -262,6 +262,16 @@ export async function promptAuthConfig(
     });
     const promptProvider =
       modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
+    const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
+    const hasPromptProviderStaticManifestRows = hasStaticManifestCatalogRows(next, promptProvider);
+    const shouldLoadModelCatalog =
+      modelPrompt?.loadCatalog ??
+      (hasPromptProviderConfiguredModels || hasPromptProviderStaticManifestRows);
+    const useProviderScopedCatalog = Boolean(
+      promptProvider &&
+      shouldLoadModelCatalog &&
+      (modelPrompt?.loadCatalog === true || hasPromptProviderConfiguredModels),
+    );
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
@@ -271,10 +281,8 @@ export async function promptAuthConfig(
       initialSelections: modelPrompt?.initialSelections,
       message: modelPrompt?.message,
       preferredProvider: promptProvider,
-      loadCatalog:
-        modelPrompt?.loadCatalog ??
-        (hasConfiguredProviderModels(next, promptProvider) ||
-          hasStaticManifestCatalogRows(next, promptProvider)),
+      providerScopedCatalog: useProviderScopedCatalog,
+      loadCatalog: shouldLoadModelCatalog,
     });
     if (allowlistSelection.models) {
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {

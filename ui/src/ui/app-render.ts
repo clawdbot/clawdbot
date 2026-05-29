@@ -113,6 +113,7 @@ import {
   branchSessionFromCheckpoint,
   deleteSessionsAndRefresh,
   loadSessions,
+  parseSessionsFilterInteger,
   patchSession,
   restoreSessionFromCheckpoint,
   toggleSessionCompactionCheckpoints,
@@ -2065,8 +2066,8 @@ export function renderApp(state: AppViewState) {
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
                   void loadSessions(state, {
-                    activeMinutes: Number(next.activeMinutes) || 0,
-                    limit: Number(next.limit) || 0,
+                    activeMinutes: parseSessionsFilterInteger(next.activeMinutes),
+                    limit: parseSessionsFilterInteger(next.limit),
                     includeGlobal: next.includeGlobal,
                     includeUnknown: next.includeUnknown,
                     showArchived: next.showArchived,
@@ -2260,16 +2261,18 @@ export function renderApp(state: AppViewState) {
                   updateCronRunsFilter(state, { cronRunsScope: "job" });
                   await loadCronRuns(state, jobId);
                 },
-                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true }),
+                onLoadMoreJobs: () => loadCronJobsPage(state, { append: true, tableFilters: true }),
                 onJobsFiltersChange: async (patch) => {
                   updateCronJobsFilter(state, patch);
                   const shouldReload =
                     typeof patch.cronJobsQuery === "string" ||
                     Boolean(patch.cronJobsEnabledFilter) ||
+                    Boolean(patch.cronJobsScheduleKindFilter) ||
+                    Boolean(patch.cronJobsLastStatusFilter) ||
                     Boolean(patch.cronJobsSortBy) ||
                     Boolean(patch.cronJobsSortDir);
                   if (shouldReload) {
-                    await loadCronJobsPage(state, { append: false });
+                    await loadCronJobsPage(state, { append: false, tableFilters: true });
                   }
                 },
                 onJobsFiltersReset: async () => {
@@ -2281,7 +2284,7 @@ export function renderApp(state: AppViewState) {
                     cronJobsSortBy: "nextRunAtMs",
                     cronJobsSortDir: "asc",
                   });
-                  await loadCronJobsPage(state, { append: false });
+                  await loadCronJobsPage(state, { append: false, tableFilters: true });
                 },
                 onLoadMoreRuns: () => loadMoreCronRuns(state),
                 onRunsFiltersChange: async (patch) => {
@@ -2837,6 +2840,7 @@ export function renderApp(state: AppViewState) {
                   canAbort: hasAbortableSessionRun(state),
                   onAbort: () => void state.handleAbortChat({ preserveDraft: true }),
                   onQueueRemove: (id) => state.removeQueuedMessage(id),
+                  onQueueRetry: (id) => void state.retryQueuedChatMessage(id),
                   onQueueSteer: (id) => void state.steerQueuedChatMessage(id),
                   onDismissSideResult: () => {
                     state.chatSideResult = null;

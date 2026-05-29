@@ -10,6 +10,7 @@ import {
 import chalk from "chalk";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
+import { parseStrictNonNegativeInteger } from "../../../../infra/parse-finite-number.js";
 import { getCustomThemesDir, getThemesDir } from "../../../config.js";
 import type { SourceInfo } from "../../../sessions/source-info.js";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.js";
@@ -659,8 +660,8 @@ export interface TerminalThemeDetectionOptions {
 function getColorFgBgBackgroundIndex(colorfgbg: string): number | undefined {
   const parts = colorfgbg.split(";");
   for (let i = parts.length - 1; i >= 0; i--) {
-    const bg = Number.parseInt(parts[i].trim(), 10);
-    if (Number.isInteger(bg) && bg >= 0 && bg <= 255) {
+    const bg = parseStrictNonNegativeInteger(parts[i].trim());
+    if (bg !== undefined && bg <= 255) {
       return bg;
     }
   }

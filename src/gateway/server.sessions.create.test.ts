@@ -84,6 +84,76 @@ test("sessions.create stores dashboard session model and parent linkage, and cre
   expect(header.id).toBe(created.payload?.sessionId);
 });
 
+test("sessions.create inherits parent runtime model selection when model is omitted", async () => {
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-parent", {
+        providerOverride: "codex",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+        agentRuntimeOverride: "codex",
+        modelProvider: "codex",
+        model: "gpt-5.5",
+        contextTokens: 272000,
+        thinkingLevel: "off",
+        traceLevel: "debug",
+        authProfileOverride: "codex-oauth",
+        authProfileOverrideSource: "user",
+      }),
+    },
+  });
+
+  const created = await directSessionReq<{
+    key?: string;
+    entry?: {
+      providerOverride?: string;
+      modelOverride?: string;
+      modelOverrideSource?: string;
+      agentRuntimeOverride?: string;
+      modelProvider?: string;
+      model?: string;
+      contextTokens?: number;
+      thinkingLevel?: string;
+      traceLevel?: string;
+      authProfileOverride?: string;
+      authProfileOverrideSource?: string;
+      parentSessionKey?: string;
+    };
+  }>("sessions.create", {
+    agentId: "main",
+    label: "Fresh Chat",
+    parentSessionKey: "main",
+  });
+
+  expect(created.ok).toBe(true);
+  expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
+  expect(created.payload?.entry?.providerOverride).toBe("codex");
+  expect(created.payload?.entry?.modelOverride).toBe("gpt-5.5");
+  expect(created.payload?.entry?.modelOverrideSource).toBe("user");
+  expect(created.payload?.entry?.agentRuntimeOverride).toBe("codex");
+  expect(created.payload?.entry?.modelProvider).toBe("codex");
+  expect(created.payload?.entry?.model).toBe("gpt-5.5");
+  expect(created.payload?.entry?.contextTokens).toBe(272000);
+  expect(created.payload?.entry?.thinkingLevel).toBe("off");
+  expect(created.payload?.entry?.traceLevel).toBe("debug");
+  expect(created.payload?.entry?.authProfileOverride).toBe("codex-oauth");
+  expect(created.payload?.entry?.authProfileOverrideSource).toBe("user");
+
+  const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      providerOverride?: string;
+      modelOverride?: string;
+      parentSessionKey?: string;
+    }
+  >;
+  const key = created.payload?.key as string;
+  expect(rawStore[key]?.providerOverride).toBe("codex");
+  expect(rawStore[key]?.modelOverride).toBe("gpt-5.5");
+  expect(rawStore[key]?.parentSessionKey).toBe("agent:main:main");
+});
+
 test("sessions.create accepts an explicit key for persistent dashboard sessions", async () => {
   await createSessionStoreDir();
 

@@ -303,6 +303,7 @@ describe("short-term dreaming config", () => {
       minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       maxAgeDays: 30,
+      maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -328,6 +329,7 @@ describe("short-term dreaming config", () => {
               minUniqueQueries: 3,
               recencyHalfLifeDays: 21,
               maxAgeDays: 30,
+              maxPromotedSnippetTokens: 333,
             },
           },
         },
@@ -343,6 +345,7 @@ describe("short-term dreaming config", () => {
       minUniqueQueries: 3,
       recencyHalfLifeDays: 21,
       maxAgeDays: 30,
+      maxPromotedSnippetTokens: 333,
       verboseLogging: true,
       storage: {
         mode: "separate",
@@ -368,6 +371,7 @@ describe("short-term dreaming config", () => {
               minUniqueQueries: "3",
               recencyHalfLifeDays: "9",
               maxAgeDays: "45",
+              maxPromotedSnippetTokens: "222",
             },
           },
         },
@@ -382,6 +386,7 @@ describe("short-term dreaming config", () => {
       minUniqueQueries: 3,
       recencyHalfLifeDays: 9,
       maxAgeDays: 45,
+      maxPromotedSnippetTokens: 222,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -403,6 +408,7 @@ describe("short-term dreaming config", () => {
               minUniqueQueries: "",
               recencyHalfLifeDays: "",
               maxAgeDays: " ",
+              maxPromotedSnippetTokens: "",
             },
           },
         },
@@ -417,6 +423,7 @@ describe("short-term dreaming config", () => {
       minUniqueQueries: constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES,
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       maxAgeDays: 30,
+      maxPromotedSnippetTokens: constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
       verboseLogging: false,
       storage: {
         mode: "separate",
@@ -473,6 +480,7 @@ describe("short-term dreaming config", () => {
               minUniqueQueries: -4,
               recencyHalfLifeDays: -10,
               maxAgeDays: -5,
+              maxPromotedSnippetTokens: -10,
             },
           },
         },
@@ -484,6 +492,9 @@ describe("short-term dreaming config", () => {
     expect(resolved.minUniqueQueries).toBe(constants.DEFAULT_DREAMING_MIN_UNIQUE_QUERIES);
     expect(resolved.recencyHalfLifeDays).toBe(constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS);
     expect(resolved.maxAgeDays).toBe(30);
+    expect(resolved.maxPromotedSnippetTokens).toBe(
+      constants.DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+    );
   });
 
   it("keeps deep sleep disabled when the phase is off", () => {

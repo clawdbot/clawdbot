@@ -929,6 +929,31 @@ describe("resolveExplicitLiveModelCandidates", () => {
     expect(candidates).toEqual([model]);
   });
 
+  it("keeps provider-qualified explicit refs usable when the registry is empty", () => {
+    const matcher = createLiveTargetMatcher({
+      providerFilter: new Set(["openai"]),
+      modelFilter: new Set(["openai/gpt-5.5"]),
+      env: {},
+    });
+    const candidates = resolveExplicitLiveModelCandidates({
+      modelRegistry: {
+        find(provider, modelId) {
+          expect(provider).toBe("openai");
+          expect(modelId).toBe("gpt-5.5");
+          return undefined;
+        },
+        getAll() {
+          throw new Error("explicit model lookup should not enumerate registry");
+        },
+      },
+      modelFilter: new Set(["openai/gpt-5.5"]),
+      providerFilter: new Set(["openai"]),
+      targetMatcher: matcher,
+    });
+
+    expect(candidates).toEqual([createGatewayLiveTestModel("openai", "gpt-5.5")]);
+  });
+
   it("falls back to enumeration for ambiguous model-only filters", () => {
     const matcher = createLiveTargetMatcher({
       providerFilter: null,
@@ -1214,10 +1239,10 @@ describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(2);
+    ).toBe(3);
     expect(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3-flash-preview" }),
-    ).toBe(3);
+    ).toBe(4);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -2057,10 +2082,9 @@ function resolveExplicitLiveModelCandidates(params: {
     if (!ref) {
       return null;
     }
-    const model = params.modelRegistry.find(ref.provider, ref.modelId);
-    if (!model) {
-      return null;
-    }
+    const model =
+      params.modelRegistry.find(ref.provider, ref.modelId) ??
+      createGatewayLiveTestModel(ref.provider, ref.modelId);
     if (
       !params.targetMatcher.matchesProvider(model.provider) ||
       !params.targetMatcher.matchesModel(model.provider, model.id)

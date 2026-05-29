@@ -22,7 +22,9 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.doUnmock("./bundled-dir.js");
   vi.doUnmock("./native-module-require.js");
+  vi.doUnmock("./public-surface-runtime.js");
   vi.doUnmock("node:module");
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -37,6 +39,53 @@ afterEach(() => {
 });
 
 describe("bundled plugin public surface loader", () => {
+  it("keeps auto-resolved bundled roots on built public artifacts", async () => {
+    const tempRoot = createTempDir();
+    const bundledPluginsDir = path.join(tempRoot, "dist", "extensions");
+    const modulePath = path.join(bundledPluginsDir, "demo", "provider-policy-api.js");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, 'export const marker = "built";\n', "utf8");
+
+    const resolveBundledPluginPublicSurfacePath = vi.fn(() => modulePath);
+    vi.doMock("./bundled-dir.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./bundled-dir.js")>();
+      return {
+        ...actual,
+        resolveBundledPluginsDir: () => bundledPluginsDir,
+      };
+    });
+    vi.doMock("./public-surface-runtime.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./public-surface-runtime.js")>();
+      return {
+        ...actual,
+        resolveBundledPluginPublicSurfacePath,
+      };
+    });
+    vi.doMock("./native-module-require.js", () => ({
+      tryNativeRequireJavaScriptModule: (target: string) => ({
+        ok: true,
+        moduleExport: { marker: path.basename(path.dirname(target)) },
+      }),
+    }));
+
+    const publicSurfaceLoader = await importFreshModule<
+      typeof import("./public-surface-loader.js")
+    >(import.meta.url, "./public-surface-loader.js?scope=auto-bundled-built-artifacts");
+
+    expect(
+      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
+        dirName: "demo",
+        artifactBasename: "provider-policy-api.js",
+      }).marker,
+    ).toBe("demo");
+    expect(resolveBundledPluginPublicSurfacePath).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledPluginsDir,
+        bundledPluginsDirMode: "explicit",
+      }),
+    );
+  });
+
   it("uses native require for Windows dist public artifact loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
     vi.doMock("jiti", () => ({

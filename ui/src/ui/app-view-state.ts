@@ -322,6 +322,7 @@ export type AppViewState = {
   usageStartDate: string;
   usageEndDate: string;
   usageScope: "instance" | "family";
+  usageAgentId: string | null;
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageSelectedHours: number[];
@@ -358,6 +359,8 @@ export type AppViewState = {
   | "cronQuickCreateStep"
   | "cronQuickCreateDraft"
   | "cronJobsLoadingMore"
+  | "cronJobsReloadPending"
+  | "cronJobsReloadPendingTableFilters"
   | "cronJobs"
   | "cronJobsTotal"
   | "cronJobsHasMore"
@@ -527,6 +530,7 @@ export type AppViewState = {
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: (opts?: ChatAbortOptions) => Promise<void>;
     removeQueuedMessage: (id: string) => void;
+    retryQueuedChatMessage: (id: string) => Promise<void>;
     handleChatScroll: (event: Event) => void;
     resetToolStream: () => void;
     resetChatScroll: () => void;

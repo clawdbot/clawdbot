@@ -21,7 +21,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
     vi.restoreAllMocks();
   });
 
-  it("waits for aborted prompt settlement before flushing, disposing, and releasing the lock", async () => {
+  it("waits for aborted prompt settlement before flushing and releasing the lock", async () => {
     const order: string[] = [];
     const settle = createDeferred<void>();
 
@@ -57,7 +57,7 @@ describe("cleanupEmbeddedAttemptResources", () => {
     settle.resolve();
     await cleanupPromise;
 
-    expect(order).toEqual(["guard", "flush", "dispose", "release"]);
+    expect(order).toEqual(["guard", "flush", "release", "dispose"]);
   });
 
   it("releases the lock after the aborted settle timeout", async () => {
@@ -93,7 +93,44 @@ describe("cleanupEmbeddedAttemptResources", () => {
     await vi.advanceTimersByTimeAsync(1);
     await cleanupPromise;
 
-    expect(order).toEqual(["flush", "dispose", "release"]);
+    expect(order).toEqual(["flush", "release", "dispose"]);
+  });
+
+  it("releases the lock before runtime teardown can hang", async () => {
+    const order: string[] = [];
+    let markRuntimeDisposeStarted!: () => void;
+    const runtimeDisposeStarted = new Promise<void>((resolve) => {
+      markRuntimeDisposeStarted = resolve;
+    });
+
+    void cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle: vi.fn(async () => {
+        order.push("flush");
+      }),
+      session: {
+        agent: {},
+        dispose: () => {
+          order.push("dispose");
+        },
+      },
+      sessionManager: {},
+      sessionLock: {
+        release: async () => {
+          order.push("release");
+        },
+      },
+      bundleMcpRuntime: {
+        dispose: async () => {
+          order.push("runtime-dispose-start");
+          markRuntimeDisposeStarted();
+          await new Promise(() => {});
+        },
+      },
+    });
+
+    await runtimeDisposeStarted;
+
+    expect(order).toEqual(["flush", "release", "dispose", "runtime-dispose-start"]);
   });
 
   it("does not wait for the settle promise on non-aborted cleanup", async () => {
@@ -116,10 +153,43 @@ describe("cleanupEmbeddedAttemptResources", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("still disposes resources when lock release fails", async () => {
+    const releaseError = new Error("release failed");
+    const dispose = vi.fn();
+    const runtimeDispose = vi.fn(async () => {});
+
+    await expect(
+      cleanupEmbeddedAttemptResources({
+        flushPendingToolResultsAfterIdle: vi.fn(async () => {}),
+        session: {
+          agent: {},
+          dispose,
+        },
+        sessionManager: {},
+        sessionLock: {
+          release: async () => {
+            throw releaseError;
+          },
+        },
+        bundleMcpRuntime: {
+          dispose: runtimeDispose,
+        },
+      }),
+    ).rejects.toBe(releaseError);
+
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(runtimeDispose).toHaveBeenCalledTimes(1);
+  });
+
   it("can skip stale session-manager flushing after session takeover", async () => {
     const flushPendingToolResultsAfterIdle = vi.fn(async () => {});
-    const dispose = vi.fn();
-    const release = vi.fn(async () => {});
+    const order: string[] = [];
+    const dispose = vi.fn(() => {
+      order.push("dispose");
+    });
+    const release = vi.fn(async () => {
+      order.push("release");
+    });
 
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle,
@@ -135,5 +205,6 @@ describe("cleanupEmbeddedAttemptResources", () => {
     expect(flushPendingToolResultsAfterIdle).not.toHaveBeenCalled();
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(release).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["release", "dispose"]);
   });
 });

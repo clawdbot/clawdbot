@@ -5,6 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import {
+  parseNonNegativeInt,
+  parsePositiveInt,
+  parsePositiveNumber,
+} from "./lib/numeric-options.mjs";
 import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mjs";
 
@@ -90,42 +95,6 @@ function parseArgs(argv) {
     throw new Error("--skip-startup and --skip-qa cannot be used together");
   }
   return options;
-}
-
-function parsePositiveInt(raw, label) {
-  const text = String(raw).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value < 1) {
-    throw new Error(`${label} must be a positive integer`);
-  }
-  return value;
-}
-
-function parseNonNegativeInt(raw, label) {
-  const text = String(raw).trim();
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  const value = Number(text);
-  if (!Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`${label} must be a non-negative integer`);
-  }
-  return value;
-}
-
-function parsePositiveNumber(raw, label) {
-  const text = String(raw).trim();
-  if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  const value = Number(text);
-  if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`${label} must be a positive number`);
-  }
-  return value;
 }
 
 function printHelp() {

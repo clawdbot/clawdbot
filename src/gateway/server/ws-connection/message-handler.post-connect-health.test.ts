@@ -1,10 +1,10 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import type { HealthSummary } from "../../../commands/health.types.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
-import { PROTOCOL_VERSION } from "../../protocol/index.js";
 import { handleGatewayRequest } from "../../server-methods.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 

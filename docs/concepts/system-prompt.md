@@ -258,6 +258,10 @@ prompt instructs the model to use `read` to load the SKILL.md at the listed
 location (workspace, managed, or bundled). If no skills are eligible, the
 Skills section is omitted.
 
+The location can point at a nested skill, such as
+`skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt still
+uses the flat skill name from `SKILL.md` frontmatter.
+
 Eligibility includes skill metadata gates, runtime environment/config checks,
 and the effective agent skill allowlist when `agents.defaults.skills` or
 `agents.list[].skills` is configured.

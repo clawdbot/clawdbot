@@ -56,6 +56,28 @@ describe("getVisibleCronJobs", () => {
     expect(visible.map((entry) => entry.id)).toEqual(["error"]);
   });
 
+  it("filters unknown and preferred last-run statuses", () => {
+    const jobs = [
+      job("preferred", { state: { lastRunStatus: "skipped", lastRunAtMs: 1 } }),
+      job("legacy", { state: { lastStatus: "skipped", lastRunAtMs: 2 } }),
+      job("missing"),
+    ];
+
+    const skipped = getVisibleCronJobs({
+      cronJobs: jobs,
+      cronJobsScheduleKindFilter: "all",
+      cronJobsLastStatusFilter: "skipped",
+    });
+    const unknown = getVisibleCronJobs({
+      cronJobs: jobs,
+      cronJobsScheduleKindFilter: "all",
+      cronJobsLastStatusFilter: "unknown",
+    });
+
+    expect(skipped.map((entry) => entry.id)).toEqual(["preferred", "legacy"]);
+    expect(unknown.map((entry) => entry.id)).toEqual(["missing"]);
+  });
+
   it("combines schedule and last-status filters", () => {
     const jobs = [
       job("a", {

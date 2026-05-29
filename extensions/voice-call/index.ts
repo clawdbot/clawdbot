@@ -125,7 +125,7 @@ const voiceCallConfigSchema = {
     },
     "realtime.agentContext.enabled": {
       label: "Enable Agent Voice Context",
-      help: "Injects a compact agent identity, system prompt, and workspace context capsule into realtime voice instructions.",
+      help: "Injects a compact agent identity and workspace context capsule into realtime voice instructions.",
       advanced: true,
     },
     "realtime.agentContext.maxChars": {
@@ -134,10 +134,6 @@ const voiceCallConfigSchema = {
     },
     "realtime.agentContext.includeIdentity": {
       label: "Include Agent Identity",
-      advanced: true,
-    },
-    "realtime.agentContext.includeSystemPrompt": {
-      label: "Include Agent System Prompt",
       advanced: true,
     },
     "realtime.agentContext.includeWorkspaceFiles": {

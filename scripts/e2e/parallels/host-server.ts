@@ -5,6 +5,8 @@ import path from "node:path";
 import { die, run, say, sh, warn } from "./host-command.ts";
 import type { HostServer } from "./types.ts";
 
+const HOST_SERVER_STDERR_LIMIT_BYTES = 64 * 1024;
+
 export function resolveHostIp(explicit = ""): string {
   if (explicit) {
     return explicit;
@@ -98,11 +100,21 @@ async function waitForHostServer(
 ): Promise<void> {
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
+    stderr = appendBoundedOutput(stderr, chunk, HOST_SERVER_STDERR_LIMIT_BYTES);
+  });
+  let childClosed = false;
+  const childClose = new Promise<void>((resolve) => {
+    child.once("close", () => {
+      childClosed = true;
+      resolve();
+    });
   });
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10_000) {
     if (child.exitCode != null) {
+      if (!childClosed) {
+        await Promise.race([childClose, delay(1_000)]);
+      }
       die(`host artifact server exited early: ${stderr.trim() || `exit ${child.exitCode}`}`);
     }
     if (await canConnect(port)) {
@@ -112,6 +124,14 @@ async function waitForHostServer(
   }
   child.kill("SIGTERM");
   die(`host artifact server did not start on port ${port}: ${stderr.trim()}`);
+}
+
+function appendBoundedOutput(previous: string, chunk: Buffer, limitBytes: number): string {
+  const combined = Buffer.concat([Buffer.from(previous, "utf8"), chunk]);
+  if (combined.byteLength <= limitBytes) {
+    return combined.toString("utf8");
+  }
+  return combined.subarray(combined.byteLength - limitBytes).toString("utf8");
 }
 
 async function canConnect(port: number): Promise<boolean> {
@@ -128,3 +148,11 @@ async function canConnect(port: number): Promise<boolean> {
     });
   });
 }
+
+async function delay(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export const testing = {
+  appendBoundedOutput,
+};

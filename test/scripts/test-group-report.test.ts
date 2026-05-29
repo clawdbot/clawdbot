@@ -9,6 +9,7 @@ import {
 } from "../../scripts/lib/test-group-report.mjs";
 import {
   parseTestGroupReportArgs,
+  resolveFullSuiteVitestEnv,
   resolveReportArtifactDirs,
   resolveRunPlans,
 } from "../../scripts/test-group-report.mjs";
@@ -295,6 +296,33 @@ describe("scripts/test-group-report arg parsing", () => {
 });
 
 describe("scripts/test-group-report run plans", () => {
+  it("caps Vitest workers for full-suite profiling by default", () => {
+    expect(resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {})).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+  });
+
+  it("uses a serial worker budget for commands full-suite profiling", () => {
+    expect(
+      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {}, "commands"),
+    ).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
+    });
+  });
+
+  it("preserves explicit Vitest worker budgets for full-suite profiling", () => {
+    expect(
+      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {
+        OPENCLAW_VITEST_MAX_WORKERS: "2",
+      }),
+    ).toEqual({});
+    expect(
+      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {
+        OPENCLAW_TEST_WORKERS: "2",
+      }),
+    ).toEqual({});
+  });
+
   it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousLeaf = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;

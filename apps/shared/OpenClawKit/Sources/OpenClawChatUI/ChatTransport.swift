@@ -10,6 +10,11 @@ public enum OpenClawChatTransportEvent: Sendable {
 }
 
 public protocol OpenClawChatTransport: Sendable {
+    func createSession(
+        key: String,
+        label: String?,
+        parentSessionKey: String?) async throws -> OpenClawChatCreateSessionResponse
+
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload
     func listModels() async throws -> [OpenClawChatModelChoice]
     func sendMessage(
@@ -25,6 +30,7 @@ public protocol OpenClawChatTransport: Sendable {
     func setSessionThinking(sessionKey: String, thinkingLevel: String) async throws
 
     func requestHealth(timeoutMs: Int) async throws -> Bool
+    func waitForRunCompletion(runId: String, timeoutMs: Int) async -> Bool
     func events() -> AsyncStream<OpenClawChatTransportEvent>
 
     func setActiveSessionKey(_ sessionKey: String) async throws
@@ -33,7 +39,22 @@ public protocol OpenClawChatTransport: Sendable {
 }
 
 extension OpenClawChatTransport {
+    public func createSession(
+        key _: String,
+        label _: String?,
+        parentSessionKey _: String?) async throws -> OpenClawChatCreateSessionResponse
+    {
+        throw NSError(
+            domain: "OpenClawChatTransport",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "sessions.create not supported by this transport"])
+    }
+
     public func setActiveSessionKey(_: String) async throws {}
+
+    public func waitForRunCompletion(runId _: String, timeoutMs _: Int) async -> Bool {
+        false
+    }
 
     public func resetSession(sessionKey _: String) async throws {
         throw NSError(

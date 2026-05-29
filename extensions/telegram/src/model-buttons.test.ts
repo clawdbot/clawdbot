@@ -46,6 +46,7 @@ describe("parseModelCallbackData", () => {
       "",
       "mdl_invalid",
       "mdl_list_",
+      "mdl_list_openai_9007199254740993",
       "mdl_sel_noslash",
       "mdl_sel/",
     ];

@@ -282,7 +282,7 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="Are opus / sonnet / gpt built-in shortcuts?">
     Yes. OpenClaw ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
-    - `opus` → `anthropic/claude-opus-4-7`
+    - `opus` → `anthropic/claude-opus-4-8`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
     - `gpt` → `openai/gpt-5.4`
     - `gpt-mini` → `openai/gpt-5.4-mini`
@@ -536,7 +536,11 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
   <Accordion title="OAuth vs API key - what is the difference?">
     OpenClaw supports both:
 
-    - **OAuth** often leverages subscription access (where applicable).
+    - **OAuth / CLI login** often leverages subscription access where the
+      provider supports it. For Anthropic, OpenClaw's Claude CLI backend uses
+      Claude Code `claude -p`; Anthropic currently treats that as Agent
+      SDK/programmatic usage, with a separate monthly Agent SDK credit starting
+      June 15, 2026.
     - **API keys** use pay-per-token billing.
 
     The wizard explicitly supports Anthropic Claude CLI, OpenAI Codex OAuth, and API keys.

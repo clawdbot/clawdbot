@@ -7,18 +7,35 @@ export type LocalCommandProbe = {
   error?: string;
 };
 
+const LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS = 16 * 1024;
+const LOCAL_COMMAND_PROBE_KILL_GRACE_MS = 500;
+
+function appendBounded(previous: string, chunk: string, limit: number): string {
+  const next = previous + chunk;
+  return next.length > limit ? next.slice(-limit) : next;
+}
+
 export async function probeLocalCommand(
   command: string,
   args: string[] = ["--version"],
-  opts: { timeoutMs?: number } = {},
+  opts: { outputLimit?: number; timeoutKillGraceMs?: number; timeoutMs?: number } = {},
 ): Promise<LocalCommandProbe> {
   const timeoutMs = opts.timeoutMs ?? 1_500;
+  const outputLimit = opts.outputLimit ?? LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS;
+  const timeoutKillGraceMs = opts.timeoutKillGraceMs ?? LOCAL_COMMAND_PROBE_KILL_GRACE_MS;
   return await new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
+    let killTimer: NodeJS.Timeout | undefined;
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timeoutResult = (): LocalCommandProbe => ({
+      command,
+      found: true,
+      error: `timed out after ${timeoutMs}ms`,
     });
     const finish = (result: LocalCommandProbe) => {
       if (settled) {
@@ -26,19 +43,32 @@ export async function probeLocalCommand(
       }
       settled = true;
       clearTimeout(timer);
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       resolve(result);
     };
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill("SIGTERM");
-      finish({ command, found: true, error: `timed out after ${timeoutMs}ms` });
+      killTimer = setTimeout(
+        () => {
+          child.kill("SIGKILL");
+          child.stdout.destroy();
+          child.stderr.destroy();
+          finish(timeoutResult());
+        },
+        Math.max(0, timeoutKillGraceMs),
+      );
+      killTimer.unref?.();
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBounded(stdout, String(chunk), outputLimit);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBounded(stderr, String(chunk), outputLimit);
     });
     child.on("error", (err: NodeJS.ErrnoException) => {
       finish({
@@ -48,6 +78,10 @@ export async function probeLocalCommand(
       });
     });
     child.on("close", (code) => {
+      if (timedOut) {
+        finish(timeoutResult());
+        return;
+      }
       const text = `${stdout}\n${stderr}`.trim().split(/\r?\n/)[0]?.trim();
       finish({
         command,

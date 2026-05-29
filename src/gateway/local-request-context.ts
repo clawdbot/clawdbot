@@ -47,6 +47,22 @@ export function createLocalGatewayRequestContext(
   const logGateway = createSubsystemLogger("gateway/local");
   const sessionEvents = new Set<string>();
   const chatRuns = new Map<string, { sessionKey: string; clientRunId: string }>();
+  const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
+  const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
+  const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();
+  const chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"] = new Map();
+  const agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"] = new Map();
+  const bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"] = new Map();
+  const clearChatRunState = (runId: string) => {
+    chatRunBuffers.delete(runId);
+    chatDeltaSentAt.delete(runId);
+    chatDeltaLastBroadcastLen.delete(runId);
+    chatDeltaLastBroadcastText.delete(runId);
+    for (const key of [runId, `${runId}:assistant`, `${runId}:thinking`]) {
+      agentDeltaSentAt.delete(key);
+      bufferedAgentEvents.delete(key);
+    }
+  };
   return {
     deps: params.deps,
     cron: unavailableCron,
@@ -73,12 +89,13 @@ export function createLocalGatewayRequestContext(
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatAbortedRuns: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
-    chatDeltaLastBroadcastText: new Map(),
-    agentDeltaSentAt: new Map(),
-    bufferedAgentEvents: new Map(),
+    chatRunBuffers,
+    chatDeltaSentAt,
+    chatDeltaLastBroadcastLen,
+    chatDeltaLastBroadcastText,
+    agentDeltaSentAt,
+    bufferedAgentEvents,
+    clearChatRunState,
     addChatRun: (sessionId, entry) => {
       chatRuns.set(sessionId, entry);
     },

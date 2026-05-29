@@ -30,6 +30,7 @@ import {
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -2344,8 +2345,8 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        const page = Number.parseInt(pageValue, 10);
-        if (Number.isNaN(page) || page < 1) {
+        const page = parseStrictPositiveInteger(pageValue);
+        if (page === undefined) {
           return;
         }
 

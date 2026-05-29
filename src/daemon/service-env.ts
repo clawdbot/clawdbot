@@ -391,6 +391,14 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
+function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): string {
+  const override = normalizeOptionalString(env.OPENCLAW_SYSTEMD_UNIT);
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
+  }
+  return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+}
+
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -411,7 +419,7 @@ export function buildServiceEnvironment(params: {
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
-  const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
+  const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,

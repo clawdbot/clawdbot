@@ -13,6 +13,7 @@ export async function extractPdfContent(params: {
   maxPages: number;
   maxPixels: number;
   minTextChars: number;
+  password?: string;
   pageNumbers?: number[];
   config?: OpenClawConfig;
   onImageExtractionError?: (error: unknown) => void;
@@ -23,6 +24,7 @@ export async function extractPdfContent(params: {
     maxPages: params.maxPages,
     maxPixels: params.maxPixels,
     minTextChars: params.minTextChars,
+    ...(params.password ? { password: params.password } : {}),
     ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
     ...(params.config ? { config: params.config } : {}),
     ...(params.onImageExtractionError

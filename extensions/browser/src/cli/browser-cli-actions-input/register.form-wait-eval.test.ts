@@ -65,6 +65,20 @@ describe("browser action input wait command", () => {
     expect(options?.timeoutMs).toBeGreaterThan(21000);
   });
 
+  it("rejects non-decimal wait numeric options before sending the wait request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "wait", "--time", "1e3"], { from: "user" }),
+    ).rejects.toThrow("--time must be a non-negative integer.");
+    await expect(
+      program.parseAsync(["browser", "wait", "--text", "Ready", "--timeout-ms", "0x1000"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
   it("rejects unsupported load states before sending the wait request", async () => {
     const program = createActionInputProgram();
 
@@ -100,5 +114,16 @@ describe("browser action input evaluate command", () => {
       | undefined;
     expect(request?.body?.timeoutMs).toBe(30000);
     expect(options?.timeoutMs).toBeGreaterThan(30000);
+  });
+
+  it("rejects non-decimal evaluate timeouts before dispatch", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "1e3"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 });

@@ -8,6 +8,7 @@ import type {
   DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
   getDiagnosticStabilitySnapshot,
@@ -896,8 +897,7 @@ function readPositiveMemoryFile(file: string): number | "max" | undefined {
     if (raw === "max") {
       return "max";
     }
-    const parsed = Number.parseInt(raw, 10);
-    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+    return parseStrictNonNegativeInteger(raw);
   } catch {
     return undefined;
   }
@@ -911,8 +911,8 @@ function readCgroupEventFile(file: string): Record<string, number> {
       if (!key || !SAFE_REASON_CODE.test(key)) {
         continue;
       }
-      const value = Number.parseInt(raw ?? "", 10);
-      if (Number.isFinite(value) && value >= 0) {
+      const value = parseStrictNonNegativeInteger(raw ?? "");
+      if (value !== undefined) {
         events[key] = value;
       }
     }

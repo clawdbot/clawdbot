@@ -31,6 +31,9 @@ export const existingSessionRouteState = {
 
 export function createExistingSessionAgentSharedModule() {
   return {
+    browserNavigationPolicyForProfile: vi.fn((ctx: BrowserRouteContext) =>
+      withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
+    ),
     getPwAiModule: vi.fn(async () => null),
     handleRouteError: vi.fn((_ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);

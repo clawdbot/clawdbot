@@ -1,5 +1,8 @@
+import type {
+  CommandEntry,
+  CommandsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
-import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/protocol/index.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";

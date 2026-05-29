@@ -98,7 +98,7 @@ Do not close from title alone. If closing as done on main or nonsensical, prove 
 
 When asked for `5 new`, exclude refs already surfaced in the session and refill from the archive until there are 5 live-open candidates. If fewer than 5 remain open, list all open ones and say how many short.
 
-When asked to `update`, `refresh`, `recheck`, `check again`, or similar, return an updated live-open candidate list. Do not fill the main list with items that merely merged/closed since the last pass; put those numbers in a short bottom line.
+When asked to `update`, `refresh`, `recheck`, `check again`, or similar, return an updated live-open candidate list. Sort by maintainer importance, not recency: high-impact ready fixes first, then useful-but-review-first, then open/not-ready items. Do not include a "changed since last pass" section or bottom-line merged/closed summary unless the user explicitly asks for churn.
 
 Prefer:
 
@@ -142,18 +142,20 @@ No Markdown tables. Compact bullets. Use color/risk markers:
 Required line shape:
 
 ```markdown
-- **PR #81244** `@whatsskill.` `+118/-1` `bug` 🟢 verifiable: yes. This prevents chat action buttons from overlapping short assistant replies. Blast: web chat rendering, low.
-- **Issue #81245** `@alice` `LOC n/a` `bug` 🟡 verifiable: partial. This reports duplicate Telegram replies when reconnecting after gateway restart. Blast: Telegram channel runtime, medium.
+- **PR #81244** `@whatsskill.` `+118/-1` `bug` 🟢 https://github.com/openclaw/openclaw/pull/81244 - Prevents chat action buttons from overlapping short assistant replies. Verifiable: yes. Blast: web chat rendering, low.
+- **Issue #81245** `@alice` `LOC n/a` `bug` 🟡 https://github.com/openclaw/openclaw/issues/81245 - Reports duplicate Telegram replies when reconnecting after gateway restart. Verifiable: partial. Blast: Telegram channel runtime, medium.
 ```
 
 Rules:
 
 - Bold the `PR #n` or `Issue #n` marker.
 - Use `@handle`, not author bio text.
+- Always include the full GitHub URL.
+- Include a one-line description after the URL, separated with `-`.
 - PR LOC is `+additions/-deletions`; issue LOC is `LOC n/a`.
 - Type: `bug`, `feature`, `perf`, `security`, `docs`, `test`, `chore`, or `refactor`.
 - Write a full sentence for what it does.
 - Always include blast radius in one phrase.
 - Always include `verifiable: yes|partial|no` plus the shortest proof hint when helpful.
 - If status is not open, still show it only when the user asked for all surfaced refs; use ✅ or ⚪ and state merged/closed.
-- For refresh-style asks, bottom line: `Merged/closed since last pass: #81016 merged, #81026 closed.` Omit if none.
+- For refresh-style asks, prefer section order: `Best Open Now`, `Useful But Review First`, `Still Open / Not Ready`. Omit merged/closed churn by default.

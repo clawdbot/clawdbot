@@ -1,10 +1,10 @@
-import { withProgress } from "../cli/progress.js";
 import {
   normalizePairingConnectRequestId,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
   type ConnectPairingRequiredReason,
-} from "../gateway/protocol/connect-error-details.js";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { withProgress } from "../cli/progress.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { type RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";

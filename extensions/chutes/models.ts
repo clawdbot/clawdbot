@@ -5,6 +5,7 @@ import {
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -616,8 +617,9 @@ export async function discoverChutesModels(accessToken?: string): Promise<ModelD
             cacheRead: 0,
             cacheWrite: 0,
           },
-          contextWindow: entry.context_length || CHUTES_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: entry.max_output_length || CHUTES_DEFAULT_MAX_TOKENS,
+          contextWindow:
+            asPositiveSafeInteger(entry.context_length) ?? CHUTES_DEFAULT_CONTEXT_WINDOW,
+          maxTokens: asPositiveSafeInteger(entry.max_output_length) ?? CHUTES_DEFAULT_MAX_TOKENS,
           compat: {
             supportsUsageInStreaming: false,
           },

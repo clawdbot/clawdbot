@@ -29,6 +29,7 @@ export type {
   MarkdownConfig,
   MarkdownTableMode,
   MSTeamsChannelConfig,
+  MSTeamsCloudName,
   MSTeamsConfig,
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,

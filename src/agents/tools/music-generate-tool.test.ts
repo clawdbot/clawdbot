@@ -1044,6 +1044,43 @@ describe("createMusicGenerateTool", () => {
     });
   });
 
+  it("rejects fractional duration seconds before generation", async () => {
+    const generateMusic = vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "minimax",
+      model: "music-2.6",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [
+        {
+          buffer: Buffer.from("music-bytes"),
+          mimeType: "audio/mpeg",
+          fileName: "night-drive.mp3",
+        },
+      ],
+    });
+
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: { primary: "minimax/music-2.6" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    await expect(
+      tool.execute("call-1", {
+        prompt: "night-drive synthwave",
+        durationSeconds: 45.5,
+      }),
+    ).rejects.toThrow("durationSeconds must be a positive integer");
+    expect(generateMusic).not.toHaveBeenCalled();
+  });
+
   it("passes web_fetch SSRF policy when loading reference images", async () => {
     vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
       {

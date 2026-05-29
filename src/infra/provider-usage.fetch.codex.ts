@@ -1,4 +1,5 @@
 import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { parseStrictFiniteNumber } from "./parse-finite-number.js";
 import {
   buildUsageHttpErrorSnapshot,
   fetchJson,
@@ -126,7 +127,7 @@ export async function fetchCodexUsage(
     const balance =
       typeof data.credits.balance === "number"
         ? data.credits.balance
-        : Number.parseFloat(data.credits.balance) || 0;
+        : (parseStrictFiniteNumber(data.credits.balance) ?? 0);
     plan = plan ? `${plan} ($${balance.toFixed(2)})` : `$${balance.toFixed(2)}`;
   }
 

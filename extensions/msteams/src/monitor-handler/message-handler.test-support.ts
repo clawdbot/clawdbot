@@ -68,7 +68,7 @@ export function createMessageHandlerDeps(
     cfg,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
     appId: "test-app",
-    adapter: {} as MSTeamsMessageHandlerDeps["adapter"],
+    app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
       getAccessToken: vi.fn(async () => "token"),
     },

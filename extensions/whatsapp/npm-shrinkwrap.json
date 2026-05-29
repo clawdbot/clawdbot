@@ -10,7 +10,6 @@
       "dependencies": {
         "audio-decode": "2.2.3",
         "baileys": "7.0.0-rc13",
-        "https-proxy-agent": "9.0.0",
         "typebox": "1.1.38"
       },
       "peerDependencies": {
@@ -240,15 +239,6 @@
         "url": "https://github.com/sponsors/eshaz"
       }
     },
-    "node_modules/agent-base": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-9.0.0.tgz",
-      "integrity": "sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 20"
-      }
-    },
     "node_modules/async-mutex": {
       "version": "0.5.0",
       "resolved": "https://registry.npmjs.org/async-mutex/-/async-mutex-0.5.0.tgz",
@@ -433,19 +423,6 @@
       "resolved": "https://registry.npmjs.org/hookified/-/hookified-1.15.1.tgz",
       "integrity": "sha512-MvG/clsADq1GPM2KGo2nyfaWVyn9naPiXrqIe4jYjXNZQt238kWyOGrsyc/DmRAQ+Re6yeo6yX/yoNCG5KAEVg==",
       "license": "MIT"
-    },
-    "node_modules/https-proxy-agent": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-9.0.0.tgz",
-      "integrity": "sha512-/MVmHp58WkOypgFhCLk4fzpPcFQvTJ/e6LBI7irpIO2HfxUbpmYoHF+KzipzJpxxzJu7aJNWQ0xojJ/dzV2G5g==",
-      "license": "MIT",
-      "dependencies": {
-        "agent-base": "9.0.0",
-        "debug": "^4.3.4"
-      },
-      "engines": {
-        "node": ">= 20"
-      }
     },
     "node_modules/ieee754": {
       "version": "1.2.1",

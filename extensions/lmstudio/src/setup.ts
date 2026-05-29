@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   removeProviderAuthProfilesWithLock,
   buildApiKeyCredential,
@@ -122,8 +123,7 @@ function resolvePositiveInteger(value: unknown): number | undefined {
   if (!trimmed || !/^\d+$/.test(trimmed)) {
     return undefined;
   }
-  const normalized = Number.parseInt(trimmed, 10);
-  return Number.isFinite(normalized) && normalized > 0 ? normalized : undefined;
+  return parseStrictPositiveInteger(trimmed);
 }
 
 function buildLmstudioSetupProviderConfig(params: {

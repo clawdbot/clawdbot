@@ -26,7 +26,7 @@ describe("createWhatsAppLoginTool", () => {
     const tool = createWhatsAppLoginTool();
     const result = await tool.execute("tool-call-1", {
       action: "wait",
-      timeoutMs: 5000,
+      timeoutMs: "5000",
       accountId,
       currentQrDataUrl: "data:image/png;base64,current-qr",
     });
@@ -54,6 +54,39 @@ describe("createWhatsAppLoginTool", () => {
         qr: true,
       },
     });
+  });
+
+  it("passes string timeoutMs through to start actions", async () => {
+    startWebLoginWithQrMock.mockResolvedValueOnce({
+      connected: false,
+      message: "Scan this QR in WhatsApp → Linked Devices.",
+      qrDataUrl: "data:image/png;base64,current-qr",
+    });
+
+    const tool = createWhatsAppLoginTool();
+    await tool.execute("tool-call-start", {
+      action: "start",
+      timeoutMs: "6000",
+      accountId: "account-3",
+    });
+
+    expect(startWebLoginWithQrMock).toHaveBeenCalledWith({
+      accountId: "account-3",
+      timeoutMs: 6000,
+      force: false,
+    });
+  });
+
+  it("rejects fractional timeoutMs before login actions", async () => {
+    const tool = createWhatsAppLoginTool();
+
+    await expect(
+      tool.execute("tool-call-start", {
+        action: "start",
+        timeoutMs: "6000.5",
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
+    expect(startWebLoginWithQrMock).not.toHaveBeenCalled();
   });
 
   it("does not retain QR state across tool actions", async () => {

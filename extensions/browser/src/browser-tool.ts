@@ -33,6 +33,7 @@ import {
   listNodes,
   normalizeOptionalString,
   persistBrowserProxyFiles,
+  readPositiveIntegerParam,
   readStringParam,
   readStringValue,
   resolveBrowserConfig,
@@ -128,10 +129,9 @@ export const testing = {
 
 function readOptionalTargetAndTimeout(params: Record<string, unknown>) {
   const targetId = normalizeOptionalString(params.targetId);
-  const timeoutMs =
-    typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-      ? params.timeoutMs
-      : undefined;
+  const timeoutMs = readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
   return { targetId, timeoutMs };
 }
 
@@ -422,9 +422,9 @@ function usesExistingSessionManageFlow(params: { action: string; profileName?: s
 }
 
 function readToolTimeoutMs(params: Record<string, unknown>) {
-  return typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-    ? Math.max(1, Math.floor(params.timeoutMs))
-    : undefined;
+  return readPositiveIntegerParam(params, "timeoutMs", {
+    message: "timeoutMs must be a positive integer.",
+  });
 }
 
 export function createBrowserTool(opts?: {
@@ -735,11 +735,7 @@ export function createBrowserTool(opts?: {
           const element = readStringParam(params, "element");
           const labels = typeof params.labels === "boolean" ? params.labels : undefined;
           const type = params.type === "jpeg" ? "jpeg" : "png";
-          const timeoutMs =
-            typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-              ? Math.max(1, Math.floor(params.timeoutMs))
-              : undefined;
-          const effectiveTimeoutMs = timeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
+          const effectiveTimeoutMs = requestedTimeoutMs ?? DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS;
           const result = proxyRequest
             ? ((await proxyRequest({
                 method: "POST",

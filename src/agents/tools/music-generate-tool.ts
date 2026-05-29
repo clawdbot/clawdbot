@@ -21,6 +21,7 @@ import type {
   MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
@@ -124,7 +125,7 @@ const MusicGenerateToolSchema = Type.Object({
     }),
   ),
   durationSeconds: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Target seconds; provider may clamp.",
       minimum: 1,
     }),
@@ -651,9 +652,15 @@ export function createMusicGenerateTool(options?: {
       const instrumental = readBooleanToolParam(args, "instrumental");
       const model = readStringParam(args, "model");
       const durationSeconds = readNumberParam(args, "durationSeconds", {
-        integer: true,
+        positiveInteger: true,
         strict: true,
       });
+      if (
+        durationSeconds === undefined &&
+        readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
+      ) {
+        throw new ToolInputError("durationSeconds must be a positive integer");
+      }
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
       const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);

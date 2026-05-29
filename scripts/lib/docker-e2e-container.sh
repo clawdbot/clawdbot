@@ -53,6 +53,17 @@ const child = spawn(command, args, {
   stdio: "inherit",
 });
 let timedOut = false;
+let parentSignal = null;
+let parentSignalTimer = null;
+const signalExitCodes = new Map([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+const killGraceMs = Number.parseInt(
+  process.env.OPENCLAW_DOCKER_TIMEOUT_KILL_GRACE_MS || "30000",
+  10,
+);
 const killTarget = process.platform === "win32" ? child.pid : -child.pid;
 const killChild = (signal) => {
   if (!child.pid) {
@@ -70,17 +81,34 @@ const timer = setTimeout(() => {
   timedOut = true;
   console.error(`Docker command timed out after ${timeoutValue}`);
   killChild("SIGTERM");
-  setTimeout(() => killChild("SIGKILL"), 30_000).unref();
+  setTimeout(() => killChild("SIGKILL"), killGraceMs).unref();
 }, timeoutMs);
 const forwardSignal = (signal) => {
+  if (parentSignal) {
+    killChild("SIGKILL");
+    process.exit(signalExitCodes.get(signal) ?? 1);
+  }
+  parentSignal = signal;
+  clearTimeout(timer);
   killChild(signal);
+  parentSignalTimer = setTimeout(() => {
+    killChild("SIGKILL");
+    process.exit(signalExitCodes.get(signal) ?? 1);
+  }, killGraceMs);
+  parentSignalTimer.unref();
 };
 process.once("SIGINT", forwardSignal);
 process.once("SIGTERM", forwardSignal);
 child.on("exit", (code, signal) => {
   clearTimeout(timer);
+  if (parentSignalTimer) {
+    clearTimeout(parentSignalTimer);
+  }
   if (timedOut) {
     process.exit(124);
+  }
+  if (parentSignal) {
+    process.exit(signalExitCodes.get(parentSignal) ?? 1);
   }
   if (code !== null) {
     process.exit(code);

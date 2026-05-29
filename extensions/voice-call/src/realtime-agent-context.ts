@@ -5,11 +5,6 @@ import { normalizeOptionalString as normalizeString } from "openclaw/plugin-sdk/
 import type { VoiceCallConfig } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 
-type AgentEntryLike = {
-  id?: unknown;
-  systemPromptOverride?: unknown;
-};
-
 type VoiceIdentityLike = {
   name?: unknown;
   emoji?: unknown;
@@ -17,27 +12,6 @@ type VoiceIdentityLike = {
   creature?: unknown;
   vibe?: unknown;
 };
-
-function readAgentEntries(cfg: CoreConfig): AgentEntryLike[] {
-  const agents = (cfg as { agents?: { list?: unknown } }).agents;
-  return Array.isArray(agents?.list)
-    ? agents.list.filter((entry): entry is AgentEntryLike =>
-        Boolean(entry && typeof entry === "object"),
-      )
-    : [];
-}
-
-function resolveAgentSystemPromptOverride(cfg: CoreConfig, agentId: string): string | undefined {
-  const entries = readAgentEntries(cfg);
-  const entry = entries.find((candidate) => normalizeString(candidate.id) === agentId);
-  return (
-    normalizeString(entry?.systemPromptOverride) ??
-    normalizeString(
-      (cfg as { agents?: { defaults?: { systemPromptOverride?: unknown } } }).agents?.defaults
-        ?.systemPromptOverride,
-    )
-  );
-}
 
 function limitText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
@@ -116,13 +90,6 @@ export async function buildRealtimeVoiceInstructions(params: {
     ].filter(Boolean);
     if (identityLines.length > 0) {
       capsule.push(`Configured identity:\n${identityLines.join("\n")}`);
-    }
-  }
-
-  if (contextConfig.includeSystemPrompt) {
-    const systemPrompt = resolveAgentSystemPromptOverride(params.coreConfig, agentId);
-    if (systemPrompt) {
-      capsule.push(`Configured system prompt override:\n${systemPrompt}`);
     }
   }
 

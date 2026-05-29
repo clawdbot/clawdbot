@@ -602,6 +602,8 @@ extension NodeAppModel {
 struct OpenClawApp: App {
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @AppStorage(AppAppearancePreference.storageKey) private var appearancePreferenceRaw: String =
+        AppAppearancePreference.system.rawValue
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
@@ -616,26 +618,62 @@ struct OpenClawApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootCanvas()
+            RootTabs()
+                .preferredColorScheme(self.appearancePreference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
                     self.appDelegate.appModel = self.appModel
+                    self.applyAppearancePreference()
+                    self.gatewayController.setScenePhase(self.scenePhase)
                 }
                 .onOpenURL { url in
-                    Task { await self.appModel.handleDeepLink(url: url) }
+                    Task { await self.handleOpenURL(url) }
+                }
+                .onChange(of: self.appearancePreferenceRaw) { _, _ in
+                    self.applyAppearancePreference()
                 }
                 .onChange(of: self.scenePhase) { _, newValue in
                     self.appModel.setScenePhase(newValue)
                     self.gatewayController.setScenePhase(newValue)
                     self.appDelegate.scenePhaseChanged(newValue)
+                    self.applyAppearancePreference()
                 }
         }
+    }
+
+    private var appearancePreference: AppAppearancePreference {
+        AppAppearancePreference.launchArgumentPreference
+            ?? AppAppearancePreference(rawValue: self.appearancePreferenceRaw)
+            ?? .system
+    }
+
+    @MainActor
+    private func applyAppearancePreference() {
+        let style = self.appearancePreference.userInterfaceStyle
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .forEach { window in
+                window.overrideUserInterfaceStyle = style
+            }
     }
 }
 
 extension OpenClawApp {
+    @MainActor
+    private func handleOpenURL(_ url: URL) async {
+        guard let route = DeepLinkParser.parse(url) else { return }
+
+        switch route {
+        case .agent, .dashboard:
+            await self.appModel.handleDeepLink(url: url)
+        case .gateway:
+            break
+        }
+    }
+
     private static func installUncaughtExceptionLogger() {
         NSLog("OpenClaw: installing uncaught exception handler")
         NSSetUncaughtExceptionHandler { exception in

@@ -222,6 +222,32 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
+  it("omits malformed preload context lengths", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      baseUrl: "http://lmstudio.internal:1234/v1",
+    });
+    const stream = runWrappedLmstudioStream(
+      wrapped,
+      {
+        contextTokens: 64000.5,
+        contextWindow: Number.POSITIVE_INFINITY,
+      },
+      { apiKey: "lmstudio-token" },
+    );
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expectEnsureLoadedFields({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+      requestedContextLength: undefined,
+      apiKey: "lmstudio-token",
+      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+    });
+  });
+
   it("continues inference when preload fails", async () => {
     ensureLmstudioModelLoadedMock.mockRejectedValueOnce(new Error("load failed"));
     const baseStream = buildDoneStreamFn();

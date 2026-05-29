@@ -139,6 +139,7 @@ export function createCronPromptExecutor(params: {
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
+  modelFallbacksOverride?: string[];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
@@ -156,12 +157,14 @@ export function createCronPromptExecutor(params: {
   if (!params.cronSession.sessionEntry.sessionFile?.trim()) {
     params.cronSession.sessionEntry.sessionFile = sessionFile;
   }
-  const cronFallbacksOverride = resolveCronFallbacksOverride({
-    cfg: params.cfg,
-    job: params.job,
-    agentId: params.agentId,
-    useSubagentFallbacks: params.useSubagentFallbacks,
-  });
+  const cronFallbacksOverride =
+    params.modelFallbacksOverride ??
+    resolveCronFallbacksOverride({
+      cfg: params.cfg,
+      job: params.job,
+      agentId: params.agentId,
+      useSubagentFallbacks: params.useSubagentFallbacks,
+    });
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
   let fallbackModel = params.liveSelection.model;
@@ -366,6 +369,7 @@ export async function executeCronRun(params: {
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
   useSubagentFallbacks: boolean;
+  modelFallbacksOverride?: string[];
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
@@ -414,6 +418,7 @@ export async function executeCronRun(params: {
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
     useSubagentFallbacks: params.useSubagentFallbacks,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,

@@ -129,6 +129,8 @@ describe("phone-control plugin", () => {
   it("arms sms.send as part of the writes group", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile, getConfig }) => {
       expect(command.name).toBe("phone");
+      expect(command.requiredScopes).toBeUndefined();
+      expect(command.exposeSenderIsOwner).toBe(true);
 
       const res = await command.handler({
         ...createCommandContext("arm writes 30s"),
@@ -163,26 +165,54 @@ describe("phone-control plugin", () => {
     });
   });
 
-  it("allows external channel callers without operator.admin to mutate phone control", async () => {
+  it("blocks external non-owner callers without operator.admin from mutating phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({
         ...createCommandContext("arm writes 30s"),
         channel: "telegram",
+        senderIsOwner: false,
       });
 
-      expect(res?.text ?? "").toContain("Phone control: armed");
-      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      expect(res?.text ?? "").toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
 
-  it("allows external channel callers without operator.admin to disarm phone control", async () => {
+  it("blocks external non-owner callers without operator.admin from disarming phone control", async () => {
     await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
       const res = await command.handler({
         ...createCommandContext("disarm"),
         channel: "telegram",
+        senderIsOwner: false,
+      });
+
+      expect(res?.text ?? "").toContain("requires operator.admin");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows external non-owner callers without operator.admin to read phone control status", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("status"),
+        channel: "telegram",
+        senderIsOwner: false,
       });
 
       expect(res?.text ?? "").toContain("Phone control: disarmed.");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows external non-owner callers without operator.admin to read phone control help", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("help"),
+        channel: "telegram",
+        senderIsOwner: false,
+      });
+
+      expect(res?.text ?? "").toContain("/phone status");
       expect(writeConfigFile).not.toHaveBeenCalled();
     });
   });
@@ -216,6 +246,38 @@ describe("phone-control plugin", () => {
       });
 
       expect(res?.text ?? "").toContain("sms.send");
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("rejects invalid arm durations without mutating phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const typoRes = await command.handler({
+        ...createCommandContext("arm writes forever"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+      const overflowRes = await command.handler({
+        ...createCommandContext("arm writes 9007199254740993d"),
+        channel: "webchat",
+        gatewayClientScopes: ["operator.admin"],
+      });
+
+      expect(typoRes?.text ?? "").toContain("Invalid duration");
+      expect(overflowRes?.text ?? "").toContain("Invalid duration");
+      expect(writeConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows external owner callers without gateway scopes to mutate phone control", async () => {
+    await withRegisteredPhoneControl(async ({ command, writeConfigFile }) => {
+      const res = await command.handler({
+        ...createCommandContext("arm writes 30s"),
+        channel: "telegram",
+        senderIsOwner: true,
+      });
+
+      expect(res?.text ?? "").toContain("Phone control: armed");
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
     });
   });

@@ -44,24 +44,46 @@ generation.
 The bundled `fal` image-generation provider defaults to
 `fal/fal-ai/flux/dev`.
 
-| Capability     | Value                                                       |
-| -------------- | ----------------------------------------------------------- |
-| Max images     | 4 per request                                               |
-| Edit mode      | Flux: 1 reference image; GPT Image 2: 10; Nano Banana 2: 14 |
-| Size overrides | Supported                                                   |
-| Aspect ratio   | Supported for generate and GPT Image 2/Nano Banana 2 edit   |
-| Resolution     | Supported                                                   |
-| Output format  | `png` or `jpeg`                                             |
+| Capability     | Value                                                              |
+| -------------- | ------------------------------------------------------------------ |
+| Max images     | 4 per request; Krea 2: 1 per request                               |
+| Edit mode      | Flux: 1 reference image; GPT Image 2: 10; Nano Banana 2: 14        |
+| Style refs     | Krea 2: up to 10 style references via `image` / `images`           |
+| Size overrides | Supported                                                          |
+| Aspect ratio   | Supported for generate, Krea 2, and GPT Image 2/Nano Banana 2 edit |
+| Resolution     | Supported                                                          |
+| Output format  | `png` or `jpeg`                                                    |
 
 <Warning>
 Flux image-to-image requests do **not** support `aspectRatio` overrides. GPT
 Image 2 and Nano Banana 2 edit requests use fal's `/edit` endpoint and accept
-aspect-ratio hints.
+aspect-ratio hints. Nano Banana 2 also accepts extra-native wide/tall ratios
+such as `4:1`, `1:4`, `8:1`, and `1:8`; Krea 2 validates its own smaller
+aspect-ratio subset.
 </Warning>
 
-Use `outputFormat: "png"` when you want PNG output. fal does not declare an
-explicit transparent-background control in OpenClaw, so `background:
-"transparent"` is reported as an ignored override for fal models.
+Krea 2 models use fal's native Krea payload schema. OpenClaw sends
+`aspect_ratio`, `creativity`, and `image_style_references` instead of the
+generic `image_size` / edit-endpoint payload used by Flux. The model refs are:
+
+- `fal/krea/v2/medium/text-to-image`
+- `fal/krea/v2/large/text-to-image`
+
+Use Medium for faster expressive illustration, anime, painting, and artistic
+styles. Use Large for slower photoreal, raw texture, film grain, and detailed
+looks. Krea defaults to `fal.creativity: "medium"`; supported values are
+`raw`, `low`, `medium`, and `high`.
+
+Krea 2 exposes aspect ratio, not `image_size`, in fal's request schema. Prefer
+`aspectRatio`; OpenClaw maps `size` to the closest supported Krea aspect ratio
+and rejects `resolution` for Krea rather than dropping it.
+
+Use `outputFormat: "png"` when you want PNG output from fal models that expose
+`output_format`. fal does not declare an explicit transparent-background
+control in OpenClaw, so `background: "transparent"` is reported as an ignored
+override for fal models.
+Krea 2 endpoints do not expose an `output_format` request field through fal, so
+OpenClaw rejects `outputFormat` overrides for Krea requests.
 
 To use fal as the default image provider:
 
@@ -71,6 +93,20 @@ To use fal as the default image provider:
     defaults: {
       imageGenerationModel: {
         primary: "fal/fal-ai/flux/dev",
+      },
+    },
+  },
+}
+```
+
+To use Krea 2 Medium:
+
+```json5
+{
+  agents: {
+    defaults: {
+      imageGenerationModel: {
+        primary: "fal/krea/v2/medium/text-to-image",
       },
     },
   },

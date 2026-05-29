@@ -1090,6 +1090,11 @@ export const zh_CN: TranslationMap = {
       send: "发送",
       sendMessage: "发送消息",
     },
+    queue: {
+      retry: "重试",
+      retrySend: "重试发送",
+      retryQueuedMessage: "重试队列中的消息",
+    },
     composer: {
       placeholder: "给 {name} 发消息（Enter 发送）",
       placeholderWithAttachments: "添加消息或继续粘贴图片...",

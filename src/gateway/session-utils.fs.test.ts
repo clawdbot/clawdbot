@@ -461,6 +461,51 @@ describe("readSessionMessages", () => {
     expectMessageFields(out[1], { role: "assistant", content: "latest", openclaw: { seq: 4 } });
   });
 
+  test("returns no recent messages for non-finite maxMessages", async () => {
+    const sessionId = "test-session-recent-non-finite-max-messages";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    expect(
+      readRecentSessionMessages(sessionId, storePath, undefined, {
+        maxMessages: Number.NaN,
+        maxBytes: 1024,
+      }),
+    ).toEqual([]);
+    await expect(
+      readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+        maxMessages: Number.POSITIVE_INFINITY,
+        maxBytes: 1024,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  test("uses the default recent byte cap for non-finite maxBytes", async () => {
+    const sessionId = "test-session-recent-non-finite-max-bytes";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    const syncOut = readRecentSessionMessages(sessionId, storePath, undefined, {
+      maxMessages: 1,
+      maxBytes: Number.NaN,
+    });
+    const asyncOut = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 1,
+      maxBytes: Number.POSITIVE_INFINITY,
+    });
+
+    expect(syncOut).toHaveLength(1);
+    expectMessageFields(syncOut[0], { role: "assistant", content: "latest" });
+    expect(asyncOut).toHaveLength(1);
+    expectMessageFields(asyncOut[0], { role: "assistant", content: "latest" });
+  });
+
   test("bounds recent-message reads for large append-only transcripts", () => {
     const sessionId = "test-session-recent-large";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

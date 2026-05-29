@@ -54,6 +54,27 @@ describe("updateMatrixAccountConfig", () => {
     expect(account?.userId).toBeUndefined();
   });
 
+  it("does not store non-finite initial sync limits", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          accounts: {
+            default: {
+              initialSyncLimit: 20,
+            },
+          },
+        },
+      },
+    } as CoreConfig;
+
+    const updated = updateMatrixAccountConfig(cfg, "default", {
+      initialSyncLimit: Number.NaN,
+    });
+
+    expect(updated.channels?.matrix?.initialSyncLimit).toBeUndefined();
+    expect(updated.channels?.matrix?.accounts?.default?.initialSyncLimit).toBeUndefined();
+  });
+
   it("preserves SecretRef auth inputs when updating config", () => {
     const updated = updateMatrixAccountConfig({} as CoreConfig, "default", {
       accessToken: { source: "env", provider: "default", id: "MATRIX_ACCESS_TOKEN" },

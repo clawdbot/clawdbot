@@ -16,6 +16,7 @@ import { formatDimensionNote, resizeImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { normalizePositiveLimit } from "./limits.js";
 import { resolveReadPath } from "./path-utils.js";
 import { getTextOutput, invalidArgText, replaceTabs, shortenPath, str } from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
@@ -325,7 +326,8 @@ export function createReadToolDefinition(
               let userLimitedLines: number | undefined;
               // If limit is specified by the user, honor it first. Otherwise truncateHead decides.
               if (limit !== undefined) {
-                const endLine = Math.min(startLine + limit, allLines.length);
+                const normalizedLimit = normalizePositiveLimit(limit, DEFAULT_MAX_LINES);
+                const endLine = Math.min(startLine + normalizedLimit, allLines.length);
                 selectedContent = allLines.slice(startLine, endLine).join("\n");
                 userLimitedLines = endLine - startLine;
               } else {

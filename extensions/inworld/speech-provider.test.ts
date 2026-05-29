@@ -160,6 +160,29 @@ describe("buildInworldSpeechProvider", () => {
     });
   });
 
+  it("drops malformed temperature values before synthesis", async () => {
+    inworldTTSMock.mockResolvedValueOnce(Buffer.from("audio"));
+    const provider = buildInworldSpeechProvider();
+
+    await provider.synthesize?.({
+      text: "Hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "key",
+        voiceId: "Sarah",
+        modelId: "inworld-tts-1.5-max",
+        temperature: 0,
+      },
+      providerOverrides: { temperature: 3 },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    expect(inworldTTSMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ temperature: expect.any(Number) }),
+    );
+  });
+
   it("synthesizes voice-note targets with native OGG_OPUS output", async () => {
     inworldTTSMock.mockResolvedValueOnce(Buffer.from("opus"));
     const provider = buildInworldSpeechProvider();

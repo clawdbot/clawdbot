@@ -86,6 +86,21 @@ describe("createPersistentDedupe", () => {
     expect(raceSecond).toBe(false);
   });
 
+  it("bounds non-finite persistent dedupe options", async () => {
+    const root = await createTempDir("openclaw-dedupe-");
+    const dedupe = createPersistentDedupe({
+      ttlMs: Number.NaN,
+      memoryMaxSize: Number.NaN,
+      fileMaxEntries: Number.NaN,
+      resolveFilePath: (namespace) => path.join(root, `${namespace}.json`),
+    });
+
+    expect(await dedupe.checkAndRecord("m1", { namespace: "a", now: 100 })).toBe(true);
+    expect(await dedupe.hasRecent("m1", { namespace: "a", now: 100 })).toBe(true);
+    expect(await dedupe.checkAndRecord("m1", { namespace: "a", now: 100 })).toBe(false);
+    expect(dedupe.memorySize()).toBe(0);
+  });
+
   it("falls back to memory-only behavior on disk errors", async () => {
     const dedupe = createPersistentDedupe({
       ttlMs: 10_000,
@@ -190,5 +205,17 @@ describe("createClaimableDedupe", () => {
     await expect(reader.claim("m1", { namespace: "acct" })).resolves.toEqual({
       kind: "duplicate",
     });
+  });
+
+  it("bounds non-finite claimable dedupe options", async () => {
+    const dedupe = createClaimableDedupe({
+      ttlMs: Number.NaN,
+      memoryMaxSize: Number.NaN,
+    });
+
+    await expect(dedupe.claim("m1", { now: 100 })).resolves.toEqual({ kind: "claimed" });
+    await expect(dedupe.commit("m1", { now: 100 })).resolves.toBe(true);
+    await expect(dedupe.claim("m1", { now: 100 })).resolves.toEqual({ kind: "claimed" });
+    expect(dedupe.memorySize()).toBe(0);
   });
 });

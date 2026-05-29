@@ -1,4 +1,5 @@
 import { emitInternalDiagnosticEvent as emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
 type LargePayloadBase = {
   surface: string;
@@ -37,6 +38,5 @@ export function parseContentLengthHeader(raw: string | string[] | undefined): nu
   if (trimmed.length === 0 || !/^\d+$/.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
+  return parseStrictNonNegativeInteger(trimmed);
 }

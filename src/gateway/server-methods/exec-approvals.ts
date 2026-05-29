@@ -1,4 +1,12 @@
 import {
+  ErrorCodes,
+  errorShape,
+  validateExecApprovalsGetParams,
+  validateExecApprovalsNodeGetParams,
+  validateExecApprovalsNodeSetParams,
+  validateExecApprovalsSetParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
@@ -7,14 +15,6 @@ import {
   type ExecApprovalsFile,
   type ExecApprovalsSnapshot,
 } from "../../infra/exec-approvals.js";
-import {
-  ErrorCodes,
-  errorShape,
-  validateExecApprovalsGetParams,
-  validateExecApprovalsNodeGetParams,
-  validateExecApprovalsNodeSetParams,
-  validateExecApprovalsSetParams,
-} from "../protocol/index.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
   respondUnavailableOnNodeInvokeError,

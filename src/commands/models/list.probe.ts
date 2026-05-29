@@ -522,6 +522,9 @@ async function probeTarget(params: {
       model: target.model.model,
       authProfileId: target.profileId,
       authProfileIdSource: target.profileId ? "user" : undefined,
+      ...(target.provider === "openai-codex"
+        ? { agentHarnessId: "openclaw", agentHarnessRuntimeOverride: "openclaw" }
+        : {}),
       timeoutMs,
       runId: `probe-${crypto.randomUUID()}`,
       lane: `auth-probe:${target.provider}:${target.profileId ?? target.source}`,
@@ -530,6 +533,7 @@ async function probeTarget(params: {
       verboseLevel: "off",
       streamParams: { maxTokens },
       disableTools: true,
+      modelRun: true,
       cleanupBundleMcpOnRunEnd: true,
     });
     return buildResult("ok");

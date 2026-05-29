@@ -34,12 +34,17 @@ vi.mock("../llm/stream.js", async () => {
   };
 });
 
-vi.mock("node:fs/promises", () => ({
-  default: {
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  return {
+    ...actual,
+    default: {
+      ...actual,
+      readFile: (...args: unknown[]) => readFileMock(...args),
+    },
     readFile: (...args: unknown[]) => readFileMock(...args),
-  },
-  readFile: (...args: unknown[]) => readFileMock(...args),
-}));
+  };
+});
 
 vi.mock("./sessions/session-manager.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
@@ -68,6 +73,30 @@ vi.mock("./model-auth.js", () => ({
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),
   getApiKeyForModel: (...args: unknown[]) => getApiKeyForModelMock(...args),
   requireApiKey: (...args: unknown[]) => requireApiKeyMock(...args),
+}));
+
+vi.mock("./model-runtime-aliases.js", () => ({
+  resolveCliRuntimeExecutionProvider: ({
+    provider,
+    cfg,
+    modelId,
+  }: {
+    provider?: string;
+    cfg?: {
+      agents?: {
+        defaults?: {
+          models?: Record<string, { agentRuntime?: { id?: string } }>;
+        };
+      };
+    };
+    modelId?: string;
+  }) => {
+    const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+    const runtime = key
+      ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+      : undefined;
+    return runtime || undefined;
+  },
 }));
 
 vi.mock("./embedded-agent-runner/runs.js", () => ({
@@ -518,6 +547,9 @@ describe("runBtwSideQuestion", () => {
     const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
     expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
     expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+    expect(discoverModelsMock).toHaveBeenCalledWith(undefined, DEFAULT_AGENT_DIR, {
+      workspaceDir: "/tmp/workspace",
+    });
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {

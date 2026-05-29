@@ -130,9 +130,9 @@ function parseDaysOption(raw: unknown, fallback = 30): number {
     return Math.max(1, Math.floor(raw));
   }
   if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) {
-      return Math.max(1, Math.floor(parsed));
+    const parsed = parseStrictPositiveInteger(raw);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return fallback;

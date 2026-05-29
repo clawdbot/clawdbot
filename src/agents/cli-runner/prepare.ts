@@ -55,7 +55,6 @@ import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
-import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -90,7 +89,9 @@ const prepareDeps = {
 };
 
 const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-7",
+  opus: "claude-opus-4-8",
+  "opus-4.8": "claude-opus-4-8",
+  "opus-4-8": "claude-opus-4-8",
   "opus-4.7": "claude-opus-4-7",
   "opus-4-7": "claude-opus-4-7",
   "opus-4.6": "claude-opus-4-6",
@@ -426,29 +427,24 @@ export async function prepareCliRunContext(
     agentId: sessionAgentId,
   });
   const systemPromptSkillsPrompt = claudeSkillsPlugin.args.length > 0 ? "" : skillsPrompt;
-  const builtSystemPrompt =
-    resolveSystemPromptOverride({
-      config: params.config,
-      agentId: sessionAgentId,
-    }) ??
-    buildCliAgentSystemPrompt({
-      workspaceDir,
-      cwd,
-      config: params.config,
-      defaultThinkLevel: params.thinkLevel,
-      extraSystemPrompt,
-      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      silentReplyPromptMode: params.silentReplyPromptMode,
-      ownerNumbers: params.ownerNumbers,
-      heartbeatPrompt,
-      docsPath: openClawReferences.docsPath ?? undefined,
-      sourcePath: openClawReferences.sourcePath ?? undefined,
-      skillsPrompt: systemPromptSkillsPrompt,
-      tools: promptTools,
-      contextFiles,
-      modelDisplay,
-      agentId: sessionAgentId,
-    });
+  const builtSystemPrompt = buildCliAgentSystemPrompt({
+    workspaceDir,
+    cwd,
+    config: params.config,
+    defaultThinkLevel: params.thinkLevel,
+    extraSystemPrompt,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    silentReplyPromptMode: params.silentReplyPromptMode,
+    ownerNumbers: params.ownerNumbers,
+    heartbeatPrompt,
+    docsPath: openClawReferences.docsPath ?? undefined,
+    sourcePath: openClawReferences.sourcePath ?? undefined,
+    skillsPrompt: systemPromptSkillsPrompt,
+    tools: promptTools,
+    contextFiles,
+    modelDisplay,
+    agentId: sessionAgentId,
+  });
   const transformedSystemPrompt =
     backendResolved.transformSystemPrompt?.({
       config: params.config,

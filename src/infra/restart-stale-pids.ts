@@ -6,6 +6,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { uniqueValues } from "../shared/string-normalization.js";
 import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { resolveLsofCommandSync } from "./ports-lsof.js";
 import { getWindowsInstallRoots } from "./windows-install-roots.js";
 import {
@@ -114,8 +115,7 @@ function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null
     if (res.error || res.status !== 0 || !res.stdout.trim()) {
       return null;
     }
-    const parsed = Number.parseInt(res.stdout.trim(), 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+    return parseStrictPositiveInteger(res.stdout.trim()) ?? null;
   } catch {
     return null;
   }

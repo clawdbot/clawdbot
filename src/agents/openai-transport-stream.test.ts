@@ -2293,6 +2293,65 @@ describe("openai transport stream", () => {
     expect(params.prompt_cache_key).toBeUndefined();
   });
 
+  it("adds fallback instructions for raw native Codex responses probes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Follow the user request.");
+    expect(params.max_output_tokens).toBeUndefined();
+    expect(params.prompt_cache_retention).toBeUndefined();
+  });
+
+  it("does not add fallback instructions for custom Codex-compatible responses backends", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBeUndefined();
+    expect(params.max_output_tokens).toBe(16);
+  });
+
   it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -8152,6 +8211,51 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
     );
 
     expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  // Regression for #87575: OpenCode Zen exposes DeepSeek V4 with a `-free`
+  // tier suffix that does not change the upstream replay contract. Without
+  // matching the base id we stripped reasoning_content from the follow-up
+  // request and DeepSeek rejected the assistant turn with HTTP 400.
+  it.each([
+    [
+      "OpenCode Zen DeepSeek V4 Flash Free",
+      {
+        id: "deepseek-v4-flash-free",
+        name: "DeepSeek V4 Flash Free",
+        api: "openai-completions" as const,
+        provider: "opencode",
+        baseUrl: "https://opencode.ai/zen/v1",
+        reasoning: true,
+        input: ["text"] as ("text" | "image")[],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 65_536,
+        maxTokens: 8192,
+      },
+    ],
+    [
+      "OpenRouter MiMo V2 Pro Free",
+      {
+        ...customMiMoProxyModel,
+        id: "xiaomi/mimo-v2-pro-free",
+      },
+    ],
+    [
+      "OpenRouter Kimi K2 Thinking Free",
+      {
+        ...customKimiProxyModel,
+        id: "moonshotai/kimi-k2-thinking-free",
+      },
+    ],
+  ] as const)("preserves reasoning_content replay despite the %s tier suffix", (_label, model) => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(model as Model<"openai-completions">, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
   });
 
   it("preserves OpenRouter array reasoning_details from tool-call signatures", () => {

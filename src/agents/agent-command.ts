@@ -19,6 +19,7 @@ import {
 } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
@@ -432,7 +433,11 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   const subagentLane: string = AGENT_LANE_SUBAGENT;
   const isSubagentLane = laneRaw === subagentLane;
   const timeoutSecondsRaw =
-    opts.timeout !== undefined ? Number.parseInt(opts.timeout, 10) : isSubagentLane ? 0 : undefined;
+    opts.timeout !== undefined
+      ? (parseStrictNonNegativeInteger(opts.timeout) ?? Number.NaN)
+      : isSubagentLane
+        ? 0
+        : undefined;
   if (
     timeoutSecondsRaw !== undefined &&
     (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw < 0)

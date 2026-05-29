@@ -58,6 +58,38 @@
             }
           },
           {
+            "id": "minimaxai/minimax-m2.7",
+            "name": "Minimax M2.7",
+            "input": ["text"],
+            "contextWindow": 196608,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
+            "id": "z-ai/glm-5.1",
+            "name": "GLM 5.1",
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
             "id": "minimaxai/minimax-m2.5",
             "name": "MiniMax M2.5",
             "input": ["text"],
@@ -71,7 +103,10 @@
             },
             "compat": {
               "requiresStringContent": true
-            }
+            },
+            "status": "deprecated",
+            "statusReason": "Shipped compatibility row; use minimaxai/minimax-m2.7 for new NVIDIA setups.",
+            "replacedBy": "minimaxai/minimax-m2.7"
           },
           {
             "id": "z-ai/glm5",
@@ -87,7 +122,10 @@
             },
             "compat": {
               "requiresStringContent": true
-            }
+            },
+            "status": "deprecated",
+            "statusReason": "Shipped compatibility row; use z-ai/glm-5.1 for new NVIDIA setups.",
+            "replacedBy": "z-ai/glm-5.1"
           }
         ]
       }

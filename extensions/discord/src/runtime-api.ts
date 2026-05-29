@@ -24,7 +24,9 @@ export type {
 } from "openclaw/plugin-sdk/config-contracts";
 export {
   jsonResult,
+  readNonNegativeIntegerParam,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
   resolvePollMaxSelections,

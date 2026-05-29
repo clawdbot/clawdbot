@@ -3,6 +3,7 @@ import type { OcPath } from "../oc-path.js";
 import {
   isPositionalSeg,
   isQuotedSeg,
+  parseArrayIndexSegment,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
@@ -116,8 +117,8 @@ function walkNode(
   }
 
   if (isSeq(node)) {
-    const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {
+    const idx = parseArrayIndexSegment(seg, node.items.length);
+    if (idx === null) {
       return null;
     }
     const child = node.items[idx];

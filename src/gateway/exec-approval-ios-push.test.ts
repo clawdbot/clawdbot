@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const listDevicePairingMock = vi.fn();
 const loadApnsRegistrationMock = vi.fn();
+const loadApnsRegistrationsMock = vi.fn();
 const resolveApnsAuthConfigFromEnvMock = vi.fn();
 const resolveApnsRelayConfigFromEnvMock = vi.fn();
 const sendApnsExecApprovalAlertMock = vi.fn();
@@ -68,6 +69,7 @@ vi.mock("../infra/device-pairing.js", async () => {
 
 vi.mock("../infra/push-apns.js", () => ({
   loadApnsRegistration: loadApnsRegistrationMock,
+  loadApnsRegistrations: loadApnsRegistrationsMock,
   resolveApnsAuthConfigFromEnv: resolveApnsAuthConfigFromEnvMock,
   resolveApnsRelayConfigFromEnv: resolveApnsRelayConfigFromEnvMock,
   sendApnsExecApprovalAlert: sendApnsExecApprovalAlertMock,
@@ -91,6 +93,16 @@ describe("createExecApprovalIosPushDelivery", () => {
       topic: "ai.openclaw.ios.test",
       environment: "sandbox",
       updatedAtMs: 1,
+    });
+    loadApnsRegistrationsMock.mockImplementation(async (nodeIds: readonly string[]) => {
+      const registrations = [];
+      for (const nodeId of nodeIds) {
+        const registration = await loadApnsRegistrationMock(nodeId);
+        if (registration) {
+          registrations.push({ nodeId, registration });
+        }
+      }
+      return registrations;
     });
     resolveApnsAuthConfigFromEnvMock.mockResolvedValue({
       ok: true,
@@ -150,7 +162,7 @@ describe("createExecApprovalIosPushDelivery", () => {
     });
 
     expect(accepted).toBe(false);
-    expect(loadApnsRegistrationMock).not.toHaveBeenCalled();
+    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
     expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
   });
 
@@ -167,8 +179,62 @@ describe("createExecApprovalIosPushDelivery", () => {
     });
 
     expect(accepted).toBe(true);
-    expect(loadApnsRegistrationMock).toHaveBeenCalledWith("ios-device-1");
+    expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1"]);
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads APNs registrations in one bulk read for all visible iOS operators", async () => {
+    listDevicePairingMock.mockResolvedValue({
+      pending: [],
+      paired: [
+        {
+          deviceId: "ios-device-1",
+          publicKey: "pub-1",
+          platform: "iOS 18",
+          role: "operator",
+          roles: ["operator"],
+          createdAtMs: 1,
+          approvedAtMs: 1,
+          tokens: {
+            operator: {
+              token: "operator-token-1",
+              role: "operator",
+              scopes: ["operator.approvals"],
+              createdAtMs: 1,
+            },
+          },
+        },
+        {
+          deviceId: "ios-device-2",
+          publicKey: "pub-2",
+          platform: "iPadOS 18",
+          role: "operator",
+          roles: ["operator"],
+          createdAtMs: 1,
+          approvedAtMs: 2,
+          tokens: {
+            operator: {
+              token: "operator-token-2",
+              role: "operator",
+              scopes: ["operator.approvals"],
+              createdAtMs: 1,
+            },
+          },
+        },
+      ],
+    });
+
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+
+    await delivery.handleRequested({
+      id: "approval-bulk-load",
+      request: { command: "echo ok", host: "gateway", allowedDecisions: ["allow-once"] },
+      createdAtMs: 1,
+      expiresAtMs: 2,
+    });
+
+    expect(loadApnsRegistrationsMock).toHaveBeenCalledTimes(1);
+    expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1", "ios-device-2"]);
   });
 
   it("does not target iOS devices rejected by the approval visibility filter", async () => {
@@ -192,7 +258,7 @@ describe("createExecApprovalIosPushDelivery", () => {
       deviceId: "ios-device-1",
       scopes: ["operator.approvals", "operator.read"],
     });
-    expect(loadApnsRegistrationMock).not.toHaveBeenCalled();
+    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
     expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
   });
 
@@ -285,7 +351,7 @@ describe("createExecApprovalIosPushDelivery", () => {
       "exec approvals: iOS cleanup push skipped approvalId=approval-missing-targets reason=missing-targets",
     );
     expect(listDevicePairingMock).not.toHaveBeenCalled();
-    expect(loadApnsRegistrationMock).not.toHaveBeenCalled();
+    expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
     expect(sendApnsExecApprovalResolvedWakeMock).not.toHaveBeenCalled();
   });
 
@@ -321,7 +387,7 @@ describe("createExecApprovalIosPushDelivery", () => {
     });
 
     expect(listDevicePairingMock).not.toHaveBeenCalled();
-    expect(loadApnsRegistrationMock).toHaveBeenCalledWith("ios-device-1");
+    expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1"]);
     expect(sendApnsExecApprovalResolvedWakeMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -24,7 +24,14 @@ concurrency:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'issue_comment' || !(endsWith(github.actor, '[bot]') && (github.event.action == 'labeled' || github.event.action == 'unlabeled')) }}
+    if: >-
+      ${{
+        github.event_name == 'issue_comment' ||
+        !(
+          endsWith(github.actor, '[bot]') &&
+          (github.event.action == 'labeled' || github.event.action == 'unlabeled')
+        )
+      }}
     env:
       HAS_CLAWSWEEPER_APP_PRIVATE_KEY: ${{ secrets.CLAWSWEEPER_APP_PRIVATE_KEY != '' }}
       CLAWSWEEPER_APP_CLIENT_ID: Iv23liOECG0slfuhz093

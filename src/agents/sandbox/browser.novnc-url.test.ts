@@ -52,6 +52,28 @@ describe("noVNC auth helpers", () => {
     expect(consumeNoVncObserverToken(token, 1200)).toBeNull();
   });
 
+  it("uses the default ttl when observer token ttlMs is non-finite", () => {
+    resetNoVncObserverTokensForTests();
+    const liveToken = issueNoVncObserverToken({
+      noVncPort: 50123,
+      password: "abcd1234", // pragma: allowlist secret
+      nowMs: 1000,
+      ttlMs: Number.NaN,
+    });
+    const expiredToken = issueNoVncObserverToken({
+      noVncPort: 50123,
+      password: "abcd1234", // pragma: allowlist secret
+      nowMs: 1000,
+      ttlMs: Number.NaN,
+    });
+
+    expect(consumeNoVncObserverToken(liveToken, 60_999)).toEqual({
+      noVncPort: 50123,
+      password: "abcd1234", // pragma: allowlist secret
+    });
+    expect(consumeNoVncObserverToken(expiredToken, 61_001)).toBeNull();
+  });
+
   it("generates 8-char alphanumeric passwords", () => {
     const password = generateNoVncPassword();
     expect(password).toMatch(/^[a-zA-Z0-9]{8}$/);

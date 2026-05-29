@@ -24,18 +24,17 @@
     <style>
       :root {
         color-scheme: dark;
-        --bg: #06070b;
-        --panel: rgba(14, 17, 24, 0.74);
-        --panel-strong: rgba(18, 23, 32, 0.86);
-        --line: rgba(255, 255, 255, 0.1);
-        --line-strong: rgba(255, 255, 255, 0.18);
-        --text: rgba(255, 255, 255, 0.96);
-        --muted: rgba(222, 229, 239, 0.72);
-        --soft: rgba(222, 229, 239, 0.5);
-        --accent: #8ec5ff;
-        --accent-strong: #5b9dff;
-        --accent-warm: #ff9159;
-        --accent-rose: #ff5fa2;
+        --bg: #08080a;
+        --panel: rgba(18, 19, 23, 0.76);
+        --panel-strong: rgba(28, 30, 35, 0.88);
+        --line: rgba(255, 255, 255, 0.11);
+        --line-strong: rgba(255, 255, 255, 0.2);
+        --text: rgba(250, 250, 250, 0.96);
+        --muted: rgba(224, 224, 226, 0.72);
+        --soft: rgba(224, 224, 226, 0.5);
+        --accent: #c6312a;
+        --accent-strong: #ef3e52;
+        --accent-warm: #f59e0b;
         --state: #7d8ca3;
         --safe-top: env(safe-area-inset-top, 0px);
         --safe-bottom: env(safe-area-inset-bottom, 0px);
@@ -49,49 +48,33 @@
       body {
         font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
         background:
-          radial-gradient(900px 640px at 12% 10%, rgba(91, 157, 255, 0.36), rgba(0, 0, 0, 0) 58%),
-          radial-gradient(840px 600px at 88% 16%, rgba(255, 95, 162, 0.24), rgba(0, 0, 0, 0) 62%),
-          radial-gradient(960px 720px at 50% 100%, rgba(255, 145, 89, 0.18), rgba(0, 0, 0, 0) 60%),
-          linear-gradient(180deg, #090b11 0%, #05060a 100%);
+          linear-gradient(135deg, rgba(198, 49, 42, 0.2), rgba(198, 49, 42, 0) 34%),
+          linear-gradient(180deg, #14161a 0%, #08080a 42%, #050506 100%);
         color: var(--text);
         overflow: hidden;
       }
 
-      body::before,
-      body::after {
+      body::before {
         content: "";
         position: fixed;
         inset: -10%;
         pointer-events: none;
-      }
-
-      body::before {
         background:
           repeating-linear-gradient(
             90deg,
-            rgba(255, 255, 255, 0.025) 0,
-            rgba(255, 255, 255, 0.025) 1px,
+            rgba(255, 255, 255, 0.018) 0,
+            rgba(255, 255, 255, 0.018) 1px,
             transparent 1px,
-            transparent 52px
+            transparent 44px
           ),
           repeating-linear-gradient(
             0deg,
-            rgba(255, 255, 255, 0.025) 0,
-            rgba(255, 255, 255, 0.025) 1px,
+            rgba(255, 255, 255, 0.018) 0,
+            rgba(255, 255, 255, 0.018) 1px,
             transparent 1px,
-            transparent 52px
+            transparent 44px
           );
-        opacity: 0.42;
-        transform: rotate(-7deg);
-      }
-
-      body::after {
-        background:
-          radial-gradient(700px 460px at 20% 18%, rgba(142, 197, 255, 0.18), rgba(0, 0, 0, 0) 62%),
-          radial-gradient(720px 520px at 84% 20%, rgba(255, 95, 162, 0.14), rgba(0, 0, 0, 0) 66%),
-          radial-gradient(860px 620px at 52% 88%, rgba(255, 145, 89, 0.14), rgba(0, 0, 0, 0) 64%);
-        filter: blur(28px);
-        opacity: 0.95;
+        opacity: 0.5;
       }
 
       body[data-state="connected"] { --state: #61d58b; }
@@ -135,8 +118,8 @@
       .hero {
         position: relative;
         overflow: hidden;
-        border-radius: 28px;
-        background: linear-gradient(180deg, rgba(18, 24, 34, 0.86), rgba(10, 13, 19, 0.94));
+        border-radius: 24px;
+        background: linear-gradient(180deg, rgba(31, 33, 38, 0.86), rgba(13, 14, 17, 0.94));
         border: 1px solid var(--line);
         box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
         padding: 22px 22px 18px;
@@ -145,11 +128,9 @@
       .hero::before {
         content: "";
         position: absolute;
-        inset: -30% auto auto -20%;
-        width: 240px;
-        height: 240px;
-        border-radius: 999px;
-        background: radial-gradient(circle, rgba(142, 197, 255, 0.18), rgba(0, 0, 0, 0));
+        inset: 0 auto 0 0;
+        width: 3px;
+        background: linear-gradient(180deg, var(--accent-strong), rgba(198, 49, 42, 0.08));
         pointer-events: none;
       }
 
@@ -188,9 +169,9 @@
 
       .hero h1 {
         margin: 18px 0 0;
-        font-size: clamp(32px, 7vw, 52px);
-        line-height: 0.98;
-        letter-spacing: -0.04em;
+        font-size: clamp(34px, 7vw, 54px);
+        line-height: 1;
+        letter-spacing: -0.03em;
       }
 
       .hero p {
@@ -258,7 +239,7 @@
         align-items: center;
         justify-content: center;
         background:
-          linear-gradient(135deg, rgba(142, 197, 255, 0.22), rgba(91, 157, 255, 0.1)),
+          linear-gradient(135deg, rgba(198, 49, 42, 0.28), rgba(239, 62, 82, 0.1)),
           rgba(255, 255, 255, 0.04);
         border: 1px solid rgba(255, 255, 255, 0.12);
         font-size: 24px;
@@ -315,7 +296,7 @@
       .agent-card.active {
         background: var(--panel-strong);
         border-color: var(--line-strong);
-        box-shadow: inset 0 0 0 1px rgba(142, 197, 255, 0.12);
+        box-shadow: inset 0 0 0 1px rgba(198, 49, 42, 0.18);
       }
 
       .agent-row {

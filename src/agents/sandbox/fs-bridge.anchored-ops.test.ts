@@ -216,4 +216,35 @@ describe("sandbox fs bridge anchored ops", () => {
       expect(args).not.toContain("/workspace/nested/file.txt");
     });
   });
+
+  it("does not accept partial stat size output", async () => {
+    await withTempDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+
+      mockedExecDockerRaw.mockImplementation(async (args) => {
+        const script = getDockerScript(args);
+        if (script.includes('readlink -f -- "$cursor"')) {
+          return dockerExecResult(`${getDockerArg(args, 1)}\n`);
+        }
+        if (script.includes('stat -c "%F|%s|%y"')) {
+          return dockerExecResult("regular file|12oops|not-a-date\n");
+        }
+        return dockerExecResult("");
+      });
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
+        type: "file",
+        size: 0,
+        mtimeMs: 0,
+      });
+    });
+  });
 });

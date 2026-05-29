@@ -57,7 +57,6 @@ vi.mock("./session.js", async () => {
     waitForWaConnection,
     formatError,
     getStatusCode,
-    WA_WEB_AUTH_DIR: authDir,
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
       await fs.rm(params.authDir ?? authDir, {
         recursive: true,
@@ -159,8 +158,8 @@ describe("loginWeb coverage", () => {
     );
     expect(runtime.log).toHaveBeenCalledWith("terminal:initial-qr");
     expect(runtime.log).toHaveBeenCalledWith("terminal:restart-qr");
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr");
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr");
+    expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
+    expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
   });
 
   it("clears creds and throws when logged out", async () => {

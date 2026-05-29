@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { formatConnectError } from "./connect-error.ts";
 
 describe("formatConnectError", () => {

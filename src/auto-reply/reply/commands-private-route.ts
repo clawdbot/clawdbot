@@ -87,6 +87,7 @@ export async function deliverPrivateCommandReply(params: {
         policyConversationType: "direct",
         mirror: false,
         isGroup: false,
+        replyKind: "final",
       }),
     ),
   );

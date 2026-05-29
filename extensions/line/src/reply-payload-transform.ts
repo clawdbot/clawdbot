@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -64,9 +65,9 @@ export function parseLineDirectives(payload: ReplyPayload): ReplyPayload {
     const parts = locationMatch[1].split("|").map((s) => s.trim());
     if (parts.length >= 4) {
       const [title, address, latStr, lonStr] = parts;
-      const latitude = Number.parseFloat(latStr);
-      const longitude = Number.parseFloat(lonStr);
-      if (!Number.isNaN(latitude) && !Number.isNaN(longitude)) {
+      const latitude = parseStrictFiniteNumber(latStr);
+      const longitude = parseStrictFiniteNumber(lonStr);
+      if (latitude !== undefined && longitude !== undefined) {
         lineData.location = {
           title: title || "Location",
           address: address || "",

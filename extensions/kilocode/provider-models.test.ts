@@ -239,6 +239,40 @@ describe("discoverKilocodeModels (fetch path)", () => {
     }
   });
 
+  it("falls back from malformed live token metadata", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: [
+            makeGatewayModel({
+              id: "some/bad-window",
+              context_length: -1,
+              top_provider: { max_completion_tokens: 8192.5 },
+            }),
+            makeGatewayModel({
+              id: "some/bad-output",
+              context_length: Number.POSITIVE_INFINITY,
+              top_provider: { max_completion_tokens: 0 },
+            }),
+          ],
+        }),
+    });
+
+    await withFetchPathTest(mockFetch, async () => {
+      const models = await discoverKilocodeModels();
+
+      expect(requireModelById(models, "some/bad-window")).toMatchObject({
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      });
+      expect(requireModelById(models, "some/bad-output")).toMatchObject({
+        contextWindow: 1000000,
+        maxTokens: 128000,
+      });
+    });
+  });
+
   it("ensures kilo/auto is present even when API doesn't return it", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,

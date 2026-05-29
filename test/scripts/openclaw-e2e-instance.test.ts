@@ -378,6 +378,68 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
+  it("escalates Node watchdog children that ignore parent termination", () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-signal-"),
+    );
+    try {
+      writeNodeShim(tempDir);
+      const childPath = path.join(tempDir, "ignore-term.cjs");
+      const pidPath = path.join(tempDir, "child.pid");
+      const watchdogPidPath = path.join(tempDir, "watchdog.pid");
+      fs.writeFileSync(
+        childPath,
+        [
+          "const fs = require('node:fs');",
+          "fs.writeFileSync(process.argv[2], String(process.pid));",
+          "fs.writeFileSync(process.argv[3], String(process.ppid));",
+          "process.on('SIGTERM', () => {});",
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+      );
+
+      const script = `
+set -euo pipefail
+source ${shellQuote(helperPath)}
+export OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS=100
+openclaw_e2e_maybe_timeout 30s node ${shellQuote(childPath)} ${shellQuote(pidPath)} ${shellQuote(watchdogPidPath)} &
+wrapper_pid="$!"
+for ((i = 0; i < 100; i += 1)); do
+  [ -s ${shellQuote(pidPath)} ] && [ -s ${shellQuote(watchdogPidPath)} ] && break
+  /bin/sleep 0.02
+done
+[ -s ${shellQuote(pidPath)} ]
+[ -s ${shellQuote(watchdogPidPath)} ]
+kill -TERM "$(/bin/cat ${shellQuote(watchdogPidPath)})"
+set +e
+wait "$wrapper_pid"
+status="$?"
+set -e
+[ "$status" = "143" ]
+child_pid="$(/bin/cat ${shellQuote(pidPath)})"
+for ((i = 0; i < 100; i += 1)); do
+  kill -0 "$child_pid" 2>/dev/null || exit 0
+  /bin/sleep 0.02
+done
+echo "child still alive after watchdog termination" >&2
+exit 1
+`;
+
+      const result = spawnSync("/bin/bash", ["-c", script], {
+        encoding: "utf8",
+        env: shellTestEnv({
+          PATH: tempDir,
+        }),
+        timeout: 5_000,
+      });
+
+      expectShellSuccess(result);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("bounds HTTP readiness probes when a server accepts connections but never responds", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-http-probe-"));
     try {

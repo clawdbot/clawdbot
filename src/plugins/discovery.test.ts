@@ -138,6 +138,7 @@ function writePluginPackageManifest(params: {
   runtimeExtensions?: string[];
   setupEntry?: string;
   runtimeSetupEntry?: string;
+  compatPluginApi?: string;
 }) {
   fs.writeFileSync(
     path.join(params.packageDir, "package.json"),
@@ -148,6 +149,7 @@ function writePluginPackageManifest(params: {
         ...(params.runtimeExtensions ? { runtimeExtensions: params.runtimeExtensions } : {}),
         ...(params.setupEntry ? { setupEntry: params.setupEntry } : {}),
         ...(params.runtimeSetupEntry ? { runtimeSetupEntry: params.runtimeSetupEntry } : {}),
+        ...(params.compatPluginApi ? { compat: { pluginApi: params.compatPluginApi } } : {}),
       },
     }),
     "utf-8",
@@ -198,12 +200,14 @@ function createPackagePlugin(params: {
   packageName: string;
   extensions: string[];
   pluginId?: string;
+  compatPluginApi?: string;
 }) {
   mkdirSafe(params.packageDir);
   writePluginPackageManifest({
     packageDir: params.packageDir,
     packageName: params.packageName,
     extensions: params.extensions,
+    ...(params.compatPluginApi ? { compatPluginApi: params.compatPluginApi } : {}),
   });
   if (params.pluginId) {
     writePluginManifest({ pluginDir: params.packageDir, id: params.pluginId });
@@ -216,6 +220,7 @@ function createPackagePluginWithEntry(params: {
   pluginId?: string;
   entryPath?: string;
   writeBuiltRuntime?: boolean;
+  compatPluginApi?: string;
 }) {
   const entryPath = params.entryPath ?? "src/index.ts";
   mkdirSafe(path.dirname(path.join(params.packageDir, entryPath)));
@@ -224,6 +229,7 @@ function createPackagePluginWithEntry(params: {
     packageName: params.packageName,
     extensions: [`./${entryPath}`],
     ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+    ...(params.compatPluginApi ? { compatPluginApi: params.compatPluginApi } : {}),
   });
   writePluginEntry(path.join(params.packageDir, entryPath));
   if (params.writeBuiltRuntime ?? listBuiltRuntimeEntryCandidates(entryPath).length > 0) {
@@ -1525,6 +1531,125 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("skips incompatible non-bundled package plugin API candidates during discovery", () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    const pluginDir = path.join(globalExt, "future-channel");
+    createPackagePluginWithEntry({
+      packageDir: pluginDir,
+      packageName: "@openclaw/future-channel",
+      pluginId: "future-channel",
+      compatPluginApi: ">=2026.5.27-beta.2",
+    });
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.27-beta.1",
+      }),
+    });
+
+    expectCandidateIds(candidates, { excludes: ["future-channel"] });
+    expectDiagnostic({
+      diagnostics,
+      level: "warn",
+      pluginId: "future-channel",
+      source: path.join(pluginDir, "package.json"),
+      messageIncludes:
+        "plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery",
+    });
+  });
+
+  it("skips malformed non-bundled package plugin API candidates during discovery", () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    const pluginDir = path.join(globalExt, "malformed-channel");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/malformed-channel",
+        openclaw: {
+          extensions: ["./index.js"],
+          plugin: { id: "malformed-channel" },
+          compat: { pluginApi: 20260527 },
+        },
+      }),
+      "utf-8",
+    );
+    writePluginEntry(path.join(pluginDir, "index.js"));
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.27",
+      }),
+    });
+
+    expectCandidateIds(candidates, { excludes: ["malformed-channel"] });
+    expectDiagnostic({
+      diagnostics,
+      level: "warn",
+      pluginId: "malformed-channel",
+      source: path.join(pluginDir, "package.json"),
+      messageIncludes:
+        "invalid package plugin API metadata: package.json openclaw.compat.pluginApi must be a string; skipping discovery",
+    });
+  });
+
+  it("checks non-bundled package plugin API before package entry validation", () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    const pluginDir = path.join(globalExt, "future-shape");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/future-shape",
+        openclaw: {
+          extensions: { runtime: "./src/index.ts" },
+          compat: { pluginApi: ">=2026.5.27-beta.2" },
+        },
+      }),
+      "utf-8",
+    );
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.27-beta.1",
+      }),
+    });
+
+    expectCandidateIds(candidates, { excludes: ["future-shape"] });
+    expectDiagnostic({
+      diagnostics,
+      level: "warn",
+      pluginId: "future-shape",
+      source: path.join(pluginDir, "package.json"),
+      messageIncludes:
+        "plugin requires plugin API >=2026.5.27-beta.2, but this host is 2026.5.27-beta.1; skipping discovery",
+    });
+    expectNoDiagnostic({ diagnostics, messageIncludes: "openclaw.extensions" });
+  });
+
+  it("discovers same-floor beta non-bundled package plugin API candidates", () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions");
+    createPackagePluginWithEntry({
+      packageDir: path.join(globalExt, "current-channel"),
+      packageName: "@openclaw/current-channel",
+      pluginId: "current-channel",
+      compatPluginApi: ">=2026.5.27-beta.1",
+    });
+
+    const { candidates, diagnostics } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.27-beta.1",
+      }),
+    });
+
+    expectCandidateIds(candidates, { includes: ["current-channel"] });
+    expect(diagnostics).toStrictEqual([]);
+  });
+
   it("discovers present bundled package plugins without package metadata gates", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled");
@@ -1536,6 +1661,7 @@ describe("discoverOpenClawPlugins", () => {
         name: "@openclaw/downloadable",
         openclaw: {
           extensions: ["./index.ts"],
+          compat: { pluginApi: ">=2099.1.1" },
         },
       }),
       "utf-8",

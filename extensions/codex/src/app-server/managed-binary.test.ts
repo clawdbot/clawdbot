@@ -22,7 +22,8 @@ function startOptions(
 }
 
 function managedCommandPath(root: string, platform: NodeJS.Platform): string {
-  return path.join(root, "node_modules", ".bin", platform === "win32" ? "codex.cmd" : "codex");
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  return pathApi.join(root, "node_modules", ".bin", platform === "win32" ? "codex.cmd" : "codex");
 }
 
 describe("managed Codex app-server binary", () => {
@@ -86,6 +87,52 @@ describe("managed Codex app-server binary", () => {
     await expect(
       resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
         platform: "linux",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: installedCommand,
+      commandSource: "resolved-managed",
+    });
+  });
+
+  it("finds Codex bins hoisted into an isolated npm project root", async () => {
+    const projectRoot = path.join("/tmp", "state", "npm", "projects", "openclaw-codex-hash");
+    const pluginRoot = path.join(projectRoot, "node_modules", "@openclaw", "codex");
+    const installedCommand = managedCommandPath(projectRoot, "linux");
+    const pathExists = vi.fn(async (filePath: string) => filePath === installedCommand);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "linux",
+        pluginRoot,
+        pathExists,
+      }),
+    ).resolves.toEqual({
+      ...startOptions("managed"),
+      command: installedCommand,
+      commandSource: "resolved-managed",
+    });
+  });
+
+  it("finds Windows Codex shims hoisted into an isolated npm project root", async () => {
+    const projectRoot = path.win32.join(
+      "C:\\",
+      "Users",
+      "test",
+      ".openclaw",
+      "npm",
+      "projects",
+      "openclaw-codex-hash",
+    );
+    const pluginRoot = path.win32.join(projectRoot, "node_modules", "@openclaw", "codex");
+    const installedCommand = managedCommandPath(projectRoot, "win32");
+    const pathExists = vi.fn(async (filePath: string) => filePath === installedCommand);
+
+    await expect(
+      resolveManagedCodexAppServerStartOptions(startOptions("managed"), {
+        platform: "win32",
         pluginRoot,
         pathExists,
       }),

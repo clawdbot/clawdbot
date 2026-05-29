@@ -10,7 +10,6 @@
   "dependencies": {
     "@discordjs/voice": "0.19.2",
     "discord-api-types": "0.38.48",
-    "https-proxy-agent": "9.0.0",
     "libopus-wasm": "0.1.0",
     "typebox": "1.1.38",
     "undici": "8.3.0",

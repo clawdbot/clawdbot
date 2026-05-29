@@ -18,6 +18,11 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentToolResult } from "../runtime/index.js";
 import { sanitizeToolResultImages } from "../tool-images.js";
+import {
+  readFiniteNumberParam,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+} from "./common.js";
 import type { GatewayCallOptions } from "./gateway.js";
 import { callGatewayTool } from "./gateway.js";
 import { resolveNode, resolveNodeId } from "./nodes-utils.js";
@@ -46,6 +51,7 @@ export const POLICY_REDIRECT_INVOKE_COMMANDS: ReadonlySet<string> = new Set([
 ]);
 
 export type NodeMediaAction = "camera_snap" | "photos_latest" | "camera_clip" | "screen_record";
+const MAX_RECORDING_DURATION_MS = 300_000;
 
 type ExecuteNodeMediaActionParams = {
   action: NodeMediaAction;
@@ -89,16 +95,14 @@ async function executeCameraSnap({
         : (() => {
             throw new Error("invalid facing (front|back|both)");
           })();
-  const maxWidth =
-    typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
-      ? params.maxWidth
-      : 1600;
+  const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? 1600;
   const quality =
-    typeof params.quality === "number" && Number.isFinite(params.quality) ? params.quality : 0.95;
-  const delayMs =
-    typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
-      ? params.delayMs
-      : undefined;
+    readFiniteNumberParam(params, "quality", {
+      min: 0,
+      max: 1,
+      message: "quality must be between 0 and 1",
+    }) ?? 0.95;
+  const delayMs = readNonNegativeIntegerParam(params, "delayMs");
   const deviceId =
     typeof params.deviceId === "string" && params.deviceId.trim()
       ? params.deviceId.trim()
@@ -183,19 +187,17 @@ async function executePhotosLatest({
   const node = requireString(params, "node");
   const resolvedNode = await resolveNode(gatewayOpts, node);
   const nodeId = resolvedNode.nodeId;
-  const limitRaw =
-    typeof params.limit === "number" && Number.isFinite(params.limit)
-      ? Math.floor(params.limit)
-      : DEFAULT_PHOTOS_LIMIT;
-  const limit = Math.max(1, Math.min(limitRaw, MAX_PHOTOS_LIMIT));
-  const maxWidth =
-    typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
-      ? params.maxWidth
-      : DEFAULT_PHOTOS_MAX_WIDTH;
+  const limit = Math.min(
+    readPositiveIntegerParam(params, "limit") ?? DEFAULT_PHOTOS_LIMIT,
+    MAX_PHOTOS_LIMIT,
+  );
+  const maxWidth = readPositiveIntegerParam(params, "maxWidth") ?? DEFAULT_PHOTOS_MAX_WIDTH;
   const quality =
-    typeof params.quality === "number" && Number.isFinite(params.quality)
-      ? params.quality
-      : DEFAULT_PHOTOS_QUALITY;
+    readFiniteNumberParam(params, "quality", {
+      min: 0,
+      max: 1,
+      message: "quality must be between 0 and 1",
+    }) ?? DEFAULT_PHOTOS_QUALITY;
   const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
     nodeId,
     command: "photos.latest",
@@ -294,12 +296,11 @@ async function executeCameraClip({
   if (facing !== "front" && facing !== "back") {
     throw new Error("invalid facing (front|back)");
   }
-  const durationMs =
-    typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
-      ? params.durationMs
-      : typeof params.duration === "string"
-        ? parseDurationMs(params.duration)
-        : 3000;
+  const durationMs = Math.min(
+    readPositiveIntegerParam(params, "durationMs") ??
+      (typeof params.duration === "string" ? parseDurationMs(params.duration) : 3000),
+    MAX_RECORDING_DURATION_MS,
+  );
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
   const deviceId =
     typeof params.deviceId === "string" && params.deviceId.trim()
@@ -341,18 +342,17 @@ async function executeScreenRecord({
   const node = requireString(params, "node");
   const nodeId = await resolveNodeId(gatewayOpts, node);
   const durationMs = Math.min(
-    typeof params.durationMs === "number" && Number.isFinite(params.durationMs)
-      ? params.durationMs
-      : typeof params.duration === "string"
-        ? parseDurationMs(params.duration)
-        : 10_000,
-    300_000,
+    readPositiveIntegerParam(params, "durationMs") ??
+      (typeof params.duration === "string" ? parseDurationMs(params.duration) : 10_000),
+    MAX_RECORDING_DURATION_MS,
   );
-  const fps = typeof params.fps === "number" && Number.isFinite(params.fps) ? params.fps : 10;
-  const screenIndex =
-    typeof params.screenIndex === "number" && Number.isFinite(params.screenIndex)
-      ? params.screenIndex
-      : 0;
+  const fps =
+    readFiniteNumberParam(params, "fps", {
+      min: 0,
+      minExclusive: true,
+      message: "fps must be greater than 0",
+    }) ?? 10;
+  const screenIndex = readNonNegativeIntegerParam(params, "screenIndex") ?? 0;
   const includeAudio = typeof params.includeAudio === "boolean" ? params.includeAudio : true;
   const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
     nodeId,

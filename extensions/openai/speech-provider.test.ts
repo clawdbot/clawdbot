@@ -97,6 +97,64 @@ describe("buildOpenAISpeechProvider", () => {
     });
   });
 
+  it("drops malformed speech speed values", () => {
+    const provider = buildOpenAISpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          openai: {
+            speed: 4.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.speed).toBeUndefined();
+  });
+
+  it("passes custom endpoint speech speeds through", () => {
+    const provider = buildOpenAISpeechProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      rawConfig: {
+        providers: {
+          openai: {
+            baseUrl: "https://tts.example.com/v1",
+            speed: 4.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.speed).toBe(4.5);
+  });
+
+  it("uses talk base url overrides when validating speech speed", () => {
+    const provider = buildOpenAISpeechProvider();
+
+    const resolvedConfig = provider.resolveTalkConfig?.({
+      cfg: {} as never,
+      timeoutMs: 30_000,
+      baseTtsConfig: {
+        providers: {
+          openai: {
+            apiKey: "sk-base",
+          },
+        },
+      },
+      talkProviderConfig: {
+        baseUrl: "https://tts.example.com/v1",
+        speed: 4.5,
+      },
+    });
+
+    expect(resolvedConfig?.baseUrl).toBe("https://tts.example.com/v1");
+    expect(resolvedConfig?.speed).toBe(4.5);
+  });
+
   it("parses OpenAI directive tokens against the resolved base url", () => {
     const provider = buildOpenAISpeechProvider();
 

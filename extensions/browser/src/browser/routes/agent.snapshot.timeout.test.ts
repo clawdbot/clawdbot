@@ -64,6 +64,7 @@ vi.mock("../../media/store.js", () => ({
 }));
 
 vi.mock("./agent.shared.js", () => ({
+  browserNavigationPolicyForProfile: vi.fn(() => ({})),
   getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn((_ctx, _res, err) => {
     throw err;
@@ -72,7 +73,24 @@ vi.mock("./agent.shared.js", () => ({
   requirePwAi: vi.fn(async () => null),
   resolveProfileContext: vi.fn(() => profileContext),
   withPlaywrightRouteContext: vi.fn(),
-  withRouteTabContext: vi.fn(),
+  withRouteTabContext: vi.fn(
+    async (params: {
+      run: (ctx: {
+        profileCtx: typeof profileContext;
+        tab: { targetId: string; url: string; wsUrl: string };
+        cdpUrl: string;
+      }) => Promise<void>;
+    }) =>
+      await params.run({
+        profileCtx: profileContext,
+        tab: {
+          targetId: "tab-1",
+          url: "https://example.com",
+          wsUrl: "ws://127.0.0.1:18800/devtools/page/tab-1",
+        },
+        cdpUrl: "http://127.0.0.1:18800",
+      }),
+  ),
 }));
 
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
@@ -83,6 +101,16 @@ function getSnapshotHandler() {
     state: () => ({ resolved: { extraArgs: [] } }),
   } as never);
   const handler = getHandlers.get("/snapshot");
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
+function getScreenshotHandler() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(app, {
+    state: () => ({ resolved: { extraArgs: [] } }),
+  } as never);
+  const handler = postHandlers.get("/screenshot");
   expect(handler).toBeTypeOf("function");
   return handler;
 }
@@ -123,5 +151,37 @@ describe("browser agent snapshot timeout routing", () => {
         timeoutMs: 9876,
       }),
     );
+  });
+
+  it("caps screenshot timeoutMs before dispatching to CDP", async () => {
+    cdpMocks.captureScreenshot.mockResolvedValueOnce(Buffer.from("png"));
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      { params: {}, query: {}, body: { type: "png", timeoutMs: 3_000_000_000 } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(cdpMocks.captureScreenshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 2_147_483_647,
+      }),
+    );
+  });
+
+  it("rejects loose screenshot timeoutMs values before dispatching", async () => {
+    const handler = getScreenshotHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.(
+      { params: {}, query: {}, body: { type: "png", timeoutMs: "1e3" } },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toEqual({ error: "timeoutMs must be a positive integer." });
+    expect(cdpMocks.captureScreenshot).not.toHaveBeenCalled();
   });
 });

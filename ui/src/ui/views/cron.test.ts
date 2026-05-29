@@ -207,10 +207,16 @@ describe("cron view", () => {
       'select[data-test-id="cron-jobs-last-status-filter"]',
       HTMLSelectElement,
     );
+    expect(Array.from(lastRunSelect.options).map((option) => option.value)).toContain("unknown");
     lastRunSelect.value = "error";
     lastRunSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "error" });
+
+    lastRunSelect.value = "unknown";
+    lastRunSelect.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onJobsFiltersChange).toHaveBeenLastCalledWith({ cronJobsLastStatusFilter: "unknown" });
 
     render(
       renderCron(

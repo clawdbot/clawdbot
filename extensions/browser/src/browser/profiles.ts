@@ -1,3 +1,5 @@
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
+
 /**
  * CDP port allocation for browser profiles.
  *
@@ -14,6 +16,7 @@
 
 export const CDP_PORT_RANGE_START = 18800;
 export const CDP_PORT_RANGE_END = 18899;
+const MAX_TCP_PORT = 65_535;
 
 const PROFILE_NAME_REGEX = /^[a-z0-9][a-z0-9-]*$/;
 
@@ -30,7 +33,7 @@ export function allocateCdpPort(
 ): number | null {
   const start = range?.start ?? CDP_PORT_RANGE_START;
   const end = range?.end ?? CDP_PORT_RANGE_END;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start <= 0 || end <= 0) {
+  if (!isValidTcpPort(start) || !isValidTcpPort(end)) {
     return null;
   }
   if (start > end) {
@@ -44,6 +47,10 @@ export function allocateCdpPort(
   return null;
 }
 
+function isValidTcpPort(port: number): boolean {
+  return Number.isSafeInteger(port) && port > 0 && port <= MAX_TCP_PORT;
+}
+
 export function getUsedPorts(
   profiles: Record<string, { cdpPort?: number; cdpUrl?: string }> | undefined,
 ): Set<number> {
@@ -52,7 +59,7 @@ export function getUsedPorts(
   }
   const used = new Set<number>();
   for (const profile of Object.values(profiles)) {
-    if (typeof profile.cdpPort === "number") {
+    if (typeof profile.cdpPort === "number" && isValidTcpPort(profile.cdpPort)) {
       used.add(profile.cdpPort);
       continue;
     }
@@ -61,16 +68,7 @@ export function getUsedPorts(
       continue;
     }
     try {
-      const parsed = new URL(rawUrl);
-      const port =
-        parsed.port && Number.parseInt(parsed.port, 10) > 0
-          ? Number.parseInt(parsed.port, 10)
-          : parsed.protocol === "https:"
-            ? 443
-            : 80;
-      if (!Number.isNaN(port) && port > 0 && port <= 65535) {
-        used.add(port);
-      }
+      used.add(parseBrowserHttpUrl(rawUrl, "browser.profiles.*.cdpUrl").port);
     } catch {
       // ignore invalid URLs
     }

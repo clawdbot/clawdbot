@@ -43,6 +43,15 @@ describe("summarizeStringEntries", () => {
     ).toBe("a, b, c, d, e, f (+1)");
   });
 
+  it("uses the default limit for non-finite limits", () => {
+    expect(
+      summarizeStringEntries({
+        entries: ["a", "b", "c", "d", "e", "f", "g"],
+        limit: Number.NaN,
+      }),
+    ).toBe("a, b, c, d, e, f (+1)");
+  });
+
   it("does not add a suffix when the limit exactly matches the entry count", () => {
     expect(
       summarizeStringEntries({

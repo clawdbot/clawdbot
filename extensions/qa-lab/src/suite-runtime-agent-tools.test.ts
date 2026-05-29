@@ -189,4 +189,40 @@ describe("qa suite runtime agent tools helpers", () => {
     expect(callToolMock).not.toHaveBeenCalled();
     expect(closeMock).toHaveBeenCalled();
   });
+
+  it("keeps only a byte-bounded plugin-tools MCP stderr tail on call failures", async () => {
+    listToolsMock.mockResolvedValueOnce({
+      tools: [{ name: "plugin.echo" }] as never[],
+    });
+    callToolMock.mockImplementationOnce(async () => {
+      const stderrListener = stderrOnMock.mock.calls[0]?.[1] as
+        | ((chunk: unknown) => void)
+        | undefined;
+      stderrListener?.(Buffer.from(`old stderr${"x".repeat(12_000)}\nrecent MCP stderr tail`));
+      throw new Error("tool call failed");
+    });
+
+    const error = await callPluginToolsMcp({
+      env: {
+        gateway: {
+          tempRoot: gatewayTempRoot,
+          runtimeEnv: {
+            PATH: "/usr/bin",
+          },
+        },
+        repoRoot,
+      } as never,
+      toolName: "plugin.echo",
+      args: { text: "hello" },
+    }).catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("tool call failed");
+    expect(message).toContain("MCP stderr tail:");
+    expect(message).toContain("MCP stderr truncated to last");
+    expect(message).toContain("recent MCP stderr tail");
+    expect(message).not.toContain("old stderr");
+    expect(closeMock).toHaveBeenCalled();
+  });
 });

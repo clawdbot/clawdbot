@@ -64,6 +64,18 @@ export function resolveProfileContext(
   return profileCtx;
 }
 
+export function browserNavigationPolicyForProfile(
+  ctx: BrowserRouteContext,
+  profileCtx: ProfileContext,
+) {
+  return withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy, {
+    browserProxyMode: resolveBrowserNavigationProxyMode({
+      resolved: ctx.state().resolved,
+      profile: profileCtx.profile,
+    }),
+  });
+}
+
 export async function getPwAiModule(): Promise<PwAiModule | null> {
   return await getPwAiModuleBase({ mode: "soft" });
 }
@@ -124,12 +136,7 @@ export async function withRouteTabContext<T>(
     if (params.enforceCurrentUrlAllowed) {
       await assertBrowserNavigationResultAllowed({
         url: tab.url,
-        ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy, {
-          browserProxyMode: resolveBrowserNavigationProxyMode({
-            resolved: params.ctx.state().resolved,
-            profile: profileCtx.profile,
-          }),
-        }),
+        ...browserNavigationPolicyForProfile(params.ctx, profileCtx),
       });
     }
     return await params.run({
@@ -169,12 +176,7 @@ export async function resolveSafeRouteTabUrl(params: {
   try {
     await assertBrowserNavigationResultAllowed({
       url: candidateUrl,
-      ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy, {
-        browserProxyMode: resolveBrowserNavigationProxyMode({
-          resolved: params.ctx.state().resolved,
-          profile: params.profileCtx.profile,
-        }),
-      }),
+      ...browserNavigationPolicyForProfile(params.ctx, params.profileCtx),
     });
     return candidateUrl;
   } catch {

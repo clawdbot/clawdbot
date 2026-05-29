@@ -441,11 +441,21 @@ function invalidCliArgument(message: string): Error & { code: string; exitCode: 
 }
 
 function parseWikiConfidenceOption(value: string): number {
-  const confidence = Number(value);
+  const trimmed = value.trim();
+  const confidence = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
     throw invalidCliArgument("--confidence must be a number between 0 and 1.");
   }
   return confidence;
+}
+
+function parseWikiPositiveIntegerOption(value: string, flag: string): number {
+  const trimmed = value.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 function addWikiApplyMutationOptions<T extends Command>(command: T): T {
@@ -959,7 +969,9 @@ export function registerWikiCli(
       .command("search")
       .description("Search wiki pages and, when configured, the active memory corpus")
       .argument("<query>", "Search query")
-      .option("--max-results <n>", "Maximum results", (value: string) => Number(value))
+      .option("--max-results <n>", "Maximum results", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--max-results"),
+      )
       .option("--mode <mode>", `Search mode (${WIKI_SEARCH_MODES.join(", ")})`),
   )
     .option("--json", "Print JSON")
@@ -981,8 +993,12 @@ export function registerWikiCli(
       .command("get")
       .description("Read a wiki page by id or relative path, with optional active-memory fallback")
       .argument("<lookup>", "Relative path or page id")
-      .option("--from <n>", "Start line", (value: string) => Number(value))
-      .option("--lines <n>", "Number of lines", (value: string) => Number(value)),
+      .option("--from <n>", "Start line", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--from"),
+      )
+      .option("--lines <n>", "Number of lines", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--lines"),
+      ),
   )
     .option("--json", "Print JSON")
     .action(async (lookup: string, opts: WikiGetCommandOptions) => {

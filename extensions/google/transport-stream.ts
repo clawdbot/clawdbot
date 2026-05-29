@@ -417,7 +417,7 @@ function getGoogleThinkingBudget(
   effort: ThinkingLevel,
   customBudgets?: GoogleTransportOptions["thinkingBudgets"],
 ): number | undefined {
-  const normalizedEffort = effort === "xhigh" ? "high" : effort;
+  const normalizedEffort = effort === "xhigh" || effort === "max" ? "high" : effort;
   if (customBudgets?.[normalizedEffort] !== undefined) {
     return customBudgets[normalizedEffort];
   }

@@ -178,6 +178,7 @@ mantis/
 /local/
 /client_secret_*.json
 package-lock.json
+!src/commands/copilot-sdk-install-manifest/package-lock.json
 .claude/
 .agent/
 skills-lock.json

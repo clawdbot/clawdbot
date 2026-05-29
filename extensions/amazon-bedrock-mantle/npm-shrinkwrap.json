@@ -592,12 +592,12 @@
       }
     },
     "node_modules/@smithy/node-http-handler": {
-      "version": "4.7.3",
-      "resolved": "https://registry.npmjs.org/@smithy/node-http-handler/-/node-http-handler-4.7.3.tgz",
-      "integrity": "sha512-/jPhevcTFPMVl6KNjbaI47iOg1zxC7IsnX4PQDGVZKMFceOXtB8IEYaB7a9VvkP/3oC60WzTeKocvSI7vLT0vA==",
+      "version": "4.7.4",
+      "resolved": "https://registry.npmjs.org/@smithy/node-http-handler/-/node-http-handler-4.7.4.tgz",
+      "integrity": "sha512-HIeF+1vrDGzPkkv39Hj2vlHSXHY3p958jd/8ZnePIY6+ZOsQX8coyEUKO5yQu4r0bQIVsbpotVIrXXwyycMStQ==",
       "license": "Apache-2.0",
       "dependencies": {
-        "@smithy/core": "^3.24.3",
+        "@smithy/core": "^3.24.4",
         "@smithy/types": "^4.14.2",
         "tslib": "^2.6.2"
       },

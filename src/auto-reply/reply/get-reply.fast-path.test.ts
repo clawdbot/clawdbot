@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   buildFastReplyCommandContext,
@@ -101,6 +102,16 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+      resolveRuntimeCliBackends: () => [],
+    });
     mocks.ensureAgentWorkspace.mockReset();
     mocks.initSessionState.mockReset();
     mocks.loadModelCatalog.mockReset();
@@ -130,6 +141,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     vi.unstubAllEnvs();
   });
 

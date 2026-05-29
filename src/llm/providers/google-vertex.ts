@@ -132,7 +132,9 @@ export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStr
   }
 
   const clampedReasoning = clampThinkingLevel(model, options.reasoning);
-  const effort = (clampedReasoning === "off" ? "high" : clampedReasoning) as ClampedThinkingLevel;
+  const effort = (
+    clampedReasoning === "off" || clampedReasoning === "max" ? "high" : clampedReasoning
+  ) as ClampedThinkingLevel;
   const geminiModel = model as unknown as Model<"google-generative-ai">;
 
   if (isGemini3ProModel(geminiModel) || isGemini3FlashModel(geminiModel)) {
@@ -312,7 +314,7 @@ function buildParams(
   return params;
 }
 
-type ClampedThinkingLevel = Exclude<AgentThinkingLevel, "xhigh">;
+type ClampedThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
 
 function isGemini3ProModel(model: Model<"google-generative-ai">): boolean {
   return /gemini-3(?:\.\d+)?-pro/.test(model.id.toLowerCase());

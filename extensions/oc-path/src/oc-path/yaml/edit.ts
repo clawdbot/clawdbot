@@ -13,6 +13,7 @@ import {
   formatOcPath,
   isPositionalSeg,
   isQuotedSeg,
+  parseArrayIndexSegment,
   resolvePositionalSeg,
   splitRespectingBrackets,
   unquoteSeg,
@@ -138,8 +139,8 @@ function resolvePositionalSegments(root: Node, segments: readonly string[]): str
       continue;
     }
     if (isSeq(node)) {
-      const idx = Number(segNorm);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {
+      const idx = parseArrayIndexSegment(segNorm, node.items.length);
+      if (idx === null) {
         return null;
       }
       node = (node.items[idx] as Node | null) ?? null;

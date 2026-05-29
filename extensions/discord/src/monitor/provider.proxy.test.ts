@@ -158,10 +158,6 @@ vi.mock("node:https", () => ({
   Agent: HttpsAgent,
 }));
 
-vi.mock("https-proxy-agent", () => ({
-  HttpsProxyAgent,
-}));
-
 vi.mock("ws", () => ({
   default: function MockWebSocket(
     url: string,
@@ -228,8 +224,8 @@ describe("createDiscordGatewayPlugin", () => {
 
   function createProxyTestingOverrides() {
     return {
-      HttpsProxyAgentCtor:
-        HttpsProxyAgent as unknown as typeof import("https-proxy-agent").HttpsProxyAgent,
+      createProxyAgent: (proxyUrl: string) =>
+        new HttpsProxyAgent(proxyUrl) as unknown as import("node:http").Agent,
       webSocketCtor: function WebSocketCtor(
         url: string,
         options?: { agent?: unknown; handshakeTimeout?: number },

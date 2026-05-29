@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { appendQaLiveLaneIssue as appendLiveLaneIssue } from "./live-artifacts.js";
 import {
   startQaGatewayChild,
   type QaCliBackendAuthMode,
@@ -8,6 +7,7 @@ import {
 import type { QaProviderMode } from "../../model-selection.js";
 import { startQaProviderServer } from "../../providers/server-runtime.js";
 import type { QaThinkingLevel } from "../../qa-gateway-config.js";
+import { appendQaLiveLaneIssue as appendLiveLaneIssue } from "./live-artifacts.js";
 
 async function stopQaLiveLaneResources(
   resources: {

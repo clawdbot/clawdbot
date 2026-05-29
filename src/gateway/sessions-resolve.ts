@@ -1,14 +1,14 @@
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   ErrorCodes,
   type ErrorShape,
   errorShape,
   type SessionsResolveParams,
-} from "./protocol/index.js";
+} from "../../packages/gateway-protocol/src/index.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSessionIdMatchSelection } from "../sessions/session-id-resolution.js";
+import { parseSessionLabel } from "../sessions/session-label.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   filterAndSortSessionEntries,
   listSessionsFromStore,

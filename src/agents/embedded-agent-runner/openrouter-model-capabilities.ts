@@ -23,6 +23,7 @@ import { basename, dirname, join } from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
+import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -182,10 +183,10 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
       model.max_output_tokens ??
       8192,
     cost: {
-      input: Number.parseFloat(model.pricing?.prompt || "0") * 1_000_000,
-      output: Number.parseFloat(model.pricing?.completion || "0") * 1_000_000,
-      cacheRead: Number.parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000,
-      cacheWrite: Number.parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000,
+      input: (parseStrictFiniteNumber(model.pricing?.prompt) ?? 0) * 1_000_000,
+      output: (parseStrictFiniteNumber(model.pricing?.completion) ?? 0) * 1_000_000,
+      cacheRead: (parseStrictFiniteNumber(model.pricing?.input_cache_read) ?? 0) * 1_000_000,
+      cacheWrite: (parseStrictFiniteNumber(model.pricing?.input_cache_write) ?? 0) * 1_000_000,
     },
   };
 }

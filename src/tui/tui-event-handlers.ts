@@ -22,7 +22,7 @@ type EventHandlerChatLog = {
 };
 
 type EventHandlerTui = {
-  requestRender: () => void;
+  requestRender: (force?: boolean) => void;
 };
 
 type EventHandlerBtwPresenter = {
@@ -489,7 +489,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         forgetLocalBtwRunId?.(evt.runId);
         noteFinalizedRun(evt.runId);
         clearStaleStreamingIfNoTrackedRunRemains();
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (!evt.message) {
@@ -498,7 +498,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         });
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       if (isCommandMessage(evt.message)) {
@@ -508,7 +508,7 @@ export function createEventHandlers(context: EventHandlerContext) {
           chatLog.addSystem(text);
         }
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
-        tui.requestRender();
+        tui.requestRender(true);
         return;
       }
       maybeRefreshHistoryForRun(evt.runId);

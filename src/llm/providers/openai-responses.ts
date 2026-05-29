@@ -179,7 +179,12 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
+  const reasoningEffort =
+    clampedReasoning === "off"
+      ? undefined
+      : clampedReasoning === "max"
+        ? "xhigh"
+        : clampedReasoning;
 
   return streamOpenAIResponses(model, context, {
     ...base,

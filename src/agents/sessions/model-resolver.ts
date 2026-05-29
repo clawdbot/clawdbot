@@ -11,7 +11,7 @@ import type { ThinkingLevel } from "../runtime/index.js";
 import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
 
-const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 function isValidThinkingLevel(level: string): level is ThinkingLevel {
   return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);

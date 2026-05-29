@@ -34,7 +34,10 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+            -c protocol.version=2 \
+            fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+            "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Fail on tabs in workflow files
@@ -75,7 +78,10 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+            -c protocol.version=2 \
+            fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+            "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Install actionlint
@@ -116,7 +122,10 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
+          timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
+            -c protocol.version=2 \
+            fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
+            "+${CHECKOUT_SHA}:refs/remotes/origin/checkout"
           git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
 
       - name: Setup Node environment

@@ -130,12 +130,15 @@ async function handleMSTeamsFileConsentInvoke(
   return true;
 }
 
-export async function respondToMSTeamsFileConsentInvoke(
+/**
+ * Run the file-consent invoke handler after the SDK route has acknowledged the
+ * invoke. This intentionally does not send its own invokeResponse; it only does
+ * the delayed upload/update work.
+ */
+export async function runMSTeamsFileConsentInvokeHandler(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
 ): Promise<void> {
-  await context.sendActivity({ type: "invokeResponse", value: { status: 200 } });
-
   try {
     await withRevokedProxyFallback({
       run: async () => await handleMSTeamsFileConsentInvoke(context, log),

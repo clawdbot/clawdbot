@@ -1,15 +1,18 @@
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  readConnectPairingRequiredMessage,
+  type ConnectPairingRequiredDetails,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import {
   buildGatewayConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
 } from "../gateway/call.js";
 import { ADMIN_SCOPE, PAIRING_SCOPE, type OperatorScope } from "../gateway/method-scopes.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
-import {
-  readConnectPairingRequiredMessage,
-  type ConnectPairingRequiredDetails,
-} from "../gateway/protocol/connect-error-details.js";
 import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,

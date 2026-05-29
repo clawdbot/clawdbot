@@ -41,6 +41,10 @@ const ensureSupportedNodeVersion = () => {
 
 ensureSupportedNodeVersion();
 
+if (tryOutputLauncherVersion(process.argv)) {
+  process.exit(0);
+}
+
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
@@ -444,6 +448,155 @@ const loadPrecomputedHelpText = (key) => {
     return null;
   }
 };
+
+function tryOutputLauncherVersion(argv) {
+  try {
+    if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+      return false;
+    }
+    if (!isLauncherVersionFastPathArgv(argv)) {
+      return false;
+    }
+    const version = resolveLauncherVersion();
+    const commit = resolveLauncherCommit();
+    process.stdout.write(commit ? `OpenClaw ${version} (${commit})\n` : `OpenClaw ${version}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLauncherVersionFastPathArgv(argv) {
+  return argv.length === 3 && (argv[2] === "--version" || argv[2] === "-V" || argv[2] === "-v");
+}
+
+function normalizeLauncherMetadataValue(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+}
+
+function readLauncherJson(relativePath) {
+  try {
+    return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherVersion() {
+  const packageJson = readLauncherJson("./package.json");
+  const packageVersion = normalizeLauncherMetadataValue(packageJson?.version);
+  if (packageVersion) {
+    return packageVersion;
+  }
+  const buildInfo = readLauncherJson("./dist/build-info.json");
+  const buildVersion = normalizeLauncherMetadataValue(buildInfo?.version);
+  if (buildVersion) {
+    return buildVersion;
+  }
+  return normalizeLauncherMetadataValue(process.env.OPENCLAW_BUNDLED_VERSION) ?? "0.0.0";
+}
+
+function resolveLauncherCommit() {
+  const envCommit = formatLauncherCommit(process.env.GIT_COMMIT ?? process.env.GIT_SHA);
+  if (envCommit) {
+    return envCommit;
+  }
+  return (
+    readLauncherGitCommit() ??
+    formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.githead)
+  );
+}
+
+function formatLauncherCommit(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.trim().match(/[0-9a-fA-F]{7,40}/);
+  return match ? match[0].slice(0, 7).toLowerCase() : null;
+}
+
+function readLauncherGitCommit() {
+  try {
+    const gitPath = fileURLToPath(new URL("./.git", import.meta.url));
+    const headPath = resolveLauncherGitHeadPath(gitPath);
+    if (!headPath) {
+      return null;
+    }
+    const head = readFileSync(headPath, "utf8").trim();
+    if (!head) {
+      return null;
+    }
+    if (!head.startsWith("ref:")) {
+      return formatLauncherCommit(head);
+    }
+    const ref = head.replace(/^ref:\s*/i, "").trim();
+    if (!ref.startsWith("refs/") || path.isAbsolute(ref) || ref.split("/").includes("..")) {
+      return null;
+    }
+    const refsBase = resolveLauncherGitRefsBase(headPath);
+    const refPath = path.resolve(refsBase, ref);
+    const rel = path.relative(refsBase, refPath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return null;
+    }
+    try {
+      return formatLauncherCommit(readFileSync(refPath, "utf8"));
+    } catch {
+      return readLauncherPackedRef(refsBase, ref);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitHeadPath(gitPath) {
+  try {
+    if (statSync(gitPath).isDirectory()) {
+      return path.join(gitPath, "HEAD");
+    }
+    const raw = readFileSync(gitPath, "utf8").trim();
+    if (!raw.startsWith("gitdir:")) {
+      return null;
+    }
+    return path.join(
+      path.resolve(path.dirname(gitPath), raw.slice("gitdir:".length).trim()),
+      "HEAD",
+    );
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitRefsBase(headPath) {
+  const gitDir = path.dirname(headPath);
+  try {
+    const commonDir = readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    return commonDir ? path.resolve(gitDir, commonDir) : gitDir;
+  } catch {
+    return gitDir;
+  }
+}
+
+function readLauncherPackedRef(refsBase, ref) {
+  try {
+    const packedRefs = readFileSync(path.join(refsBase, "packed-refs"), "utf8");
+    for (const line of packedRefs.split("\n")) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) {
+        continue;
+      }
+      const [commit, packedRef] = line.trim().split(/\s+/, 2);
+      if (packedRef === ref) {
+        return formatLauncherCommit(commit);
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
 
 const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {

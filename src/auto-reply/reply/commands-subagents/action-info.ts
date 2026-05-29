@@ -9,18 +9,12 @@ import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
 import type { CommandHandlerResult } from "../commands-types.js";
+import { formatRunLabel, formatRunStatus } from "../subagents-utils.js";
 import {
-  formatRunLabel,
-  formatRunStatus,
-  resolveSubagentTargetFromRuns,
-} from "../subagents-utils.js";
-import { type SubagentsCommandContext } from "./shared.js";
-
-const RECENT_WINDOW_MINUTES = 30;
-
-function stopWithText(text: string): CommandHandlerResult {
-  return { shouldContinue: false, reply: { text } };
-}
+  resolveSubagentEntryForToken,
+  stopWithText,
+  type SubagentsCommandContext,
+} from "./shared.js";
 
 function formatTimestamp(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -47,41 +41,6 @@ function resolveDisplayStatus(
   }
   const status = formatRunStatus(entry);
   return status === "error" ? "failed" : status;
-}
-
-function resolveSubagentEntryForToken(
-  runs: SubagentsCommandContext["runs"],
-  token: string | undefined,
-): { entry: SubagentsCommandContext["runs"][number] } | { reply: CommandHandlerResult } {
-  const resolved = resolveSubagentTargetFromRuns({
-    runs,
-    token,
-    recentWindowMinutes: RECENT_WINDOW_MINUTES,
-    label: (entry) => formatRunLabel(entry),
-    aliases: (entry) => (entry.taskName ? [entry.taskName] : []),
-    isActive: (entry) =>
-      !entry.endedAt ||
-      Math.max(
-        0,
-        countPendingDescendantRunsFromRuns(
-          getSubagentRunsSnapshotForRead(subagentRuns),
-          entry.childSessionKey,
-        ),
-      ) > 0,
-    errors: {
-      missingTarget: "Missing subagent id.",
-      invalidIndex: (value) => `Invalid subagent index: ${value}`,
-      unknownSession: (value) => `Unknown subagent session: ${value}`,
-      ambiguousLabel: (value) => `Ambiguous subagent label: ${value}`,
-      ambiguousLabelPrefix: (value) => `Ambiguous subagent label prefix: ${value}`,
-      ambiguousRunIdPrefix: (value) => `Ambiguous run id prefix: ${value}`,
-      unknownTarget: (value) => `Unknown subagent id: ${value}`,
-    },
-  });
-  if (!resolved.entry) {
-    return { reply: stopWithText(`⚠️ ${resolved.error ?? "Unknown subagent."}`) };
-  }
-  return { entry: resolved.entry };
 }
 
 function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {

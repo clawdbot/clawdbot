@@ -9,6 +9,7 @@ import {
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
+import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
 
@@ -96,13 +97,15 @@ export function createWebhookInFlightLimiter(options?: {
   maxInFlightPerKey?: number;
   maxTrackedKeys?: number;
 }): WebhookInFlightLimiter {
-  const maxInFlightPerKey = Math.max(
-    1,
-    Math.floor(options?.maxInFlightPerKey ?? WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey),
+  const maxInFlightPerKey = resolveWebhookIntegerOption(
+    options?.maxInFlightPerKey,
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxInFlightPerKey,
+    { min: 1 },
   );
-  const maxTrackedKeys = Math.max(
-    1,
-    Math.floor(options?.maxTrackedKeys ?? WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys),
+  const maxTrackedKeys = resolveWebhookIntegerOption(
+    options?.maxTrackedKeys,
+    WEBHOOK_IN_FLIGHT_DEFAULTS.maxTrackedKeys,
+    { min: 1 },
   );
   const active = new Map<string, number>();
 

@@ -1,5 +1,6 @@
 import { Compile } from "typebox/compile";
 import type { JsonSchemaObject } from "./json-schema.types.js";
+import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
 type JsonSchemaValue = JsonSchemaObject | boolean;
 type LocalRefResolution =
@@ -304,8 +305,8 @@ function resolveLocalRef(
     let currentResourceBaseId = resourceBaseId;
     for (const segment of ref.slice(2).split("/").map(decodePointerSegment)) {
       if (Array.isArray(current)) {
-        const index = Number(segment);
-        if (!Number.isInteger(index) || index < 0) {
+        const index = parseConfigPathArrayIndex(segment);
+        if (index === undefined) {
           return { found: false };
         }
         current = current[index];

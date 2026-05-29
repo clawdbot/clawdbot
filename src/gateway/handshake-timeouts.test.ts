@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../utils/timer-delay.js";
 import {
   clampConnectChallengeTimeoutMs,
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
@@ -62,6 +63,20 @@ describe("gateway handshake timeouts", () => {
     );
   });
 
+  test("caps preauth handshake timeout env and config values to the safe timer range", () => {
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "3000000000",
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    expect(
+      resolvePreauthHandshakeTimeoutMs({
+        env: {},
+        configuredTimeoutMs: 3_000_000_000,
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
   test("resolves preauth handshake timeout from the test-only env before config", () => {
     expect(
       resolvePreauthHandshakeTimeoutMs({
@@ -94,6 +109,16 @@ describe("gateway handshake timeouts", () => {
         VITEST: "1",
       }),
     ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "1e3",
+      }),
+    ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: "0x10",
+      }),
+    ).toBe(DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS);
   });
 
   test("getConnectChallengeTimeoutMsFromEnv reads OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS", () => {
@@ -104,6 +129,31 @@ describe("gateway handshake timeouts", () => {
     expect(
       getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "garbage" }),
     ).toBeUndefined();
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "1e3" }),
+    ).toBeUndefined();
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "0x10" }),
+    ).toBeUndefined();
+  });
+
+  test("caps connect challenge timeout env and explicit values to the safe timer range", () => {
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({
+        OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000",
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    expect(
+      resolveConnectChallengeTimeoutMs(3_000_000_000, {
+        env: {},
+        configuredTimeoutMs: 3_000_000_000,
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+    expect(
+      resolveConnectChallengeTimeoutMs(undefined, {
+        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "3000000000" },
+      }),
+    ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 
   test("resolveConnectChallengeTimeoutMs falls back to env override", () => {

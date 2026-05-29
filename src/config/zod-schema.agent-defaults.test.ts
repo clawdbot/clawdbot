@@ -73,6 +73,17 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("accepts voiceModel", () => {
+    expectSchemaSuccess(
+      AgentDefaultsSchema.safeParse({
+        voiceModel: {
+          primary: "openai/gpt-4o-mini-tts",
+          fallbacks: ["elevenlabs/eleven_multilingual_v2"],
+        },
+      }),
+    );
+  });
+
   it("accepts imageGenerationModel timeoutMs", () => {
     const defaults = AgentDefaultsSchema.parse({
       imageGenerationModel: {

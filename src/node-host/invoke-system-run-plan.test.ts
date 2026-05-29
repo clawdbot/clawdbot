@@ -335,6 +335,16 @@ const unsafeRuntimeInvocationCases: UnsafeRuntimeInvocationCase[] = [
     },
   },
   {
+    name: "rejects node inline import values that contain equals signs",
+    binName: "node",
+    tmpPrefix: "openclaw-node-import-inline-equals-",
+    command: ["node", "--import=./pre=load.mjs", "./main.mjs"],
+    setup: (tmp) => {
+      fs.writeFileSync(path.join(tmp, "main.mjs"), 'console.log("SAFE")\n');
+      fs.writeFileSync(path.join(tmp, "pre=load.mjs"), 'console.log("SAFE")\n');
+    },
+  },
+  {
     name: "rejects ruby require preloads that approval cannot bind completely",
     binName: "ruby",
     tmpPrefix: "openclaw-ruby-require-",

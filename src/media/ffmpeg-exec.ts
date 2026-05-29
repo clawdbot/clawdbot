@@ -92,15 +92,22 @@ export function parseFfprobeCsvFields(stdout: string, maxFields: number): string
     .map((field) => normalizeLowercaseStringOrEmpty(field));
 }
 
+function parseFfprobeSampleRateHz(value: string | undefined): number | null {
+  if (!value || !/^\d+$/.test(value)) {
+    return null;
+  }
+  const sampleRate = Number(value);
+  return Number.isSafeInteger(sampleRate) && sampleRate > 0 ? sampleRate : null;
+}
+
 export function parseFfprobeCodecAndSampleRate(stdout: string): {
   codec: string | null;
   sampleRateHz: number | null;
 } {
   const [codecRaw, sampleRateRaw] = parseFfprobeCsvFields(stdout, 2);
   const codec = codecRaw ? codecRaw : null;
-  const sampleRate = sampleRateRaw ? Number.parseInt(sampleRateRaw, 10) : Number.NaN;
   return {
     codec,
-    sampleRateHz: Number.isFinite(sampleRate) ? sampleRate : null,
+    sampleRateHz: parseFfprobeSampleRateHz(sampleRateRaw),
   };
 }

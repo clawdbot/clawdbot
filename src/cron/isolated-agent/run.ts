@@ -54,6 +54,7 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
+import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
 import {
   adoptCronRunSessionMetadata,
   createPersistCronSessionEntry,
@@ -477,6 +478,7 @@ type PreparedCronRunContext = {
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
   useSubagentFallbacks: boolean;
+  modelFallbacksOverride?: string[];
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /**
@@ -638,27 +640,67 @@ async function prepareCronRunContext(params: {
   let model = resolvedModelSelection.model;
   const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
 
-  const preflight = await (
-    await loadCronModelPreflightRuntime()
-  ).preflightCronModelProvider({
+  const modelPreflightRuntime = await loadCronModelPreflightRuntime();
+  const preflightCandidates = resolveCronPreflightCandidates({
     cfg: cfgWithAgentDefaults,
+    job: input.job,
+    agentId,
     provider,
     model,
+    useSubagentFallbacks,
   });
-  if (preflight.status === "unavailable") {
-    logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
+  let selectedPreflightCandidate: { provider: string; model: string } | undefined;
+  let selectedPreflightCandidateIndex = -1;
+  let firstUnavailablePreflight:
+    | Awaited<ReturnType<typeof modelPreflightRuntime.preflightCronModelProvider>>
+    | undefined;
+  for (const [index, candidate] of preflightCandidates.entries()) {
+    const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
+      cfg: cfgWithAgentDefaults,
+      provider: candidate.provider,
+      model: candidate.model,
+    });
+    if (candidatePreflight.status === "available") {
+      selectedPreflightCandidate = candidate;
+      selectedPreflightCandidateIndex = index;
+      break;
+    }
+    firstUnavailablePreflight ??= candidatePreflight;
+  }
+  if (!selectedPreflightCandidate && firstUnavailablePreflight?.status === "unavailable") {
+    logWarn(`[cron:${input.job.id}] ${firstUnavailablePreflight.reason}`);
     return {
       ok: false,
       result: withRunSession({
         status: "skipped",
-        error: preflight.reason,
-        diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
-          severity: "warn",
-        }),
+        error: firstUnavailablePreflight.reason,
+        diagnostics: createCronRunDiagnosticsFromError(
+          "model-preflight",
+          firstUnavailablePreflight.reason,
+          {
+            severity: "warn",
+          },
+        ),
         provider,
         model,
       }),
     };
+  }
+  const modelFallbacksOverride =
+    selectedPreflightCandidate &&
+    (selectedPreflightCandidate.provider !== provider || selectedPreflightCandidate.model !== model)
+      ? preflightCandidates
+          .slice(selectedPreflightCandidateIndex + 1)
+          .map((candidate) => `${candidate.provider}/${candidate.model}`)
+      : undefined;
+  if (selectedPreflightCandidate && modelFallbacksOverride) {
+    if (firstUnavailablePreflight?.status === "unavailable") {
+      logWarn(
+        `[cron:${input.job.id}] Local provider preflight failed for ${firstUnavailablePreflight.provider}/${firstUnavailablePreflight.model} at ${firstUnavailablePreflight.baseUrl}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
+      );
+    }
+    provider = selectedPreflightCandidate.provider;
+    model = selectedPreflightCandidate.model;
   }
 
   const hooksGmailThinking = isGmailHook
@@ -850,6 +892,7 @@ async function prepareCronRunContext(params: {
       skillsSnapshot,
       liveSelection,
       useSubagentFallbacks,
+      modelFallbacksOverride,
       thinkLevel,
       timeoutMs,
       runTimeoutOverrideMs,
@@ -1246,6 +1289,7 @@ export async function runCronIsolatedAgentTurn(params: {
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,
+      modelFallbacksOverride: prepared.context.modelFallbacksOverride,
       agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
       liveSelection: prepared.context.liveSelection,
       cronSession: prepared.context.cronSession,

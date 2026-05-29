@@ -630,6 +630,7 @@ describe("loginGeminiCliOAuth", () => {
 
   function installGeminiOAuthFetchMock(
     handleRequest: (request: RecordedFetchRequest) => Response | undefined,
+    options: { tokenResponse?: () => Response } = {},
   ) {
     const requests: RecordedFetchRequest[] = [];
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -637,7 +638,7 @@ describe("loginGeminiCliOAuth", () => {
       requests.push(request);
 
       if (request.url === TOKEN_URL) {
-        return tokenResponse();
+        return (options.tokenResponse ?? tokenResponse)();
       }
       if (request.url === USERINFO_URL) {
         return userInfoResponse();
@@ -918,5 +919,35 @@ describe("loginGeminiCliOAuth", () => {
       projectId: undefined,
     });
     expect(requests.map(({ url }) => url)).toEqual([TOKEN_URL, USERINFO_URL]);
+  });
+
+  it("keeps malformed token expiry values out of refreshed Gemini CLI credentials", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const beforeRefresh = Date.now();
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({
+          access_token: "access-token",
+          expires_in: Number.NaN,
+        }),
+    });
+    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+    const result = await refreshTokensForGeminiCli({
+      refresh: "refresh-token",
+      email: "lobster@openclaw.ai",
+    });
+
+    expect(Number.isFinite(result.expires)).toBe(true);
+    expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
 });

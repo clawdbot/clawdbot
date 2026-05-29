@@ -106,6 +106,12 @@ function readPositiveMsEnv(
   if (!raw) {
     return undefined;
   }
+  if (raw === "Infinity") {
+    return opts.allowInfinity ? Number.POSITIVE_INFINITY : undefined;
+  }
+  if (!/^\d+$/.test(raw)) {
+    return undefined;
+  }
   const value = Number(raw);
   return parsePositiveMs(value, opts);
 }
@@ -121,6 +127,9 @@ function parsePositiveMs(
     return opts.allowInfinity ? value : undefined;
   }
   if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(value)) {
     return undefined;
   }
   return value;

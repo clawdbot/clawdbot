@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import {
+  validateUpdateRunParams,
+  validateUpdateStatusParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -15,7 +19,6 @@ import {
 } from "../../infra/update-restart-sentinel-payload.js";
 import { resolveUpdateInstallSurface, runGatewayUpdate } from "../../infra/update-runner.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
-import { validateUpdateRunParams, validateUpdateStatusParams } from "../protocol/index.js";
 import {
   getLatestUpdateRestartSentinel,
   recordLatestUpdateRestartSentinel,

@@ -4,6 +4,7 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "openclaw/plugin-sdk/ssrf-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_PROVIDER_ID } from "./defaults.js";
 import { ensureLmstudioModelLoaded } from "./models.fetch.js";
 import { resolveLmstudioInferenceBase } from "./models.js";
@@ -88,19 +89,12 @@ function normalizeLmstudioModelKey(modelId: string): string {
 
 function resolveRequestedContextLength(model: StreamModel): number | undefined {
   const withContextTokens = model as StreamModel & { contextTokens?: unknown };
-  const contextTokens =
-    typeof withContextTokens.contextTokens === "number" &&
-    Number.isFinite(withContextTokens.contextTokens)
-      ? Math.floor(withContextTokens.contextTokens)
-      : undefined;
-  if (contextTokens && contextTokens > 0) {
+  const contextTokens = asPositiveSafeInteger(withContextTokens.contextTokens);
+  if (contextTokens !== undefined) {
     return contextTokens;
   }
-  const contextWindow =
-    typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-      ? Math.floor(model.contextWindow)
-      : undefined;
-  if (contextWindow && contextWindow > 0) {
+  const contextWindow = asPositiveSafeInteger(model.contextWindow);
+  if (contextWindow !== undefined) {
     return contextWindow;
   }
   return undefined;

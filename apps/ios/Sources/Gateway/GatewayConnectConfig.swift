@@ -25,4 +25,53 @@ struct GatewayConnectConfig {
         if trimmed.isEmpty { return self.url.absoluteString }
         return trimmed
     }
+
+    func hasSameConnectionInputs(as other: GatewayConnectConfig) -> Bool {
+        self.url == other.url &&
+            self.stableID == other.stableID &&
+            Self.sameTLS(self.tls, other.tls) &&
+            self.token == other.token &&
+            self.bootstrapToken == other.bootstrapToken &&
+            self.password == other.password &&
+            Self.sameOptions(self.nodeOptions, other.nodeOptions)
+    }
+
+    private static func sameTLS(_ lhs: GatewayTLSParams?, _ rhs: GatewayTLSParams?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            true
+        case let (lhs?, rhs?):
+            lhs.required == rhs.required &&
+                lhs.expectedFingerprint == rhs.expectedFingerprint &&
+                lhs.allowTOFU == rhs.allowTOFU &&
+                lhs.storeKey == rhs.storeKey
+        default:
+            false
+        }
+    }
+
+    private static func sameOptions(_ lhs: GatewayConnectOptions, _ rhs: GatewayConnectOptions) -> Bool {
+        let lhsScopes = Self.normalizedValues(lhs.scopes)
+        let rhsScopes = Self.normalizedValues(rhs.scopes)
+        let lhsCaps = Self.normalizedValues(lhs.caps)
+        let rhsCaps = Self.normalizedValues(rhs.caps)
+        let lhsCommands = Self.normalizedValues(lhs.commands)
+        let rhsCommands = Self.normalizedValues(rhs.commands)
+        return lhs.role == rhs.role &&
+            lhs.scopesAreExplicit == rhs.scopesAreExplicit &&
+            lhs.clientId == rhs.clientId &&
+            lhs.clientMode == rhs.clientMode &&
+            lhs.clientDisplayName == rhs.clientDisplayName &&
+            lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
+            lhsScopes == rhsScopes &&
+            lhsCaps == rhsCaps &&
+            lhsCommands == rhsCommands &&
+            lhs.permissions == rhs.permissions
+    }
+
+    private static func normalizedValues(_ values: [String]) -> [String] {
+        values.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .sorted()
+    }
 }

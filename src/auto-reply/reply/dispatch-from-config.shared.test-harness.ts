@@ -50,6 +50,7 @@ const hookMocks = vi.hoisted(() => ({
     runReplyDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
+    runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));
 const internalHookMocks = vi.hoisted(() => ({

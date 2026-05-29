@@ -242,6 +242,34 @@ describe("resolveStatusTtsSnapshot", () => {
     });
   });
 
+  it("reports migrated canonical speaker voice fields", async () => {
+    await withStatusTempHome(async () => {
+      expect(
+        resolveStatusTtsSnapshot({
+          cfg: {
+            messages: {
+              tts: {
+                auto: "always",
+                provider: "elevenlabs",
+                providers: {
+                  elevenlabs: {
+                    speakerVoiceId: "voice-123",
+                  },
+                },
+              },
+            },
+          } as OpenClawConfig,
+        }),
+      ).toEqual({
+        autoMode: "always",
+        provider: "elevenlabs",
+        voice: "voice-123",
+        maxLength: 1500,
+        summarize: true,
+      });
+    });
+  });
+
   it("reports merged per-agent provider metadata", async () => {
     await withStatusTempHome(async () => {
       expect(

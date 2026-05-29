@@ -1,6 +1,6 @@
 import type { TUI } from "@earendil-works/pi-tui";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import {
   normalizeAgentId,
   normalizeMainKey,

@@ -283,6 +283,12 @@ interface ToolDefinitionEntry {
   sourceInfo: SourceInfo;
 }
 
+type ActiveToolPromptMetadata = {
+  validToolNames: string[];
+  toolSnippets: Record<string, string>;
+  promptGuidelines: string[];
+};
+
 type CompactionReason = "manual" | "threshold" | "overflow";
 
 type CompactionWorkOutcome =
@@ -369,6 +375,7 @@ export class AgentSession {
   // Base system prompt (without extension appends) - used to apply fresh appends each turn
   private baseSystemPrompt = "";
   private baseSystemPromptOptions!: BuildSystemPromptOptions;
+  private exactBaseSystemPrompt: string | undefined;
 
   constructor(config: AgentSessionConfig) {
     this.agent = config.agent;
@@ -889,6 +896,23 @@ export class AgentSession {
     this.agent.state.systemPrompt = this.baseSystemPrompt;
   }
 
+  /** Set an exact base prompt owned by the current runtime. */
+  setBaseSystemPrompt(systemPrompt: string): void {
+    const { validToolNames, toolSnippets, promptGuidelines } = this.collectActiveToolPromptMetadata(
+      this.getActiveToolNames(),
+    );
+    this.exactBaseSystemPrompt = systemPrompt;
+    this.baseSystemPrompt = systemPrompt;
+    this.baseSystemPromptOptions = {
+      cwd: this.cwd,
+      selectedTools: validToolNames,
+      toolSnippets,
+      promptGuidelines,
+      customPrompt: systemPrompt,
+    };
+    this.agent.state.systemPrompt = systemPrompt;
+  }
+
   /** Whether compaction or branch summarization is currently running */
   get isCompacting(): boolean {
     return (
@@ -969,7 +993,7 @@ export class AgentSession {
     return Array.from(unique);
   }
 
-  private rebuildSystemPrompt(toolNames: string[]): string {
+  private collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {
     const validToolNames = toolNames.filter((name) => this.toolRegistry.has(name));
     const toolSnippets: Record<string, string> = {};
     const promptGuidelines: string[] = [];
@@ -983,6 +1007,25 @@ export class AgentSession {
       if (toolGuidelines) {
         promptGuidelines.push(...toolGuidelines);
       }
+    }
+
+    return { validToolNames, toolSnippets, promptGuidelines };
+  }
+
+  private rebuildSystemPrompt(toolNames: string[]): string {
+    const { validToolNames, toolSnippets, promptGuidelines } =
+      this.collectActiveToolPromptMetadata(toolNames);
+
+    if (this.exactBaseSystemPrompt !== undefined) {
+      this.baseSystemPromptOptions = {
+        ...this.baseSystemPromptOptions,
+        cwd: this.cwd,
+        customPrompt: this.exactBaseSystemPrompt,
+        selectedTools: validToolNames,
+        toolSnippets,
+        promptGuidelines,
+      };
+      return this.exactBaseSystemPrompt;
     }
 
     const loaderSystemPrompt = this.sessionResourceLoader.getSystemPrompt();

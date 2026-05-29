@@ -1,7 +1,8 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMonitorContext } from "./context.js";
 
 const readChannelIngressStoreAllowFromForDmPolicyMock = vi.hoisted(() => vi.fn());
+let authorizeSlackBotRoomMessage: typeof import("./auth.js").authorizeSlackBotRoomMessage;
 let authorizeSlackSystemEventSender: typeof import("./auth.js").authorizeSlackSystemEventSender;
 let clearSlackAllowFromCacheForTest: typeof import("./auth.js").clearSlackAllowFromCacheForTest;
 let resolveSlackEffectiveAllowFrom: typeof import("./auth.js").resolveSlackEffectiveAllowFrom;
@@ -109,12 +110,54 @@ describe("resolveSlackEffectiveAllowFrom", () => {
 
 describe("authorizeSlackSystemEventSender", () => {
   beforeAll(async () => {
-    ({ authorizeSlackSystemEventSender, clearSlackAllowFromCacheForTest } =
-      await import("./auth.js"));
+    ({
+      authorizeSlackBotRoomMessage,
+      authorizeSlackSystemEventSender,
+      clearSlackAllowFromCacheForTest,
+    } = await import("./auth.js"));
   });
 
   beforeEach(() => {
     clearSlackAllowFromCacheForTest();
+    delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS;
+  });
+
+  it("ignores non-decimal channel member cache ttl env values", async () => {
+    process.env.OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS = "0x0";
+    const conversationsMembers = vi.fn(async () => ({
+      members: ["UOWNER"],
+      response_metadata: {},
+    }));
+    const ctx = {
+      allowFrom: [],
+      accountId: "main",
+      allowNameMatching: false,
+      app: { client: { conversations: { members: conversationsMembers } } },
+      botToken: "xoxb-test",
+    } as unknown as SlackMonitorContext;
+
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+    await expect(
+      authorizeSlackBotRoomMessage({
+        ctx,
+        channelId: "C1",
+        senderId: "U_BOT",
+        allowFromLower: ["uowner"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(conversationsMembers).toHaveBeenCalledTimes(1);
   });
 
   it("keeps non-interactive channel senders open when only global allowFrom is configured", async () => {

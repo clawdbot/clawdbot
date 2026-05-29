@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { disposeRegisteredAgentHarnesses } from "openclaw/plugin-sdk/agent-harness";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   renderQaMarkdownReport,
   type QaReportCheck,
@@ -152,11 +153,11 @@ function resolveQaSuiteTransportReadyTimeoutMs(
   if (!raw) {
     return 120_000;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
     return 120_000;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 function writeQaSuiteProgress(enabled: boolean, message: string) {

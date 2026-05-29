@@ -229,13 +229,16 @@ All settings live under `plugins.entries.memory-core.config.dreaming`.
 <ParamField path="model" type="string">
   Optional Dream Diary subagent model override. Use a canonical `provider/model` value when also setting a subagent `allowedModels` allowlist.
 </ParamField>
+<ParamField path="phases.deep.maxPromotedSnippetTokens" type="number" default="160">
+  Maximum estimated token count kept from each short-term recall snippet promoted into `MEMORY.md`. Ranking provenance remains visible.
+</ParamField>
 
 <Warning>
 `dreaming.model` requires `plugins.entries.memory-core.subagent.allowModelOverride: true`. To restrict it, also set `plugins.entries.memory-core.subagent.allowedModels`. Trust or allowlist failures stay visible instead of falling back silently; the retry only covers model-unavailable errors.
 </Warning>
 
 <Note>
-Phase policy, thresholds, and storage behavior are internal implementation details (not user-facing config). See [Memory configuration reference](/reference/memory-config#dreaming) for the full key list.
+Most phase policy, thresholds, and storage behavior are internal implementation details. See [Memory configuration reference](/reference/memory-config#dreaming) for the full key list.
 </Note>
 
 ## Dreams UI

@@ -23,6 +23,7 @@ export interface DoctorLintCliOptions {
   readonly severityMin?: string;
   readonly skipIds?: readonly string[];
   readonly onlyIds?: readonly string[];
+  readonly allowExec?: boolean;
 }
 
 function detectMode(opts: DoctorLintCliOptions): "human" | "json" {
@@ -69,6 +70,7 @@ export async function runDoctorLintCli(
     runtime,
     cfg: snapshot.config,
     cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
+    allowExecSecretRefs: opts.allowExec === true,
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
   registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });

@@ -7,7 +7,11 @@ import {
   purgeAgentSessionStoreEntries,
   resolveSessionTranscriptsDirForAgent,
 } from "../config/sessions.js";
-import { callGateway, isGatewayTransportError } from "../gateway/call.js";
+import {
+  callGateway,
+  isGatewayCredentialsRequiredError,
+  isGatewayTransportError,
+} from "../gateway/call.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -45,7 +49,7 @@ async function maybeDeleteAgentThroughGateway(params: {
       requiredMethods: ["agents.delete"],
     });
   } catch (error) {
-    if (isGatewayTransportError(error)) {
+    if (isGatewayTransportError(error) || isGatewayCredentialsRequiredError(error)) {
       return null;
     }
     throw error;

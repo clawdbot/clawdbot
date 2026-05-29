@@ -148,8 +148,8 @@ function mockProcessPlatform(platform: NodeJS.Platform) {
   });
 }
 
-async function runRepair(cfg: OpenClawConfig) {
-  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts());
+async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
+  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts(), options);
 }
 
 async function runNonInteractiveRepair(params: {
@@ -366,6 +366,37 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes exec SecretRef policy into service token resolution", async () => {
+    setupGatewayTokenRepairScenario();
+
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "exec",
+            provider: "execmain",
+            id: "gateway/token",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: process.execPath,
+          },
+        },
+      },
+    };
+
+    await runRepair(cfg, { allowExecSecretRefs: true });
+
+    expect(mocks.resolveGatewayAuthTokenForService).toHaveBeenCalledWith(cfg, process.env, {
+      allowExecSecretRefs: true,
+    });
   });
 
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {

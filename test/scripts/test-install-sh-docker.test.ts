@@ -481,6 +481,8 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("rockylinux:9@sha256:");
     expect(workflow).toContain("pnpm-workspace.yaml");
     expect(workflow).toContain("workspace.patchedDependencies");
+    expect(workflow).toContain('throw new Error(\\"missing patch for \\" + dep + \\": \\" + rel)');
+    expect(workflow).not.toContain("throw new Error(`missing patch");
     expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");
     expect(workflow).not.toContain("--cache-from");
     expect(workflow).not.toContain("--cache-to");

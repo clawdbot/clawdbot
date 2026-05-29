@@ -3,7 +3,7 @@ import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it, test } from "vitest";
+import { beforeAll, describe, expect, it, test } from "vitest";
 import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -257,6 +257,22 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
 
 describe("publishable plugin npm package install security scan", () => {
   const publishablePluginPackages = collectPublishablePluginPackages();
+  const scanResultsByPackageName = new Map<
+    string,
+    Awaited<ReturnType<typeof scanPublishablePluginPackage>>
+  >();
+
+  beforeAll(async () => {
+    const results = await Promise.all(
+      publishablePluginPackages.map(async (plugin) => ({
+        packageName: plugin.packageName,
+        result: await scanPublishablePluginPackage(plugin),
+      })),
+    );
+    for (const { packageName, result } of results) {
+      scanResultsByPackageName.set(packageName, result);
+    }
+  });
 
   it("covers every package with required reviewed critical findings", () => {
     const publishablePackageNames = new Set(
@@ -287,7 +303,10 @@ describe("publishable plugin npm package install security scan", () => {
   test.concurrent.each(publishablePluginPackages)(
     "keeps $packageName files clear of unexpected critical hits",
     async (plugin) => {
-      const result = await scanPublishablePluginPackage(plugin);
+      const result = scanResultsByPackageName.get(plugin.packageName);
+      if (!result) {
+        throw new Error(`Missing package scan result for ${plugin.packageName}`);
+      }
       const expectedReviewedCriticalFindings = new Set(
         [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].filter((key) =>
           key.startsWith(`${plugin.packageName}:`),

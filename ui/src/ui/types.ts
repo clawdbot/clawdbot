@@ -787,19 +787,19 @@ export type ModelCatalogEntry = {
 };
 
 export type ToolCatalogProfile =
-  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogProfile;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
 export type ToolCatalogEntry =
-  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogEntry;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogEntry;
 export type ToolCatalogGroup =
-  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogGroup;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogGroup;
 export type ToolsCatalogResult =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsCatalogResult;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsCatalogResult;
 export type ToolsEffectiveEntry =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveEntry;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveEntry;
 export type ToolsEffectiveGroup =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveGroup;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveGroup;
 export type ToolsEffectiveResult =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveResult;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveResult;
 
 export type ModelAuthExpiry =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthExpiry;

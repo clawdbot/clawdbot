@@ -1,5 +1,5 @@
 import { html } from "lit";
-import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../external-link.ts";

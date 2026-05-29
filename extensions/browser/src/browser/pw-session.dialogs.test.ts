@@ -99,6 +99,28 @@ describe("observed browser dialogs", () => {
     observed.cleanup();
   });
 
+  it("uses the default arm-next-dialog timeout for non-finite timeoutMs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const { page, emit } = createPageHarness();
+    ensurePageState(page);
+    const dialog = createDialog({ type: "alert", message: "Still armed" });
+    const observed = createObservedDialogAbortSignalForPage({ page });
+
+    armObservedDialogResponseOnPage({ page, accept: false, timeoutMs: Number.NaN });
+    await vi.advanceTimersByTimeAsync(119_999);
+    emit("dialog", dialog);
+    await Promise.resolve();
+
+    expect(observed.signal.aborted).toBe(false);
+    expect(dialog.dismiss).toHaveBeenCalledOnce();
+    expect(getObservedBrowserStateForPage(page).dialogs.pending).toEqual([]);
+    expect(getObservedBrowserStateForPage(page).dialogs.recent).toMatchObject([
+      { id: "d1", type: "alert", closedBy: "armed" },
+    ]);
+    observed.cleanup();
+  });
+
   it("aborts in-flight actions while keeping unarmed dialogs pending", async () => {
     const { page, emit } = createPageHarness();
     ensurePageState(page);

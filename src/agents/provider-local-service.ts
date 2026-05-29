@@ -87,7 +87,8 @@ export async function ensureModelProviderLocalService(
 
   try {
     if (
-      managed.process?.exitCode === null &&
+      managed.process &&
+      !hasLocalServiceProcessExited(managed.process) &&
       (await probeHealth(healthUrl, healthHeaders, signal))
     ) {
       return { release };
@@ -110,7 +111,7 @@ export async function ensureModelProviderLocalService(
       });
     }
     await waitForAbort(managed.starting, signal);
-    if (!managed.process || managed.process.exitCode !== null) {
+    if (!managed.process || hasLocalServiceProcessExited(managed.process)) {
       release();
       return undefined;
     }
@@ -232,7 +233,7 @@ async function startAndWaitForLocalService(params: {
   if (await probeHealth(healthUrl, healthHeaders, signal)) {
     return;
   }
-  if (managed.process?.exitCode === null) {
+  if (managed.process && !hasLocalServiceProcessExited(managed.process)) {
     log.info(`restarting unhealthy ${provider} local service`);
     await stopManagedProcessForRestart(managed, signal);
   }
@@ -321,7 +322,7 @@ function stopManagedService(key: string, managed: ManagedLocalService, reason: s
   managed.process = undefined;
   managed.lastExit = undefined;
   services.delete(key);
-  if (child && child.exitCode === null) {
+  if (child && !hasLocalServiceProcessExited(child)) {
     log.info(`stopping local model service: reason=${reason}`);
     child.kill("SIGTERM");
   }
@@ -334,12 +335,12 @@ async function stopManagedProcessForRestart(
   const child = managed.process;
   managed.process = undefined;
   managed.lastExit = undefined;
-  if (!child || child.exitCode !== null) {
+  if (!child || hasLocalServiceProcessExited(child)) {
     return;
   }
   child.kill("SIGTERM");
   await waitForChildExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
-  if (child.exitCode === null) {
+  if (!hasLocalServiceProcessExited(child)) {
     child.kill("SIGKILL");
     await waitForChildExit(child, signal, DEFAULT_PROBE_TIMEOUT_MS);
   }
@@ -464,7 +465,7 @@ function waitForChildExit(
   signal: AbortSignal,
   timeoutMs: number,
 ): Promise<void> {
-  if (child.exitCode !== null) {
+  if (hasLocalServiceProcessExited(child)) {
     return Promise.resolve();
   }
   throwIfAborted(signal);
@@ -489,4 +490,10 @@ function waitForChildExit(
     child.once("exit", onExit);
     signal.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+export function hasLocalServiceProcessExited(
+  child: Pick<ChildProcess, "exitCode" | "signalCode">,
+): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
 }

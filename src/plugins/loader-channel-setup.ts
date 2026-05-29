@@ -3,6 +3,7 @@ import { isChannelConfigured } from "../config/channel-configured.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import type { OpenClawPluginApi } from "./types.js";
 
 function mergeChannelPluginSection<T>(
   baseValue: T | undefined,
@@ -125,6 +126,7 @@ export function loadBundledRuntimeChannelPlugin(params: {
 export function resolveSetupChannelRegistration(moduleExport: unknown): {
   plugin?: ChannelPlugin;
   setChannelRuntime?: (runtime: PluginRuntime) => void;
+  registerSetupRuntime?: (api: OpenClawPluginApi) => void;
   usesBundledSetupContract?: boolean;
   loadError?: unknown;
 } {
@@ -137,6 +139,7 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
     loadSetupPlugin?: unknown;
     loadSetupSecrets?: unknown;
     setChannelRuntime?: unknown;
+    registerSetupRuntime?: unknown;
   };
   if (
     setupEntryRecord.kind === "bundled-channel-setup-entry" &&
@@ -163,6 +166,13 @@ export function resolveSetupChannelRegistration(moduleExport: unknown): {
             ? {
                 setChannelRuntime: setupEntryRecord.setChannelRuntime as (
                   runtime: PluginRuntime,
+                ) => void,
+              }
+            : {}),
+          ...(typeof setupEntryRecord.registerSetupRuntime === "function"
+            ? {
+                registerSetupRuntime: setupEntryRecord.registerSetupRuntime as (
+                  api: OpenClawPluginApi,
                 ) => void,
               }
             : {}),
@@ -208,6 +218,22 @@ export function shouldLoadChannelPluginInSetupRuntime(params: {
   }
   return !params.manifestChannels.some((channelId) =>
     isChannelConfigured(params.cfg, channelId, params.env),
+  );
+}
+
+export function shouldDeferConfiguredChannelFullRuntimeMerge(params: {
+  manifestChannels: string[];
+  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  preferSetupRuntimeForChannelPlugins?: boolean;
+}): boolean {
+  return (
+    params.preferSetupRuntimeForChannelPlugins === true &&
+    params.startupDeferConfiguredChannelFullLoadUntilAfterListen === true &&
+    params.manifestChannels.some((channelId) =>
+      isChannelConfigured(params.cfg, channelId, params.env),
+    )
   );
 }
 

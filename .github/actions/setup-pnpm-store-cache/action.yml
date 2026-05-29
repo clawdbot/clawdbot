@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ""
   use-actions-cache:
-    description: Whether actions/cache should cache the pnpm store.
+    description: Whether actions/cache should restore the pnpm store.
     required: false
     default: "true"
 outputs:
@@ -24,6 +24,15 @@ outputs:
   project-dir:
     description: Directory containing the packageManager file used for pnpm resolution.
     value: ${{ steps.setup-pnpm.outputs.project-dir }}
+  store-cache-hit:
+    description: Whether the pnpm store cache restored an exact key.
+    value: ${{ steps.pnpm-store-cache.outputs.cache-hit }}
+  store-cache-primary-key:
+    description: Exact pnpm store cache key used for restore/save.
+    value: ${{ steps.pnpm-store-cache.outputs.cache-primary-key }}
+  store-path:
+    description: Resolved pnpm store path.
+    value: ${{ steps.pnpm-store.outputs.path }}
 runs:
   using: composite
   steps:
@@ -81,14 +90,15 @@ runs:
         echo "path=$store_path" >> "$GITHUB_OUTPUT"
 
     - name: Restore pnpm store cache
+      id: pnpm-store-cache
       if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}
-      uses: actions/cache@v5
+      uses: actions/cache/restore@v5
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
-        key: pnpm-store-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles(inputs.lockfile-path) }}
+        key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}
         restore-keys: |
-          pnpm-store-${{ runner.os }}-${{ inputs.node-version }}-
-          pnpm-store-${{ runner.os }}-
+          pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-
+          pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-
 
     - name: Record pnpm version
       id: pnpm-version

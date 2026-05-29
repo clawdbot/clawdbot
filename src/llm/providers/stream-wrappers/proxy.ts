@@ -2,6 +2,7 @@ import { resolveProviderRequestPolicy } from "../../../agents/provider-attributi
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
+import { parseStrictFiniteNumber } from "../../../infra/parse-finite-number.js";
 import {
   normalizeOptionalLowercaseString,
   readStringValue,
@@ -60,9 +61,9 @@ function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | unde
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value.trim())
-        : Number.NaN;
-  if (!Number.isFinite(parsed)) {
+        ? parseStrictFiniteNumber(value)
+        : undefined;
+  if (parsed === undefined) {
     return undefined;
   }
   return String(Math.max(1, Math.min(86400, Math.trunc(parsed))));

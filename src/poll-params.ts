@@ -1,7 +1,7 @@
 import { readSnakeCaseParamRaw } from "./param-key.js";
 import { normalizeLowercaseStringOrEmpty } from "./shared/string-coerce.js";
 
-type PollCreationParamKind = "string" | "stringArray" | "number" | "boolean";
+type PollCreationParamKind = "string" | "stringArray" | "positiveInteger" | "boolean";
 
 type PollCreationParamDef = {
   kind: PollCreationParamKind;
@@ -10,7 +10,7 @@ type PollCreationParamDef = {
 const SHARED_POLL_CREATION_PARAM_DEFS = {
   pollQuestion: { kind: "string" },
   pollOption: { kind: "stringArray" },
-  pollDurationHours: { kind: "number" },
+  pollDurationHours: { kind: "positiveInteger" },
   pollMulti: { kind: "boolean" },
 } satisfies Record<string, PollCreationParamDef>;
 
@@ -91,7 +91,7 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
         return true;
       }
     }
-    if (def.kind === "number") {
+    if (def.kind === "positiveInteger") {
       // Treat zero-valued numeric defaults as unset, but preserve any non-zero
       // numeric value as explicit poll intent so invalid durations still hit
       // the poll-only validation path.

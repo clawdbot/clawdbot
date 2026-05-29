@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
 import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -366,8 +367,8 @@ function readPositiveIntegerEnv(name: string, fallback: number): number {
   if (!rawValue) {
     return fallback;
   }
-  const parsedValue = Number.parseInt(rawValue, 10);
-  if (!Number.isFinite(parsedValue) || parsedValue < 1) {
+  const parsedValue = parseStrictPositiveInteger(rawValue);
+  if (parsedValue === undefined) {
     return fallback;
   }
   return parsedValue;

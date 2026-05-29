@@ -52,7 +52,11 @@ export type TalkRealtimeConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Provider model override for realtime sessions. */
   model?: string;
-  /** Provider voice override for realtime sessions. */
+  /** Provider speaker voice name override for realtime sessions. */
+  speakerVoice?: string;
+  /** Provider speaker voice id override for realtime sessions. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** Additional system instructions appended to realtime Talk sessions. */
   instructions?: string;

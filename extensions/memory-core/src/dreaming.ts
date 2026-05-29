@@ -5,6 +5,7 @@ import {
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT as DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE as DEFAULT_MEMORY_DREAMING_MIN_SCORE,
   DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES as DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
+  DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS as DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
   DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS as DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME as LEGACY_LIGHT_SLEEP_CRON_NAME,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG as LEGACY_LIGHT_SLEEP_CRON_TAG,
@@ -110,6 +111,7 @@ type ShortTermPromotionDreamingConfig = {
   minUniqueQueries: number;
   recencyHalfLifeDays?: number;
   maxAgeDays?: number;
+  maxPromotedSnippetTokens?: number;
   verboseLogging: boolean;
   storage?: {
     mode: "inline" | "separate" | "both";
@@ -132,13 +134,19 @@ type LegacyPhaseMigrationMode = "enabled" | "disabled";
 function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
+  removedOverflowEntries?: number;
   removedStaleLock: boolean;
 }): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    actions.push(
-      `rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
-    );
+    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+    const details = [
+      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    actions.push(`rewrote recall store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {
     actions.push("removed stale promotion lock");
@@ -391,6 +399,8 @@ export function resolveShortTermPromotionDreamingConfig(params: {
     minUniqueQueries: resolved.minUniqueQueries,
     recencyHalfLifeDays: resolved.recencyHalfLifeDays,
     ...(typeof resolved.maxAgeDays === "number" ? { maxAgeDays: resolved.maxAgeDays } : {}),
+    maxPromotedSnippetTokens:
+      resolved.maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
     verboseLogging: resolved.verboseLogging,
     storage: resolved.storage,
     ...(resolved.execution.model ? { execution: { model: resolved.execution.model } } : {}),
@@ -613,6 +623,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         minRecallCount: params.config.minRecallCount,
         minUniqueQueries: params.config.minUniqueQueries,
         maxAgeDays: params.config.maxAgeDays,
+        maxPromotedSnippetTokens: params.config.maxPromotedSnippetTokens,
         timezone: params.config.timezone,
         nowMs: sweepNowMs,
       });
@@ -950,6 +961,8 @@ export const testing = {
     DEFAULT_DREAMING_MIN_SCORE: DEFAULT_MEMORY_DREAMING_MIN_SCORE,
     DEFAULT_DREAMING_MIN_RECALL_COUNT: DEFAULT_MEMORY_DREAMING_MIN_RECALL_COUNT,
     DEFAULT_DREAMING_MIN_UNIQUE_QUERIES: DEFAULT_MEMORY_DREAMING_MIN_UNIQUE_QUERIES,
+    DEFAULT_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS:
+      DEFAULT_MEMORY_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
     DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS: DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS,
     RUNTIME_CRON_RECONCILE_INTERVAL_MS,
     STARTUP_CRON_RETRY_DELAY_MS,

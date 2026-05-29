@@ -8,6 +8,7 @@ export type { AnyAgentTool, NodeListNode } from "openclaw/plugin-sdk/agent-harne
 export {
   imageResultFromFile,
   jsonResult,
+  readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 export { optionalStringEnum, stringEnum } from "openclaw/plugin-sdk/channel-actions";

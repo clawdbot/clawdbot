@@ -8,7 +8,12 @@ import {
 } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "./account-id.js";
 import type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isInternalNonDeliveryChannel,
+} from "./message-channel-constants.js";
 import { normalizeMessageChannel } from "./message-channel-core.js";
+import { isDeliverableMessageChannel } from "./message-channel-normalize.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
@@ -93,6 +98,30 @@ function mergeRouteMetadataWithDeliveryContext(
   });
 }
 
+function isInternalRouteContext(context?: DeliveryContext): boolean {
+  const channel = context?.channel;
+  return Boolean(
+    channel && (channel === INTERNAL_MESSAGE_CHANNEL || isInternalNonDeliveryChannel(channel)),
+  );
+}
+
+function hasExternalDeliveryTarget(context?: DeliveryContext): boolean {
+  const channel = normalizeMessageChannel(context?.channel);
+  return Boolean(channel && isDeliverableMessageChannel(channel) && context?.to);
+}
+
+function mergeExternalDeliveryContextOverInternalRoute(
+  deliveryContext?: DeliveryContext,
+  internalContext?: DeliveryContext,
+): DeliveryContext | undefined {
+  return normalizeDeliveryContext({
+    channel: deliveryContext?.channel,
+    to: deliveryContext?.to,
+    accountId: deliveryContext?.accountId ?? internalContext?.accountId,
+    threadId: deliveryContext?.threadId ?? internalContext?.threadId,
+  });
+}
+
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
@@ -120,10 +149,17 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
     accountId: source.lastAccountId,
     threadId: source.lastThreadId,
   });
-  const merged = mergeDeliveryContext(
-    routeContext,
-    mergeDeliveryContext(legacyContext, normalizeDeliveryContext(source.deliveryContext)),
-  );
+  const deliveryContext = normalizeDeliveryContext(source.deliveryContext);
+  const sessionContext =
+    isInternalRouteContext(legacyContext) && hasExternalDeliveryTarget(deliveryContext)
+      ? mergeExternalDeliveryContextOverInternalRoute(deliveryContext, legacyContext)
+      : mergeDeliveryContext(legacyContext, deliveryContext);
+  const routeInternalContext = mergeDeliveryContext(routeContext, legacyContext);
+  const routeIsInternalFallback =
+    isInternalRouteContext(routeContext) && hasExternalDeliveryTarget(deliveryContext);
+  const merged = routeIsInternalFallback
+    ? mergeExternalDeliveryContextOverInternalRoute(deliveryContext, routeInternalContext)
+    : mergeDeliveryContext(routeContext, sessionContext);
 
   if (!merged) {
     return {
@@ -137,7 +173,10 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   }
 
   return {
-    route: mergeRouteMetadataWithDeliveryContext(normalizedRoute, merged),
+    route: mergeRouteMetadataWithDeliveryContext(
+      routeIsInternalFallback ? undefined : normalizedRoute,
+      merged,
+    ),
     deliveryContext: merged,
     lastChannel: merged.channel,
     lastTo: merged.to,

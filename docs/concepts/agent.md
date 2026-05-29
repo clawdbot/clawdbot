@@ -65,6 +65,10 @@ OpenClaw loads skills from these locations (highest precedence first):
 - Bundled (shipped with the install)
 - Extra skill folders: `skills.load.extraDirs`
 
+Skill roots can contain grouped folders such as
+`<workspace>/skills/personal/foo/SKILL.md`; the skill is still exposed by its
+flat frontmatter name, for example `foo`.
+
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
 ## Runtime boundaries

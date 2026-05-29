@@ -188,7 +188,7 @@
           - "ui/**"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
-          - "src/gateway/protocol/**"
+          - "packages/gateway-protocol/src/**"
           - "src/gateway/server-methods/chat.ts"
           - "src/infra/control-ui-assets.ts"
 
@@ -196,6 +196,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "src/gateway/**"
+          - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
 
@@ -398,6 +399,17 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
+"extensions: codex-supervisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/codex-supervisor/**"
+          - "docs/plugins/reference/codex-supervisor.md"
+          - "docs/specs/claw-supervisor.md"
+"extensions: copilot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/copilot/**"
+          - "docs/plugins/copilot.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:

@@ -250,7 +250,7 @@ describe("refreshActiveTab", () => {
     expectCommonAgentsTabRefresh(host);
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: false });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledWith(host, "job-123");
     expect(mocks.loadAgentFilesMock).not.toHaveBeenCalled();
     expect(mocks.loadAgentSkillsMock).not.toHaveBeenCalled();
@@ -451,7 +451,7 @@ describe("refreshActiveTab", () => {
     expect(outcome).toBe("resolved");
     expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
-    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledWith(host, { tableFilters: true });
     expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
   });
 

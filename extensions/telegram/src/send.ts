@@ -5,6 +5,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -409,8 +410,8 @@ function normalizeMessageId(raw: string | number): number {
     if (!value) {
       throw new Error("Message id is required for Telegram actions");
     }
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) {
+    const parsed = parseStrictInteger(value);
+    if (parsed !== undefined) {
       return parsed;
     }
   }

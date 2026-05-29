@@ -33,6 +33,7 @@ on:
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
       - "packages/memory-host-sdk/**"
+      - "packages/net-policy/**"
       - "src/*.ts"
       - "src/**/*.ts"
       - "src/config/**"
@@ -106,13 +107,13 @@ on:
       - "src/gateway/**/*auth*.ts"
       - "src/gateway/*secret*.ts"
       - "src/gateway/**/*secret*.ts"
-      - "src/gateway/protocol/**/*secret*.ts"
+      - "packages/gateway-protocol/src/**/*secret*.ts"
       - "src/gateway/resolve-configured-secret-input-string*.ts"
       - "src/gateway/security-path*.ts"
       - "src/gateway/server-methods/secrets*.ts"
       - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
-      - "src/gateway/protocol/**"
+      - "packages/gateway-protocol/src/**"
       - "src/gateway/server-methods/**"
       - "src/gateway/server-methods.ts"
       - "src/gateway/server-methods-list.ts"
@@ -244,14 +245,14 @@ jobs:
                 src/config/*)
                   config=true
                   ;;
-                src/gateway/protocol/*secret*.ts|src/gateway/server-methods/secrets*.ts)
+                packages/gateway-protocol/src/*secret*.ts|packages/gateway-protocol/src/**/*secret*.ts|src/gateway/server-methods/secrets*.ts)
                   core_auth_secrets=true
                   gateway=true
                   ;;
                 src/agents/*auth*.ts|src/agents/auth-health*.ts|src/agents/auth-profiles|src/agents/auth-profiles/*|src/agents/bash-tools.exec-host-shared.ts|src/agents/sandbox|src/agents/sandbox.ts|src/agents/sandbox-*.ts|src/agents/sandbox/*|src/cron/service/jobs.ts|src/cron/stagger.ts|src/gateway/*auth*.ts|src/gateway/*secret*.ts|src/gateway/resolve-configured-secret-input-string*.ts|src/gateway/security-path*.ts|src/infra/secret-file*.ts|src/secrets/*|src/security/*)
                   core_auth_secrets=true
                   ;;
-                src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
+                packages/gateway-protocol/src/*|packages/gateway-protocol/src/**/*|src/gateway/method-scopes.ts|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
                   ;;
                 packages/memory-host-sdk/*|src/commands/doctor-cron-dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/gateway/server-startup-memory.ts|src/memory/*|src/memory-host-sdk/*)
@@ -301,7 +302,7 @@ jobs:
               esac
 
               case "${file}" in
-                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts)
+                src/*.ts|src/**/*.ts|extensions/*.ts|extensions/**/*.ts|packages/net-policy/src/*|packages/net-policy/src/**/*)
                   network_runtime=true
                   ;;
               esac

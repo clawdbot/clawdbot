@@ -12,13 +12,25 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
       startDate: "2026-02-01",
       endDate: "2026-02-02",
       daily: [],
-      totals: { totalTokens: 1, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalCost: 0 },
+      totals: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 1,
+        totalCost: 0,
+        inputCost: 0,
+        outputCost: 0,
+        cacheReadCost: 0,
+        cacheWriteCost: 0,
+        missingCostEntries: 0,
+      },
     })),
   };
 });
 
 import { loadCostUsageSummaryFromCache } from "../../infra/session-cost-usage.js";
-import { testApi } from "./usage.js";
+import { testApi, usageHandlers } from "./usage.js";
 
 describe("gateway usage helpers", () => {
   const dayMs = 24 * 60 * 60 * 1000;
@@ -159,6 +171,80 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(0)?.[0]?.refreshMode).toBe(
       "background",
+    );
+  });
+
+  it("keeps cost usage cache entries scoped by agentId", async () => {
+    const config = {} as OpenClawConfig;
+
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      agentId: "main",
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      agentId: "research",
+    });
+    await testApi.loadCostUsageSummaryCached({
+      startMs: 1,
+      endMs: 2,
+      config,
+      agentId: "research",
+    });
+
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(0)?.[0]).toMatchObject({
+      agentId: "main",
+    });
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(1)?.[0]).toMatchObject({
+      agentId: "research",
+    });
+  });
+
+  it("passes usage.cost agentId through to the cost summary loader", async () => {
+    const respond = vi.fn();
+
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentId: "research" },
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research" }),
+    );
+  });
+
+  it("passes usage.cost all-agent scope through to all configured agent loaders", async () => {
+    const respond = vi.fn();
+
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" },
+      context: {
+        getRuntimeConfig: () => ({
+          agents: { list: [{ id: "main" }, { id: "research" }] },
+        }),
+      },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        totals: expect.objectContaining({ totalTokens: 2 }),
+      }),
+      undefined,
+    );
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main" }),
+    );
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "research" }),
     );
   });
 });

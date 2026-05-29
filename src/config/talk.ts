@@ -107,6 +107,14 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     normalized.model = model;
   }
   const voice = normalizeOptionalString(source.voice);
+  const speakerVoice = normalizeOptionalString(source.speakerVoice) ?? voice;
+  const speakerVoiceId = normalizeOptionalString(source.speakerVoiceId);
+  if (speakerVoice) {
+    normalized.speakerVoice = speakerVoice;
+  }
+  if (speakerVoiceId) {
+    normalized.speakerVoiceId = speakerVoiceId;
+  }
   if (voice) {
     normalized.voice = voice;
   }

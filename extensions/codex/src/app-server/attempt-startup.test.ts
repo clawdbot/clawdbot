@@ -146,7 +146,7 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("clears the shared app-server when startup abandons an in-flight thread request", async () => {
-    const { harness, run } = startThreadWithHarness(2_000);
+    const { harness, run } = startThreadWithHarness(1_100);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,

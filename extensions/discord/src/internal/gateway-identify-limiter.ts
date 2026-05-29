@@ -1,10 +1,17 @@
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+
 const IDENTIFY_WINDOW_MS = 5_000;
+
+function normalizeMaxConcurrency(value: number | undefined): number {
+  const parsed = parseFiniteNumber(value);
+  return parsed === undefined ? 1 : Math.max(1, Math.floor(parsed));
+}
 
 class GatewayIdentifyLimiter {
   private nextAllowedAtByKey = new Map<number, number>();
 
   async wait(params: { shardId?: number; maxConcurrency?: number }): Promise<void> {
-    const maxConcurrency = Math.max(1, Math.floor(params.maxConcurrency ?? 1));
+    const maxConcurrency = normalizeMaxConcurrency(params.maxConcurrency);
     const rateKey = (params.shardId ?? 0) % maxConcurrency;
     const now = Date.now();
     const nextAllowedAt = this.nextAllowedAtByKey.get(rateKey) ?? now;

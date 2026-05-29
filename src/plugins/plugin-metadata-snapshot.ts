@@ -10,7 +10,7 @@ import { isRecord } from "../shared/record-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import { resolveDefaultPluginNpmDir } from "./install-paths.js";
+import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
@@ -90,6 +90,22 @@ function fileFingerprint(filePath: string): unknown {
   } catch {
     return [filePath, "missing"];
   }
+}
+
+function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directoryPath, { withFileTypes: true });
+  } catch {
+    return [directoryPath, "missing"];
+  }
+  return [
+    directoryPath,
+    ...entries
+      .filter((entry) => entry.isDirectory())
+      .toSorted((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => fileFingerprint(path.join(directoryPath, entry.name, "package.json"))),
+  ];
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | undefined {
@@ -194,6 +210,9 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   return {
     index: fileFingerprint(indexPath),
     npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
+    npmProjectPackageJsons: directoryChildPackageJsonFingerprint(
+      resolvePluginNpmProjectsDir(npmRoot),
+    ),
   };
 }
 

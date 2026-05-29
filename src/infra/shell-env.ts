@@ -5,6 +5,7 @@ import path from "node:path";
 import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
+import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -280,11 +281,11 @@ export function resolveShellEnvFallbackTimeoutMs(env: NodeJS.ProcessEnv): number
   if (!raw) {
     return DEFAULT_TIMEOUT_MS;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_TIMEOUT_MS;
   }
-  return Math.max(0, parsed);
+  return parsed;
 }
 
 export function getShellPathFromLoginShell(opts: {

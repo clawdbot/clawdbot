@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { __testing as discordTesting } from "../discord/discord-live.runtime.js";
 import { __testing as slackTesting } from "../slack/slack-live.runtime.js";
@@ -12,6 +14,15 @@ import {
 } from "./live-transport-scenarios.js";
 
 describe("live transport scenario helpers", () => {
+  it("keeps package-mode helpers off private QA SDK exports", () => {
+    const source = fs.readFileSync(
+      fileURLToPath(new URL("./live-transport-scenarios.ts", import.meta.url)),
+      "utf8",
+    );
+
+    expect(source).not.toContain("openclaw/plugin-sdk/qa-runtime");
+  });
+
   it("keeps the repo-wide baseline contract ordered", () => {
     expect(LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS).toEqual([
       "canary",

@@ -233,6 +233,20 @@ describe("runDiscordGatewayLifecycle", () => {
     expect(resolveDiscordGatewayRuntimeReadyTimeoutMs({ env: {} })).toBe(30_000);
   });
 
+  it("ignores non-integer gateway READY timeout values", () => {
+    expect(
+      resolveDiscordGatewayReadyTimeoutMs({
+        configuredTimeoutMs: 1.5,
+        env: { OPENCLAW_DISCORD_READY_TIMEOUT_MS: "0x1000" },
+      }),
+    ).toBe(15_000);
+    expect(
+      resolveDiscordGatewayRuntimeReadyTimeoutMs({
+        env: { OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS: "1e3" },
+      }),
+    ).toBe(30_000);
+  });
+
   it("cleans up thread bindings when gateway wait fails before READY", async () => {
     waitForDiscordGatewayStopMock.mockRejectedValueOnce(new Error("startup failed"));
     const { lifecycleParams, threadStop, gatewaySupervisor } = createLifecycleHarness();

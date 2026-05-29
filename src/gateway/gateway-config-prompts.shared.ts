@@ -1,6 +1,6 @@
+import { isIpv6Address, parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import { isIpv6Address, parseCanonicalIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export const TAILSCALE_EXPOSURE_OPTIONS = [

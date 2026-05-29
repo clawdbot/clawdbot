@@ -51,6 +51,21 @@ function isPathInside(parent, child) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+function isPathInsideManagedNpmProjectPackageRoot(params) {
+  const relative = path.relative(path.join(params.stateDir, "npm", "projects"), params.installPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    return false;
+  }
+  const segments = relative.split(path.sep);
+  const packageSegments = params.packageName.split("/");
+  return (
+    segments.length === 2 + packageSegments.length &&
+    Boolean(segments[0]) &&
+    segments[1] === "node_modules" &&
+    packageSegments.every((segment, index) => segments[index + 2] === segment)
+  );
+}
+
 function write(file, contents) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
@@ -427,10 +442,10 @@ function assertExternalPluginInstall(records, pluginId, packageName) {
     `configured external ${pluginId} package name changed: ${packageJson.name}`,
   );
   if (installedFromNpm) {
-    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+    const stateDir = requireEnv("OPENCLAW_STATE_DIR");
     assert(
-      isPathInside(npmRoot, installPath),
-      `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+      isPathInsideManagedNpmProjectPackageRoot({ stateDir, installPath, packageName }),
+      `configured external ${pluginId} npm install path outside managed npm project root: ${installPath}`,
     );
     assert(
       String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),

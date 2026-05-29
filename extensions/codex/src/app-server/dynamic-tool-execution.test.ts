@@ -38,6 +38,22 @@ describe("dynamic tool execution helpers", () => {
     ).toBe(timeoutMs);
   });
 
+  it("ignores partial dynamic tool timeout strings", () => {
+    expect(
+      resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-partial-timeout",
+          namespace: null,
+          tool: "session_status",
+          arguments: { timeoutMs: "1abc" },
+        },
+        config: undefined,
+      }),
+    ).toBe(CODEX_DYNAMIC_TOOL_TIMEOUT_MS);
+  });
+
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
     expect(
       resolveDynamicToolCallTimeoutMs({

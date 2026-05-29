@@ -6,20 +6,52 @@ type FetchJsonParams = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
   init: RequestInit;
   label: string;
+  maxBodyBytes?: number;
   timeoutMs: number;
   url: string;
 };
 
 type RunCommandOptions = {
   outputLimit?: number;
+  timeoutKillGraceMs?: number;
   timeoutMs: number;
 };
 
 const DEFAULT_OUTPUT_LIMIT = 128 * 1024;
+const DEFAULT_FETCH_BODY_LIMIT = 1024 * 1024;
 const KILL_GRACE_MS = 5_000;
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+function bodyTooLargeError(message: string) {
+  return Object.assign(new Error(message), { code: "ETOOBIG" });
+}
+
+function resolveFetchBodyLimit(limit: number | undefined) {
+  if (limit !== undefined) {
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error(`fetch JSON body limit must be a positive integer; got: ${limit}`);
+    }
+    return limit;
+  }
+  const raw = process.env.OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES?.trim();
+  if (!raw) {
+    return DEFAULT_FETCH_BODY_LIMIT;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES must be a positive integer; got: ${raw}`,
+    );
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_HTTP_MAX_BODY_BYTES must be a positive integer; got: ${raw}`,
+    );
+  }
+  return parsed;
 }
 
 function appendBounded(previous: string, chunk: Buffer, limit: number) {
@@ -47,7 +79,9 @@ export function runCommand(
     let settled = false;
     let timeout: NodeJS.Timeout;
     let killTimer: NodeJS.Timeout | undefined;
+    let timedOutError: Error | undefined;
     const timeoutMs = Math.max(1, options.timeoutMs);
+    const timeoutKillGraceMs = Math.max(0, options.timeoutKillGraceMs ?? KILL_GRACE_MS);
     const clearTimers = () => {
       clearTimeout(timeout);
       if (killTimer) {
@@ -66,17 +100,14 @@ export function runCommand(
       if (settled) {
         return;
       }
-      settled = true;
-      clearTimeout(timeout);
-      const error = timeoutError(
+      timedOutError = timeoutError(
         `${command} ${args.join(" ")} timed out after ${timeoutMs}ms\n${stdout}${stderr}`,
       );
       child.kill("SIGTERM");
       killTimer = setTimeout(() => {
         child.kill("SIGKILL");
-      }, KILL_GRACE_MS);
+      }, timeoutKillGraceMs);
       killTimer.unref?.();
-      reject(error);
     }, timeoutMs);
     timeout.unref?.();
 
@@ -89,13 +120,14 @@ export function runCommand(
     child.on("error", fail);
     child.on("close", (code, signal) => {
       if (settled) {
-        if (killTimer) {
-          clearTimeout(killTimer);
-        }
         return;
       }
       settled = true;
       clearTimers();
+      if (timedOutError) {
+        reject(timedOutError);
+        return;
+      }
       if (code === 0) {
         resolve();
         return;
@@ -106,8 +138,49 @@ export function runCommand(
   });
 }
 
+async function readBoundedResponseText(
+  response: Response,
+  label: string,
+  byteLimit: number,
+  timeoutPromise: Promise<never>,
+) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export async function fetchJsonWithTimeout(params: FetchJsonParams) {
   const timeoutMs = Math.max(1, params.timeoutMs);
+  const maxBodyBytes = resolveFetchBodyLimit(params.maxBodyBytes);
   const controller = new AbortController();
   const error = timeoutError(`${params.label} timed out after ${timeoutMs}ms`);
   let timeout: NodeJS.Timeout | undefined;
@@ -127,7 +200,13 @@ export async function fetchJsonWithTimeout(params: FetchJsonParams) {
       }),
       timeoutPromise,
     ]);
-    const payload = (await Promise.race([response.json(), timeoutPromise])) as JsonObject;
+    const rawPayload = await readBoundedResponseText(
+      response,
+      params.label,
+      maxBodyBytes,
+      timeoutPromise,
+    );
+    const payload = JSON.parse(rawPayload) as JsonObject;
     return { payload, response };
   } finally {
     if (timeout) {

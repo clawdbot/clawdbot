@@ -17,8 +17,14 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
 import { isRecord as isPlainObject } from "../../shared/record-coerce.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
-import { stringEnum } from "../schema/typebox.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import { optionalNonNegativeIntegerSchema, stringEnum } from "../schema/typebox.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 
 const log = createSubsystemLogger("gateway-tool");
@@ -30,7 +36,6 @@ const DEFAULT_UPDATE_TIMEOUT_MS = 20 * 60_000;
 // must fail closed and allow only a narrow set of agent-tunable paths.
 const ALLOWED_GATEWAY_CONFIG_PATHS = [
   // Agent prompt/model tuning.
-  "agents.defaults.systemPromptOverride",
   "agents.defaults.promptOverlays",
   "agents.defaults.model",
   "agents.defaults.thinkingDefault",
@@ -38,7 +43,6 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "agents.defaults.reasoningDefault",
   "agents.defaults.fastModeDefault",
   "agents.list[].id",
-  "agents.list[].systemPromptOverride",
   "agents.list[].model",
   "agents.list[].thinkingDefault",
   "agents.list[].subagents.thinking",
@@ -337,13 +341,11 @@ const GATEWAY_ACTIONS = [
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   // restart
-  delayMs: Type.Optional(Type.Number()),
+  delayMs: optionalNonNegativeIntegerSchema(),
   reason: Type.Optional(Type.String()),
   continuationMessage: Type.Optional(Type.String()),
   // config.get, config.schema.lookup, config.apply, update.run
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  ...gatewayCallOptionSchemaProperties(),
   // config.schema.lookup
   path: Type.Optional(Type.String()),
   // config.apply, config.patch
@@ -352,7 +354,7 @@ const GatewayToolSchema = Type.Object({
   // config.apply, config.patch, update.run
   sessionKey: Type.Optional(Type.String()),
   note: Type.Optional(Type.String()),
-  restartDelayMs: Type.Optional(Type.Number()),
+  restartDelayMs: optionalNonNegativeIntegerSchema(),
 });
 // NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
 // - OpenAI rejects tool schemas that include these keywords at the *top-level*.
@@ -379,10 +381,7 @@ export function createGatewayTool(opts?: {
         const sessionKey =
           normalizeOptionalString(params.sessionKey) ??
           normalizeOptionalString(opts?.agentSessionKey);
-        const delayMs =
-          typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
-            ? Math.floor(params.delayMs)
-            : undefined;
+        const delayMs = readNonNegativeIntegerParam(params, "delayMs");
         const reason = normalizeOptionalString(params.reason)?.slice(0, 200);
         const note = normalizeOptionalString(params.note);
         const continuationMessage = normalizeOptionalString(params.continuationMessage);
@@ -437,10 +436,7 @@ export function createGatewayTool(opts?: {
           normalizeOptionalString(params.sessionKey) ??
           normalizeOptionalString(opts?.agentSessionKey);
         const note = normalizeOptionalString(params.note);
-        const restartDelayMs =
-          typeof params.restartDelayMs === "number" && Number.isFinite(params.restartDelayMs)
-            ? Math.floor(params.restartDelayMs)
-            : undefined;
+        const restartDelayMs = readNonNegativeIntegerParam(params, "restartDelayMs");
         return { sessionKey, note, restartDelayMs };
       };
 

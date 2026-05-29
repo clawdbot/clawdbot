@@ -312,6 +312,55 @@ describe("buildGoogleRealtimeVoiceProvider", () => {
     expect(lastConnectParams().config).not.toHaveProperty("temperature");
   });
 
+  it("drops malformed VAD timing values before connecting", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        prefixPaddingMs: -1,
+        silenceDurationMs: 250.5,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("realtimeInputConfig");
+  });
+
+  it("drops malformed thinking budgets before connecting", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        thinkingBudget: 24_576.5,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config).not.toHaveProperty("thinkingConfig");
+  });
+
+  it("passes Google Live dynamic thinking budget through", async () => {
+    const provider = buildGoogleRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: {
+        apiKey: "gemini-key",
+        thinkingBudget: -1,
+      },
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+
+    await bridge.connect();
+
+    expect(lastConnectParams().config.thinkingConfig).toEqual({ thinkingBudget: -1 });
+  });
+
   it("creates constrained browser sessions for Google Live Talk", async () => {
     const provider = buildGoogleRealtimeVoiceProvider();
 

@@ -40,6 +40,15 @@ complete`,
     ]);
   });
 
+  it("drops non-integer qmd line metadata", () => {
+    const results = parseQmdQueryJson(
+      `[{"docid":"abc","start_line":4.5,"end_line":${Number.MAX_SAFE_INTEGER + 1}}]`,
+      "",
+    );
+
+    expect(results).toEqual([{ docid: "abc" }]);
+  });
+
   it("treats plain-text no-results from stderr as an empty result set", () => {
     const results = parseQmdQueryJson("", "No results found\n");
     expect(results).toStrictEqual([]);

@@ -534,6 +534,23 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
   });
 
+  it("rejects fractional maxChars before fetching", async () => {
+    const fetchMock = installMockFetch(
+      (input: RequestInfo | URL) =>
+        Promise.resolve(textResponse("unused", resolveRequestUrl(input))) as Promise<Response>,
+    );
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+
+    await expect(
+      tool?.execute?.("call", {
+        url: "https://example.com/fractional",
+        maxChars: 100.5,
+      }),
+    ).rejects.toThrow("maxChars must be a positive integer");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("strips and truncates HTML from error responses", async () => {
     const long = "x".repeat(12_000);
     const html =

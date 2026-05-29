@@ -139,6 +139,7 @@ const meta: ChannelMeta = {
   blurb: "飞书/Lark enterprise messaging.",
   aliases: ["lark"],
   order: 70,
+  preferSessionLookupForAnnounceTarget: true,
 };
 
 const loadFeishuChannelRuntime = createLazyRuntimeNamedExport(
@@ -556,15 +557,23 @@ function readFirstString(
   return undefined;
 }
 
-function readOptionalNumber(params: Record<string, unknown>, keys: string[]): number | undefined {
+function isPositiveSafeInteger(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function readOptionalPositiveInteger(
+  params: Record<string, unknown>,
+  keys: string[],
+): number | undefined {
   for (const key of keys) {
     const value = params[key];
-    if (typeof value === "number" && Number.isFinite(value)) {
+    if (typeof value === "number" && isPositiveSafeInteger(value)) {
       return value;
     }
     if (typeof value === "string" && value.trim()) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed)) {
+      const trimmed = value.trim();
+      const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+      if (isPositiveSafeInteger(parsed)) {
         return parsed;
       }
     }
@@ -939,7 +948,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               chatId,
               startTime: readFirstString(ctx.params, ["startTime", "start_time"]),
               endTime: readFirstString(ctx.params, ["endTime", "end_time"]),
-              pageSize: readOptionalNumber(ctx.params, ["pageSize", "page_size"]),
+              pageSize: readOptionalPositiveInteger(ctx.params, ["pageSize", "page_size"]),
               pageToken: readFirstString(ctx.params, ["pageToken", "page_token"]),
               accountId: ctx.accountId ?? undefined,
             });
@@ -972,7 +981,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const members = await runtime.getChatMembers(
               client,
               chatId,
-              readOptionalNumber(ctx.params, ["pageSize", "page_size"]),
+              readOptionalPositiveInteger(ctx.params, ["pageSize", "page_size"]),
               readFirstString(ctx.params, ["pageToken", "page_token"]),
               resolveFeishuMemberIdType(ctx.params),
             );
@@ -1009,7 +1018,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
             const members = await runtime.getChatMembers(
               client,
               chatId,
-              readOptionalNumber(ctx.params, ["pageSize", "page_size"]),
+              readOptionalPositiveInteger(ctx.params, ["pageSize", "page_size"]),
               readFirstString(ctx.params, ["pageToken", "page_token"]),
               resolveFeishuMemberIdType(ctx.params),
             );
@@ -1024,7 +1033,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           if (ctx.action === "channel-list") {
             const runtime = await loadFeishuChannelRuntime();
             const query = readFirstString(ctx.params, ["query"]);
-            const limit = readOptionalNumber(ctx.params, ["limit"]);
+            const limit = readOptionalPositiveInteger(ctx.params, ["limit"]);
             const scope = readFirstString(ctx.params, ["scope", "kind"]) ?? "all";
             if (
               scope === "groups" ||

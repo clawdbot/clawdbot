@@ -23,6 +23,16 @@ describe("Codex app-server attempt timeouts", () => {
     );
     expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500 })).toBe(500);
     expect(resolveCodexStartupTimeoutMs({ timeoutMs: 5, timeoutFloorMs: 250 })).toBe(250);
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.NaN })).toBe(
+      CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
+    );
+    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500, timeoutFloorMs: Number.NaN })).toBe(500);
+    expect(
+      resolveCodexStartupTimeoutMs({
+        timeoutMs: Number.NaN,
+        timeoutFloorMs: Number.NaN,
+      }),
+    ).toBe(CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS);
   });
 
   it("normalizes turn idle timeout overrides", () => {
@@ -46,6 +56,7 @@ describe("Codex app-server attempt timeouts", () => {
 
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, 123)).toBe(123);
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(Number.NaN, 123)).toBe(123);
+    expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(undefined, Number.NaN)).toBe(1);
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(7.9, 123)).toBe(7);
     expect(resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(0, 123)).toBe(1);
 

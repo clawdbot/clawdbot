@@ -75,6 +75,60 @@ describe("acp session manager", () => {
     expect(store.hasSession("existing")).toBe(true);
   });
 
+  it("falls back for non-finite idle TTL options", () => {
+    const boundedStore = createInMemorySessionStore({
+      maxSessions: 2,
+      idleTtlMs: Number.NaN,
+      now,
+    });
+    try {
+      boundedStore.createSession({
+        sessionId: "first",
+        sessionKey: "acp:first",
+        cwd: "/tmp",
+      });
+      advance(1);
+      boundedStore.createSession({
+        sessionId: "second",
+        sessionKey: "acp:second",
+        cwd: "/tmp",
+      });
+
+      expect(boundedStore.hasSession("first")).toBe(true);
+      expect(boundedStore.hasSession("second")).toBe(true);
+    } finally {
+      boundedStore.clearAllSessionsForTest();
+    }
+  });
+
+  it("falls back for non-finite max session options", () => {
+    const boundedStore = createInMemorySessionStore({
+      maxSessions: Number.NaN,
+      idleTtlMs: 24 * 60 * 60 * 1_000,
+      now,
+    });
+    try {
+      for (let index = 0; index < 5_000; index += 1) {
+        const session = boundedStore.createSession({
+          sessionId: `session-${index}`,
+          sessionKey: `acp:${index}`,
+          cwd: "/tmp",
+        });
+        boundedStore.setActiveRun(session.sessionId, `run-${index}`, new AbortController());
+      }
+
+      expect(() =>
+        boundedStore.createSession({
+          sessionId: "overflow",
+          sessionKey: "acp:overflow",
+          cwd: "/tmp",
+        }),
+      ).toThrow(/session limit reached/i);
+    } finally {
+      boundedStore.clearAllSessionsForTest();
+    }
+  });
+
   it("reaps idle sessions before enforcing the max session cap", () => {
     const boundedStore = createInMemorySessionStore({
       maxSessions: 1,

@@ -179,6 +179,20 @@ function asTurnCoverage(value: unknown): GoogleRealtimeTurnCoverage | undefined 
   }
 }
 
+function asNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number !== undefined && Number.isSafeInteger(number) && number >= 0 ? number : undefined;
+}
+
+function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {
+  const budget = asFiniteNumber(value);
+  return budget !== undefined &&
+    Number.isSafeInteger(budget) &&
+    (budget === -1 || (budget >= 0 && budget <= 24_576))
+    ? budget
+    : undefined;
+}
+
 function resolveGoogleRealtimeProviderConfigRecord(
   config: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -207,11 +221,11 @@ function normalizeProviderConfig(
       path: "plugins.entries.voice-call.config.realtime.providers.google.apiKey",
     }),
     model: trimToUndefined(raw?.model),
-    voice: trimToUndefined(raw?.voice),
+    voice: trimToUndefined(raw?.speakerVoice) ?? trimToUndefined(raw?.voice),
     temperature: asFiniteNumber(raw?.temperature),
     apiVersion: trimToUndefined(raw?.apiVersion),
-    prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
-    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
+    prefixPaddingMs: asNonNegativeInteger(raw?.prefixPaddingMs),
+    silenceDurationMs: asNonNegativeInteger(raw?.silenceDurationMs),
     startSensitivity: asSensitivity(raw?.startSensitivity),
     endSensitivity: asSensitivity(raw?.endSensitivity),
     activityHandling: asActivityHandling(raw?.activityHandling),
@@ -221,7 +235,7 @@ function normalizeProviderConfig(
     sessionResumption: asBoolean(raw?.sessionResumption),
     contextWindowCompression: asBoolean(raw?.contextWindowCompression),
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
-    thinkingBudget: asFiniteNumber(raw?.thinkingBudget),
+    thinkingBudget: asGoogleRealtimeThinkingBudget(raw?.thinkingBudget),
   };
 }
 
@@ -305,10 +319,10 @@ function buildRealtimeInputConfig(
     ...(startSensitivity ? { startOfSpeechSensitivity: startSensitivity } : {}),
     ...(endSensitivity ? { endOfSpeechSensitivity: endSensitivity } : {}),
     ...(typeof config.prefixPaddingMs === "number"
-      ? { prefixPaddingMs: Math.max(0, Math.floor(config.prefixPaddingMs)) }
+      ? { prefixPaddingMs: config.prefixPaddingMs }
       : {}),
     ...(typeof config.silenceDurationMs === "number"
-      ? { silenceDurationMs: Math.max(0, Math.floor(config.silenceDurationMs)) }
+      ? { silenceDurationMs: config.silenceDurationMs }
       : {}),
   };
   const realtimeInputConfig = {

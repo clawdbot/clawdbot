@@ -103,6 +103,7 @@ const DEFAULT_BATCH_CHAR_BUDGET = 2_000;
 const TRANSLATE_MAX_ATTEMPTS = 2;
 const TRANSLATE_BASE_DELAY_MS = 15_000;
 const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
+const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
@@ -950,10 +951,44 @@ function estimateBatchChars(items: readonly TranslationBatchItem[]): number {
 type RunProcessOptions = {
   cwd?: string;
   input?: string;
+  maxOutputChars?: number;
   rejectOnFailure?: boolean;
 };
 
-async function runProcess(
+type ProcessOutputCapture = {
+  text: string;
+  truncatedChars: number;
+};
+
+function resolveRunProcessOutputLimit(options: RunProcessOptions): number {
+  const value = options.maxOutputChars;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return RUN_PROCESS_OUTPUT_MAX_CHARS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+export function appendBoundedProcessOutput(
+  capture: ProcessOutputCapture,
+  chunk: unknown,
+  maxChars: number,
+): ProcessOutputCapture {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatProcessOutput(capture: ProcessOutputCapture): string {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+export async function runProcess(
   executable: string,
   args: string[],
   options: RunProcessOptions = {},
@@ -965,13 +1000,14 @@ async function runProcess(
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    const maxOutputChars = resolveRunProcessOutputLimit(options);
+    let stdout: ProcessOutputCapture = { text: "", truncatedChars: 0 };
+    let stderr: ProcessOutputCapture = { text: "", truncatedChars: 0 };
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedProcessOutput(stdout, chunk, maxOutputChars);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      stderr = appendBoundedProcessOutput(stderr, chunk, maxOutputChars);
     });
     child.once("error", reject);
     if (options.input !== undefined) {
@@ -980,13 +1016,25 @@ async function runProcess(
       child.stdin.end();
     }
     child.once("close", (code) => {
+      const stdoutText = formatProcessOutput(stdout);
+      const stderrText = formatProcessOutput(stderr);
       if ((code ?? 1) !== 0 && options.rejectOnFailure) {
         reject(
-          new Error(`${executable} ${args.join(" ")} failed: ${stderr.trim() || stdout.trim()}`),
+          new Error(
+            `${executable} ${args.join(" ")} failed: ${stderrText.trim() || stdoutText.trim()}`,
+          ),
         );
         return;
       }
-      resolve({ code: code ?? 1, stderr, stdout });
+      if ((code ?? 1) === 0 && stdout.truncatedChars > 0) {
+        reject(
+          new Error(
+            `${executable} ${args.join(" ")} produced more than ${maxOutputChars} stdout chars`,
+          ),
+        );
+        return;
+      }
+      resolve({ code: code ?? 1, stderr: stderrText, stdout: stdout.text });
     });
   });
 }

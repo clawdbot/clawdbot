@@ -7,7 +7,7 @@ import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth
 async function requestTokenGrant(body: URLSearchParams): Promise<{
   access_token?: string;
   refresh_token?: string;
-  expires_in?: number;
+  expires_in?: unknown;
 }> {
   const response = await fetchWithTimeout(TOKEN_URL, {
     method: "POST",
@@ -27,15 +27,22 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
   return (await response.json()) as {
     access_token?: string;
     refresh_token?: string;
-    expires_in?: number;
+    expires_in?: unknown;
   };
+}
+
+function resolveExpiresInMs(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return 0;
+  }
+  return Math.trunc(value * 1000);
 }
 
 async function buildGeminiCliCredentials(params: {
   tokenResponse: {
     access_token?: string;
     refresh_token?: string;
-    expires_in?: number;
+    expires_in?: unknown;
   };
   refreshTokenFallback?: string;
   existing?: Pick<GeminiCliOAuthCredentials, "email" | "projectId">;
@@ -63,10 +70,7 @@ async function buildGeminiCliCredentials(params: {
     // already-stored identity binding instead of failing token renewal.
   }
 
-  const expiresInMs =
-    typeof params.tokenResponse.expires_in === "number"
-      ? params.tokenResponse.expires_in * 1000
-      : 0;
+  const expiresInMs = resolveExpiresInMs(params.tokenResponse.expires_in);
   const expiresAt = Date.now() + expiresInMs - 5 * 60 * 1000;
 
   return {

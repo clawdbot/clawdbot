@@ -257,6 +257,7 @@ describe("anthropic provider replay hooks", () => {
     });
     const models = requireRecord(next?.agents?.defaults?.models, "models");
     for (const modelId of [
+      "anthropic/claude-opus-4-8",
       "anthropic/claude-opus-4-7",
       "anthropic/claude-sonnet-4-6",
       "anthropic/claude-opus-4-6",
@@ -444,15 +445,15 @@ describe("anthropic provider replay hooks", () => {
     expect(models["anthropic/claude-opus-5-0"]).toBeUndefined();
   });
 
-  it("resolves explicit claude-opus-4-7 refs from the 4.6 template family", async () => {
+  it("resolves explicit claude-opus-4-8 refs from the 4.7 template family", async () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
     const resolved = provider.resolveDynamicModel?.({
       provider: "anthropic",
-      modelId: "claude-opus-4-7",
+      modelId: "claude-opus-4-8",
       modelRegistry: createModelRegistry([
         {
-          id: "claude-opus-4-6",
-          name: "Claude Opus 4.6",
+          id: "claude-opus-4-7",
+          name: "Claude Opus 4.7",
           provider: "anthropic",
           api: "anthropic-messages",
           reasoning: true,
@@ -466,12 +467,22 @@ describe("anthropic provider replay hooks", () => {
 
     expectFields(resolved, {
       provider: "anthropic",
-      id: "claude-opus-4-7",
+      id: "claude-opus-4-8",
       api: "anthropic-messages",
       reasoning: true,
       contextWindow: 1_048_576,
       contextTokens: 1_048_576,
+      maxTokens: 128_000,
     });
+    const opus48Profile = provider.resolveThinkingProfile?.({
+      provider: "anthropic",
+      modelId: "claude-opus-4-8",
+    } as never);
+    const opus48LevelIds = levelIds(opus48Profile);
+    expect(opus48LevelIds).toContain("xhigh");
+    expect(opus48LevelIds).toContain("adaptive");
+    expect(opus48LevelIds).toContain("max");
+    expect(requireRecord(opus48Profile, "opus 4.8 thinking profile").defaultLevel).toBe("off");
     const opus47Profile = provider.resolveThinkingProfile?.({
       provider: "anthropic",
       modelId: "claude-opus-4-7",
@@ -593,6 +604,7 @@ describe("anthropic provider replay hooks", () => {
     const provider = await registerSingleProviderPlugin(anthropicPlugin);
 
     for (const [runtimeProvider, modelId] of [
+      ["anthropic", "claude-opus-4-8"],
       ["anthropic", "claude-opus-4-7"],
       ["claude-cli", "claude-opus-4.7-20260219"],
       ["anthropic", "claude-opus-4-6"],
@@ -621,6 +633,32 @@ describe("anthropic provider replay hooks", () => {
         },
       );
     }
+  });
+
+  it("normalizes Claude Opus 4.8 to 128k max output tokens", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "anthropic",
+      modelId: "claude-opus-4-8",
+      model: {
+        id: "claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        provider: "anthropic",
+        api: "anthropic-messages",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200_000,
+        maxTokens: 64_000,
+      },
+    } as never);
+
+    expectFields(normalized, {
+      contextWindow: 1_048_576,
+      contextTokens: 1_048_576,
+      maxTokens: 128_000,
+    });
   });
 
   it("does not normalize legacy Claude 4.5 models to 1M context", async () => {

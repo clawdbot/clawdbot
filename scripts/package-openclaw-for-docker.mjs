@@ -13,6 +13,7 @@ const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
+const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
 const ACTIVE_CHILD_KILLERS = new Set();
 const SIGNAL_EXIT_CODES = {
   SIGHUP: 129,
@@ -91,9 +92,16 @@ function run(command, args, cwd, options = {}) {
       detached: useProcessGroup,
     });
     let timedOut = false;
+    let outputLimitExceeded = false;
     let stdout = "";
+    let stdoutBytes = 0;
     let settled = false;
     let timeout;
+    let forceKillTimeout;
+    const maxCapturedStdoutBytes = Math.max(
+      1,
+      options.maxCapturedStdoutBytes ?? DEFAULT_CAPTURED_STDOUT_MAX_BYTES,
+    );
     const finish = (error, value = "") => {
       if (settled) {
         return;
@@ -123,22 +131,37 @@ function run(command, args, cwd, options = {}) {
       }
       child.kill(signal);
     };
+    const terminateChild = () => {
+      killChild("SIGTERM");
+      forceKillTimeout = setTimeout(
+        () => killChild("SIGKILL"),
+        options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
+      );
+      forceKillTimeout.unref?.();
+    };
     ACTIVE_CHILD_KILLERS.add(killChild);
     timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
-            killChild("SIGTERM");
-            setTimeout(
-              () => killChild("SIGKILL"),
-              options.killAfterMs ?? DEFAULT_TIMEOUT_KILL_AFTER_MS,
-            ).unref?.();
+            terminateChild();
           }, options.timeoutMs);
     timeout?.unref?.();
     if (options.captureStdout) {
       child.stdout.on("data", (chunk) => {
-        stdout += String(chunk);
+        if (outputLimitExceeded) {
+          return;
+        }
+        const chunkText = String(chunk);
+        const chunkBytes = Buffer.byteLength(chunkText);
+        if (stdoutBytes + chunkBytes > maxCapturedStdoutBytes) {
+          outputLimitExceeded = true;
+          terminateChild();
+          return;
+        }
+        stdout += chunkText;
+        stdoutBytes += chunkBytes;
       });
     } else {
       child.stdout.pipe(process.stderr, { end: false });
@@ -148,6 +171,14 @@ function run(command, args, cwd, options = {}) {
     child.on("close", (status, signal) => {
       if (timedOut) {
         finish(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        return;
+      }
+      if (outputLimitExceeded) {
+        finish(
+          new Error(
+            `${command} ${args.join(" ")} exceeded captured stdout limit (${maxCapturedStdoutBytes} bytes)`,
+          ),
+        );
         return;
       }
       if (status === 0) {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let originalTestFileLog: string | undefined;
@@ -67,5 +68,10 @@ describe("getResolvedLoggerSettings", () => {
     const settings = logging.getResolvedLoggerSettings();
 
     expect(settings.level).toBe("info");
+    expect(settings.file).toContain(path.join(".artifacts", "test-logs"));
+    expect(path.basename(settings.file)).toMatch(/^openclaw-vitest-\d+-\d{4}-\d{2}-\d{2}\.log$/);
+    expect(settings.file).not.toBe(
+      `/tmp/openclaw/openclaw-${new Date().toISOString().slice(0, 10)}.log`,
+    );
   });
 });

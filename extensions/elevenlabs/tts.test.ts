@@ -160,6 +160,20 @@ describe("elevenlabs tts diagnostics", () => {
     expect(body.latency_optimization_level).toBeUndefined();
   });
 
+  it("rejects fractional latency optimization instead of truncating it", async () => {
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      elevenLabsTTS({
+        ...createDefaultTtsRequest(),
+        latencyTier: 3.9,
+      }),
+    ).rejects.toThrow("latencyTier must be an integer");
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("omits latency optimization for eleven_v3 because the API rejects it", async () => {
     const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
     globalThis.fetch = fetchMock as unknown as typeof fetch;

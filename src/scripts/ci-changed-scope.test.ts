@@ -450,7 +450,16 @@ describe("detectChangedScope", () => {
       runChangedSmoke: true,
       runControlUiI18n: false,
     });
-    expect(detectChangedScope(["src/gateway/protocol/messages.ts"])).toEqual({
+    expect(detectChangedScope(["packages/gateway-protocol/src/schema/messages.ts"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["packages/gateway-client/src/client.ts"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
@@ -509,6 +518,10 @@ describe("detectChangedScope", () => {
       runFullInstallSmoke: false,
     });
     expect(detectInstallSmokeScope(["src/plugins/loader.ts"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: false,
+    });
+    expect(detectInstallSmokeScope(["packages/gateway-client/src/client.ts"])).toEqual({
       runFastInstallSmoke: true,
       runFullInstallSmoke: false,
     });

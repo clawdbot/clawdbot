@@ -9,6 +9,7 @@ const PROMPT_BLOB_ALGORITHM: SessionSkillPromptRef["algorithm"] = "sha256";
 const PROMPT_BLOB_VERSION: SessionSkillPromptRef["version"] = 1;
 const MIN_PROMPT_BLOB_CHARS = 512;
 const MAX_PROMPT_BLOB_BYTES = 512 * 1024;
+const PROMPT_REF_CACHE_MAX_ENTRIES = 256;
 
 type PersistedSessionStore = {
   store: Record<string, SessionEntry>;
@@ -25,8 +26,24 @@ export type SessionStorePersistenceProjection = PersistedSessionStore & {
   promptBlobs: Map<string, SessionSkillPromptBlobProjection>;
 };
 
+const promptRefCache = new Map<string, SessionSkillPromptRef>();
+
 function hashPrompt(prompt: string): string {
   return crypto.createHash(PROMPT_BLOB_ALGORITHM).update(prompt).digest("hex");
+}
+
+export function clearSessionSkillPromptRefCache(): void {
+  promptRefCache.clear();
+}
+
+export function getSessionSkillPromptRefCacheStatsForTest(): {
+  entries: number;
+  maxEntries: number;
+} {
+  return {
+    entries: promptRefCache.size,
+    maxEntries: PROMPT_REF_CACHE_MAX_ENTRIES,
+  };
 }
 
 function isSha256Hex(value: string): boolean {
@@ -47,12 +64,25 @@ export function resolveSessionSkillPromptBlobPath(storePath: string, hash: strin
 }
 
 function buildPromptRef(prompt: string): SessionSkillPromptRef {
-  return {
+  const cached = promptRefCache.get(prompt);
+  if (cached) {
+    return cached;
+  }
+  const ref = {
     version: PROMPT_BLOB_VERSION,
     algorithm: PROMPT_BLOB_ALGORITHM,
     hash: hashPrompt(prompt),
     bytes: Buffer.byteLength(prompt, "utf8"),
   };
+  promptRefCache.set(prompt, ref);
+  while (promptRefCache.size > PROMPT_REF_CACHE_MAX_ENTRIES) {
+    const oldest = promptRefCache.keys().next().value;
+    if (typeof oldest !== "string") {
+      break;
+    }
+    promptRefCache.delete(oldest);
+  }
+  return ref;
 }
 
 function shouldStorePromptAsBlob(prompt: string): boolean {

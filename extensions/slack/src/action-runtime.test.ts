@@ -876,6 +876,26 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("parses string readMessages limits before reading Slack messages", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    await handleSlackAction(
+      { action: "readMessages", channelId: "C1", limit: "20" },
+      slackConfig(),
+    );
+
+    expectRecordFields(requireRecordArg(readSlackMessages, "readSlackMessages", 0, 1), {
+      limit: 20,
+    });
+  });
+
+  it("rejects fractional readMessages limits before reading Slack messages", async () => {
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C1", limit: 2.5 }, slackConfig()),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
   it("reads from allowlisted Slack target channels", async () => {
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
@@ -1116,5 +1136,12 @@ describe("handleSlackAction", () => {
         tada: "https://example.com/tada.png",
       },
     });
+  });
+
+  it("rejects fractional emoji-list limits before reading emojis", async () => {
+    await expect(
+      handleSlackAction({ action: "emojiList", limit: 2.5 }, slackConfig()),
+    ).rejects.toThrow("limit must be a positive integer.");
+    expect(listSlackEmojis).not.toHaveBeenCalled();
   });
 });

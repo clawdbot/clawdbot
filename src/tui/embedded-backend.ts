@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
@@ -24,7 +25,6 @@ import {
   resolveMergedAssistantText,
   shouldSuppressAssistantEventForLiveChat,
 } from "../gateway/live-chat-projector.js";
-import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
 import {
   injectTimestamp,

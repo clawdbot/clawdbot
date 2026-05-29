@@ -3,12 +3,13 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
 import type {
   JsonSchemaType,
   JsonSchemaValidator,
   jsonSchemaValidator,
 } from "@modelcontextprotocol/sdk/validation/types.js";
-import { AjvJsonSchemaValidator } from "@modelcontextprotocol/sdk/validation/ajv-provider.js";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -17,13 +18,13 @@ import {
   findJsonSchemaShapeError,
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+  McpToolCatalogDiagnostic,
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
@@ -242,6 +243,33 @@ function loadSessionMcpConfig(params: {
   };
 }
 
+/**
+ * Loads enabled MCP config metadata for a session without creating runtimes,
+ * connecting transports, or issuing MCP tools/list requests.
+ */
+export function resolveSessionMcpConfigSummary(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+}): { fingerprint: string; serverNames: string[] } {
+  const { loaded, fingerprint } = loadSessionMcpConfig({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+    logDiagnostics: false,
+  });
+  return {
+    fingerprint,
+    serverNames: Object.keys(loaded.mcpServers).toSorted((a, b) => a.localeCompare(b)),
+  };
+}
+
+/** Returns the session MCP config fingerprint with the same no-runtime/no-connect contract as the summary helper. */
+export function resolveSessionMcpConfigFingerprint(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+}): string {
+  return resolveSessionMcpConfigSummary(params).fingerprint;
+}
+
 function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
 }
@@ -298,6 +326,7 @@ export function createSessionMcpRuntime(params: {
 
       const servers: Record<string, McpServerCatalog> = {};
       const tools: McpCatalogTool[] = [];
+      const diagnostics: McpToolCatalogDiagnostic[] = [];
       const usedServerNames = new Set<string>();
 
       try {
@@ -359,11 +388,18 @@ export function createSessionMcpRuntime(params: {
               });
             }
           } catch (error) {
+            const message = redactErrorUrls(error);
             if (!disposed) {
               logWarn(
-                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${redactErrorUrls(error)}`,
+                `bundle-mcp: failed to start server "${serverName}" (${resolved.description}): ${message}`,
               );
             }
+            diagnostics.push({
+              serverName,
+              safeServerName,
+              launchSummary: resolved.description,
+              message,
+            });
             await disposeSession(session);
             sessions.delete(serverName);
             failIfDisposed();
@@ -376,6 +412,7 @@ export function createSessionMcpRuntime(params: {
           generatedAt: Date.now(),
           servers,
           tools,
+          ...(diagnostics.length > 0 ? { diagnostics } : {}),
         };
       } catch (error) {
         await Promise.allSettled(
@@ -421,6 +458,10 @@ export function createSessionMcpRuntime(params: {
       };
     },
     getCatalog,
+    /** Synchronous catalog snapshot only; must not connect transports or issue tools/list. */
+    peekCatalog() {
+      return catalog;
+    },
     markUsed() {
       lastUsedAt = Date.now();
     },
@@ -611,6 +652,13 @@ function createSessionMcpRuntimeManager(
     resolveSessionId(sessionKey) {
       return sessionIdBySessionKey.get(sessionKey);
     },
+    /** Synchronous lookup only; must not create runtimes or connect transports. */
+    peekSession(params) {
+      const sessionId =
+        params.sessionId ??
+        (params.sessionKey ? sessionIdBySessionKey.get(params.sessionKey) : undefined);
+      return sessionId ? runtimesBySessionId.get(sessionId) : undefined;
+    },
     async disposeSession(sessionId) {
       const inFlight = createInFlight.get(sessionId);
       createInFlight.delete(sessionId);
@@ -664,6 +712,19 @@ export async function getOrCreateSessionMcpRuntime(params: {
   cfg?: OpenClawConfig;
 }): Promise<SessionMcpRuntime> {
   return await getSessionMcpRuntimeManager().getOrCreate(params);
+}
+
+/** Looks up an existing session MCP runtime without creating it or connecting transports. */
+export function peekSessionMcpRuntime(params: {
+  sessionId?: string | null;
+  sessionKey?: string | null;
+}): SessionMcpRuntime | undefined {
+  const sessionId = normalizeOptionalString(params.sessionId);
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  return getSessionMcpRuntimeManager().peekSession({
+    ...(sessionId ? { sessionId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+  });
 }
 
 export async function disposeSessionMcpRuntime(sessionId: string): Promise<void> {

@@ -39,13 +39,12 @@ const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
  */
 const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
-type SendContext = {
-  sendActivity: (textOrActivity: string | object) => Promise<unknown>;
-  updateActivity: (activity: object) => Promise<{ id?: string } | void>;
-  deleteActivity: (activityId: string) => Promise<void>;
-};
+import type { MSTeamsSdkCloudOptions } from "./cloud.js";
+import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
+import type { MSTeamsActivityLike } from "./sdk-types.js";
+import type { MSTeamsApp } from "./sdk.js";
 
-type MSTeamsConversationReference = {
+export type MSTeamsConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
@@ -67,22 +66,7 @@ type MSTeamsConversationReference = {
   aadObjectId?: string;
 };
 
-export type MSTeamsAdapter = {
-  continueConversation: (
-    appId: string,
-    reference: MSTeamsConversationReference,
-    logic: (context: SendContext) => Promise<void>,
-  ) => Promise<void>;
-  process: (
-    req: unknown,
-    res: unknown,
-    logic: (context: unknown) => Promise<void>,
-  ) => Promise<void>;
-  updateActivity: (context: unknown, activity: object) => Promise<void>;
-  deleteActivity: (context: unknown, reference: { activityId?: string }) => Promise<void>;
-};
-
-type MSTeamsReplyRenderOptions = {
+export type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
@@ -99,13 +83,13 @@ export type MSTeamsRenderedMessage = {
   mediaUrl?: string;
 };
 
-type MSTeamsSendRetryOptions = {
+export type MSTeamsSendRetryOptions = {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
 };
 
-type MSTeamsSendRetryEvent = {
+export type MSTeamsSendRetryEvent = {
   messageIndex: number;
   messageCount: number;
   nextAttempt: number;
@@ -424,10 +408,10 @@ export async function buildActivity(
 
 export async function sendMSTeamsMessages(params: {
   replyStyle: MSTeamsReplyStyle;
-  adapter: MSTeamsAdapter;
+  app: MSTeamsApp;
   appId: string;
   conversationRef: StoredConversationReference;
-  context?: SendContext;
+  context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
   messages: MSTeamsRenderedMessage[];
   retry?: false | MSTeamsSendRetryOptions;
   onRetry?: (event: MSTeamsSendRetryEvent) => void;
@@ -439,6 +423,7 @@ export async function sendMSTeamsMessages(params: {
   mediaMaxBytes?: number;
   /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
   feedbackLoopEnabled?: boolean;
+  serviceUrlBoundary?: MSTeamsSdkCloudOptions;
 }): Promise<string[]> {
   const messages = params.messages.filter(
     (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
@@ -486,7 +471,7 @@ export async function sendMSTeamsMessages(params: {
   };
 
   const sendMessageInContext = async (
-    ctx: SendContext,
+    sendFn: (activity: MSTeamsActivityLike) => Promise<unknown>,
     message: MSTeamsRenderedMessage,
     messageIndex: number,
   ): Promise<string> => {
@@ -511,7 +496,7 @@ export async function sendMSTeamsMessages(params: {
           delete activity["_pendingUploadId"];
         }
 
-        return await ctx.sendActivity(activity);
+        return await sendFn(activity);
       },
       {
         messageIndex,
@@ -529,13 +514,13 @@ export async function sendMSTeamsMessages(params: {
   };
 
   const sendMessageBatchInContext = async (
-    ctx: SendContext,
+    sendFn: (activity: MSTeamsActivityLike) => Promise<unknown>,
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
   ): Promise<string[]> => {
     const messageIds: string[] = [];
     for (const [idx, message] of batch.entries()) {
-      messageIds.push(await sendMessageInContext(ctx, message, startIndex + idx));
+      messageIds.push(await sendMessageInContext(sendFn, message, startIndex + idx));
     }
     return messageIds;
   };
@@ -547,24 +532,12 @@ export async function sendMSTeamsMessages(params: {
   ): Promise<string[]> => {
     const baseRef = buildConversationReference(params.conversationRef);
     const isChannel = params.conversationRef.conversation?.conversationType === "channel";
-    // For Teams channels, reconstruct the threaded conversation ID so the
-    // proactive message lands in the correct thread instead of creating a
-    // new top-level post in the channel.
-    const conversationId =
-      isChannel && threadActivityId
-        ? `${baseRef.conversation.id};messageid=${threadActivityId}`
-        : baseRef.conversation.id;
-    const proactiveRef: MSTeamsConversationReference = {
-      ...baseRef,
-      activityId: undefined,
-      conversation: { ...baseRef.conversation, id: conversationId },
-    };
-
-    const messageIds: string[] = [];
-    await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-      messageIds.push(...(await sendMessageBatchInContext(ctx, batch, startIndex)));
-    });
-    return messageIds;
+    const sendFn = (activity: MSTeamsActivityLike) =>
+      sendMSTeamsActivityWithReference(params.app, baseRef, activity, {
+        threadActivityId: isChannel ? threadActivityId : undefined,
+        serviceUrlBoundary: params.serviceUrlBoundary,
+      });
+    return await sendMessageBatchInContext(sendFn, batch, startIndex);
   };
 
   // Resolve the thread root message ID for channel thread routing.
@@ -577,11 +550,12 @@ export async function sendMSTeamsMessages(params: {
     if (!ctx) {
       return await sendProactively(messages, 0, resolvedThreadId);
     }
+    const sendFn = ctx.sendActivity;
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const result = await withRevokedProxyFallback({
         run: async () => ({
-          ids: [await sendMessageInContext(ctx, message, idx)],
+          ids: [await sendMessageInContext(sendFn, message, idx)],
           fellBack: false,
         }),
         onRevoked: async () => {
@@ -604,5 +578,11 @@ export async function sendMSTeamsMessages(params: {
     return messageIds;
   }
 
+  // replyStyle === "top-level" — explicit "post at the top of the channel"
+  // intent. Do NOT add the thread suffix even when the stored ref has a
+  // threadId; threading on a top-level send would defeat the operator's
+  // explicit choice. Threaded sends route through the `replyStyle === "thread"`
+  // branch above (which already passes resolvedThreadId on the proactive
+  // fallback when the live turn context is revoked, preserving #55198).
   return await sendProactively(messages, 0);
 }

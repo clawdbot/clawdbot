@@ -1117,6 +1117,11 @@ export const vi: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Thử lại",
+      retrySend: "Thử gửi lại",
+      retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

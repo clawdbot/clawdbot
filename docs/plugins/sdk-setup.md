@@ -534,7 +534,7 @@ openclaw plugins install <package-name>
 ```
 
 <Info>
-For npm-sourced installs, `openclaw plugins install` installs the package under `~/.openclaw/npm` with lifecycle scripts disabled. Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
+For npm-sourced installs, `openclaw plugins install` installs the package into a per-plugin project under `~/.openclaw/npm/projects` with lifecycle scripts disabled. Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
 </Info>
 
 <Note>

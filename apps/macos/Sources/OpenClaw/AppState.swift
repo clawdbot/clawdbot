@@ -170,6 +170,8 @@ final class AppState {
         }
     }
 
+    var voiceWakeMeterActive = false
+
     var talkEnabled: Bool {
         didSet {
             self.ifNotPreview {

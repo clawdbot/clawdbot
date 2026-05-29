@@ -71,6 +71,9 @@ vi.mock("../../media/store.js", () => ({
 }));
 
 vi.mock("./agent.shared.js", () => ({
+  browserNavigationPolicyForProfile: vi.fn(() => ({
+    ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+  })),
   getPwAiModule: vi.fn(async () => null),
   handleRouteError: vi.fn(
     (

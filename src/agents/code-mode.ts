@@ -546,6 +546,16 @@ function failedCodeModeWorkerResult(
   };
 }
 
+function normalizeCodeModeWorkerResult(result: CodeModeWorkerResult): CodeModeWorkerResult {
+  if (result.status === "failed" && result.code === "timeout" && result.error === "interrupted") {
+    return {
+      ...result,
+      error: "code mode timeout exceeded",
+    };
+  }
+  return result;
+}
+
 async function runCodeModeWorker(
   workerData: unknown,
   timeoutMs: number,
@@ -581,16 +591,15 @@ async function runCodeModeWorker(
       }, timeoutMs);
       worker.once("message", (message: unknown) => {
         void worker.terminate();
-        finish(
-          isRecord(message)
-            ? (message as CodeModeWorkerResult)
-            : {
-                status: "failed",
-                error: "invalid code mode worker response",
-                code: "internal_error",
-                output: [],
-              },
-        );
+        const result = isRecord(message)
+          ? (message as CodeModeWorkerResult)
+          : ({
+              status: "failed",
+              error: "invalid code mode worker response",
+              code: "internal_error",
+              output: [],
+            } satisfies CodeModeWorkerResult);
+        finish(normalizeCodeModeWorkerResult(result));
       });
       worker.once("error", (error) => {
         finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
@@ -992,6 +1001,7 @@ export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
+  normalizeCodeModeWorkerResult,
   runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,

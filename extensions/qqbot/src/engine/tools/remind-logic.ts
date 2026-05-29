@@ -117,17 +117,22 @@ export const RemindSchema = {
  * @returns Milliseconds or null if unparseable.
  */
 export function parseRelativeTime(timeStr: string): number | null {
-  const s = timeStr.toLowerCase();
+  const s = timeStr.trim().toLowerCase();
   if (/^\d+$/.test(s)) {
     return Number.parseInt(s, 10) * 60_000;
   }
 
   let totalMs = 0;
   let matched = false;
-  const regex = /(\d+(?:\.\d+)?)\s*(d|h|m|s)/g;
+  let consumed = 0;
+  const regex = /(\d+(?:\.\d+)?)\s*(d|h|m|s)\s*/g;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(s)) !== null) {
+    if (match.index !== consumed) {
+      return null;
+    }
     matched = true;
+    consumed = regex.lastIndex;
     const value = Number.parseFloat(match[1]);
     const unit = match[2];
     switch (unit) {
@@ -145,7 +150,7 @@ export function parseRelativeTime(timeStr: string): number | null {
         break;
     }
   }
-  return matched ? Math.round(totalMs) : null;
+  return matched && consumed === s.length ? Math.round(totalMs) : null;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   assertHostnameAllowedWithPolicy,
   closeDispatcher,
   createPinnedDispatcher,
+  matchesHostnameAllowlist,
   resolveSsrFPolicyForUrl,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
@@ -79,6 +80,7 @@ export type GuardedFetchOptions = {
   policy?: SsrFPolicy;
   lookupFn?: LookupFn;
   dispatcherPolicy?: PinnedDispatcherPolicy;
+  retainAuthorizationRedirectHostnameAllowlist?: string[];
   mode?: GuardedFetchMode;
   pinDns?: boolean;
   /** @deprecated use `mode: "trusted_env_proxy"` for trusted/operator-controlled URLs. */
@@ -293,6 +295,43 @@ function retainSafeHeadersForCrossOriginRedirect(init?: RequestInit): RequestIni
     return init;
   }
   return { ...init, headers: retainSafeRedirectHeaders(init.headers) };
+}
+
+function resolveRetainedAuthorizationForRedirect(params: {
+  init?: RequestInit;
+  nextUrl: URL;
+  hostnameAllowlist?: string[];
+}): string | undefined {
+  const init = params.init;
+  if (!init?.headers || !params.hostnameAllowlist?.length) {
+    return undefined;
+  }
+  if (params.nextUrl.protocol !== "https:") {
+    return undefined;
+  }
+  if (
+    !params.hostnameAllowlist.includes("*") &&
+    !matchesHostnameAllowlist(params.nextUrl.hostname, params.hostnameAllowlist)
+  ) {
+    return undefined;
+  }
+  const normalizedInit = normalizeRequestInitHeadersForFetch(init);
+  if (!normalizedInit?.headers) {
+    return undefined;
+  }
+  return new Headers(normalizedInit.headers).get("authorization") ?? undefined;
+}
+
+function restoreRedirectAuthorization(params: {
+  init?: RequestInit;
+  authorization?: string;
+}): RequestInit | undefined {
+  if (!params.authorization) {
+    return params.init;
+  }
+  const headers = new Headers(params.init?.headers);
+  headers.set("Authorization", params.authorization);
+  return { ...params.init, headers };
 }
 
 function dropBodyHeaders(headers?: HeadersInit): HeadersInit | undefined {
@@ -570,6 +609,11 @@ async function fetchWithSsrFGuardInternal(
           await release(dispatcher);
           throw new Error("Redirect loop detected");
         }
+        const retainedAuthorization = resolveRetainedAuthorizationForRedirect({
+          init: currentInit,
+          nextUrl: nextParsedUrl,
+          hostnameAllowlist: params.retainAuthorizationRedirectHostnameAllowlist,
+        });
         currentInit = rewriteRedirectInitForMethod({ init: currentInit, status: response.status });
         if (nextParsedUrl.origin !== parsedUrl.origin) {
           currentInit = rewriteRedirectInitForCrossOrigin({
@@ -577,6 +621,10 @@ async function fetchWithSsrFGuardInternal(
             allowUnsafeReplay: params.allowCrossOriginUnsafeRedirectReplay === true,
           });
           currentInit = retainSafeHeadersForCrossOriginRedirect(currentInit);
+          currentInit = restoreRedirectAuthorization({
+            init: currentInit,
+            authorization: retainedAuthorization,
+          });
         }
         visited.add(nextUrl);
         void response.body?.cancel();

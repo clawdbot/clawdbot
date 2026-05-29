@@ -553,6 +553,23 @@ describe("openrouter video generation provider", () => {
     });
   });
 
+  it("rejects malformed numeric seed values before submitting video jobs", async () => {
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "A glass cube reflects a neon skyline",
+        cfg: {} as never,
+        providerOptions: {
+          seed: 42.9,
+        },
+      }),
+    ).rejects.toThrow("OpenRouter video seed must be an integer");
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
   it("wraps malformed successful OpenRouter submit responses", async () => {
     postJsonRequestMock.mockResolvedValue(releasedJson([]));
 

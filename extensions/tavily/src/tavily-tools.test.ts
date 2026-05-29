@@ -109,6 +109,33 @@ describe("tavily tools", () => {
     });
   });
 
+  it("normalizes generic Tavily search count before dispatch", async () => {
+    const provider = createTavilyWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "weather sf",
+      count: "7",
+    });
+
+    expect(runTavilySearch).toHaveBeenCalledWith({
+      cfg: { test: true },
+      query: "weather sf",
+      maxResults: 7,
+    });
+    await expect(
+      tool.execute({
+        query: "weather sf",
+        count: "7.5",
+      }),
+    ).rejects.toThrow("count must be an integer from 1 to 20");
+  });
+
   it("normalizes optional parameters before invoking Tavily", async () => {
     runTavilySearch.mockImplementationOnce(async (params: Record<string, unknown>) => ({
       ok: true,
@@ -297,6 +324,41 @@ describe("tavily tools", () => {
     expect(runTavilyExtract).not.toHaveBeenCalled();
   });
 
+  it("rejects fractional and out-of-range integer options before Tavily calls", async () => {
+    const searchTool = createTavilySearchTool(fakeApi());
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 5.5,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+    await expect(
+      searchTool.execute("search-call", {
+        query: "openclaw",
+        max_results: 21,
+      }),
+    ).rejects.toThrow("max_results must be an integer from 1 to 20.");
+
+    const extractTool = createTavilyExtractTool(fakeApi());
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 2.5,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+    await expect(
+      extractTool.execute("extract-call", {
+        urls: ["https://example.com"],
+        query: "pricing",
+        chunks_per_source: 6,
+      }),
+    ).rejects.toThrow("chunks_per_source must be an integer from 1 to 5.");
+
+    expect(runTavilySearch).not.toHaveBeenCalled();
+    expect(runTavilyExtract).not.toHaveBeenCalled();
+  });
+
   it("reads plugin web search config and prefers it over env defaults", () => {
     vi.stubEnv("TAVILY_API_KEY", "env-key");
     vi.stubEnv("TAVILY_BASE_URL", "https://env.tavily.test");
@@ -338,6 +400,8 @@ describe("tavily tools", () => {
   it("accepts positive numeric timeout overrides and floors them", () => {
     expect(resolveTavilySearchTimeoutSeconds(19.9)).toBe(19);
     expect(resolveTavilyExtractTimeoutSeconds(42.7)).toBe(42);
+    expect(resolveTavilySearchTimeoutSeconds(0.5)).toBe(1);
+    expect(resolveTavilyExtractTimeoutSeconds(0.5)).toBe(1);
     expect(resolveTavilySearchTimeoutSeconds(0)).toBe(DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
     expect(resolveTavilyExtractTimeoutSeconds(Number.NaN)).toBe(
       DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS,

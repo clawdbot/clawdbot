@@ -2,8 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import { createPluginActivationSource, normalizePluginsConfig } from "../plugins/config-state.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
@@ -23,6 +30,7 @@ const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGI
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const trustedBundledFixturesRoot = path.resolve("dist-runtime", "extensions");
 const trustedBundledFixtureDirs: string[] = [];
+type SnapshotPluginRecord = PluginMetadataSnapshot["manifestRegistry"]["plugins"][number];
 
 function writeJsonFile(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -91,6 +99,7 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
   clearRuntimeConfigSnapshot();
+  clearCurrentPluginMetadataSnapshot();
   resetFacadeRuntimeStateForTest();
   setBundledPluginsDirOverrideForTest(undefined);
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -148,7 +157,7 @@ describe("plugin-sdk facade runtime", () => {
 
     expect(resolved?.boundaryRoot).not.toBe(overrideDir);
     expect(resolved?.modulePath).toMatch(
-      /(?:^|\/)(?:extensions|dist-runtime\/extensions)\/browser\/browser-maintenance\.(?:ts|js)$/u,
+      /(?:^|[\\/])(?:extensions|dist-runtime[\\/]extensions)[\\/]browser[\\/]browser-maintenance\.(?:ts|js)$/u,
     );
   });
 
@@ -566,6 +575,143 @@ describe("plugin-sdk facade runtime", () => {
     ).toEqual({
       allowed: true,
       pluginId: "demo",
+    });
+  });
+
+  it("validates current snapshot against facade boundary config and ignores on mismatch", () => {
+    const dir = createTempDirSync("openclaw-facade-snapshot-validate-");
+    fs.mkdirSync(path.join(dir, "demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "demo", "runtime-api.js"),
+      'export const marker = "snapshot-validate";\n',
+      "utf8",
+    );
+    // Do NOT write openclaw.plugin.json on disk to force fallback to registry scan
+    useBundledPluginDirOverrideForTest(dir);
+
+    function createTestSnapshot(
+      params: {
+        config?: OpenClawConfig;
+        plugins?: SnapshotPluginRecord[];
+      } = {},
+    ): PluginMetadataSnapshot {
+      const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+      return {
+        policyHash,
+        index: {
+          version: 1,
+          hostContractVersion: "test",
+          compatRegistryVersion: "test",
+          migrationVersion: 1,
+          policyHash,
+          generatedAtMs: 1,
+          installRecords: {},
+          plugins: [],
+          diagnostics: [],
+        },
+        registryDiagnostics: [],
+        manifestRegistry: { plugins: params.plugins ?? [], diagnostics: [] },
+        plugins: [],
+        diagnostics: [],
+        byPluginId: new Map(),
+        normalizePluginId: (pluginId) => pluginId,
+        owners: {
+          channels: new Map(),
+          channelConfigs: new Map(),
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          cliBackends: new Map(),
+          setupProviders: new Map(),
+          commandAliases: new Map(),
+          contracts: new Map(),
+        },
+        metrics: {
+          registrySnapshotMs: 0,
+          manifestRegistryMs: 0,
+          ownerMapsMs: 0,
+          totalMs: 0,
+          indexPluginCount: 0,
+          manifestPluginCount: 0,
+        },
+      };
+    }
+
+    const configWithPaths = {
+      plugins: {
+        load: { paths: ["/path/one"] },
+        entries: {
+          "demo-snapshot": { enabled: true },
+          demo: { enabled: true },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const matchedSnapshot = createTestSnapshot({
+      config: configWithPaths,
+      plugins: [
+        {
+          id: "demo-snapshot",
+          rootDir: path.join(dir, "demo"),
+          source: path.join(dir, "demo", "runtime-api.js"),
+          manifestPath: path.join(dir, "demo", "openclaw.plugin.json"),
+          channels: ["demo"],
+          providers: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "bundled" as const,
+        },
+      ],
+    });
+
+    setCurrentPluginMetadataSnapshot(matchedSnapshot, { config: configWithPaths });
+
+    setRuntimeConfigSnapshot(
+      {
+        plugins: {
+          load: { paths: ["/path/two"] },
+          entries: {
+            "demo-snapshot": { enabled: true },
+            demo: { enabled: true },
+          },
+        },
+      },
+      {
+        plugins: {
+          load: { paths: ["/path/two"] },
+          entries: {
+            "demo-snapshot": { enabled: true },
+            demo: { enabled: true },
+          },
+        },
+      },
+    );
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: dir,
+        resolutionKey: "snapshot-validate-demo",
+      }),
+    ).toEqual({
+      allowed: false,
+      reason: "no bundled plugin manifest found for demo",
+    });
+
+    setRuntimeConfigSnapshot(configWithPaths, configWithPaths);
+
+    expect(
+      resolveActivationCheckBundledPluginPublicSurfaceAccess({
+        dirName: "demo",
+        artifactBasename: "runtime-api.js",
+        location: null,
+        sourceExtensionsRoot: dir,
+        resolutionKey: "snapshot-validate-demo",
+      }),
+    ).toEqual({
+      allowed: true,
+      pluginId: "demo-snapshot",
     });
   });
 });

@@ -15,9 +15,15 @@ export {
   readStringValue,
 } from "../shared/string-coerce.js";
 export {
+  asFiniteNumberInRange,
   asFiniteNumber,
   asPositiveSafeInteger,
+  asSafeIntegerInRange,
   parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
 } from "../shared/number-coercion.js";
 export { asBoolean, parseBooleanValue } from "../utils/boolean.js";
 export {

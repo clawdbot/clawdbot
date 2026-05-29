@@ -130,10 +130,18 @@ describe("watch-node script", () => {
       ];
       expect(watchPaths).toEqual(runNodeWatchedPaths);
       expect(watchPaths).toContain("extensions");
+      expect(watchPaths).toContain("packages/gateway-client/src");
+      expect(watchPaths).toContain("packages/gateway-protocol/src");
+      expect(watchPaths).toContain("packages/net-policy/src");
       expect(watchPaths).toContain("tsdown.config.ts");
       expect(watchOptions.ignoreInitial).toBe(true);
       expect(watchOptions.ignored("src")).toBe(false);
       expect(watchOptions.ignored("src/infra")).toBe(false);
+      expect(watchOptions.ignored("packages/gateway-client/src/client.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/gateway-client/src/client.test.ts")).toBe(true);
+      expect(watchOptions.ignored("packages/gateway-protocol/src/schema/cron.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/net-policy/src/ip.ts")).toBe(false);
+      expect(watchOptions.ignored("packages/net-policy/src/ip.test.ts")).toBe(true);
       expect(watchOptions.ignored("extensions")).toBe(false);
       expect(watchOptions.ignored("extensions/voice-call")).toBe(false);
       expect(watchOptions.ignored("extensions/voice-call/dist")).toBe(true);

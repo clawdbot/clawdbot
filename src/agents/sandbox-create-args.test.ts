@@ -120,6 +120,39 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "--ulimit", ["nofile=1024:2048", "nproc=128", "core=0"]);
   });
 
+  it("omits non-finite numeric Docker resource flags", () => {
+    const cfg = createSandboxConfig({
+      pidsLimit: Number.POSITIVE_INFINITY,
+      cpus: Number.NaN,
+      ulimits: {
+        nofile: {
+          soft: Number.NaN,
+          hard: Number.POSITIVE_INFINITY,
+        },
+        fsize: Number.NaN,
+        core: Number.POSITIVE_INFINITY,
+        nproc: {
+          soft: Number.NEGATIVE_INFINITY,
+          hard: 1024,
+        },
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-non-finite-limits",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).not.toContain("--pids-limit");
+    expect(args).not.toContain("--cpus");
+    expectFlagValues(args, "--ulimit", ["nproc=1024"]);
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("nofile=NaN:Infinity");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("fsize=NaN");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("core=Infinity");
+  });
+
   it("passes explicit configured sandbox env through even when names look sensitive", () => {
     const cfg = createSandboxConfig({
       env: {

@@ -1,3 +1,5 @@
+import { resolveIntegerOption } from "../../shared/number-coercion.js";
+
 const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
 const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";
 
@@ -23,6 +25,9 @@ export type PreauthConnectionBudget = {
 export function createPreauthConnectionBudget(
   limit = getMaxPreauthConnectionsPerIpFromEnv(),
 ): PreauthConnectionBudget {
+  const maxConnectionsPerIp = resolveIntegerOption(limit, getMaxPreauthConnectionsPerIpFromEnv(), {
+    min: 1,
+  });
   const counts = new Map<string, number>();
   const normalizeBudgetKey = (clientIp: string | undefined) => {
     const ip = clientIp?.trim();
@@ -36,7 +41,7 @@ export function createPreauthConnectionBudget(
     acquire(clientIp) {
       const ip = normalizeBudgetKey(clientIp);
       const next = (counts.get(ip) ?? 0) + 1;
-      if (next > limit) {
+      if (next > maxConnectionsPerIp) {
         return false;
       }
       counts.set(ip, next);

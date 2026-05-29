@@ -24,6 +24,7 @@ export async function extractDocumentContent(
     maxPages: params.maxPages,
     maxPixels: params.maxPixels,
     minTextChars: params.minTextChars,
+    ...(params.password ? { password: params.password } : {}),
     ...(params.pageNumbers ? { pageNumbers: params.pageNumbers } : {}),
     ...(params.onImageExtractionError
       ? { onImageExtractionError: params.onImageExtractionError }

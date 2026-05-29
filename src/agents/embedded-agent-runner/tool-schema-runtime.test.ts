@@ -18,7 +18,9 @@ vi.mock("./logger.js", () => ({
   log: mocks.log,
 }));
 
-const { logProviderToolSchemaDiagnostics } = await import("./tool-schema-runtime.js");
+const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } = await import(
+  "./tool-schema-runtime.js"
+);
 
 describe("tool schema runtime diagnostics", () => {
   it("stays quiet when a provider reports no diagnostics", () => {
@@ -31,6 +33,26 @@ describe("tool schema runtime diagnostics", () => {
 
     expect(mocks.log.info).not.toHaveBeenCalled();
     expect(mocks.log.warn).not.toHaveBeenCalled();
+  });
+
+  it("passes through provider runtime loading policy for normalization", () => {
+    const tools = [{ name: "alpha" }] as never;
+    mocks.normalizeProviderToolSchemasWithPlugin.mockReturnValueOnce(tools);
+
+    expect(
+      normalizeProviderToolSchemas({
+        provider: "example",
+        tools,
+        allowRuntimePluginLoad: false,
+      }),
+    ).toBe(tools);
+
+    expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "example",
+        allowRuntimePluginLoad: false,
+      }),
+    );
   });
 
   it("logs one summarized warning for provider tool schema diagnostics", () => {

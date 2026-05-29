@@ -34,6 +34,7 @@ describe("provider usage fetch shared helpers", () => {
   it.each([
     { value: 12, expected: 12 },
     { value: "12.5", expected: 12.5 },
+    { value: "12.5 credits", expected: undefined },
     { value: "not-a-number", expected: undefined },
   ])("parses finite numbers for %j", ({ value, expected }) => {
     expect(parseFiniteNumber(value)).toBe(expected);

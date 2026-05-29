@@ -56,6 +56,15 @@ describe("setJsoncOcPath — value replacement", () => {
     }
   });
 
+  it("reports unresolved for noncanonical array indexes", () => {
+    const { ast } = parseJsonc('{ "limits": [10, 20, 30] }');
+    const r = setJsoncOcPath(ast, parseOcPath("oc://config/limits.01"), {
+      kind: "number",
+      value: 99,
+    });
+    expect(r).toEqual({ ok: false, reason: "unresolved" });
+  });
+
   it("reports unresolved when a key is missing", () => {
     const { ast } = parseJsonc(config);
     const r = setJsoncOcPath(ast, parseOcPath("oc://config/plugins.entries.gitlab"), {

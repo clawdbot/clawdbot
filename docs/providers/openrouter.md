@@ -150,7 +150,7 @@ OpenRouter can also be used as a TTS provider through its OpenAI-compatible
       providers: {
         openrouter: {
           model: "hexgrad/kokoro-82m",
-          voice: "af_alloy",
+          speakerVoice: "af_alloy",
           responseFormat: "mp3",
         },
       },

@@ -27,6 +27,7 @@ import {
   dropSessionStoreObjectCache,
   dropSessionStoreSnapshotCache,
   getSerializedSessionStore,
+  getSessionStoreCacheVersion,
   invalidateSessionStoreCache,
   isSessionStoreCacheEnabled,
   setSerializedSessionStore,
@@ -113,7 +114,8 @@ export function readSessionUpdatedAt(params: {
   sessionKey: string;
 }): number | undefined {
   try {
-    return readSessionEntry(params.storePath, params.sessionKey)?.updatedAt;
+    const store = loadSessionStore(params.storePath, { clone: false });
+    return resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing?.updatedAt;
   } catch {
     return undefined;
   }
@@ -135,6 +137,7 @@ export type SessionMaintenanceApplyReport = {
 export {
   capEntryCount,
   getActiveSessionMaintenanceWarning,
+  getSessionStoreCacheVersion,
   pruneStaleEntries,
   resolveMaintenanceConfig,
 };
@@ -163,6 +166,14 @@ type SaveSessionStoreOptions = {
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   /** Fully resolved maintenance settings when the caller already has config loaded. */
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
+};
+
+type UpdateSessionStoreOptions<T> = SaveSessionStoreOptions & {
+  /**
+   * Specialized callers can prove their mutator made no changes through its result.
+   * When true, the writer-owned object cache is restored and sessions.json is untouched.
+   */
+  skipSaveWhenResult?: (result: T) => boolean;
 };
 
 type SessionEntryWorkflowOptions = {
@@ -606,12 +617,16 @@ export async function saveSessionStore(
 export async function updateSessionStore<T>(
   storePath: string,
   mutator: (store: Record<string, SessionEntry>) => Promise<T> | T,
-  opts?: SaveSessionStoreOptions,
+  opts?: UpdateSessionStoreOptions<T>,
 ): Promise<T> {
   return await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
     const previousAcpByKey = collectAcpMetadataSnapshot(store);
     const result = await mutator(store);
+    if (opts?.skipSaveWhenResult?.(result)) {
+      restoreUnchangedSessionStoreCache(storePath, store);
+      return result;
+    }
     preserveExistingAcpMetadata({
       previousAcpByKey,
       nextStore: store,
@@ -726,11 +741,13 @@ async function persistResolvedSessionEntry(params: {
   previousAcpByKey?: Map<string, NonNullable<SessionEntry["acp"]>>;
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
+  returnDetached?: boolean;
 }): Promise<SessionEntry> {
   const entryUnchanged =
     params.resolved.legacyKeys.length === 0 &&
     sessionEntriesHaveSameSerializedForm(params.resolved.existing, params.next);
-  params.store[params.resolved.normalizedKey] = params.next;
+  const next = params.takeCacheOwnership ? cloneSessionEntry(params.next) : params.next;
+  params.store[params.resolved.normalizedKey] = next;
   for (const legacyKey of params.resolved.legacyKeys) {
     delete params.store[legacyKey];
   }
@@ -746,7 +763,7 @@ async function persistResolvedSessionEntry(params: {
     skipSerializeForUnchangedStore: entryUnchanged,
     takeCacheOwnership: params.takeCacheOwnership,
   });
-  return entryUnchanged ? cloneSessionEntry(params.next) : params.next;
+  return entryUnchanged || params.returnDetached ? cloneSessionEntry(next) : next;
 }
 
 export async function updateSessionStoreEntry(params: {
@@ -775,7 +792,8 @@ export async function updateSessionStoreEntry(params: {
       resolved,
       next,
       skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership,
+      takeCacheOwnership: params.takeCacheOwnership ?? true,
+      returnDetached: params.takeCacheOwnership !== true,
     });
   });
 }
@@ -802,7 +820,8 @@ export async function applySessionStoreEntryPatch(params: {
       resolved,
       next,
       skipMaintenance: params.skipMaintenance,
-      takeCacheOwnership: params.takeCacheOwnership,
+      takeCacheOwnership: params.takeCacheOwnership ?? true,
+      returnDetached: params.takeCacheOwnership !== true,
     });
   });
 }
@@ -840,6 +859,8 @@ export async function patchSessionEntry(
       store,
       resolved,
       next,
+      takeCacheOwnership: true,
+      returnDetached: true,
     });
   });
 }
@@ -864,6 +885,7 @@ export async function upsertSessionEntry(
       store,
       resolved,
       next,
+      takeCacheOwnership: true,
     });
   });
 }
@@ -896,6 +918,8 @@ export async function recordSessionMetaFromInbound(params: {
           resolved,
           next: existing,
           previousAcpByKey,
+          takeCacheOwnership: true,
+          returnDetached: true,
         });
       }
       await saveSessionStoreUnlocked(storePath, store, {
@@ -922,6 +946,8 @@ export async function recordSessionMetaFromInbound(params: {
       resolved,
       next,
       previousAcpByKey,
+      takeCacheOwnership: true,
+      returnDetached: true,
     });
   });
 }
@@ -1018,6 +1044,8 @@ export async function updateLastRoute(params: {
       store,
       resolved,
       next,
+      takeCacheOwnership: true,
+      returnDetached: true,
     });
   });
 }

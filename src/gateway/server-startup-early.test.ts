@@ -15,6 +15,7 @@ vi.mock("./server-discovery-runtime.js", () => ({
   startGatewayDiscovery: mocks.startGatewayDiscovery,
 }));
 
+import { createChatRunState } from "./server-chat-state.js";
 import { startGatewayEarlyRuntime, startGatewayPluginDiscovery } from "./server-startup-early.js";
 
 describe("startGatewayEarlyRuntime", () => {
@@ -25,6 +26,7 @@ describe("startGatewayEarlyRuntime", () => {
   });
 
   it("does not eagerly start the MCP loopback server", async () => {
+    const chatRunState = createChatRunState();
     const earlyRuntime = await startGatewayEarlyRuntime({
       minimalTestGateway: true,
       cfgAtStart: {} as never,
@@ -49,15 +51,10 @@ describe("startGatewayEarlyRuntime", () => {
       logHealth: { error: () => {} },
       dedupe: new Map(),
       chatAbortControllers: new Map(),
-      chatRunState: {
-        abortedRuns: new Map(),
-        deltaLastBroadcastText: new Map(),
-        agentDeltaSentAt: new Map(),
-        bufferedAgentEvents: new Map(),
-      },
-      chatRunBuffers: new Map(),
-      chatDeltaSentAt: new Map(),
-      chatDeltaLastBroadcastLen: new Map(),
+      chatRunState,
+      chatRunBuffers: chatRunState.buffers,
+      chatDeltaSentAt: chatRunState.deltaSentAt,
+      chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
       removeChatRun: () => undefined,
       agentRunSeq: new Map(),
       nodeSendToSession: () => {},

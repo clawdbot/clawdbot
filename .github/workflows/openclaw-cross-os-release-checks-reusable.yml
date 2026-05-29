@@ -451,7 +451,7 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline
         run: |
           mkdir -p "${OUTPUT_DIR}"
-          npm pack --ignore-scripts --json "${BASELINE_SPEC}" --pack-destination "${OUTPUT_DIR}" > "${OUTPUT_DIR}/pack.json"
+          timeout --preserve-status 300s npm pack --ignore-scripts --json "${BASELINE_SPEC}" --pack-destination "${OUTPUT_DIR}" > "${OUTPUT_DIR}/pack.json"
 
       - name: Capture candidate metadata
         id: candidate_metadata

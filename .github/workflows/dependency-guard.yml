@@ -1,0 +1,33 @@
+name: Dependency Guard
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] checks trusted base script only; never checks out PR head
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: dependency-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dependency-guard:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out trusted base workflow scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Label, comment, and guard dependency changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
+          OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
+        run: node scripts/github/dependency-guard.mjs

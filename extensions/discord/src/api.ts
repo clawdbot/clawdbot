@@ -5,6 +5,7 @@ import {
   type RetryConfig,
 } from "openclaw/plugin-sdk/retry-runtime";
 import { isDiscordHtmlResponseBody, summarizeDiscordResponseBody } from "./error-body.js";
+import { parseRetryAfterHeaderSeconds } from "./retry-after.js";
 
 const DISCORD_API_BASE = "https://discord.com/api/v10";
 const DISCORD_API_RETRY_DEFAULTS = {
@@ -51,15 +52,7 @@ function parseRetryAfterSeconds(text: string, response: Response): number | unde
   if (!header) {
     return undefined;
   }
-  const parsed = Number(header);
-  if (Number.isFinite(parsed) && parsed >= 0) {
-    return parsed;
-  }
-  const retryAt = Date.parse(header);
-  if (!Number.isFinite(retryAt)) {
-    return undefined;
-  }
-  return Math.max(0, (retryAt - Date.now()) / 1000);
+  return parseRetryAfterHeaderSeconds(header);
 }
 
 function formatRetryAfterSeconds(value: number | undefined): string | undefined {

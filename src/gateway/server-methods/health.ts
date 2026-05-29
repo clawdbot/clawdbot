@@ -1,8 +1,9 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
 import { getStatusSummary } from "../../commands/status.js";
+import { listContextEngineQuarantines } from "../../context-engine/registry.js";
 import { getGatewayModelPricingHealth } from "../model-pricing-cache-state.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
@@ -87,9 +88,26 @@ function mergeCachedHealthRuntimeState(params: {
   cached: HealthSummary;
   eventLoop?: HealthSummary["eventLoop"];
 }): HealthSummary {
+  const { contextEngines: _cachedContextEngines, ...cached } = params.cached;
+  const quarantinedContextEngines: NonNullable<HealthSummary["contextEngines"]>["quarantined"] = [];
+  for (const entry of listContextEngineQuarantines()) {
+    const summary: NonNullable<HealthSummary["contextEngines"]>["quarantined"][number] = {
+      engineId: entry.engineId,
+      operation: entry.operation,
+      reason: entry.reason,
+      failedAt: entry.failedAt.getTime(),
+    };
+    if (entry.owner) {
+      summary.owner = entry.owner;
+    }
+    quarantinedContextEngines.push(summary);
+  }
   return {
-    ...params.cached,
+    ...cached,
     ...(params.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    ...(quarantinedContextEngines.length > 0
+      ? { contextEngines: { quarantined: quarantinedContextEngines } }
+      : {}),
     modelPricing: getGatewayModelPricingHealth({
       enabled: params.cached.modelPricing?.state !== "disabled",
     }),

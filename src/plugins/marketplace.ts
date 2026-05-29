@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists } from "../infra/fs-safe.js";
@@ -9,7 +10,6 @@ import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
@@ -619,6 +619,18 @@ function hasStreamingResponseBody(
   );
 }
 
+function parseMarketplaceContentLength(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  const size = Number(trimmed);
+  if (!Number.isSafeInteger(size)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  return size;
+}
+
 async function readMarketplaceChunkWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
@@ -755,8 +767,8 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
-        const size = Number(contentLength);
-        if (Number.isFinite(size) && size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+        const size = parseMarketplaceContentLength(contentLength);
+        if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );

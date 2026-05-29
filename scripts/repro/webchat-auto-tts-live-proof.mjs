@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { maybeApplyTtsToPayload } from "../../extensions/speech-core/src/tts.ts";
+import { maybeApplyTtsToPayload } from "../../packages/speech-core/src/tts.ts";
 import { buildWebchatAudioContentBlocksFromReplyPayloads } from "../../src/gateway/server-methods/chat-webchat-media.ts";
 import { createPluginRecord } from "../../src/plugins/loader-records.ts";
 import { createPluginRegistry } from "../../src/plugins/registry.ts";

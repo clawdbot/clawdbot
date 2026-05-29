@@ -1,9 +1,7 @@
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+
 function parseIntegerId(value: string): number | undefined {
-  if (!/^-?\d+$/.test(value)) {
-    return undefined;
-  }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseStrictInteger(value);
 }
 
 export function normalizeTelegramReplyToMessageId(value: unknown): number | undefined {

@@ -267,8 +267,6 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     maxChars: z.number().int().positive().default(6000),
     /** Include configured agent identity fields. */
     includeIdentity: z.boolean().default(true),
-    /** Include agents.defaults/list systemPromptOverride when configured. */
-    includeSystemPrompt: z.boolean().default(true),
     /** Include selected workspace files such as SOUL.md and IDENTITY.md. */
     includeWorkspaceFiles: z.boolean().default(true),
     /** Workspace-relative files to include, bounded by maxChars. */
@@ -279,7 +277,6 @@ const VoiceCallRealtimeAgentContextConfigSchema = z
     enabled: false,
     maxChars: 6000,
     includeIdentity: true,
-    includeSystemPrompt: true,
     includeWorkspaceFiles: true,
     files: ["SOUL.md", "IDENTITY.md", "USER.md"],
   });
@@ -350,7 +347,6 @@ const VoiceCallRealtimeConfigSchema = z
       enabled: false,
       maxChars: 6000,
       includeIdentity: true,
-      includeSystemPrompt: true,
       includeWorkspaceFiles: true,
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     },

@@ -301,6 +301,22 @@ describe("qa cli runtime", () => {
     expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
+  it("accepts legacy pi as a runtime-pair suite alias", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+      runtimePair: "pi,codex",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        runtimePair: ["openclaw", "codex"],
+      }),
+    );
+  });
+
   it("drops blank suite model refs so provider defaults apply", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",
@@ -454,6 +470,17 @@ describe("qa cli runtime", () => {
       scenarioIds: ["channel-chat-baseline", "thread-follow-up"],
       concurrency: 3,
     });
+  });
+
+  it("rejects fractional suite concurrency from programmatic callers", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        scenarioIds: ["channel-chat-baseline"],
+        concurrency: 1.5,
+      }),
+    ).rejects.toThrow("--concurrency must be a positive integer");
+    expect(runQaSuiteFromRuntime).not.toHaveBeenCalled();
   });
 
   it("sets a failing exit code when host suite scenarios fail", async () => {
@@ -635,7 +662,7 @@ describe("qa cli runtime", () => {
       repoRoot: "/tmp/openclaw-repo",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
       preflight: true,
     });
 
@@ -645,7 +672,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
       scenarioIds: ["approval-turn-tool-followthrough"],
       concurrency: 1,
     });
@@ -1234,7 +1261,7 @@ describe("qa cli runtime", () => {
       fast: true,
       thinking: "medium",
       modelThinking: ["codex-cli/test-model=medium"],
-      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-7,thinking=high"],
+      judgeModel: ["openai/gpt-5.5,thinking=xhigh,fast", "anthropic/claude-opus-4-8,thinking=high"],
       judgeTimeoutMs: 180_000,
       blindJudgeModels: true,
       concurrency: 4,
@@ -1255,10 +1282,10 @@ describe("qa cli runtime", () => {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
         "codex-cli/test-model": { thinkingDefault: "high", fastMode: true },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-7"],
+      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-8"],
       judgeModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-7": { thinkingDefault: "high" },
+        "anthropic/claude-opus-4-8": { thinkingDefault: "high" },
       },
       judgeTimeoutMs: 180_000,
       judgeBlindModels: true,
@@ -1589,7 +1616,7 @@ describe("qa cli runtime", () => {
       providerMode: "mock-openai",
       parityPack: "agentic",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
     });
 
     expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
@@ -1598,7 +1625,7 @@ describe("qa cli runtime", () => {
       transportId: "qa-channel",
       providerMode: "mock-openai",
       primaryModel: "openai/gpt-5.5",
-      alternateModel: "anthropic/claude-opus-4-7",
+      alternateModel: "anthropic/claude-opus-4-8",
       fastMode: undefined,
       scenarioIds: [
         "approval-turn-tool-followthrough",

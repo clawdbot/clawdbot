@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  ErrorCodes,
+  type ErrorShape,
+  errorShape,
+  type SessionsPatchParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -45,12 +51,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-  type SessionsPatchParams,
-} from "./protocol/index.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };

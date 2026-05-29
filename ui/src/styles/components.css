@@ -3834,6 +3834,13 @@ td.data-table-key-col {
   -webkit-box-orient: vertical;
 }
 
+.chat-queue__error {
+  margin-top: 4px;
+  color: var(--danger);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .chat-queue__remove {
   align-self: start;
   padding: 4px 10px;

@@ -427,7 +427,6 @@ describe("normalizeVoiceCallConfig", () => {
       enabled: false,
       maxChars: 6000,
       includeIdentity: true,
-      includeSystemPrompt: true,
       includeWorkspaceFiles: true,
       files: ["SOUL.md", "IDENTITY.md", "USER.md"],
     });

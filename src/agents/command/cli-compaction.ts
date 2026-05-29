@@ -22,6 +22,7 @@ import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "
 import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../embedded-agent-runner/run/preemptive-compaction.js";
 import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
+import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImpl } from "../harness/runtime-plugin.js";
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -172,16 +173,6 @@ function isUnsupportedNativeHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
   return result?.ok === false && result.failure?.reason === "unsupported_harness_compaction";
-}
-
-function isRecoverableNativeHarnessCompactionFailure(
-  result: EmbeddedAgentCompactResult | undefined,
-): boolean {
-  return (
-    result?.ok === false &&
-    (result.failure?.reason === "missing_thread_binding" ||
-      result.failure?.reason === "stale_thread_binding")
-  );
 }
 
 function readAgentIdFromSessionKey(sessionKey: string): string | undefined {
@@ -411,7 +402,7 @@ async function compactNativeHarnessCliTranscript(params: {
   if (!result?.compacted) {
     const fallbackToContextEngine =
       isUnsupportedNativeHarnessCompaction(result) ||
-      isRecoverableNativeHarnessCompactionFailure(result);
+      isRecoverableNativeHarnessBindingFailure(result);
     log.warn(
       `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${result?.reason ?? "nothing to compact"}`,
     );

@@ -373,6 +373,9 @@ function assertInstalled() {
     expectIncludes(inspect.plugin?.channelIds, "kitchen-sink-channel", "channels");
     expectIncludes(inspect.plugin?.providerIds, "kitchen-sink-provider", "providers");
   }
+  if (source === "clawhub") {
+    expectIncludes(inspect.plugin?.contextEngineIds, pluginId, "context engines");
+  }
 
   const diagnostics = [
     ...(list.diagnostics || []),

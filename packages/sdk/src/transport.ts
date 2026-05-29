@@ -1,4 +1,4 @@
-import { GatewayClient } from "../../../src/gateway/client.js";
+import { GatewayClient } from "@openclaw/gateway-client";
 import { EventHub } from "./event-hub.js";
 import type {
   ConnectableOpenClawTransport,

@@ -1,3 +1,4 @@
+import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   NodePairingPairedNode,
@@ -10,7 +11,6 @@ import {
   resolveNodeCommandAllowlist,
   resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
-import type { ConnectParams } from "./protocol/index.js";
 
 export type NodeConnectPairingReconcileResult = {
   nodeId: string;

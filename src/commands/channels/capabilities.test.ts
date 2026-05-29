@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   replaceConfigFile: vi.fn(),
   refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveInstallableChannelPlugin: vi.fn(),
+  listReadOnlyChannelPluginsForConfig: vi.fn(),
 }));
 
 vi.mock("./shared.js", () => ({
@@ -26,6 +27,10 @@ vi.mock("./shared.js", () => ({
 vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: vi.fn(),
   getChannelPlugin: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/read-only.js", () => ({
+  listReadOnlyChannelPluginsForConfig: mocks.listReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -123,6 +128,7 @@ describe("channelsCapabilitiesCommand", () => {
     vi.clearAllMocks();
     mocks.readConfigFileSnapshot.mockResolvedValue({ hash: "config-1" });
     mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
       cfg: { channels: {} },
       configChanged: false,

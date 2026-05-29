@@ -393,6 +393,86 @@ describe("resolveMemoryBackendConfig", () => {
     expect(update.embedTimeoutMs).toBe(360_000);
   });
 
+  it("keeps sub-unit positive qmd numeric overrides usable", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: {
+            enabled: true,
+            retentionDays: 0.5,
+          },
+          update: {
+            commandTimeoutMs: 0.5,
+            updateTimeoutMs: 0.5,
+            embedTimeoutMs: 0.5,
+          },
+          limits: {
+            maxResults: 0.5,
+            maxSnippetChars: 0.5,
+            maxInjectedChars: 0.5,
+            timeoutMs: 0.5,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const qmd = requireQmdConfig(resolved);
+
+    expect(qmd.sessions.retentionDays).toBe(1);
+    expect(qmd.update.commandTimeoutMs).toBe(1);
+    expect(qmd.update.updateTimeoutMs).toBe(1);
+    expect(qmd.update.embedTimeoutMs).toBe(1);
+    expect(qmd.limits).toMatchObject({
+      maxResults: 1,
+      maxSnippetChars: 1,
+      maxInjectedChars: 1,
+      timeoutMs: 1,
+    });
+  });
+
+  it("falls back for non-finite qmd numeric overrides", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: {
+            enabled: true,
+            retentionDays: Number.NaN,
+          },
+          update: {
+            commandTimeoutMs: Number.POSITIVE_INFINITY,
+            updateTimeoutMs: Number.NaN,
+            embedTimeoutMs: Number.NEGATIVE_INFINITY,
+          },
+          limits: {
+            maxResults: Number.NaN,
+            maxSnippetChars: Number.POSITIVE_INFINITY,
+            maxInjectedChars: Number.NEGATIVE_INFINITY,
+            timeoutMs: Number.NaN,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const qmd = requireQmdConfig(resolved);
+
+    expect(qmd.sessions.retentionDays).toBeUndefined();
+    expect(qmd.update.commandTimeoutMs).toBe(30_000);
+    expect(qmd.update.updateTimeoutMs).toBe(120_000);
+    expect(qmd.update.embedTimeoutMs).toBe(120_000);
+    expect(qmd.limits).toMatchObject({
+      maxResults: 4,
+      maxSnippetChars: 450,
+      maxInjectedChars: 2_200,
+      timeoutMs: 4_000,
+    });
+  });
+
   it("resolves qmd startup refresh overrides", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },

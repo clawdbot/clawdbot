@@ -34,9 +34,10 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     });
 
     const bootstrapCall = hoisted.resolveBootstrapFilesForRunMock.mock.calls[0]?.[0] as
-      | { workspaceDir?: string }
+      | { agentId?: string; workspaceDir?: string }
       | undefined;
     expect(bootstrapCall?.workspaceDir).not.toBe("/tmp/task-repo");
+    expect(bootstrapCall?.agentId).toBe("main");
 
     const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
       | { cwd?: string; workspaceDir?: string; spawnWorkspaceDir?: string }

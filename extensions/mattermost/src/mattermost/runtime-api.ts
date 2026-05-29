@@ -47,3 +47,4 @@ export {
   parseStrictPositiveInteger,
   resolveClientIp,
 } from "openclaw/plugin-sdk/core";
+export { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";

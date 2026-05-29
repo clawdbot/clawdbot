@@ -2,6 +2,7 @@ import os from "node:os";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isErrno } from "./errors.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { buildPortHints } from "./ports-format.js";
 import { resolveLsofCommand } from "./ports-lsof.js";
 import { tryListenOnPort } from "./ports-probe.js";
@@ -75,19 +76,27 @@ function normalizeTcpHost(host: string): string {
   return normalized.startsWith("::ffff:") ? normalized.slice("::ffff:".length) : normalized;
 }
 
+function parseTcpPort(raw: string | undefined): number | null {
+  if (!raw || !/^\d+$/.test(raw)) {
+    return null;
+  }
+  const port = Number(raw);
+  return Number.isSafeInteger(port) && port >= 0 && port <= 65_535 ? port : null;
+}
+
 function parseTcpEndpoint(raw: string): { host: string; port: number } | null {
   const endpoint = raw.trim();
   const bracketMatch = endpoint.match(/^\[([^\]]+)\]:(\d+)$/);
   if (bracketMatch) {
-    const port = Number.parseInt(bracketMatch[2], 10);
-    return Number.isFinite(port) ? { host: normalizeTcpHost(bracketMatch[1]), port } : null;
+    const port = parseTcpPort(bracketMatch[2]);
+    return port === null ? null : { host: normalizeTcpHost(bracketMatch[1]), port };
   }
   const lastColon = endpoint.lastIndexOf(":");
   if (lastColon <= 0 || lastColon >= endpoint.length - 1) {
     return null;
   }
-  const port = Number.parseInt(endpoint.slice(lastColon + 1), 10);
-  if (!Number.isFinite(port)) {
+  const port = parseTcpPort(endpoint.slice(lastColon + 1));
+  if (port === null) {
     return null;
   }
   return { host: normalizeTcpHost(endpoint.slice(0, lastColon)), port };
@@ -438,9 +447,9 @@ function parseNetstatListeners(output: string, port: number): PortListener[] {
       continue;
     }
     const pidRaw = parts.at(-1);
-    const pid = pidRaw ? Number.parseInt(pidRaw, 10) : Number.NaN;
+    const pid = parseStrictPositiveInteger(pidRaw);
     const listener: PortListener = {};
-    if (Number.isFinite(pid)) {
+    if (pid !== undefined) {
       listener.pid = pid;
     }
     listener.address = localAddr;
@@ -475,8 +484,8 @@ function parseNetstatConnections(output: string, port: number): PortConnection[]
       address,
       direction: resolveLsofTcpDirection(address, port),
     };
-    const pid = Number.parseInt(pidRaw, 10);
-    if (Number.isFinite(pid)) {
+    const pid = parseStrictPositiveInteger(pidRaw);
+    if (pid !== undefined) {
       connection.pid = pid;
     }
     connections.push(connection);

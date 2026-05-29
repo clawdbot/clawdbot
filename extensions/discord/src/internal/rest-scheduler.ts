@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { RateLimitError, readRetryAfter } from "./rest-errors.js";
 import { createBucketKey, createRouteKey, readHeaderNumber, readResetAt } from "./rest-routes.js";
 
@@ -47,6 +48,29 @@ export type RestSchedulerOptions = {
 const INVALID_REQUEST_WINDOW_MS = 10 * 60_000;
 const requestPriorities = ["critical", "standard", "background"] as const;
 
+function normalizeRestSchedulerOptions(options: RestSchedulerOptions): RestSchedulerOptions {
+  return {
+    lanes: {
+      critical: normalizeLaneOptions(options.lanes.critical),
+      standard: normalizeLaneOptions(options.lanes.standard),
+      background: normalizeLaneOptions(options.lanes.background),
+    },
+    maxConcurrency: resolveIntegerOption(options.maxConcurrency, 1, { min: 1 }),
+    maxQueueSize: resolveIntegerOption(options.maxQueueSize, 1, { min: 1 }),
+    maxRateLimitRetries: resolveIntegerOption(options.maxRateLimitRetries, 0, { min: 0 }),
+  };
+}
+
+function normalizeLaneOptions(options: RestSchedulerLaneOptions): RestSchedulerLaneOptions {
+  return {
+    maxQueueSize: resolveIntegerOption(options.maxQueueSize, 1, { min: 1 }),
+    ...(options.staleAfterMs === undefined
+      ? {}
+      : { staleAfterMs: resolveIntegerOption(options.staleAfterMs, 0, { min: 0 }) }),
+    weight: resolveIntegerOption(options.weight, 1, { min: 1 }),
+  };
+}
+
 function createLaneQueues<TData>(): LaneQueues<TData> {
   return {
     critical: [],
@@ -60,6 +84,7 @@ function countPending<TData>(bucket: BucketState<TData>): number {
 }
 
 export class RestScheduler<TData> {
+  private readonly options: RestSchedulerOptions;
   private activeWorkers = 0;
   private buckets = new Map<string, BucketState<TData>>();
   private drainTimer: NodeJS.Timeout | undefined;
@@ -82,10 +107,11 @@ export class RestScheduler<TData> {
   private routeBuckets = new Map<string, string>();
 
   constructor(
-    private readonly options: RestSchedulerOptions,
+    options: RestSchedulerOptions,
     private readonly executor: (request: ScheduledRequest<TData>) => Promise<unknown>,
   ) {
-    this.laneSchedule = this.buildLaneSchedule(options.lanes);
+    this.options = normalizeRestSchedulerOptions(options);
+    this.laneSchedule = this.buildLaneSchedule(this.options.lanes);
   }
 
   enqueue(params: {
@@ -186,11 +212,11 @@ export class RestScheduler<TData> {
   }
 
   private get maxConcurrentWorkers(): number {
-    return Math.max(1, Math.floor(this.options.maxConcurrency));
+    return this.options.maxConcurrency;
   }
 
   private get maxRateLimitRetries(): number {
-    return Math.max(0, Math.floor(this.options.maxRateLimitRetries));
+    return this.options.maxRateLimitRetries;
   }
 
   private getBucket(key: string): BucketState<TData> {
@@ -528,7 +554,7 @@ export class RestScheduler<TData> {
   private buildLaneSchedule(lanes: Record<RequestPriority, RestSchedulerLaneOptions>) {
     const schedule: RequestPriority[] = [];
     for (const lane of requestPriorities) {
-      const weight = Math.max(1, Math.floor(lanes[lane].weight));
+      const weight = lanes[lane].weight;
       for (let i = 0; i < weight; i += 1) {
         schedule.push(lane);
       }

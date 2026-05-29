@@ -20,9 +20,13 @@ inputs:
     required: false
     default: "true"
   use-actions-cache:
-    description: Whether to restore and save the pnpm store with actions/cache.
+    description: Whether to restore the pnpm store with actions/cache.
     required: false
     default: "true"
+  save-actions-cache:
+    description: Whether to save the pnpm store with actions/cache after install when no exact cache restored.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -45,6 +49,7 @@ runs:
         openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
     - name: Setup pnpm
+      id: setup-pnpm
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
         node-version: ${{ inputs.node-version }}
@@ -130,3 +135,10 @@ runs:
           ln -sfn "$PNPM_CONFIG_MODULES_DIR" node_modules
           ln -sfn . "$PNPM_CONFIG_MODULES_DIR/node_modules"
         fi
+
+    - name: Save pnpm store cache
+      if: ${{ inputs.install-deps == 'true' && inputs.use-actions-cache == 'true' && inputs.save-actions-cache == 'true' && runner.os != 'Windows' && steps.setup-pnpm.outputs.store-cache-hit != 'true' }}
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.setup-pnpm.outputs.store-path }}
+        key: ${{ steps.setup-pnpm.outputs.store-cache-primary-key }}

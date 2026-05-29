@@ -20,6 +20,7 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { isRecoverableNativeHarnessBindingFailure } from "../harness/compaction-recovery.js";
 import {
   maybeCompactAgentHarnessSession,
   resolveAgentHarnessPolicy,
@@ -53,11 +54,7 @@ import { normalizeContextTokenBudget } from "./utils.js";
 function shouldFallbackAfterHarnessCompaction(
   result: EmbeddedAgentCompactResult | undefined,
 ): boolean {
-  return (
-    result?.ok === false &&
-    (result.failure?.reason === "missing_thread_binding" ||
-      result.failure?.reason === "stale_thread_binding")
-  );
+  return isRecoverableNativeHarnessBindingFailure(result);
 }
 
 const DEFERRED_CONTEXT_ENGINE_COMPACTION_SCHEDULE_FAILURE_REASON =

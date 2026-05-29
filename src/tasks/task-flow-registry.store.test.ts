@@ -261,12 +261,94 @@ describe("task-flow-registry store runtime", () => {
       expect(legacy?.ownerKey).toBe("agent:main:legacy");
       expect(legacy?.controllerId).toBe("core/legacy-restored");
 
+      const managed = createManagedTaskFlow({
+        ownerKey: "agent:main:fresh",
+        controllerId: "tests/migrated-flow",
+        goal: "Writable after migration",
+      });
+      expect(managed).toMatchObject({
+        ownerKey: "agent:main:fresh",
+        syncMode: "managed",
+        controllerId: "tests/migrated-flow",
+      });
+
       const migratedDb = new DatabaseSync(sqlitePath);
       const columns = migratedDb.prepare(`PRAGMA table_info(flow_runs)`).all() as Array<{
         name?: string;
+        notnull?: number;
       }>;
       migratedDb.close();
       expect(columns.map((column) => column.name)).not.toContain("owner_session_key");
+      expect(columns.find((column) => column.name === "owner_key")?.notnull).toBe(1);
+    });
+  });
+
+  it("backfills blank hybrid owner_key values before rebuilding legacy flow_runs tables", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+
+      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(sqlitePath);
+      db.exec(`
+        DROP TABLE IF EXISTS flow_runs;
+        CREATE TABLE flow_runs (
+          flow_id TEXT PRIMARY KEY,
+          owner_session_key TEXT NOT NULL,
+          owner_key TEXT,
+          requester_origin_json TEXT,
+          status TEXT NOT NULL,
+          notify_policy TEXT NOT NULL,
+          goal TEXT NOT NULL,
+          current_step TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          ended_at INTEGER
+        );
+        INSERT INTO flow_runs (
+          flow_id,
+          owner_session_key,
+          owner_key,
+          status,
+          notify_policy,
+          goal,
+          current_step,
+          created_at,
+          updated_at
+        ) VALUES (
+          'hybrid-flow',
+          'agent:main:legacy-hybrid',
+          '   ',
+          'queued',
+          'done_only',
+          'Hybrid flow',
+          NULL,
+          20,
+          20
+        );
+      `);
+      db.close();
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const hybrid = getTaskFlowById("hybrid-flow");
+      expect(hybrid).toMatchObject({
+        flowId: "hybrid-flow",
+        ownerKey: "agent:main:legacy-hybrid",
+        syncMode: "managed",
+        controllerId: "core/legacy-restored",
+        revision: 0,
+        status: "queued",
+      });
+
+      const migratedDb = new DatabaseSync(sqlitePath);
+      const columns = migratedDb.prepare(`PRAGMA table_info(flow_runs)`).all() as Array<{
+        name?: string;
+        notnull?: number;
+      }>;
+      migratedDb.close();
+      expect(columns.map((column) => column.name)).not.toContain("owner_session_key");
+      expect(columns.find((column) => column.name === "owner_key")?.notnull).toBe(1);
     });
   });
 

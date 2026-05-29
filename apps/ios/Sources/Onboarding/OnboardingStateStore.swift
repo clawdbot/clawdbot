@@ -24,11 +24,16 @@ enum OnboardingStateStore {
     private static let lastSuccessTimeDefaultsKey = "onboarding.last_success_time"
 
     @MainActor
-    static func shouldPresentOnLaunch(appModel: NodeAppModel, defaults: UserDefaults = .standard) -> Bool {
+    static func shouldPresentOnLaunch(
+        appModel: NodeAppModel,
+        defaults: UserDefaults = .standard,
+        hasSavedGatewayConnection: Bool? = nil)
+        -> Bool
+    {
         if defaults.bool(forKey: self.completedDefaultsKey) { return false }
-        // If we have a last-known connection config, don't force onboarding on launch. Auto-connect
-        // should handle reconnecting, and users can always open onboarding manually if needed.
-        if GatewaySettingsStore.loadLastGatewayConnection() != nil { return false }
+        let hasSavedGatewayConnection =
+            hasSavedGatewayConnection ?? (GatewaySettingsStore.loadLastGatewayConnection() != nil)
+        if hasSavedGatewayConnection { return false }
         return appModel.gatewayServerName == nil
     }
 

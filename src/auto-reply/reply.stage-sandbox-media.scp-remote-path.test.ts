@@ -29,7 +29,11 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
+import {
+  appendScpStderrTail,
+  SCP_STDERR_TAIL_CHARS,
+  stageSandboxMedia,
+} from "./reply/stage-sandbox-media.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -84,6 +88,14 @@ function requireFirstMockCall(mock: { mock: { calls: unknown[][] } }, label: str
 }
 
 describe("stageSandboxMedia scp remote paths", () => {
+  it("keeps only the tail of noisy scp stderr", () => {
+    const stderr = appendScpStderrTail("start-", `${"x".repeat(SCP_STDERR_TAIL_CHARS)}-end`);
+
+    expect(stderr).toHaveLength(SCP_STDERR_TAIL_CHARS);
+    expect(stderr).toContain("-end");
+    expect(stderr).not.toContain("start-");
+  });
+
   it("rejects remote attachment filenames with shell metacharacters before spawning scp", async () => {
     await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
       const { cfg, workspaceDir, sessionKey, remoteCacheDir } = createRemoteStageParams(home);

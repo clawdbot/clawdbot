@@ -163,7 +163,6 @@ function isGatewayBackendLiveTest(file) {
   return (
     file === "src/gateway/gateway-acp-bind.live.test.ts" ||
     file === "src/gateway/gateway-cli-backend.live.test.ts" ||
-    file === "src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts" ||
     file === "src/gateway/gateway-codex-bind.live.test.ts" ||
     file === "src/gateway/gateway-codex-harness.live.test.ts"
   );

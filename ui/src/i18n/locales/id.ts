@@ -1125,6 +1125,11 @@ export const id: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Coba lagi",
+      retrySend: "Coba kirim lagi",
+      retryQueuedMessage: "Coba lagi pesan dalam antrean",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

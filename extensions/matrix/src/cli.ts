@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/setup";
 import { resolveMatrixAccount, resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices, pruneMatrixStaleGatewayDevices } from "./matrix/actions/devices.js";
@@ -237,8 +238,8 @@ function parseOptionalInt(value: string | undefined, fieldName: string): number 
   if (!/^-?\d+$/.test(trimmed)) {
     throw new Error(`${fieldName} must be an integer`);
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(parsed)) {
+  const parsed = parseStrictInteger(trimmed);
+  if (parsed === undefined) {
     throw new Error(`${fieldName} must be an integer`);
   }
   return parsed;

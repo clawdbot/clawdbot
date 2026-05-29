@@ -2,7 +2,7 @@ import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 const nonCoreGatewayTestExclude = [
   "src/gateway/server-methods/**/*.test.ts",
-  "src/gateway/protocol/**/*.test.ts",
+  "packages/gateway-protocol/src/**/*.test.ts",
   "src/gateway/**/*client*.test.ts",
   "src/gateway/**/*reconnect*.test.ts",
   "src/gateway/**/*android-node*.test.ts",

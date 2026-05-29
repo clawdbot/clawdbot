@@ -1,3 +1,4 @@
+import { normalizeChannelId } from "../channels/registry.js";
 import {
   resolveLegacyOutboundSendDepKeys,
   type OutboundSendDeps,
@@ -46,6 +47,10 @@ function resolveChannelIdFromLegacyOutboundKey(key: string): string | undefined 
   return normalizedStem || undefined;
 }
 
+function resolveKnownChannelId(raw: string): string | undefined {
+  return normalizeChannelId(raw) ?? undefined;
+}
+
 /**
  * Pass CLI send sources through as-is — both CliOutboundSendSource and
  * OutboundSendDeps are now channel-ID-keyed records.
@@ -82,8 +87,9 @@ export function createOutboundSendDepsFromCliSource(deps: CliOutboundSendSource)
   }
 
   const resolveFactoryValue = (key: string): unknown => {
-    const channelId =
+    const candidate =
       outbound[key] === undefined ? (resolveChannelIdFromLegacyOutboundKey(key) ?? key) : key;
+    const channelId = resolveKnownChannelId(candidate);
     if (!channelId || channelId === "then" || channelId === "toJSON") {
       return undefined;
     }

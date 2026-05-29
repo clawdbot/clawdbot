@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { NodePairingPairedNode, NodePairingRequestInput } from "../infra/node-pairing.js";
 import { reconcileNodePairingOnConnect } from "./node-connect-reconcile.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
-import type { ConnectParams } from "./protocol/index.js";
 
 function makeNodeConnectParams(overrides?: Partial<ConnectParams>): ConnectParams {
   return {

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginCandidate } from "../plugins/discovery.js";
+import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -117,8 +118,12 @@ function createManagedNpmPlugin(params: {
   peerDependencies?: Record<string, string>;
   packageLock?: boolean;
 }) {
-  const npmRoot = path.join(params.stateDir, "npm");
-  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
+  const npmBaseDir = path.join(params.stateDir, "npm");
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName: params.packageName,
+  });
+  const packageDir = path.join(npmRoot, "node_modules", ...params.packageName.split("/"));
   fs.mkdirSync(packageDir, { recursive: true });
   fs.writeFileSync(
     path.join(npmRoot, "package.json"),
@@ -318,7 +323,7 @@ describe("maybeRepairPluginRegistryState", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");
     fs.mkdirSync(bundledDir, { recursive: true });
-    createManagedNpmPlugin({
+    const managed = createManagedNpmPlugin({
       stateDir,
       id: "google-meet",
       packageName: "@openclaw/google-meet",
@@ -355,16 +360,14 @@ describe("maybeRepairPluginRegistryState", () => {
       "Managed npm plugin packages shadow bundled plugins",
     );
     expect(vi.mocked(note).mock.calls.join("\n")).toContain("@openclaw/google-meet@2026.5.2");
-    expect(
-      fs.existsSync(path.join(stateDir, "npm", "node_modules", "@openclaw", "google-meet")),
-    ).toBe(true);
+    expect(fs.existsSync(managed.packageDir)).toBe(true);
   });
 
   it("removes stale managed npm packages that shadow bundled plugins during repair", async () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");
     fs.mkdirSync(bundledDir, { recursive: true });
-    createManagedNpmPlugin({
+    const managed = createManagedNpmPlugin({
       stateDir,
       id: "google-meet",
       packageName: "@openclaw/google-meet",
@@ -397,11 +400,9 @@ describe("maybeRepairPluginRegistryState", () => {
       prompter: { shouldRepair: true },
     });
 
+    expect(fs.existsSync(managed.packageDir)).toBe(false);
     expect(
-      fs.existsSync(path.join(stateDir, "npm", "node_modules", "@openclaw", "google-meet")),
-    ).toBe(false);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(stateDir, "npm", "package.json"), "utf8")),
+      JSON.parse(fs.readFileSync(path.join(managed.npmRoot, "package.json"), "utf8")),
     ).not.toHaveProperty("dependencies");
     const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
     expect(persisted.refreshReason).toBe("migration");
@@ -590,7 +591,7 @@ describe("maybeRepairPluginRegistryState", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");
     fs.mkdirSync(bundledDir, { recursive: true });
-    createManagedNpmPlugin({
+    const managed = createManagedNpmPlugin({
       stateDir,
       id: "google-meet",
       packageName: "@openclaw/google-meet",
@@ -625,7 +626,7 @@ describe("maybeRepairPluginRegistryState", () => {
     });
 
     const packageLock = JSON.parse(
-      fs.readFileSync(path.join(stateDir, "npm", "package-lock.json"), "utf8"),
+      fs.readFileSync(path.join(managed.npmRoot, "package-lock.json"), "utf8"),
     );
     expect(packageLock.packages[""].dependencies).toEqual({ "other-plugin": "1.0.0" });
     expect(packageLock.packages).not.toHaveProperty("node_modules/@openclaw/google-meet");

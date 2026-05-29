@@ -766,6 +766,7 @@ describe("updateNpmInstalledPlugins", () => {
       "version",
       "dist.integrity",
       "dist.shasum",
+      "openclaw",
       "--json",
     ]);
     if (npmViewCall()?.[1] === undefined) {
@@ -1157,6 +1158,7 @@ describe("updateNpmInstalledPlugins", () => {
     });
     expectRecordFields(result.config.plugins?.installs?.["lossless-claw"], {
       source: "npm",
+      spec: "@martian-engineering/lossless-claw",
       resolvedName: "@martian-engineering/lossless-claw",
       resolvedVersion: "0.9.0",
       resolvedSpec: "@martian-engineering/lossless-claw@0.9.0",
@@ -1931,6 +1933,7 @@ describe("updateNpmInstalledPlugins", () => {
         "openclaw-codex-app-server": "openclaw-codex-app-server@beta",
       },
       expectedSpec: "openclaw-codex-app-server@beta",
+      expectedRecordSpec: "openclaw-codex-app-server@beta",
       expectedVersion: "0.2.0-beta.4",
       expectedResolvedSpec: "openclaw-codex-app-server@0.2.0-beta.4",
     },
@@ -1941,6 +1944,7 @@ describe("updateNpmInstalledPlugins", () => {
       config,
       specOverrides,
       expectedSpec,
+      expectedRecordSpec,
       expectedVersion,
       expectedResolvedSpec,
     }) => {
@@ -1958,14 +1962,14 @@ describe("updateNpmInstalledPlugins", () => {
       });
       expectCodexAppServerInstallState({
         result,
-        spec: expectedSpec,
+        spec: expectedRecordSpec ?? expectedSpec,
         version: expectedVersion,
         ...(expectedResolvedSpec ? { resolvedSpec: expectedResolvedSpec } : {}),
       });
     },
   );
 
-  it("tries npm beta for default npm specs on beta channel without persisting the beta tag", async () => {
+  it("tries npm beta for default npm specs on beta channel and preserves the default selector", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
         pluginId: "openclaw-codex-app-server",

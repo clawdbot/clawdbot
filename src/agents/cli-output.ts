@@ -27,6 +27,19 @@ export type CliStreamingDelta = {
   usage?: CliUsage;
 };
 
+export type CliToolUseStartDelta = {
+  toolCallId: string;
+  name: string;
+  args: Record<string, unknown>;
+};
+
+export type CliToolResultDelta = {
+  toolCallId: string;
+  name: string;
+  isError: boolean;
+  result?: unknown;
+};
+
 function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
@@ -394,10 +407,215 @@ function parseClaudeCliStreamingDelta(params: {
   };
 }
 
+type PendingToolUse = {
+  toolCallId: string;
+  name: string;
+  inputJsonParts: string[];
+};
+
+type ToolUseTracker = {
+  pendingByIndex: Map<number, PendingToolUse>;
+  nameById: Map<string, string>;
+  startedIds: Set<string>;
+  resultDeliveredIds: Set<string>;
+};
+
+function createToolUseTracker(): ToolUseTracker {
+  return {
+    pendingByIndex: new Map(),
+    nameById: new Map(),
+    startedIds: new Set(),
+    resultDeliveredIds: new Set(),
+  };
+}
+
+function emitToolStartOnce(
+  tracker: ToolUseTracker,
+  toolCallId: string,
+  name: string,
+  args: Record<string, unknown>,
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void,
+): void {
+  if (tracker.startedIds.has(toolCallId)) {
+    return;
+  }
+  tracker.startedIds.add(toolCallId);
+  tracker.nameById.set(toolCallId, name);
+  onToolUseStart?.({ toolCallId, name, args });
+}
+
+function emitToolResultOnce(
+  tracker: ToolUseTracker,
+  toolCallId: string,
+  isError: boolean,
+  result: unknown,
+  onToolResult?: (delta: CliToolResultDelta) => void,
+): void {
+  if (tracker.resultDeliveredIds.has(toolCallId)) {
+    return;
+  }
+  tracker.resultDeliveredIds.add(toolCallId);
+  onToolResult?.({
+    toolCallId,
+    name: tracker.nameById.get(toolCallId) ?? "",
+    isError,
+    result,
+  });
+}
+
+function isClaudeToolUseBlockType(type: unknown): boolean {
+  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
+}
+
+function isClaudeAssistantToolResultBlockType(type: unknown): boolean {
+  return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
+}
+
+function isClaudeToolResultError(content: unknown): boolean {
+  return isRecord(content) && typeof content.type === "string" && content.type.endsWith("_error");
+}
+
+function parseToolInputJson(parts: string[]): Record<string, unknown> {
+  if (parts.length === 0) {
+    return {};
+  }
+  try {
+    const parsed: unknown = JSON.parse(parts.join(""));
+    return isRecord(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function dispatchClaudeCliStreamingToolEvent(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  tracker: ToolUseTracker;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
+}): void {
+  if (!usesClaudeStreamJsonDialect(params)) {
+    return;
+  }
+  const tracker = params.tracker;
+
+  if (params.parsed.type === "stream_event" && isRecord(params.parsed.event)) {
+    const event = params.parsed.event;
+    if (
+      event.type === "content_block_start" &&
+      typeof event.index === "number" &&
+      isRecord(event.content_block)
+    ) {
+      const block = event.content_block;
+      if (isClaudeToolUseBlockType(block.type)) {
+        const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
+        const name = typeof block.name === "string" ? block.name.trim() : "";
+        if (toolCallId && name) {
+          tracker.pendingByIndex.set(event.index, { toolCallId, name, inputJsonParts: [] });
+        }
+      } else if (isClaudeAssistantToolResultBlockType(block.type)) {
+        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+        if (toolCallId) {
+          emitToolResultOnce(
+            tracker,
+            toolCallId,
+            block.is_error === true || isClaudeToolResultError(block.content),
+            block.content,
+            params.onToolResult,
+          );
+        }
+      }
+      return;
+    }
+    if (
+      event.type === "content_block_delta" &&
+      typeof event.index === "number" &&
+      isRecord(event.delta)
+    ) {
+      if (event.delta.type === "input_json_delta" && typeof event.delta.partial_json === "string") {
+        tracker.pendingByIndex.get(event.index)?.inputJsonParts.push(event.delta.partial_json);
+      }
+      return;
+    }
+    if (event.type === "content_block_stop" && typeof event.index === "number") {
+      const pending = tracker.pendingByIndex.get(event.index);
+      tracker.pendingByIndex.delete(event.index);
+      if (pending) {
+        emitToolStartOnce(
+          tracker,
+          pending.toolCallId,
+          pending.name,
+          parseToolInputJson(pending.inputJsonParts),
+          params.onToolUseStart,
+        );
+      }
+      return;
+    }
+    return;
+  }
+
+  if (params.parsed.type === "assistant" && isRecord(params.parsed.message)) {
+    const message = params.parsed.message;
+    const content = Array.isArray(message.content) ? message.content : [];
+    for (const block of content) {
+      if (!isRecord(block)) {
+        continue;
+      }
+      if (isClaudeToolUseBlockType(block.type)) {
+        const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
+        const name = typeof block.name === "string" ? block.name.trim() : "";
+        if (!toolCallId || !name) {
+          continue;
+        }
+        const args: Record<string, unknown> = isRecord(block.input) ? block.input : {};
+        emitToolStartOnce(tracker, toolCallId, name, args, params.onToolUseStart);
+      } else if (isClaudeAssistantToolResultBlockType(block.type)) {
+        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+        if (!toolCallId) {
+          continue;
+        }
+        emitToolResultOnce(
+          tracker,
+          toolCallId,
+          block.is_error === true || isClaudeToolResultError(block.content),
+          block.content,
+          params.onToolResult,
+        );
+      }
+    }
+    return;
+  }
+
+  if (params.parsed.type === "user" && isRecord(params.parsed.message)) {
+    const message = params.parsed.message;
+    const content = Array.isArray(message.content) ? message.content : [];
+    for (const block of content) {
+      if (!isRecord(block) || block.type !== "tool_result") {
+        continue;
+      }
+      const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+      if (!toolCallId) {
+        continue;
+      }
+      emitToolResultOnce(
+        tracker,
+        toolCallId,
+        block.is_error === true,
+        block.content,
+        params.onToolResult,
+      );
+    }
+    return;
+  }
+}
+
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onToolResult?: (delta: CliToolResultDelta) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
@@ -405,6 +623,7 @@ export function createCliJsonlStreamingParser(params: {
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
   const texts: string[] = [];
+  const toolTracker = createToolUseTracker();
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
@@ -440,6 +659,17 @@ export function createCliJsonlStreamingParser(params: {
       if (!type || type.includes("message")) {
         texts.push(item.text);
       }
+    }
+
+    if (params.onToolUseStart || params.onToolResult) {
+      dispatchClaudeCliStreamingToolEvent({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        tracker: toolTracker,
+        onToolUseStart: params.onToolUseStart,
+        onToolResult: params.onToolResult,
+      });
     }
 
     const delta = parseClaudeCliStreamingDelta({

@@ -308,6 +308,55 @@ describe("loadPluginLookUpTable", () => {
     );
   });
 
+  it("reuses lookup tables prepared from the same metadata snapshot and activation config", async () => {
+    const plugins = [
+      createManifestRecord({
+        id: "telegram",
+        origin: "bundled",
+        channels: ["telegram"],
+      }),
+    ];
+    const config = {
+      channels: {
+        telegram: { token: "configured" },
+      },
+    } as OpenClawConfig;
+    const index = {
+      ...createIndex(plugins),
+      policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    };
+    const manifestRegistry: PluginManifestRegistry = {
+      plugins,
+      diagnostics: [],
+    };
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(manifestRegistry);
+    const { loadPluginMetadataSnapshot } = await import("./plugin-metadata-snapshot.js");
+    const { clearPluginLookUpTableMemoForTest, loadPluginLookUpTable } =
+      await import("./plugin-lookup-table.js");
+    clearPluginLookUpTableMemoForTest();
+
+    const metadataSnapshot = loadPluginMetadataSnapshot({
+      config,
+      env: {},
+      index,
+    });
+    listPotentialConfiguredChannelIds.mockClear();
+
+    const first = loadPluginLookUpTable({
+      config,
+      env: {},
+      metadataSnapshot,
+    });
+    const second = loadPluginLookUpTable({
+      config,
+      env: {},
+      metadataSnapshot,
+    });
+
+    expect(second).toBe(first);
+    expect(listPotentialConfiguredChannelIds).toHaveBeenCalledOnce();
+  });
+
   it("rebuilds when a provided metadata snapshot has a stale plugin policy", async () => {
     const plugins = [
       createManifestRecord({

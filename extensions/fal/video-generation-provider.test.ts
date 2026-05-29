@@ -364,6 +364,30 @@ describe("fal video generation provider", () => {
     });
   });
 
+  it("drops unsupported Seedance 2 duration values before queue submission", async () => {
+    mockFalProviderRuntime();
+    mockCompletedFalVideoJob({
+      requestId: "seedance-req-123",
+      statusUrl:
+        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123/status",
+      responseUrl:
+        "https://queue.fal.run/bytedance/seedance-2.0/fast/text-to-video/requests/seedance-req-123",
+      videoUrl: "https://fal.run/files/seedance.mp4",
+      bytes: "seedance-mp4-bytes",
+    });
+
+    const provider = buildFalVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "fal",
+      model: "bytedance/seedance-2.0/fast/text-to-video",
+      prompt: "A chrome lobster drives a tiny kart across a neon pier",
+      durationSeconds: 99,
+      cfg: {},
+    });
+
+    expect(getSubmitBody()).not.toHaveProperty("duration");
+  });
+
   it("submits Seedance 2 image-to-video requests with a single image_url", async () => {
     mockFalProviderRuntime();
     mockCompletedFalVideoJob({

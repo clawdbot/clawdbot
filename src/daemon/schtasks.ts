@@ -5,6 +5,7 @@ import path from "node:path";
 import { isGatewayArgv } from "../infra/gateway-process-argv.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { getWindowsInstallRoots } from "../infra/windows-install-roots.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -499,24 +500,11 @@ async function launchFallbackTaskScript(env: GatewayServiceEnv): Promise<void> {
 }
 
 function resolveConfiguredGatewayPort(env: GatewayServiceEnv): number | null {
-  const raw = env.OPENCLAW_GATEWAY_PORT?.trim();
-  if (!raw) {
-    return null;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return parseTcpPort(env.OPENCLAW_GATEWAY_PORT);
 }
 
 function parsePositivePort(raw: string | undefined): number | null {
-  const value = raw?.trim();
-  if (!value) {
-    return null;
-  }
-  if (!/^\d+$/.test(value)) {
-    return null;
-  }
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 && parsed <= 65535 ? parsed : null;
+  return parseTcpPort(raw);
 }
 
 function parsePortFromProgramArguments(programArguments?: string[]): number | null {

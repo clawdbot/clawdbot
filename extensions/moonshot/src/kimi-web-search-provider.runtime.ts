@@ -7,10 +7,11 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -366,7 +367,12 @@ export async function executeKimiWebSearchProviderTool(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const model = resolveKimiModel(kimiConfig);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
   const cacheKey = buildSearchCacheKey([

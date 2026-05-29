@@ -105,6 +105,8 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
+    itemId?: string;
+    toolCallId?: string;
     name?: string;
     phase?: string;
     args?: Record<string, unknown>;

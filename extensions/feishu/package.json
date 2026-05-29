@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@larksuiteoapi/node-sdk": "1.65.0",
+    "@larksuiteoapi/node-sdk": "1.66.0",
     "typebox": "1.1.38",
     "zod": "4.4.3"
   },

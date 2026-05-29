@@ -1474,7 +1474,11 @@ describe("before_tool_call requireApproval handling", () => {
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
-    expect(result).toEqual({ blocked: false, params: { command: "echo ok" } });
+    expect(result).toEqual({
+      blocked: false,
+      params: { command: "echo ok" },
+      approvalResolution: "allow-always",
+    });
     expect(onResolution).toHaveBeenCalledWith("allow-always");
   });
 
@@ -1511,7 +1515,11 @@ describe("before_tool_call requireApproval handling", () => {
         }),
       ]);
 
-      expect(result).toEqual({ blocked: false, params: {} });
+      expect(result).toEqual({
+        blocked: false,
+        params: {},
+        approvalResolution: "allow-once",
+      });
       expect(onResolution).toHaveBeenCalledWith("allow-once");
     } finally {
       if (timeoutId) {

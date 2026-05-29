@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { formatErrorMessage } from "./errors.js";
+import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
 export const DEFAULT_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 export const DEFAULT_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -68,8 +69,8 @@ function parseContentLengthHeader(req: IncomingMessage): number | null {
   if (typeof raw !== "string") {
     return null;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(raw);
+  if (parsed === undefined) {
     return null;
   }
   return parsed;

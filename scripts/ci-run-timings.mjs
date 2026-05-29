@@ -18,9 +18,33 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
+function percentile(values, percentileValue) {
+  if (values.length === 0) {
+    return null;
+  }
+  const sorted = [...values].toSorted((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileValue) - 1);
+  return sorted[index];
+}
+
 function parseRunList(raw) {
   const parsed = JSON.parse(raw);
   return Array.isArray(parsed) ? parsed : [];
+}
+
+function isPnpmStoreWarmupGatedJobName(name) {
+  return (
+    name === "build-artifacts" ||
+    name === "check-docs" ||
+    name === "check-guards" ||
+    name === "check-prod-types" ||
+    name === "check-lint" ||
+    name === "check-dependencies" ||
+    name === "check-test-types" ||
+    name.startsWith("check-additional-") ||
+    name.startsWith("checks-fast-") ||
+    (name.startsWith("checks-node-") && !name.startsWith("checks-node-compat-"))
+  );
 }
 
 function collectRunTimingContext(run) {
@@ -66,6 +90,46 @@ export function summarizeRunTimings(run, limit = 15) {
     status: run.status ?? "",
     wallSeconds: secondsBetween(created, updated),
     badJobs,
+  };
+}
+
+export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
+  const { jobs } = collectRunTimingContext(run);
+  const preflight = jobs.find((job) => job.name === "preflight");
+  const warmup = jobs.find((job) => job.name === "pnpm-store-warmup");
+  if (!warmup?.started || !warmup?.completed) {
+    return null;
+  }
+
+  const postWarmupJobs = jobs.filter(
+    (job) =>
+      job.name !== "preflight" &&
+      job.name !== "security-fast" &&
+      job.name !== "pnpm-store-warmup" &&
+      isPnpmStoreWarmupGatedJobName(job.name) &&
+      job.status === "completed" &&
+      job.conclusion !== "skipped" &&
+      job.started !== null &&
+      job.started >= warmup.completed &&
+      (job.durationSeconds ?? 0) > 5,
+  );
+  const startDelays = postWarmupJobs
+    .map((job) => secondsBetween(warmup.completed, job.started))
+    .filter((delay) => delay !== null);
+
+  return {
+    activePostWarmupJobCount: postWarmupJobs.length,
+    firstPostWarmupStartDelaySeconds: startDelays.length === 0 ? null : Math.min(...startDelays),
+    postWarmupP95StartDelaySeconds: percentile(startDelays, 0.95),
+    postWarmupStartedWithinWindow: startDelays.filter((delay) => delay <= windowSeconds).length,
+    preflightToWarmupCompleteSeconds: secondsBetween(
+      preflight?.completed ?? null,
+      warmup.completed,
+    ),
+    preflightToWarmupStartSeconds: secondsBetween(preflight?.completed ?? null, warmup.started),
+    warmupDurationSeconds: secondsBetween(warmup.started, warmup.completed),
+    warmupResult: `${warmup.status}/${warmup.conclusion}`,
+    windowSeconds,
   };
 }
 
@@ -193,15 +257,6 @@ function summarizeJobs(run) {
   };
 }
 
-function percentile(values, percentileValue) {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].toSorted((left, right) => left - right);
-  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileValue) - 1);
-  return sorted[index];
-}
-
 function printSection(title, jobs, metric) {
   console.log(title);
   for (const job of jobs) {
@@ -265,11 +320,32 @@ async function main() {
     return;
   }
   const runId = explicitRunId ?? (useLatestMain ? getLatestMainPushCiRunId() : getLatestCiRunId());
-  const summary = summarizeRunTimings(loadRun(runId), limit);
+  const run = loadRun(runId);
+  const summary = summarizeRunTimings(run, limit);
+  const warmupBarrier = summarizePnpmStoreWarmupBarrier(run);
 
   console.log(
     `CI run ${runId}: ${summary.status}/${summary.conclusion} wall=${formatSeconds(summary.wallSeconds)}`,
   );
+  if (warmupBarrier) {
+    console.log("\npnpm-store-warmup barrier");
+    console.log(
+      [
+        `result=${warmupBarrier.warmupResult}`,
+        `preflight->start=${formatSeconds(warmupBarrier.preflightToWarmupStartSeconds)}`,
+        `duration=${formatSeconds(warmupBarrier.warmupDurationSeconds)}`,
+        `preflight->complete=${formatSeconds(warmupBarrier.preflightToWarmupCompleteSeconds)}`,
+      ].join("  "),
+    );
+    console.log(
+      [
+        `active-post-warmup-jobs=${warmupBarrier.activePostWarmupJobCount}`,
+        `first-start-delay=${formatSeconds(warmupBarrier.firstPostWarmupStartDelaySeconds)}`,
+        `p95-start-delay=${formatSeconds(warmupBarrier.postWarmupP95StartDelaySeconds)}`,
+        `started-within-${warmupBarrier.windowSeconds}s=${warmupBarrier.postWarmupStartedWithinWindow}`,
+      ].join("  "),
+    );
+  }
   printSection("\nSlowest jobs", summary.byDuration, "durationSeconds");
   printSection("\nLongest queues", summary.byQueue, "queueSeconds");
   if (summary.badJobs.length > 0) {

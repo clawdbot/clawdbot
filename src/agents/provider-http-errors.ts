@@ -76,14 +76,18 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
   if (!subject) {
     return undefined;
   }
+  const errorDescription =
+    trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
+  const oauthCode = errorDescription ? trimToUndefined(root?.error) : undefined;
   const message =
     trimToUndefined(subject.message) ??
     trimToUndefined(subject.detail) ??
+    errorDescription ??
     trimToUndefined(root?.message) ??
     trimToUndefined(root?.error) ??
     trimToUndefined(root?.detail);
   const type = trimToUndefined(subject.type);
-  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status);
+  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
   const metadata = [type ? `type=${type}` : undefined, code ? `code=${code}` : undefined]
     .filter((value): value is string => Boolean(value))
     .join(", ");
@@ -115,7 +119,10 @@ function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPay
 
   const detail = formatProviderErrorPayload(payload);
   const type = trimToUndefined(subject.type);
-  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status);
+  const errorDescription =
+    trimToUndefined(subject.error_description) ?? trimToUndefined(root?.error_description);
+  const oauthCode = errorDescription ? trimToUndefined(root?.error) : undefined;
+  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status) ?? oauthCode;
   return {
     ...(detail ? { detail: redactSensitiveText(detail) } : {}),
     ...(code ? { code } : {}),
@@ -132,7 +139,7 @@ export type ProviderHttpErrorInfo = {
 };
 
 export async function extractProviderErrorInfo(response: Response): Promise<ProviderHttpErrorInfo> {
-  const rawBody = trimToUndefined(await readResponseTextLimited(response));
+  const rawBody = trimToUndefined(await readResponseTextLimited(response).catch(() => ""));
   const requestId = extractProviderRequestId(response);
   if (!rawBody) {
     return requestId ? { requestId } : {};

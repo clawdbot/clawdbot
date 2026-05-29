@@ -22,6 +22,7 @@ import {
   handleSendChat as handleSendChatInternal,
   removeQueuedMessage as removeQueuedMessageInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
+  retryQueuedChatMessage as retryQueuedChatMessageInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
@@ -471,6 +472,7 @@ export class OpenClawApp extends LitElement {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   })();
   @state() usageScope: "instance" | "family" = "family";
+  @state() usageAgentId: string | null = null;
   @state() usageSelectedSessions: string[] = [];
   @state() usageSelectedDays: string[] = [];
   @state() usageSelectedHours: number[] = [];
@@ -521,6 +523,8 @@ export class OpenClawApp extends LitElement {
     | import("./views/cron-quick-create.ts").CronQuickCreateDraft
     | null = null;
   @state() cronJobsLoadingMore = false;
+  cronJobsReloadPending = false;
+  cronJobsReloadPendingTableFilters = false;
   @state() cronJobs: CronJob[] = [];
   @state() cronJobsTotal = 0;
   @state() cronJobsHasMore = false;
@@ -1057,6 +1061,13 @@ export class OpenClawApp extends LitElement {
   removeQueuedMessage(id: string) {
     removeQueuedMessageInternal(
       this as unknown as Parameters<typeof removeQueuedMessageInternal>[0],
+      id,
+    );
+  }
+
+  async retryQueuedChatMessage(id: string) {
+    await retryQueuedChatMessageInternal(
+      this as unknown as Parameters<typeof retryQueuedChatMessageInternal>[0],
       id,
     );
   }

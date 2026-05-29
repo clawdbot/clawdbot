@@ -217,6 +217,20 @@ describe("canvas host", () => {
     }
   });
 
+  it("falls back to the default mount when the configured base path is malformed", async () => {
+    const dir = await createCaseDir();
+    await fs.writeFile(path.join(dir, "index.html"), "<html><body>fallback</body></html>", "utf8");
+    const handler = await createTestCanvasHostHandler(dir, { basePath: "/%E0%A4%A" });
+
+    try {
+      const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain("fallback");
+    } finally {
+      await handler.close();
+    }
+  });
+
   it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");

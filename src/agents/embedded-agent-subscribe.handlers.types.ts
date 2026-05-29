@@ -2,6 +2,7 @@ import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-respons
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
+import type { FenceScanState } from "../markdown/fences.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
@@ -64,12 +65,26 @@ export type EmbeddedAgentSubscribeState = {
     thinking: boolean;
     final: boolean;
     inlineCode: InlineCodeState;
+    fence?: FenceScanState;
+    reasoningInlineCode?: InlineCodeState;
+    reasoningFence?: FenceScanState;
+    reasoningPendingFenceFragment?: string;
+    finalInlineCode?: InlineCodeState;
+    finalFence?: FenceScanState;
+    pendingFenceFragment?: string;
     pendingTagFragment?: string;
   };
   partialBlockState: {
     thinking: boolean;
     final: boolean;
     inlineCode: InlineCodeState;
+    fence?: FenceScanState;
+    reasoningInlineCode?: InlineCodeState;
+    reasoningFence?: FenceScanState;
+    reasoningPendingFenceFragment?: string;
+    finalInlineCode?: InlineCodeState;
+    finalFence?: FenceScanState;
+    pendingFenceFragment?: string;
     pendingTagFragment?: string;
   };
   lastStreamedAssistant?: string;
@@ -150,6 +165,13 @@ export type EmbeddedAgentSubscribeContext = {
       thinking: boolean;
       final: boolean;
       inlineCode?: InlineCodeState;
+      fence?: FenceScanState;
+      reasoningInlineCode?: InlineCodeState;
+      reasoningFence?: FenceScanState;
+      reasoningPendingFenceFragment?: string;
+      finalInlineCode?: InlineCodeState;
+      finalFence?: FenceScanState;
+      pendingFenceFragment?: string;
       pendingTagFragment?: string;
     },
     options?: { final?: boolean },

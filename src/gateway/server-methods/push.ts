@@ -1,4 +1,13 @@
 import {
+  ErrorCodes,
+  errorShape,
+  validatePushTestParams,
+  validateWebPushSubscribeParams,
+  validateWebPushTestParams,
+  validateWebPushUnsubscribeParams,
+  validateWebPushVapidPublicKeyParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
@@ -14,15 +23,6 @@ import {
   resolveVapidKeys,
 } from "../../infra/push-web.js";
 import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  errorShape,
-  validatePushTestParams,
-  validateWebPushSubscribeParams,
-  validateWebPushTestParams,
-  validateWebPushUnsubscribeParams,
-  validateWebPushVapidPublicKeyParams,
-} from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";

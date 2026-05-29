@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
+import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 describe("gateway restart benchmark script", () => {
   it("prints help without running benchmark cases", () => {
@@ -211,90 +211,9 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
   });
 
-  it("classifies queued child exits before sending teardown signals", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => true);
-
-    const stopped = testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0]);
-    queueMicrotask(() => {
-      child.exitCode = 0;
-      child.emit("exit", 0, null);
-    });
-
-    await expect(stopped).resolves.toEqual({
-      exitedBeforeTeardown: true,
-      exitCode: 0,
-      signal: null,
-    });
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("classifies failed teardown signaling as a pre-teardown child exit", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => {
-      setImmediate(() => {
-        child.exitCode = 8;
-        child.emit("exit", 8, null);
-      });
-      return false;
-    });
-
-    await expect(
-      testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0]),
-    ).resolves.toEqual({
-      exitedBeforeTeardown: true,
-      exitCode: 8,
-      signal: null,
-    });
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-  });
-
-  it("bounds teardown when the child ignores termination signals", async () => {
-    const child = new EventEmitter() as EventEmitter & {
-      exitCode: number | null;
-      kill: ReturnType<typeof vi.fn>;
-      signalCode: NodeJS.Signals | null;
-      stderr: { destroy: ReturnType<typeof vi.fn> };
-      stdin: { destroy: ReturnType<typeof vi.fn> };
-      stdout: { destroy: ReturnType<typeof vi.fn> };
-      unref: ReturnType<typeof vi.fn>;
-    };
-    child.exitCode = null;
-    child.signalCode = null;
-    child.kill = vi.fn(() => true);
-    child.stderr = { destroy: vi.fn() };
-    child.stdin = { destroy: vi.fn() };
-    child.stdout = { destroy: vi.fn() };
-    child.unref = vi.fn();
-
-    await expect(
-      testing.stopChild(child as unknown as Parameters<typeof testing.stopChild>[0], {
-        killGraceMs: 1,
-        teardownGraceMs: 1,
-      }),
-    ).resolves.toEqual({
-      exitedBeforeTeardown: false,
-      exitCode: null,
-      signal: "SIGKILL",
-    });
-    expect(child.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-    expect(child.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
-    expect(child.stdin.destroy).toHaveBeenCalledOnce();
-    expect(child.stdout.destroy).toHaveBeenCalledOnce();
-    expect(child.stderr.destroy).toHaveBeenCalledOnce();
-    expect(child.unref).toHaveBeenCalledOnce();
+  registerStopChildBehaviorTests({
+    stopChild: testing.stopChild,
+    queuedExitCode: 0,
   });
 
   it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {

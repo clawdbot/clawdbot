@@ -32,6 +32,7 @@ const STARTUP_PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000;
 const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
+const SESSION_LOCK_CLEANUP_CONCURRENCY = 4;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
@@ -317,6 +318,61 @@ function schedulePostReadySidecarTask(params: {
       await params.stop?.();
     },
   };
+}
+
+type CleanStaleLockFiles = typeof import("../agents/session-write-lock.js").cleanStaleLockFiles;
+type MarkRestartAbortedMainSessionsFromLocks =
+  typeof import("../agents/main-session-restart-recovery.js").markRestartAbortedMainSessionsFromLocks;
+
+async function cleanupStaleSessionLocks(params: {
+  sessionDirs: readonly string[];
+  cfg: OpenClawConfig;
+  log: { warn: (msg: string) => void };
+  isStopped: () => boolean;
+  cleanStaleLockFiles: CleanStaleLockFiles;
+  markRestartAbortedMainSessionsFromLocks?: MarkRestartAbortedMainSessionsFromLocks;
+  concurrency?: number;
+}): Promise<void> {
+  const concurrency = Math.max(
+    1,
+    Math.min(
+      params.sessionDirs.length,
+      Math.floor(params.concurrency ?? SESSION_LOCK_CLEANUP_CONCURRENCY),
+    ),
+  );
+  let nextIndex = 0;
+  let markRestartAbortedMainSessionsFromLocks =
+    params.markRestartAbortedMainSessionsFromLocks ?? null;
+  const getMarker = async () => {
+    markRestartAbortedMainSessionsFromLocks ??= (
+      await import("../agents/main-session-restart-recovery.js")
+    ).markRestartAbortedMainSessionsFromLocks;
+    return markRestartAbortedMainSessionsFromLocks;
+  };
+  const worker = async () => {
+    while (!params.isStopped()) {
+      const sessionsDir = params.sessionDirs[nextIndex];
+      nextIndex += 1;
+      if (!sessionsDir) {
+        return;
+      }
+      const result = await params.cleanStaleLockFiles({
+        sessionsDir,
+        config: params.cfg,
+        removeStale: true,
+        log: { warn: (message) => params.log.warn(message) },
+      });
+      if (result.cleaned.length === 0) {
+        continue;
+      }
+      const markRestartAbortedMainSessionsFromLocks = await getMarker();
+      await markRestartAbortedMainSessionsFromLocks({
+        sessionsDir,
+        cleanedLocks: result.cleaned,
+      });
+    }
+  };
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
 }
 
 function scheduleTranscriptsAutoStartSidecar(params: {
@@ -732,7 +788,7 @@ export async function startGatewaySidecars(params: {
     startupTrace: params.startupTrace,
     name: "sidecars.session-locks",
     log: params.log,
-    run: async () => {
+    run: async (isStopped) => {
       try {
         const [{ resolveStateDir }, { resolveAgentSessionDirs }, { cleanStaleLockFiles }] =
           await Promise.all([
@@ -742,22 +798,13 @@ export async function startGatewaySidecars(params: {
           ]);
         const stateDir = resolveStateDir(process.env);
         const sessionDirs = await resolveAgentSessionDirs(stateDir);
-        for (const sessionsDir of sessionDirs) {
-          const result = await cleanStaleLockFiles({
-            sessionsDir,
-            config: params.cfg,
-            removeStale: true,
-            log: { warn: (message) => params.log.warn(message) },
-          });
-          if (result.cleaned.length > 0) {
-            const { markRestartAbortedMainSessionsFromLocks } =
-              await import("../agents/main-session-restart-recovery.js");
-            await markRestartAbortedMainSessionsFromLocks({
-              sessionsDir,
-              cleanedLocks: result.cleaned,
-            });
-          }
-        }
+        await cleanupStaleSessionLocks({
+          sessionDirs,
+          cfg: params.cfg,
+          log: params.log,
+          isStopped,
+          cleanStaleLockFiles,
+        });
       } catch (err) {
         params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
       }
@@ -1279,6 +1326,7 @@ export const testing = {
   prewarmConfiguredPrimaryModelWithTimeout,
   refreshLatestUpdateRestartSentinelIfPresent,
   resolveGatewayMemoryStartupPolicy,
+  cleanupStaleSessionLocks,
   scheduleProviderAuthStatePrewarm,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,

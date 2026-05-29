@@ -275,6 +275,8 @@ const TalkRealtimeSchema = z
     provider: z.string().optional(),
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     model: z.string().optional(),
+    speakerVoice: z.string().optional(),
+    speakerVoiceId: z.string().optional(),
     voice: z.string().optional(),
     instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),

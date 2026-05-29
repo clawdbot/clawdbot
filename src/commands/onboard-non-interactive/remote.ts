@@ -1,11 +1,4 @@
 import { formatCliCommand } from "../../cli/command-format.js";
-import {
-  commitConfigWriteWithPendingPluginInstalls,
-  hasPendingPluginInstallRecords,
-  stripPendingPluginInstallRecords,
-  unchangedPendingPluginInstallRecordIds,
-} from "../../cli/plugins-install-record-commit.js";
-import { replaceConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -13,6 +6,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { applySkipBootstrapConfig } from "../onboard-config.js";
 import { applyWizardMetadata } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
+import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 
 export async function runNonInteractiveRemoteSetup(params: {
   opts: OnboardOptions;
@@ -47,38 +41,11 @@ export async function runNonInteractiveRemoteSetup(params: {
     nextConfig = applySkipBootstrapConfig(nextConfig);
   }
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  // Ordinary remote onboard reruns must preserve existing agents.list /
-  // bindings the same way the local writer does — see openclaw#84692.
-  const allowConfigSizeDrop = opts.reset === true;
-  let writeBaseHash = baseHash;
-  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(baseConfig)) {
-    const migrated = await commitConfigWriteWithPendingPluginInstalls({
-      nextConfig: baseConfig,
-      writeOptions: { allowConfigSizeDrop: true },
-      commit: async (config, writeOptions) => {
-        return await replaceConfigFile({
-          nextConfig: config,
-          ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
-          ...(writeOptions ? { writeOptions } : {}),
-        });
-      },
-    });
-    writeBaseHash = migrated.persistedHash ?? undefined;
-    nextConfig = stripPendingPluginInstallRecords(
-      nextConfig,
-      unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig),
-    );
-  }
-  await commitConfigWriteWithPendingPluginInstalls({
+  await commitNonInteractiveOnboardConfig({
     nextConfig,
-    writeOptions: { allowConfigSizeDrop },
-    commit: async (config, writeOptions) => {
-      return await replaceConfigFile({
-        nextConfig: config,
-        ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
-        ...(writeOptions ? { writeOptions } : {}),
-      });
-    },
+    baseConfig,
+    baseHash,
+    reset: opts.reset,
   });
   logConfigUpdated(runtime);
 

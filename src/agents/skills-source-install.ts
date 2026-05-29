@@ -1,11 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { withTempDir } from "../infra/install-source-utils.js";
 import { writeJson } from "../infra/json-files.js";
 import { parseGitPluginSpec } from "../plugins/git-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";

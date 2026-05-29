@@ -1085,6 +1085,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - a global fallback `.env` from `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`)
 
     Neither `.env` file overrides existing env vars.
+    Provider credential variables are an exception for workspace `.env`: keys such as
+    `GEMINI_API_KEY`, `XAI_API_KEY`, or `MISTRAL_API_KEY` are ignored from workspace
+    `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
 
     You can also define inline env vars in config (applied only if missing from the process env):
 

@@ -286,6 +286,28 @@ describe("readRemoteMediaBuffer", () => {
     expect(body.wasCanceled()).toBe(true);
   });
 
+  it("rejects malformed content-length before remote buffer reads", async () => {
+    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(body.stream, {
+          status: 200,
+          headers: { "content-length": "1e9" },
+        }),
+    );
+
+    await expect(
+      readRemoteMediaBuffer({
+        url: "https://example.com/file.bin",
+        fetchImpl,
+        maxBytes: 4,
+        lookupFn: makeLookupFn(),
+      }),
+    ).rejects.toThrow("invalid content-length header: 1e9");
+
+    expect(body.wasCanceled()).toBe(true);
+  });
+
   it("applies a default stream limit when maxBytes is omitted", async () => {
     const fetchImpl = vi.fn(
       async () =>
@@ -628,6 +650,25 @@ describe("readRemoteMediaBuffer", () => {
         },
       ),
     ).rejects.toThrow("content length 5 exceeds maxBytes 4");
+
+    expect(body.wasCanceled()).toBe(true);
+  });
+
+  it("rejects malformed content-length before saving responses", async () => {
+    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
+
+    await expect(
+      saveResponseMedia(
+        new Response(body.stream, {
+          status: 200,
+          headers: { "content-length": "1e9" },
+        }),
+        {
+          maxBytes: 4,
+          sourceUrl: "https://example.com/file.bin",
+        },
+      ),
+    ).rejects.toThrow("invalid content-length header: 1e9");
 
     expect(body.wasCanceled()).toBe(true);
   });

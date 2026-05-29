@@ -118,4 +118,39 @@ describe("getOrCreateAccountThrottler", () => {
 
     expect(entered).toEqual(["101:first-edit", "202:other-edit", "101:second-edit"]);
   });
+
+  it("does not group-throttle fractional chat ids", async () => {
+    const firstGate = deferred<void>();
+    const entered: string[] = [];
+    const throttler = createTelegramAccountThrottler(
+      () => async (prev, method, payload, signal) => prev(method, payload, signal),
+    );
+    const prev = vi.fn(async (_method: string, payload: unknown) => {
+      const request = payload as { text?: string };
+      entered.push(request.text ?? "");
+      if (entered.length === 1) {
+        await firstGate.promise;
+      }
+      return { ok: true, result: request.text ?? "" };
+    }) as unknown as TelegramPreviousCall;
+
+    const first = throttler(
+      prev,
+      "sendMessage",
+      { chat_id: "-100123.5", message_thread_id: 10, text: "first" },
+      undefined,
+    );
+    await vi.waitFor(() => expect(entered).toEqual(["first"]));
+
+    const second = throttler(
+      prev,
+      "sendMessage",
+      { chat_id: "-100123.5", message_thread_id: 20, text: "second" },
+      undefined,
+    );
+    await vi.waitFor(() => expect(entered).toEqual(["first", "second"]));
+
+    firstGate.resolve();
+    await Promise.all([first, second]);
+  });
 });

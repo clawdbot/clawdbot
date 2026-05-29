@@ -218,6 +218,16 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),
   deprecatedCompatRecord({
+    code: "doctor-tts-speaker-selection-fields",
+    owner: "tts",
+    introduced: "2026-05-28",
+    source: "TTS provider speaker selection fields named voice, voiceName, and voiceId",
+    migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
+    replacement: "speakerVoice and speakerVoiceId",
+    docsPath: "/tools/tts",
+    tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
+  }),
+  deprecatedCompatRecord({
     code: "doctor-plugin-install-config-ledger",
     owner: "plugin",
     introduced: "2026-04-25",

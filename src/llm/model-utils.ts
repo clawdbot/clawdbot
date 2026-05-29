@@ -17,6 +17,7 @@ const EXTENDED_THINKING_LEVELS: ModelThinkingLevel[] = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ];
 
 export function getSupportedThinkingLevels<TApi extends Api>(
@@ -31,7 +32,7 @@ export function getSupportedThinkingLevels<TApi extends Api>(
     if (mapped === null) {
       return false;
     }
-    if (level === "xhigh") {
+    if (level === "xhigh" || level === "max") {
       return mapped !== undefined;
     }
     return true;

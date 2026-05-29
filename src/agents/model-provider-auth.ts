@@ -145,6 +145,7 @@ export async function hasAuthForModelProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
+  agentDir?: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   store?: AuthProfileStore;
@@ -176,10 +177,15 @@ export async function hasAuthForModelProvider(params: {
     preparedState !== null && params.cfg
       ? resolveAgentWorkspaceDir(params.cfg, preparedState.agentId)
       : null;
+  const expectedAgentDir =
+    preparedState !== null && params.cfg
+      ? resolveAgentDir(params.cfg, preparedState.agentId)
+      : null;
   const matchesWarmedScope =
     preparedState !== null &&
     configFingerprint === preparedState.configFingerprint &&
     workspaceDir === expectedWorkspaceDir &&
+    (params.agentDir === undefined || params.agentDir === expectedAgentDir) &&
     params.discoverExternalCliAuth !== false &&
     params.allowPluginSyntheticAuth !== false &&
     params.env === undefined &&
@@ -204,7 +210,10 @@ export async function hasAuthForModelProvider(params: {
     return true;
   }
   const slowPathAgentDir =
-    params.agentId && params.cfg ? resolveAgentDir(params.cfg, params.agentId) : undefined;
+    params.agentDir ??
+    (params.agentId && params.cfg
+      ? resolveAgentDir(params.cfg, params.agentId, params.env)
+      : undefined);
   const store =
     params.store ??
     (params.discoverExternalCliAuth === false
@@ -223,6 +232,7 @@ export async function hasAuthForModelProvider(params: {
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
+  agentDir?: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
@@ -240,6 +250,7 @@ export function createProviderAuthChecker(params: {
       provider: key,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
       agentId: params.agentId,
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,

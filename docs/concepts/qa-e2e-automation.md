@@ -665,6 +665,48 @@ pnpm openclaw qa slack \
 
 A green run completes in well under 30 seconds and `slack-qa-report.md` shows both `slack-canary` and `slack-mention-gating` at status `pass`. If the lane hangs for ~90 seconds and exits with `Convex credential pool exhausted for kind "slack"`, either the pool is empty or every row is leased - `qa credentials list --kind slack --status all --json` will tell you which.
 
+### WhatsApp QA
+
+```bash
+pnpm openclaw qa whatsapp
+```
+
+Targets two dedicated WhatsApp Web accounts: a driver account controlled by
+the harness and a SUT account started by the child OpenClaw gateway through the
+bundled WhatsApp plugin.
+
+Required env when `--credential-source env`:
+
+- `OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164`
+- `OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164`
+- `OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64`
+- `OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64`
+
+Optional:
+
+- `OPENCLAW_QA_WHATSAPP_GROUP_JID` enables `whatsapp-mention-gating`.
+- `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1` keeps message bodies in
+  observed-message artifacts.
+
+Scenarios (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
+
+- `whatsapp-canary`
+- `whatsapp-pairing-block`
+- `whatsapp-mention-gating`
+- `whatsapp-approval-exec-native` - opt-in native WhatsApp exec approval
+  scenario. Requests an exec approval through the gateway, verifies the
+  WhatsApp message has native reaction approval affordances, resolves it, and
+  verifies the resolved WhatsApp follow-up.
+- `whatsapp-approval-plugin-native` - opt-in native WhatsApp plugin approval
+  scenario. Enables exec and plugin approval forwarding together, then verifies
+  the same pending/resolved native WhatsApp path.
+
+Output artifacts:
+
+- `whatsapp-qa-report.md`
+- `whatsapp-qa-summary.json`
+- `whatsapp-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1`.
+
 ### Convex credential pool
 
 Telegram, Discord, Slack, and WhatsApp lanes can lease credentials from a shared Convex pool instead of reading the env vars above. Pass `--credential-source convex` (or set `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`); QA Lab acquires an exclusive lease, heartbeats it for the duration of the run, and releases it on shutdown. Pool kinds are `"telegram"`, `"discord"`, `"slack"`, and `"whatsapp"`.
@@ -847,13 +889,13 @@ pnpm openclaw qa character-eval \
   --model openai/gpt-5.5,thinking=medium,fast \
   --model openai/gpt-5.2,thinking=xhigh \
   --model openai/gpt-5,thinking=xhigh \
-  --model anthropic/claude-opus-4-7,thinking=high \
+  --model anthropic/claude-opus-4-8,thinking=high \
   --model anthropic/claude-sonnet-4-6,thinking=high \
   --model zai/glm-5.1,thinking=high \
   --model moonshot/kimi-k2.5,thinking=high \
   --model google/gemini-3.1-pro-preview,thinking=high \
   --judge-model openai/gpt-5.5,thinking=xhigh,fast \
-  --judge-model anthropic/claude-opus-4-7,thinking=high \
+  --judge-model anthropic/claude-opus-4-8,thinking=high \
   --blind-judge-models \
   --concurrency 16 \
   --judge-concurrency 16
@@ -884,13 +926,13 @@ Candidate and judge model runs both default to concurrency 16. Lower
 `--concurrency` or `--judge-concurrency` when provider limits or local gateway
 pressure make a run too noisy.
 When no candidate `--model` is passed, the character eval defaults to
-`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-7`,
+`openai/gpt-5.5`, `openai/gpt-5.2`, `openai/gpt-5`, `anthropic/claude-opus-4-8`,
 `anthropic/claude-sonnet-4-6`, `zai/glm-5.1`,
 `moonshot/kimi-k2.5`, and
 `google/gemini-3.1-pro-preview` when no `--model` is passed.
 When no `--judge-model` is passed, the judges default to
 `openai/gpt-5.5,thinking=xhigh,fast` and
-`anthropic/claude-opus-4-7,thinking=high`.
+`anthropic/claude-opus-4-8,thinking=high`.
 
 ## Related docs
 

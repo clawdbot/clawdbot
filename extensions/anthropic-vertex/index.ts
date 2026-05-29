@@ -1,6 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { NATIVE_ANTHROPIC_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  NATIVE_ANTHROPIC_REPLAY_HOOKS,
+  resolveClaudeThinkingProfile,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import {
   hasAnthropicVertexAvailableAuth,
   mergeImplicitAnthropicVertexProvider,
@@ -40,6 +43,7 @@ export default definePluginEntry({
       },
       resolveConfigApiKey: ({ env }) => resolveAnthropicVertexConfigApiKey(env),
       ...NATIVE_ANTHROPIC_REPLAY_HOOKS,
+      resolveThinkingProfile: ({ modelId }) => resolveClaudeThinkingProfile(modelId),
       resolveSyntheticAuth: () => {
         if (!hasAnthropicVertexAvailableAuth()) {
           return undefined;

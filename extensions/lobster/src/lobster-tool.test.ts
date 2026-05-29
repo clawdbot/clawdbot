@@ -109,6 +109,54 @@ describe("lobster plugin tool", () => {
     expect(approval.resumeToken).toBe("resume-token-1");
   });
 
+  it("normalizes numeric string run limits before invoking the runner", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+
+    const tool = createLobsterTool(fakeApi(), { runner });
+    await tool.execute("call-string-limits", {
+      action: "run",
+      pipeline: "noop",
+      timeoutMs: "1500",
+      maxStdoutBytes: "4096",
+    });
+
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      cwd: process.cwd(),
+      timeoutMs: 1500,
+      maxStdoutBytes: 4096,
+    });
+  });
+
+  it("rejects malformed numeric run limits before invoking the runner", async () => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), { runner });
+
+    await expect(
+      tool.execute("call-bad-timeout", {
+        action: "run",
+        pipeline: "noop",
+        timeoutMs: "1500.5",
+      }),
+    ).rejects.toThrow("timeoutMs must be a positive integer");
+    await expect(
+      tool.execute("call-bad-stdout", {
+        action: "run",
+        pipeline: "noop",
+        maxStdoutBytes: 0,
+      }),
+    ).rejects.toThrow("maxStdoutBytes must be a positive integer");
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
   it("throws when the runner returns an error envelope", async () => {
     const tool = createLobsterTool(fakeApi(), {
       runner: {
@@ -257,6 +305,35 @@ describe("lobster plugin tool", () => {
     expect(details.status).toBe("ok");
     const mutation = requireRecord(details.mutation, "managed resume mutation details");
     expect(mutation.applied).toBe(true);
+  });
+
+  it("normalizes numeric string flowExpectedRevision before managed resume", async () => {
+    const runner = {
+      run: vi.fn().mockResolvedValue({
+        ok: true,
+        status: "ok",
+        output: [],
+        requiresApproval: null,
+      }),
+    };
+    const taskFlow = createFakeTaskFlow();
+    const tool = createLobsterTool(fakeApi(), { runner, taskFlow });
+
+    await tool.execute("call-managed-resume-string-revision", {
+      action: "resume",
+      approvalId: "approval-1",
+      approve: true,
+      flowId: "flow-1",
+      flowExpectedRevision: "1",
+      flowCurrentStep: "resume_lobster",
+    });
+
+    expect(taskFlow.resume).toHaveBeenCalledWith({
+      flowId: "flow-1",
+      expectedRevision: 1,
+      status: "running",
+      currentStep: "resume_lobster",
+    });
   });
 
   it("rejects managed TaskFlow resume mode without a token or approvalId", async () => {

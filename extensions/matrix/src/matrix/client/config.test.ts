@@ -85,6 +85,24 @@ describe("Matrix auth/config live surfaces", () => {
     expect(resolved.encryption).toBe(false);
   });
 
+  it("ignores non-finite initial sync limits", () => {
+    const cfg = {
+      channels: {
+        matrix: {
+          initialSyncLimit: Number.NaN,
+          accounts: {
+            ops: {
+              initialSyncLimit: Number.POSITIVE_INFINITY,
+            },
+          },
+        },
+      },
+    } as unknown as CoreConfig;
+
+    const resolved = resolveMatrixConfigForAccount(cfg, "ops", {} as NodeJS.ProcessEnv);
+    expect(resolved.initialSyncLimit).toBeUndefined();
+  });
+
   it("resolves accessToken SecretRef against the provided env", () => {
     const cfg = {
       channels: {

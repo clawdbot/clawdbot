@@ -2216,7 +2216,7 @@ describe("DiscordVoiceManager", () => {
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
           debounceMs: 1,
         },
       },
@@ -2702,7 +2702,7 @@ describe("DiscordVoiceManager", () => {
         mode: "agent-proxy",
         realtime: {
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoiceId: "cedar",
           minBargeInAudioEndMs: 500,
           providers: {
             openai: { model: "provider-default", voice: "marin" },
@@ -5505,7 +5505,7 @@ describe("DiscordVoiceManager", () => {
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 
-  it("passes per-channel system prompt overrides to voice agent runs", async () => {
+  it("passes per-channel system prompt context to voice agent runs", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
       nickname: "Guest Nick",

@@ -365,6 +365,28 @@ describe("plugin index install records store", () => {
     expectRecordFields(loadedSync.discord, { source: "npm", installPath: discordDir });
   });
 
+  it("still recovers legacy flat managed npm plugin records", async () => {
+    const stateDir = makeStateDir();
+    const discordDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/discord",
+      pluginId: "discord",
+      version: "2026.5.2",
+      layout: "legacy",
+    });
+    const indexPath = resolveInstalledPluginIndexRecordsStorePath({ stateDir });
+    fs.mkdirSync(path.dirname(indexPath), { recursive: true });
+    fs.writeFileSync(indexPath, JSON.stringify({ installRecords: {}, plugins: [] }), "utf8");
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    expectRecordFields(loaded.discord, {
+      source: "npm",
+      spec: "@openclaw/discord@2026.5.2",
+      installPath: discordDir,
+      version: "2026.5.2",
+    });
+  });
+
   it("keeps persisted install record metadata over recovered npm records", async () => {
     const stateDir = makeStateDir();
     writeManagedNpmPlugin({

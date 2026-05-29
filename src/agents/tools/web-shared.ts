@@ -15,6 +15,12 @@ export function resolveTimeoutSeconds(value: unknown, fallback: number): number 
   return Math.max(1, Math.floor(parsed));
 }
 
+export function resolvePositiveTimeoutSeconds(value: unknown, fallback: number): number {
+  const parsed =
+    typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+  return Math.max(1, Math.floor(parsed));
+}
+
 export function resolveCacheTtlMs(value: unknown, fallbackMinutes: number): number {
   const minutes =
     typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : fallbackMinutes;

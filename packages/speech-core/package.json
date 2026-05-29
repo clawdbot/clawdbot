@@ -1,0 +1,39 @@
+{
+  "name": "@openclaw/speech-core",
+  "version": "2026.5.28",
+  "private": true,
+  "description": "OpenClaw speech runtime package",
+  "type": "module",
+  "main": "./dist/runtime-api.mjs",
+  "types": "./dist/runtime-api.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/runtime-api.d.mts",
+      "import": "./dist/runtime-api.mjs",
+      "default": "./dist/runtime-api.mjs"
+    },
+    "./api": {
+      "types": "./dist/api.d.mts",
+      "import": "./dist/api.mjs",
+      "default": "./dist/api.mjs"
+    },
+    "./runtime-api": {
+      "types": "./dist/runtime-api.d.mts",
+      "import": "./dist/runtime-api.mjs",
+      "default": "./dist/runtime-api.mjs"
+    },
+    "./speaker": {
+      "types": "./dist/speaker.d.mts",
+      "import": "./dist/speaker.mjs",
+      "default": "./dist/speaker.mjs"
+    },
+    "./voice-models": {
+      "types": "./dist/voice-models.d.mts",
+      "import": "./dist/voice-models.mjs",
+      "default": "./dist/voice-models.mjs"
+    }
+  },
+  "dependencies": {
+    "openclaw": "workspace:*"
+  }
+}

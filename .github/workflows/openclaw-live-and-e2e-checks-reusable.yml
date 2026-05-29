@@ -480,6 +480,35 @@ jobs:
           fi
           exit 1
 
+  plan_release_workflow_matrices:
+    needs: validate_selected_ref
+    runs-on: ubuntu-24.04
+    outputs:
+      docker_e2e_count: ${{ steps.plan.outputs.docker_e2e_count }}
+      docker_e2e_matrix: ${{ steps.plan.outputs.docker_e2e_matrix }}
+      docker_e2e_omitted_json: ${{ steps.plan.outputs.docker_e2e_omitted_json }}
+      live_models_count: ${{ steps.plan.outputs.live_models_count }}
+      live_models_matrix: ${{ steps.plan.outputs.live_models_matrix }}
+      live_models_omitted_json: ${{ steps.plan.outputs.live_models_omitted_json }}
+    steps:
+      - name: Checkout trusted release harness
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Plan release workflow matrices
+        id: plan
+        env:
+          DOCKER_LANES: ${{ inputs.docker_lanes }}
+          INCLUDE_LIVE_SUITES: ${{ inputs.include_live_suites }}
+          INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
+          LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
+        run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
+
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
@@ -636,72 +665,15 @@ jobs:
         run: ${{ matrix.command }}
 
   validate_docker_e2e:
-    needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_release_path_suites && inputs.docker_lanes == ''
+    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
+    if: inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - chunk_id: core
-            label: core
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: package-update-openai
-            label: package/update OpenAI install
-            timeout_minutes: 45
-            profiles: beta minimum stable full
-          - chunk_id: package-update-anthropic
-            label: package/update Anthropic install
-            timeout_minutes: 60
-            profiles: beta minimum stable full
-          - chunk_id: package-update-core
-            label: package/update core
-            timeout_minutes: 60
-            profiles: beta minimum stable full
-          - chunk_id: plugins-runtime-plugins
-            label: plugins/runtime plugins
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-services
-            label: plugins/runtime services
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-a
-            label: plugins/runtime install A
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-b
-            label: plugins/runtime install B
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-c
-            label: plugins/runtime install C
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-d
-            label: plugins/runtime install D
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-e
-            label: plugins/runtime install E
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-f
-            label: plugins/runtime install F
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-g
-            label: plugins/runtime install G
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-h
-            label: plugins/runtime install H
-            timeout_minutes: 60
-            profiles: stable full
+      matrix: ${{ fromJson(needs.plan_release_workflow_matrices.outputs.docker_e2e_matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -1631,42 +1603,14 @@ jobs:
 
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
-    needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
+    needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
+    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
     continue-on-error: ${{ inputs.advisory }}
     runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - provider_label: Anthropic
-            providers: anthropic
-            profiles: stable full
-          - provider_label: Google
-            providers: google
-            profiles: stable full
-          - provider_label: MiniMax
-            providers: minimax
-            profiles: stable full
-          - provider_label: OpenAI
-            providers: openai
-            profiles: beta minimum stable full
-          - provider_label: OpenCode
-            providers: opencode-go
-            profiles: full
-          - provider_label: OpenRouter
-            providers: openrouter
-            profiles: full
-          - provider_label: xAI
-            providers: xai
-            profiles: full
-          - provider_label: Z.ai
-            providers: zai
-            profiles: full
-          - provider_label: Fireworks
-            providers: fireworks
-            profiles: full
+      matrix: ${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_models_matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -1744,6 +1688,8 @@ jobs:
       - name: Validate provider credential
         if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
+        env:
+          LIVE_MODEL_PROVIDERS: ${{ matrix.providers }}
         run: |
           set -euo pipefail
 
@@ -1760,7 +1706,7 @@ jobs:
             exit 1
           }
 
-          case "${{ matrix.providers }}" in
+          case "${LIVE_MODEL_PROVIDERS}" in
             anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
@@ -1771,7 +1717,7 @@ jobs:
             zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
             fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
             *)
-              echo "Unhandled live model provider shard: ${{ matrix.providers }}" >&2
+              echo "Unhandled live model provider shard: ${LIVE_MODEL_PROVIDERS}" >&2
               exit 1
               ;;
           esac
@@ -1986,7 +1932,7 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-anthropic-opus
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Opus
-            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-8 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true
@@ -2013,7 +1959,7 @@ jobs:
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full

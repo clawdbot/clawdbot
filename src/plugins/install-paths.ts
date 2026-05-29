@@ -87,6 +87,40 @@ export function resolveDefaultPluginNpmDir(
   return path.join(resolveConfigDir(env, homedir), "npm");
 }
 
+export function encodePluginNpmProjectDirName(packageName: string): string {
+  const trimmed = packageName.trim();
+  if (!trimmed) {
+    throw new Error("invalid npm package name: missing");
+  }
+  return safePathSegmentHashed(trimmed);
+}
+
+export function resolvePluginNpmProjectsDir(npmDir?: string): string {
+  const npmBase = npmDir ? resolveUserPath(npmDir) : resolveDefaultPluginNpmDir();
+  return path.join(npmBase, "projects");
+}
+
+export function resolvePluginNpmProjectDir(params: {
+  packageName: string;
+  npmDir?: string;
+}): string {
+  return path.join(
+    resolvePluginNpmProjectsDir(params.npmDir),
+    encodePluginNpmProjectDirName(params.packageName),
+  );
+}
+
+export function resolvePluginNpmPackageDir(params: {
+  packageName: string;
+  npmDir?: string;
+}): string {
+  return path.join(
+    resolvePluginNpmProjectDir(params),
+    "node_modules",
+    ...params.packageName.split("/"),
+  );
+}
+
 export function resolveDefaultPluginGitDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir?: () => string,

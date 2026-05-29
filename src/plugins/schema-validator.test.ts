@@ -314,6 +314,13 @@ describe("schema validator", () => {
         },
       ],
       [
+        "schema-validator.test.invalid-array-ref-leading-zero",
+        {
+          anyOf: [{ type: "number" }, { type: "string" }],
+          $ref: "#/anyOf/01",
+        },
+      ],
+      [
         "schema-validator.test.invalid-dynamic-ref-type",
         {
           $dynamicRef: 123,

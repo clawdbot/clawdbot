@@ -174,7 +174,10 @@ export function resolveTransientProviderAttempts(options?: TransientProviderRetr
   if (!options) {
     return 1;
   }
-  return Math.max(1, Math.round(Number.isFinite(options.attempts) ? options.attempts : 1));
+  if (!Number.isSafeInteger(options.attempts)) {
+    return 1;
+  }
+  return Math.max(1, options.attempts);
 }
 
 export function resolveTransientProviderDelayMs(

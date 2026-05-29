@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectProdResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
+  fetchBulkAdvisories,
   filterFindingsBySeverity,
   parseSnapshotKey,
   readBoundedBulkAdvisoryErrorText,
@@ -229,6 +230,48 @@ snapshots:
     expect(text).toContain("[truncated]");
     expect(text).not.toContain(tail);
     expect(text.length).toBeLessThan(4200);
+  });
+
+  it("aborts stalled bulk advisory requests", async () => {
+    let signal: AbortSignal | undefined;
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      timeoutMs: 5,
+      fetchImpl: ((_url, init) => {
+        signal = init?.signal ?? undefined;
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal?.reason ?? new Error("aborted")), {
+            once: true,
+          });
+        });
+      }) as typeof fetch,
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory request exceeded timeout/u);
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("bounds successful bulk advisory response bodies", async () => {
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      responseBodyMaxBytes: 4,
+      fetchImpl: async () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "content-length": "5" },
+        }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory response body exceeded 4 bytes/u);
+  });
+
+  it("fails closed on empty successful bulk advisory response bodies", async () => {
+    const request = fetchBulkAdvisories({
+      payload: { axios: ["1.0.0"] },
+      fetchImpl: async () => new Response("", { status: 200 }),
+    });
+
+    await expect(request).rejects.toThrow(/Bulk advisory response body was empty/u);
   });
 
   it("returns a failing exit code when bulk advisories include high severity findings", async () => {

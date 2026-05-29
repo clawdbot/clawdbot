@@ -33,6 +33,7 @@ let openResponsesTesting: {
     scope?: { authSubject: string; agentId: string; requestedSessionKey?: string },
   ): string | undefined;
   getResponseSessionIds(): string[];
+  resolveResponsesLimits(config: { maxUrlParts?: number } | undefined): { maxUrlParts: number };
 };
 
 beforeAll(async () => {
@@ -231,6 +232,14 @@ function buildResponsesUrlPolicyConfig(maxUrlParts: number) {
     },
   };
 }
+
+it("uses default URL part limits for non-finite OpenResponses config caps", () => {
+  const limits = openResponsesTesting.resolveResponsesLimits({
+    maxUrlParts: Number.POSITIVE_INFINITY,
+  });
+
+  expect(limits.maxUrlParts).toBe(8);
+});
 
 async function expectInvalidRequest(
   res: Response,

@@ -1,3 +1,9 @@
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateModelsListParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
@@ -7,12 +13,6 @@ import {
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateModelsListParams,
-} from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;

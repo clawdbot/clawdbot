@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
 const gatewayClientState = vi.hoisted(() => ({
@@ -30,6 +31,7 @@ describe("gateway cli backend live helpers", () => {
   });
 
   afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
     gatewayClientState.lastOptions = undefined;
     delete process.env.OPENCLAW_SKIP_CHANNELS;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -135,6 +137,25 @@ describe("gateway cli backend live helpers", () => {
   it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
     const { resolveCliBackendLiveModelSelection } =
       await import("./gateway-cli-backend.live-helpers.js");
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [
+          {
+            pluginId: "claude",
+            backend: {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              config: { command: "claude", args: [] },
+            },
+          },
+        ],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+    });
 
     expect(
       resolveCliBackendLiveModelSelection({

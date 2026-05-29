@@ -8,6 +8,8 @@ import {
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
+  type ProviderOperationDeadline,
+  type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   normalizeOptionalLowercaseString,
@@ -200,16 +202,24 @@ function resolveVydraFileExtension(kind: VydraMediaKind, mimeType: string): stri
   );
 }
 
+function resolveVydraHttpTimeoutMs(timeoutMs: ProviderOperationTimeoutMs | undefined): number {
+  const resolved = typeof timeoutMs === "function" ? timeoutMs() : timeoutMs;
+  if (typeof resolved !== "number" || !Number.isFinite(resolved) || resolved <= 0) {
+    return DEFAULT_HTTP_TIMEOUT_MS;
+  }
+  return resolved;
+}
+
 export async function downloadVydraAsset(params: {
   url: string;
   kind: VydraMediaKind;
-  timeoutMs?: number;
+  timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
 }): Promise<{ buffer: Buffer; mimeType: string; fileName: string }> {
   const response = await fetchWithTimeout(
     params.url,
     { method: "GET" },
-    params.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS,
+    resolveVydraHttpTimeoutMs(params.timeoutMs),
     params.fetchFn,
   );
   await assertOkOrThrowHttpError(response, `Vydra ${params.kind} download failed`);
@@ -231,13 +241,16 @@ async function waitForVydraJob(params: {
   jobId: string;
   headers: Headers;
   timeoutMs?: number;
+  deadline?: ProviderOperationDeadline;
   fetchFn: typeof fetch;
   kind: VydraMediaKind;
 }): Promise<unknown> {
-  const deadline = createProviderOperationDeadline({
-    timeoutMs: params.timeoutMs,
-    label: `Vydra job ${params.jobId}`,
-  });
+  const deadline =
+    params.deadline ??
+    createProviderOperationDeadline({
+      timeoutMs: params.timeoutMs,
+      label: `Vydra job ${params.jobId}`,
+    });
   for (let attempt = 0; attempt < MAX_POLL_ATTEMPTS; attempt += 1) {
     const response = await fetchWithTimeout(
       `${params.baseUrl}/jobs/${params.jobId}`,
@@ -267,6 +280,7 @@ export async function resolveCompletedVydraPayload(params: {
   baseUrl: string;
   headers: Headers;
   timeoutMs?: number;
+  deadline?: ProviderOperationDeadline;
   fetchFn: typeof fetch;
   kind: VydraMediaKind;
   missingJobIdMessage: string;
@@ -286,6 +300,7 @@ export async function resolveCompletedVydraPayload(params: {
     jobId,
     headers: params.headers,
     timeoutMs: params.timeoutMs,
+    ...(params.deadline ? { deadline: params.deadline } : {}),
     fetchFn: params.fetchFn,
     kind: params.kind,
   });

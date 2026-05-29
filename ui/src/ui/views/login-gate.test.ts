@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
+import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { i18n } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { renderLoginGate, resolveLoginFailureFeedback } from "./login-gate.ts";

@@ -407,6 +407,24 @@ describe("handleTelegramAction", () => {
     expect(reactMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("soft-fails fractional reaction message ids", async () => {
+    const result = await handleTelegramAction(
+      {
+        action: "react",
+        chatId: "123",
+        messageId: 456.5,
+        emoji: "✅",
+      },
+      reactionConfig("minimal"),
+    );
+
+    expect(resultDetails(result)).toMatchObject({
+      ok: false,
+      reason: "missing_message_id",
+    });
+    expect(reactMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("removes reactions on empty emoji", async () => {
     await handleTelegramAction(
       {
@@ -480,6 +498,52 @@ describe("handleTelegramAction", () => {
     expect(options.token).toBe("tok");
     expect(options.replyToMessageId).toBe(9);
     expect(options.messageThreadId).toBe(11);
+  });
+
+  it("treats null primary id aliases as absent", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendSticker",
+        to: "123",
+        fileId: "sticker",
+        replyToMessageId: null,
+        replyTo: 9,
+        messageThreadId: null,
+        threadId: 11,
+      },
+      telegramConfig({ actions: { sticker: true } }),
+    );
+    const call = mockCall(sendStickerTelegram, 0, "sticker null aliases");
+    const options = requireRecord(call[2], "sticker null alias options");
+    expect(options.replyToMessageId).toBe(9);
+    expect(options.messageThreadId).toBe(11);
+  });
+
+  it("rejects fractional Telegram thread and reply ids before sending", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "123",
+          content: "hello",
+          replyToMessageId: 9.5,
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow("replyToMessageId must be a positive integer.");
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendSticker",
+          to: "123",
+          fileId: "sticker",
+          threadId: 11.5,
+        },
+        telegramConfig({ actions: { sticker: true } }),
+      ),
+    ).rejects.toThrow("threadId must be a positive integer.");
+    expect(sendDurableMessageBatch).not.toHaveBeenCalled();
+    expect(sendStickerTelegram).not.toHaveBeenCalled();
   });
 
   it("removes reactions when remove flag set", async () => {
@@ -991,6 +1055,22 @@ describe("handleTelegramAction", () => {
     expect(details.pollId).toBe("poll-1");
   });
 
+  it("rejects fractional poll durations before sending", async () => {
+    await expect(
+      handleTelegramAction(
+        {
+          action: "poll",
+          to: "@testchannel",
+          question: "Ready?",
+          answers: ["Yes", "No"],
+          durationSeconds: 60.5,
+        },
+        telegramConfig(),
+      ),
+    ).rejects.toThrow("durationSeconds must be a positive integer.");
+    expect(sendPollTelegram).not.toHaveBeenCalled();
+  });
+
   it("accepts shared poll action aliases", async () => {
     await handleTelegramAction(
       {
@@ -1465,6 +1545,36 @@ describe("handleTelegramAction", () => {
     expect(call[0]).toBe("123");
     expect(call[1]).toBe(456);
     expect(requireRecord(call[2], "delete message options").token).toBe("tok");
+  });
+
+  it("rejects fractional message ids before mutating messages", async () => {
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+
+    await expect(
+      handleTelegramAction(
+        {
+          action: "deleteMessage",
+          chatId: "123",
+          messageId: 456.5,
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("messageId must be a positive integer.");
+    await expect(
+      handleTelegramAction(
+        {
+          action: "editMessage",
+          chatId: "123",
+          messageId: 456.5,
+          content: "updated",
+        },
+        cfg,
+      ),
+    ).rejects.toThrow("messageId must be a positive integer.");
+    expect(deleteMessageTelegram).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
   it("surfaces non-fatal delete warnings", async () => {

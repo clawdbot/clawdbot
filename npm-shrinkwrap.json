@@ -14,13 +14,13 @@
         "@anthropic-ai/sdk": "0.98.0",
         "@clack/core": "1.3.1",
         "@clack/prompts": "1.4.0",
-        "@earendil-works/pi-tui": "0.75.5",
+        "@earendil-works/pi-tui": "0.76.0",
         "@google/genai": "2.6.0",
         "@grammyjs/runner": "2.0.3",
         "@grammyjs/transformer-throttler": "1.2.1",
-        "@homebridge/ciao": "1.3.8",
+        "@homebridge/ciao": "1.3.9",
         "@lydell/node-pty": "1.2.0-beta.12",
-        "@mistralai/mistralai": "2.2.1",
+        "@mistralai/mistralai": "2.2.5",
         "@modelcontextprotocol/sdk": "1.29.0",
         "@mozilla/readability": "0.6.0",
         "@openclaw/fs-safe": "0.3.0",
@@ -28,39 +28,36 @@
         "@silvia-odwyer/photon-node": "0.3.4",
         "chalk": "5.6.2",
         "chokidar": "5.0.0",
+        "clawpdf": "0.2.0",
         "commander": "14.0.3",
         "croner": "10.0.1",
         "cross-spawn": "7.0.6",
-        "diff": "8.0.4",
+        "diff": "9.0.0",
         "dotenv": "17.4.2",
         "express": "5.2.1",
         "file-type": "22.0.1",
         "glob": "13.0.6",
         "grammy": "1.43.0",
-        "highlight.js": "10.7.3",
+        "highlight.js": "11.11.1",
         "hosted-git-info": "9.0.3",
-        "http-proxy-agent": "7.0.2",
-        "https-proxy-agent": "7.0.6",
         "ignore": "7.0.5",
-        "ipaddr.js": "2.4.0",
         "jiti": "2.7.0",
         "json5": "2.2.3",
         "jszip": "3.10.1",
         "kysely": "0.29.2",
         "linkedom": "0.18.12",
-        "markdown-it": "14.1.1",
+        "markdown-it": "14.2.0",
         "minimatch": "10.2.5",
         "node-edge-tts": "1.2.10",
         "openai": "6.39.0",
         "partial-json": "0.1.7",
-        "pdfjs-dist": "5.7.284",
         "playwright-core": "1.60.0",
         "proper-lockfile": "4.1.2",
         "qrcode": "1.5.4",
-        "quickjs-wasi": "2.2.0",
+        "quickjs-wasi": "3.0.0",
         "rastermill": "0.3.0",
         "tar": "7.5.15",
-        "tokenjuice": "0.7.1",
+        "tokenjuice": "0.8.0",
         "tree-sitter-bash": "0.25.1",
         "tslog": "4.10.2",
         "typebox": "1.1.38",
@@ -161,9 +158,9 @@
       }
     },
     "node_modules/@earendil-works/pi-tui": {
-      "version": "0.75.5",
-      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.75.5.tgz",
-      "integrity": "sha512-LkXUM1/49pvzzeI39Y5wjBMlgafcCf67HCLhB9Z7yuXHy4XgT+VqxWcZVW5hBdhQsHZd0znjJotfGH1BzxMfiA==",
+      "version": "0.76.0",
+      "resolved": "https://registry.npmjs.org/@earendil-works/pi-tui/-/pi-tui-0.76.0.tgz",
+      "integrity": "sha512-TWQEWqc38gVRYr/VTrlfePQPpJk938gNNLL1xuv0M+9cTkVr880/Q3baZQrxKoLrmN/MmVx7TyR8knYZGxTqqg==",
       "license": "MIT",
       "dependencies": {
         "get-east-asian-width": "1.6.0",
@@ -244,9 +241,9 @@
       "license": "MIT"
     },
     "node_modules/@homebridge/ciao": {
-      "version": "1.3.8",
-      "resolved": "https://registry.npmjs.org/@homebridge/ciao/-/ciao-1.3.8.tgz",
-      "integrity": "sha512-lNhpCsZVbdbjz2trFjQdzQ3cUIMZQMIMksi7wd3ntTIYgdaGLqT1Ms97DfVIJYHzRuduf56ISvgU8RRLTpK/ng==",
+      "version": "1.3.9",
+      "resolved": "https://registry.npmjs.org/@homebridge/ciao/-/ciao-1.3.9.tgz",
+      "integrity": "sha512-TMy9zy173jDOpnFXDqL3BPIQn5lfcAkSsivYQatCCakoHk4fLGd7QjfAaNGYE3Ox+/ZI6Lq0e1gGcz1qdw/IbA==",
       "license": "MIT",
       "dependencies": {
         "debug": "^4.4.3",
@@ -841,9 +838,9 @@
       ]
     },
     "node_modules/@mistralai/mistralai": {
-      "version": "2.2.1",
-      "resolved": "https://registry.npmjs.org/@mistralai/mistralai/-/mistralai-2.2.1.tgz",
-      "integrity": "sha512-uKU8CZmL2RzYKmplsU01hii4p3pe4HqJefpWNRWXm1Tcm0Sm4xXfwSLIy4k7ZCPlbETCGcp69E7hZs+WOJ5itQ==",
+      "version": "2.2.5",
+      "resolved": "https://registry.npmjs.org/@mistralai/mistralai/-/mistralai-2.2.5.tgz",
+      "integrity": "sha512-ATbWzKkNzNAZ+gtw9MI/c/ULTMG80tKUiRNIbQFfg4OP0uEZZpTfXZeBCNfs5Dq0uqMQ/tQWc4o6RRJQtMrpDA==",
       "license": "Apache-2.0",
       "dependencies": {
         "ws": "^8.18.0",
@@ -898,256 +895,6 @@
       "license": "Apache-2.0",
       "engines": {
         "node": ">=14.0.0"
-      }
-    },
-    "node_modules/@napi-rs/canvas": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas/-/canvas-0.1.100.tgz",
-      "integrity": "sha512-xglYA6q3XO5P3BNJYxVZ1IV7DLVjp1Py6nwag88YntrS+3vKHyYcMqXVS4ZztJmwz2uGvz1FWhI/4LgbR5uQDA==",
-      "license": "MIT",
-      "optional": true,
-      "workspaces": [
-        "e2e/*"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      },
-      "optionalDependencies": {
-        "@napi-rs/canvas-android-arm64": "0.1.100",
-        "@napi-rs/canvas-darwin-arm64": "0.1.100",
-        "@napi-rs/canvas-darwin-x64": "0.1.100",
-        "@napi-rs/canvas-linux-arm-gnueabihf": "0.1.100",
-        "@napi-rs/canvas-linux-arm64-gnu": "0.1.100",
-        "@napi-rs/canvas-linux-arm64-musl": "0.1.100",
-        "@napi-rs/canvas-linux-riscv64-gnu": "0.1.100",
-        "@napi-rs/canvas-linux-x64-gnu": "0.1.100",
-        "@napi-rs/canvas-linux-x64-musl": "0.1.100",
-        "@napi-rs/canvas-win32-arm64-msvc": "0.1.100",
-        "@napi-rs/canvas-win32-x64-msvc": "0.1.100"
-      }
-    },
-    "node_modules/@napi-rs/canvas-android-arm64": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-android-arm64/-/canvas-android-arm64-0.1.100.tgz",
-      "integrity": "sha512-hjhCKhntPv9+t4ckHymdx0phYNcVW+GKQR6Lzw2zE+pOVjOplSmtx9nNNknTjbEDLcuLZqA1y8ufKg1XfgftzQ==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "android"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-darwin-arm64": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-darwin-arm64/-/canvas-darwin-arm64-0.1.100.tgz",
-      "integrity": "sha512-2PcswRaC7Ly645DGt88///zuFDhJxJYdKAs1uU3mfk1atYkXufgcgLfBpk6Tm12nCQBaNt1wpybuPZ4qOhTo8A==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "darwin"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-darwin-x64": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-darwin-x64/-/canvas-darwin-x64-0.1.100.tgz",
-      "integrity": "sha512-ePNZtj7pNIva/siZMg+HmbeozkIjqUIYdoymH8HaA3qK7LfzFN4WMBM8G6HQ9ZC+H3+Dnn5pqtiXpgLykaPOhw==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "darwin"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-linux-arm-gnueabihf": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-linux-arm-gnueabihf/-/canvas-linux-arm-gnueabihf-0.1.100.tgz",
-      "integrity": "sha512-d5cDB48oWFGU8/XPhUOFAlySgb/VAu7D+s8fi55K1Pcfg8aPplHWqMgibhVLU8ky7Pyg/fuiVLz4Nf3JrSTuUA==",
-      "cpu": [
-        "arm"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-linux-arm64-gnu": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-linux-arm64-gnu/-/canvas-linux-arm64-gnu-0.1.100.tgz",
-      "integrity": "sha512-rDxgxRu69RvDlX/bh9o22DxLsGr8EqsNgotL9+RwQE1S0b0cqeatqsw6aW45mukm0B42DIAaAacKaYQ8cqS1nw==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-linux-arm64-musl": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-linux-arm64-musl/-/canvas-linux-arm64-musl-0.1.100.tgz",
-      "integrity": "sha512-K3mDW66N+xT2/V439u1alFANiBUjdEx2gLiNYnCmUsva5jZMxWTjafBYwTzYK+EMFMHrUoabuU+T1BIP5CgbYQ==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-linux-riscv64-gnu": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-linux-riscv64-gnu/-/canvas-linux-riscv64-gnu-0.1.100.tgz",
-      "integrity": "sha512-mooqUBTIsccZpnoQC4NgrC1v6C1vof39etLNMnBwCY+p0gajWJvAHLGQ6g/gGyS5YrpDW+GefSN4+Cvcr08UWw==",
-      "cpu": [
-        "riscv64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-linux-x64-gnu": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-linux-x64-gnu/-/canvas-linux-x64-gnu-0.1.100.tgz",
-      "integrity": "sha512-1eCvkDCazm7FFhsT7DfGOdSaHgZVK3bt/dSBl5EWHOWmnz+I7j8tPseJqqD81NF+MH21jKUK4wQSDjN0mdhnTg==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-linux-x64-musl": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-linux-x64-musl/-/canvas-linux-x64-musl-0.1.100.tgz",
-      "integrity": "sha512-20arT6lnI19S68qNlii73TSEDbECNgzMz2EpldC1V3mZFuRkeujXkcebRk0LRJe9SEUAooYiLokfMViY8IX7yA==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "linux"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-win32-arm64-msvc": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-win32-arm64-msvc/-/canvas-win32-arm64-msvc-0.1.100.tgz",
-      "integrity": "sha512-DZFFT1wIAg37LJw37yhMRFfjATd3vTQzjZ1Yki8u2vhO6Hi5VE6BVaGQ1aaDu7xb4iMErz+9EOwjpS7xcxFeBw==",
-      "cpu": [
-        "arm64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "win32"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
-      }
-    },
-    "node_modules/@napi-rs/canvas-win32-x64-msvc": {
-      "version": "0.1.100",
-      "resolved": "https://registry.npmjs.org/@napi-rs/canvas-win32-x64-msvc/-/canvas-win32-x64-msvc-0.1.100.tgz",
-      "integrity": "sha512-MyT1j3mHC2+Lu4pBi9mKyMJhtP6U7k7EldY7sj/uS5gJA65gTXt8MefJQXLJo5d/vZbuWmfxzkEUNc/urV3pHA==",
-      "cpu": [
-        "x64"
-      ],
-      "license": "MIT",
-      "optional": true,
-      "os": [
-        "win32"
-      ],
-      "engines": {
-        "node": ">= 10"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/Brooooooklyn"
       }
     },
     "node_modules/@openclaw/fs-safe": {
@@ -1512,6 +1259,15 @@
         "node": ">=18"
       }
     },
+    "node_modules/clawpdf": {
+      "version": "0.2.0",
+      "resolved": "https://registry.npmjs.org/clawpdf/-/clawpdf-0.2.0.tgz",
+      "integrity": "sha512-Za4HD3CMRHNqOXOOyVJiQLnEuezRZR/oXiBzraTwL5XEQZuBwFxnyC1UzN4AjQWV2JrLN3ItbzfPRGE0gGOVwg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      }
+    },
     "node_modules/cliui": {
       "version": "8.0.1",
       "resolved": "https://registry.npmjs.org/cliui/-/cliui-8.0.1.tgz",
@@ -1738,9 +1494,9 @@
       }
     },
     "node_modules/diff": {
-      "version": "8.0.4",
-      "resolved": "https://registry.npmjs.org/diff/-/diff-8.0.4.tgz",
-      "integrity": "sha512-DPi0FmjiSU5EvQV0++GFDOJ9ASQUVFh5kD+OzOnYdi7n3Wpm9hWWGfB/O2blfHcMVTL5WkQXSnRiK9makhrcnw==",
+      "version": "9.0.0",
+      "resolved": "https://registry.npmjs.org/diff/-/diff-9.0.0.tgz",
+      "integrity": "sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==",
       "license": "BSD-3-Clause",
       "engines": {
         "node": ">=0.3.1"
@@ -2399,12 +2155,12 @@
       }
     },
     "node_modules/highlight.js": {
-      "version": "10.7.3",
-      "resolved": "https://registry.npmjs.org/highlight.js/-/highlight.js-10.7.3.tgz",
-      "integrity": "sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==",
+      "version": "11.11.1",
+      "resolved": "https://registry.npmjs.org/highlight.js/-/highlight.js-11.11.1.tgz",
+      "integrity": "sha512-Xwwo44whKBVCYoliBQwaPvtd/2tYFkRQtXDWj1nackaV2JPXx3L0+Jvd8/qCJ2p+ML0/XVkJ2q+Mr+UVdpJK5w==",
       "license": "BSD-3-Clause",
       "engines": {
-        "node": "*"
+        "node": ">=12.0.0"
       }
     },
     "node_modules/hono": {
@@ -2494,19 +2250,6 @@
         "url": "https://opencollective.com/express"
       }
     },
-    "node_modules/http-proxy-agent": {
-      "version": "7.0.2",
-      "resolved": "https://registry.npmjs.org/http-proxy-agent/-/http-proxy-agent-7.0.2.tgz",
-      "integrity": "sha512-T1gkAiYYDWYx3V5Bmyu7HcfcvL7mUrTWiM6yOfa3PIphViJ/gFPbvidQ+veqSOHci/PxBcDabeUNCzpOODJZig==",
-      "license": "MIT",
-      "dependencies": {
-        "agent-base": "^7.1.0",
-        "debug": "^4.3.4"
-      },
-      "engines": {
-        "node": ">= 14"
-      }
-    },
     "node_modules/https-proxy-agent": {
       "version": "7.0.6",
       "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-7.0.6.tgz",
@@ -2587,12 +2330,12 @@
       }
     },
     "node_modules/ipaddr.js": {
-      "version": "2.4.0",
-      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-2.4.0.tgz",
-      "integrity": "sha512-9VGk3HGanVE6JoZXHiCpnGy5X0jYDnN4EA4lntFPj+1vIWlFhIylq2CrrCOJH9EAhc5CYhq18F2Av2tgoAPsYQ==",
+      "version": "1.9.1",
+      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz",
+      "integrity": "sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==",
       "license": "MIT",
       "engines": {
-        "node": ">= 10"
+        "node": ">= 0.10"
       }
     },
     "node_modules/is-fullwidth-code-point": {
@@ -2762,9 +2505,19 @@
       }
     },
     "node_modules/linkify-it": {
-      "version": "5.0.0",
-      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.0.tgz",
-      "integrity": "sha512-5aHCbzQRADcdP+ATqnDuhhJ/MRIqDkZX5pyjFHRRysS8vZ5AbqGEoFIb6pYHPZ+L/OC2Lc+xT8uHVVR5CAK/wQ==",
+      "version": "5.0.1",
+      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.1.tgz",
+      "integrity": "sha512-wVoTjP4Q6R0NW5hiZkVJaFZPWgtXfoGF+6LucL3/FtiNjmcHhYjEr5f1Kqjirc1nBW07J/ZuRFumqr2oqccEWg==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/puzrin"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/markdown-it"
+        }
+      ],
       "license": "MIT",
       "dependencies": {
         "uc.micro": "^2.0.0"
@@ -2798,14 +2551,24 @@
       }
     },
     "node_modules/markdown-it": {
-      "version": "14.1.1",
-      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.1.1.tgz",
-      "integrity": "sha512-BuU2qnTti9YKgK5N+IeMubp14ZUKUUw7yeJbkjtosvHiP0AZ5c8IAgEMk79D0eC8F23r4Ac/q8cAIFdm2FtyoA==",
+      "version": "14.2.0",
+      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.2.0.tgz",
+      "integrity": "sha512-1TGiQiJVRQ3NPmZH6sx5Cfnmg6GQm9jvC1ch4TK511NjSJvjzKLzn5pPfZRNZkRPZP0HqCioSndqH8v2nRaWVQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/puzrin"
+        },
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/markdown-it"
+        }
+      ],
       "license": "MIT",
       "dependencies": {
         "argparse": "^2.0.1",
         "entities": "^4.4.0",
-        "linkify-it": "^5.0.0",
+        "linkify-it": "^5.0.1",
         "mdurl": "^2.0.0",
         "punycode.js": "^2.3.1",
         "uc.micro": "^2.1.0"
@@ -3204,18 +2967,6 @@
         "url": "https://opencollective.com/express"
       }
     },
-    "node_modules/pdfjs-dist": {
-      "version": "5.7.284",
-      "resolved": "https://registry.npmjs.org/pdfjs-dist/-/pdfjs-dist-5.7.284.tgz",
-      "integrity": "sha512-h4EdYQczmGhbOlqc3PPZwxevn7ApdWPbovAuWXOB/DjIyigSnwfy2oze7c6mRcSr9XgLp3eN3EeL4DyySTPMFw==",
-      "license": "Apache-2.0",
-      "engines": {
-        "node": ">=22.13.0 || >=24"
-      },
-      "optionalDependencies": {
-        "@napi-rs/canvas": "^0.1.100"
-      }
-    },
     "node_modules/pkce-challenge": {
       "version": "5.0.1",
       "resolved": "https://registry.npmjs.org/pkce-challenge/-/pkce-challenge-5.0.1.tgz",
@@ -3294,15 +3045,6 @@
         "forwarded": "0.2.0",
         "ipaddr.js": "1.9.1"
       },
-      "engines": {
-        "node": ">= 0.10"
-      }
-    },
-    "node_modules/proxy-addr/node_modules/ipaddr.js": {
-      "version": "1.9.1",
-      "resolved": "https://registry.npmjs.org/ipaddr.js/-/ipaddr.js-1.9.1.tgz",
-      "integrity": "sha512-0KI/607xoxSToH7GjN1FfSbLoU0+btTicjsQSWQlh/hZykN8KpmMf7uYwPW3R+akZ6R/w18ZlXSHBYXiYUPO3g==",
-      "license": "MIT",
       "engines": {
         "node": ">= 0.10"
       }
@@ -3415,9 +3157,9 @@
       }
     },
     "node_modules/quickjs-wasi": {
-      "version": "2.2.0",
-      "resolved": "https://registry.npmjs.org/quickjs-wasi/-/quickjs-wasi-2.2.0.tgz",
-      "integrity": "sha512-zQxXmQMrEoD3S+jQdYsloq4qAuaxKFHZj6hHqOYGwB2iQZH+q9e/lf5zQPXCKOk0WJuAjzRFbO4KwHIp2D05Iw==",
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/quickjs-wasi/-/quickjs-wasi-3.0.0.tgz",
+      "integrity": "sha512-X7ouKC4ZVf9bXQ8rsE7+L6TeBbesejAJH61x16xRaGAQGfBHHRcniWgzJZZVtHc8rS9yVsY+Tvk8/usAosg4bg==",
       "license": "MIT"
     },
     "node_modules/range-parser": {
@@ -3566,9 +3308,9 @@
       "license": "MIT"
     },
     "node_modules/semver": {
-      "version": "7.8.0",
-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.0.tgz",
-      "integrity": "sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA==",
+      "version": "7.8.1",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.1.tgz",
+      "integrity": "sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==",
       "license": "ISC",
       "optional": true,
       "bin": {
@@ -4009,9 +3751,9 @@
       }
     },
     "node_modules/tokenjuice": {
-      "version": "0.7.1",
-      "resolved": "https://registry.npmjs.org/tokenjuice/-/tokenjuice-0.7.1.tgz",
-      "integrity": "sha512-eO048hm9UcGHASjYkIWEij8QN68amGp+S1nJyo685qB1/ol+VGEYjPglcVPvCbJbZyFHvI+BBAMvOfnqYCtpsQ==",
+      "version": "0.8.0",
+      "resolved": "https://registry.npmjs.org/tokenjuice/-/tokenjuice-0.8.0.tgz",
+      "integrity": "sha512-8jSOhyW3NzYNx7HbbGDkNVltQPiGaZB10Tty5Ovqpsw1VOBw7y+FikykNZ4+Gp9Ze94UubtcPDak7kkyv6F2cg==",
       "license": "MIT",
       "bin": {
         "tokenjuice": "dist/cli/main.js"

@@ -285,6 +285,23 @@ describe("security audit gateway exposure findings", () => {
       } satisfies OpenClawConfig,
       expectedSeverity: "critical" as const,
     },
+    {
+      name: "loopback trusted-proxy with partial loopback CIDR prefix",
+      cfg: {
+        gateway: {
+          bind: "loopback",
+          allowRealIpFallback: true,
+          trustedProxies: ["127.0.0.1/32abc"],
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+      expectedSeverity: "critical" as const,
+    },
   ])("scores X-Real-IP fallback risk by gateway exposure: $name", ({ cfg, expectedSeverity }) => {
     expect(
       hasFinding(

@@ -35,6 +35,12 @@ describe("resolveSandboxWorkdir", () => {
     expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
   });
 
+  it("ignores unsafe environment integers", () => {
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "9007199254740993");
+
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+  });
+
   it("maps container root workdir to host workspace", async () => {
     await withTempDir(async (workspaceDir) => {
       const warnings: string[] = [];

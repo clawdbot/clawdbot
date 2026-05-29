@@ -20,6 +20,7 @@ struct VoiceWakeSettings: View {
     private let meter = MicLevelMonitor()
     @State private var micObserver = AudioInputDeviceObserver()
     @State private var micRefreshTask: Task<Void, Never>?
+    @State private var meterStartupTask: Task<Void, Never>?
     @State private var availableLocales: [Locale] = []
     @State private var triggerEntries: [TriggerEntry] = []
     private let fieldLabelWidth: CGFloat = 140
@@ -188,56 +189,65 @@ struct VoiceWakeSettings: View {
             }
             .settingsDetailContent()
         }
-        .task {
-            guard !self.isPreview else { return }
-            await self.loadMicsIfNeeded()
-        }
-        .task {
-            guard !self.isPreview else { return }
-            await self.loadLocalesIfNeeded()
-        }
-        .task {
-            guard !self.isPreview else { return }
-            await self.restartMeter()
-        }
         .onAppear {
             guard !self.isPreview else { return }
-            self.startMicObserver()
-            self.loadTriggerEntries()
+            guard self.isActive else { return }
+            self.activateLivePreview()
         }
         .onChange(of: self.state.voiceWakeMicID) { _, _ in
             guard !self.isPreview else { return }
             self.updateSelectedMicName()
-            Task { await self.restartMeter() }
+            guard self.isActive else { return }
+            self.scheduleMeterRestart()
         }
         .onChange(of: self.isActive) { _, active in
             guard !self.isPreview else { return }
             if !active {
-                self.tester.stop()
-                self.isTesting = false
-                self.testState = .idle
-                self.testTimeoutTask?.cancel()
-                self.micRefreshTask?.cancel()
-                self.micRefreshTask = nil
-                Task { await self.meter.stop() }
-                self.micObserver.stop()
+                self.deactivateLivePreview()
                 self.syncTriggerEntriesToState()
             } else {
-                self.startMicObserver()
-                self.loadTriggerEntries()
+                self.activateLivePreview()
             }
         }
         .onDisappear {
             guard !self.isPreview else { return }
-            self.tester.stop()
-            self.isTesting = false
-            self.testState = .idle
-            self.testTimeoutTask?.cancel()
-            self.micRefreshTask?.cancel()
-            self.micRefreshTask = nil
-            self.micObserver.stop()
-            Task { await self.meter.stop() }
+            self.deactivateLivePreview()
             self.syncTriggerEntriesToState()
+        }
+    }
+
+    private func activateLivePreview() {
+        self.meterStartupTask?.cancel()
+        self.startMicObserver()
+        self.loadTriggerEntries()
+        self.meterStartupTask = Task { @MainActor in
+            await self.loadMicsIfNeeded()
+            guard !Task.isCancelled, self.isActive else { return }
+            await self.loadLocalesIfNeeded()
+            guard !Task.isCancelled, self.isActive else { return }
+            await self.restartMeter()
+        }
+    }
+
+    private func deactivateLivePreview() {
+        self.tester.stop()
+        self.isTesting = false
+        self.testState = .idle
+        self.testTimeoutTask?.cancel()
+        self.micRefreshTask?.cancel()
+        self.micRefreshTask = nil
+        self.meterStartupTask?.cancel()
+        self.meterStartupTask = nil
+        self.micObserver.stop()
+        self.state.voiceWakeMeterActive = false
+        Task { await self.meter.stop() }
+    }
+
+    private func scheduleMeterRestart() {
+        self.meterStartupTask?.cancel()
+        self.meterStartupTask = Task { @MainActor in
+            guard !Task.isCancelled, self.isActive else { return }
+            await self.restartMeter()
         }
     }
 
@@ -652,6 +662,7 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func scheduleMicRefresh() {
+        guard self.isActive else { return }
         MicRefreshSupport.schedule(refreshTask: &self.micRefreshTask) {
             await self.loadMicsIfNeeded(force: true)
             await self.restartMeter()
@@ -713,8 +724,17 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func restartMeter() async {
+        guard self.isActive else {
+            self.state.voiceWakeMeterActive = false
+            await self.meter.stop()
+            return
+        }
         self.meterError = nil
         await self.meter.stop()
+        guard !Task.isCancelled, self.isActive else {
+            self.state.voiceWakeMeterActive = false
+            return
+        }
         do {
             try await self.meter.start { [weak state] level in
                 Task { @MainActor in
@@ -722,7 +742,14 @@ struct VoiceWakeSettings: View {
                     self.meterLevel = level
                 }
             }
+            guard !Task.isCancelled, self.isActive else {
+                self.state.voiceWakeMeterActive = false
+                await self.meter.stop()
+                return
+            }
+            self.state.voiceWakeMeterActive = true
         } catch {
+            self.state.voiceWakeMeterActive = false
             self.meterError = error.localizedDescription
         }
     }

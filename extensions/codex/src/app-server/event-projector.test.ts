@@ -1150,7 +1150,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking" });
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "thinking",
+      isReasoningSnapshot: true,
+    });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
     expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
       "patch (in_progress)",
@@ -1173,6 +1176,94 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+  });
+
+  it("streams accumulated reasoning snapshots grouped by Codex reasoning indexes", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 1,
+        delta: "Checking ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "Reading ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/textDelta", {
+        itemId: "reason-1",
+        contentIndex: 0,
+        delta: "files",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Checking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "Reading \n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "Reading files\n\nChecking ",
+      isReasoningSnapshot: true,
+    });
+  });
+
+  it("streams accumulated reasoning summaries grouped by summary section", async () => {
+    const onReasoningStream = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onReasoningStream,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 1,
+        delta: "Second",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "First ",
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/reasoning/summaryTextDelta", {
+        itemId: "reason-1",
+        summaryIndex: 0,
+        delta: "section",
+      }),
+    );
+
+    expect(onReasoningStream).toHaveBeenCalledTimes(3);
+    expect(onReasoningStream).toHaveBeenNthCalledWith(1, {
+      text: "Second",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(2, {
+      text: "First \n\nSecond",
+      isReasoningSnapshot: true,
+    });
+    expect(onReasoningStream).toHaveBeenNthCalledWith(3, {
+      text: "First section\n\nSecond",
+      isReasoningSnapshot: true,
+    });
   });
 
   it("synthesizes normalized tool progress for Codex-native tool items", async () => {

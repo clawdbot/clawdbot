@@ -9,6 +9,14 @@ export const msTeamsChannelConfigUiHints = {
     label: "MS Teams Config Writes",
     help: "Allow Microsoft Teams to write config in response to channel events/commands (default: true).",
   },
+  cloud: {
+    label: "MS Teams Cloud",
+    help: 'Teams SDK cloud environment for auth, token validation, and token services: "Public", "USGov", "USGovDoD", or "China" (default: Public).',
+  },
+  serviceUrl: {
+    label: "MS Teams Service URL",
+    help: "Bot Connector service URL for SDK proactive sends/edits/deletes. Set with cloud for USGov/DoD; set alone for GCC.",
+  },
   streaming: {
     label: "MS Teams Streaming",
     help: 'Microsoft Teams preview/progress streaming mode: "off" | "partial" | "block" | "progress". Personal chats use Teams native streaminfo progress when available.',

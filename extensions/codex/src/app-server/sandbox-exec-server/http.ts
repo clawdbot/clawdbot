@@ -7,6 +7,8 @@ import { readHttpHeaders, requireNumber, requireObject, requireString } from "./
 import { requireBackend } from "./runtime.js";
 import type { HttpHeader, OpenClawExecServer } from "./types.js";
 
+export const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
+
 export async function httpRequest(
   execServer: OpenClawExecServer,
   socket: WebSocket,
@@ -190,6 +192,13 @@ function readStreamingSandboxHttpResponse(params: {
           }
         }
         newline = stdoutBuffer.indexOf("\n");
+      }
+      if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
+        params.child.kill("SIGKILL");
+        fail(
+          `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
+          null,
+        );
       }
     });
     params.child.stderr.on("data", (chunk: Buffer) => {

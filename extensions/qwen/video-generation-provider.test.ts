@@ -53,6 +53,18 @@ function expectPostJsonRequest(
   ]);
 }
 
+function streamedVideoResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
+}
+
 describe("qwen video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildQwenVideoGenerationProvider());
@@ -89,6 +101,39 @@ describe("qwen video generation provider", () => {
     });
     expectDashscopeVideoTaskPoll(fetchWithTimeoutMock);
     expectSuccessfulDashscopeVideoResult(result);
+  });
+
+  it("rejects DashScope video downloads that exceed the configured media cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          request_id: "req-too-large",
+          output: { task_id: "task-too-large" },
+        }),
+      },
+      release: async () => {},
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          output: {
+            task_status: "SUCCEEDED",
+            results: [{ video_url: "https://example.com/too-large.mp4" }],
+          },
+        }),
+        headers: new Headers(),
+      })
+      .mockResolvedValueOnce(streamedVideoResponse("too-large"));
+
+    const provider = buildQwenVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "qwen",
+        model: "wan2.6-r2v-flash",
+        prompt: "short video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Qwen generated video download exceeds 1 bytes");
   });
 
   it("fails fast when reference inputs are local buffers instead of remote URLs", async () => {

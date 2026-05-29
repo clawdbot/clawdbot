@@ -108,7 +108,7 @@ preset and adapt the provider block:
         "azure-speech": {
           apiKey: "${AZURE_SPEECH_KEY}",
           region: "eastus",
-          voice: "en-US-JennyNeural",
+          speakerVoice: "en-US-JennyNeural",
           lang: "en-US",
           outputFormat: "audio-24khz-48kbitrate-mono-mp3",
           voiceNoteOutputFormat: "ogg-24khz-16bit-mono-opus",
@@ -130,7 +130,7 @@ preset and adapt the provider block:
         elevenlabs: {
           apiKey: "${ELEVENLABS_API_KEY}",
           model: "eleven_multilingual_v2",
-          voiceId: "EXAVITQu4vr4xnSDxMaL",
+          speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
         },
       },
     },
@@ -149,7 +149,7 @@ preset and adapt the provider block:
         google: {
           apiKey: "${GEMINI_API_KEY}",
           model: "gemini-3.1-flash-tts-preview",
-          voiceName: "Kore",
+          speakerVoice: "Kore",
           // Optional natural-language style prompts:
           // audioProfile: "Speak in a calm, podcast-host tone.",
           // speakerName: "Alex",
@@ -170,7 +170,7 @@ preset and adapt the provider block:
       providers: {
         gradium: {
           apiKey: "${GRADIUM_API_KEY}",
-          voiceId: "YTpq7expH9539ERJ",
+          speakerVoiceId: "YTpq7expH9539ERJ",
         },
       },
     },
@@ -189,7 +189,7 @@ preset and adapt the provider block:
         inworld: {
           apiKey: "${INWORLD_API_KEY}",
           modelId: "inworld-tts-1.5-max",
-          voiceId: "Sarah",
+          speakerVoiceId: "Sarah",
           temperature: 0.7,
         },
       },
@@ -228,7 +228,7 @@ preset and adapt the provider block:
       providers: {
         microsoft: {
           enabled: true,
-          voice: "en-US-MichelleNeural",
+          speakerVoice: "en-US-MichelleNeural",
           lang: "en-US",
           outputFormat: "audio-24khz-48kbitrate-mono-mp3",
           rate: "+0%",
@@ -251,7 +251,7 @@ preset and adapt the provider block:
         minimax: {
           apiKey: "${MINIMAX_API_KEY}",
           model: "speech-2.8-hd",
-          voiceId: "English_expressive_narrator",
+          speakerVoiceId: "English_expressive_narrator",
           speed: 1.0,
           vol: 1.0,
           pitch: 0,
@@ -275,12 +275,12 @@ preset and adapt the provider block:
         openai: {
           apiKey: "${OPENAI_API_KEY}",
           model: "gpt-4o-mini-tts",
-          voice: "alloy",
+          speakerVoice: "alloy",
         },
         elevenlabs: {
           apiKey: "${ELEVENLABS_API_KEY}",
           model: "eleven_multilingual_v2",
-          voiceId: "EXAVITQu4vr4xnSDxMaL",
+          speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
           voiceSettings: { stability: 0.5, similarityBoost: 0.75, style: 0.0, useSpeakerBoost: true, speed: 1.0 },
           applyTextNormalization: "auto",
           languageCode: "en",
@@ -302,7 +302,7 @@ preset and adapt the provider block:
         openrouter: {
           apiKey: "${OPENROUTER_API_KEY}",
           model: "hexgrad/kokoro-82m",
-          voice: "af_alloy",
+          speakerVoice: "af_alloy",
           responseFormat: "mp3",
         },
       },
@@ -322,7 +322,7 @@ preset and adapt the provider block:
         volcengine: {
           apiKey: "${VOLCENGINE_TTS_API_KEY}",
           resourceId: "seed-tts-1.0",
-          voice: "en_female_anna_mars_bigtts",
+          speakerVoice: "en_female_anna_mars_bigtts",
         },
       },
     },
@@ -340,7 +340,7 @@ preset and adapt the provider block:
       providers: {
         xai: {
           apiKey: "${XAI_API_KEY}",
-          voiceId: "eve",
+          speakerVoiceId: "eve",
           language: "en",
           responseFormat: "mp3",
         },
@@ -361,7 +361,7 @@ preset and adapt the provider block:
         xiaomi: {
           apiKey: "${XIAOMI_API_KEY}",
           model: "mimo-v2.5-tts",
-          voice: "mimo_default",
+          speakerVoice: "mimo_default",
           format: "mp3",
         },
       },
@@ -395,7 +395,7 @@ voice, model, persona, or auto-TTS mode. The agent block deep-merges over
         id: "reader",
         tts: {
           providers: {
-            elevenlabs: { voiceId: "EXAVITQu4vr4xnSDxMaL" },
+            elevenlabs: { speakerVoiceId: "EXAVITQu4vr4xnSDxMaL" },
           },
         },
       },
@@ -419,7 +419,7 @@ Precedence order for automatic replies, `/tts audio`, `/tts status`, and the
 
 Channel and account overrides use the same shape as `messages.tts` and
 deep-merge over the earlier layers, so shared provider credentials can stay in
-`messages.tts` while a channel or bot account changes only voice, model, persona,
+`messages.tts` while a channel or bot account changes only speaker voice, model, persona,
 or auto mode:
 
 ```json5
@@ -438,7 +438,7 @@ or auto mode:
         english: {
           tts: {
             providers: {
-              openai: { voice: "shimmer" },
+              openai: { speakerVoice: "shimmer" },
             },
           },
         },
@@ -468,7 +468,10 @@ templates, seeds, and voice settings.
           label: "Narrator",
           provider: "elevenlabs",
           providers: {
-            elevenlabs: { voiceId: "EXAVITQu4vr4xnSDxMaL", modelId: "eleven_multilingual_v2" },
+            elevenlabs: {
+              speakerVoiceId: "EXAVITQu4vr4xnSDxMaL",
+              modelId: "eleven_multilingual_v2",
+            },
           },
         },
       },
@@ -503,12 +506,12 @@ templates, seeds, and voice settings.
           providers: {
             google: {
               model: "gemini-3.1-flash-tts-preview",
-              voiceName: "Algieba",
+              speakerVoice: "Algieba",
               promptTemplate: "audio-profile-v1",
             },
-            openai: { model: "gpt-4o-mini-tts", voice: "cedar" },
+            openai: { model: "gpt-4o-mini-tts", speakerVoice: "cedar" },
             elevenlabs: {
-              voiceId: "voice_id",
+              speakerVoiceId: "voice_id",
               modelId: "eleven_multilingual_v2",
               seed: 42,
               voiceSettings: {
@@ -606,7 +609,7 @@ audio only:
 ```text
 Here you go.
 
-[[tts:voiceId=pMsXgVXv3BLzUgSXRplE model=eleven_v3 speed=1.1]]
+[[tts:speakerVoiceId=pMsXgVXv3BLzUgSXRplE model=eleven_v3 speed=1.1]]
 [[tts:text]](laughs) Read the song once more.[[/tts:text]]
 ```
 
@@ -622,7 +625,7 @@ directive warnings.
 **Available directive keys:**
 
 - `provider` (registered provider id; requires `allowProvider: true`)
-- `voice` / `voiceName` / `voice_name` / `google_voice` / `voiceId`
+- `speakerVoice` / `speakerVoiceId` (legacy aliases: `voice`, `voiceName`, `voice_name`, `google_voice`, `voiceId`)
 - `model` / `google_model`
 - `stability`, `similarityBoost`, `style`, `speed`, `useSpeakerBoost`
 - `vol` / `volume` (MiniMax volume, 0–10)
@@ -823,7 +826,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="apiKey" type="string">Env: `AZURE_SPEECH_KEY`, `AZURE_SPEECH_API_KEY`, or `SPEECH_KEY`.</ParamField>
     <ParamField path="region" type="string">Azure Speech region (e.g. `eastus`). Env: `AZURE_SPEECH_REGION` or `SPEECH_REGION`.</ParamField>
     <ParamField path="endpoint" type="string">Optional Azure Speech endpoint override (alias `baseUrl`).</ParamField>
-    <ParamField path="voice" type="string">Azure voice ShortName. Default `en-US-JennyNeural`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Azure voice ShortName. Default `en-US-JennyNeural`. Legacy alias: `voice`.</ParamField>
     <ParamField path="lang" type="string">SSML language code. Default `en-US`.</ParamField>
     <ParamField path="outputFormat" type="string">Azure `X-Microsoft-OutputFormat` for standard audio. Default `audio-24khz-48kbitrate-mono-mp3`.</ParamField>
     <ParamField path="voiceNoteOutputFormat" type="string">Azure `X-Microsoft-OutputFormat` for voice-note output. Default `ogg-24khz-16bit-mono-opus`.</ParamField>
@@ -832,7 +835,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   <Accordion title="ElevenLabs">
     <ParamField path="apiKey" type="string">Falls back to `ELEVENLABS_API_KEY` or `XI_API_KEY`.</ParamField>
     <ParamField path="model" type="string">Model id (e.g. `eleven_multilingual_v2`, `eleven_v3`).</ParamField>
-    <ParamField path="voiceId" type="string">ElevenLabs voice id.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">ElevenLabs voice id. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="voiceSettings" type="object">
       `stability`, `similarityBoost`, `style` (each `0..1`), `useSpeakerBoost` (`true|false`), `speed` (`0.5..2.0`, `1.0` = normal).
     </ParamField>
@@ -845,7 +848,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   <Accordion title="Google Gemini">
     <ParamField path="apiKey" type="string">Falls back to `GEMINI_API_KEY` / `GOOGLE_API_KEY`. If omitted, TTS can reuse `models.providers.google.apiKey` before env fallback.</ParamField>
     <ParamField path="model" type="string">Gemini TTS model. Default `gemini-3.1-flash-tts-preview`.</ParamField>
-    <ParamField path="voiceName" type="string">Gemini prebuilt voice name. Default `Kore`. Alias: `voice`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Gemini prebuilt voice name. Default `Kore`. Legacy aliases: `voiceName`, `voice`.</ParamField>
     <ParamField path="audioProfile" type="string">Natural-language style prompt prepended before spoken text.</ParamField>
     <ParamField path="speakerName" type="string">Optional speaker label prepended before spoken text when your prompt uses a named speaker.</ParamField>
     <ParamField path="promptTemplate" type='"audio-profile-v1"'>Set to `audio-profile-v1` to wrap active persona prompt fields in a deterministic Gemini TTS prompt structure.</ParamField>
@@ -856,7 +859,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   <Accordion title="Gradium">
     <ParamField path="apiKey" type="string">Env: `GRADIUM_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.gradium.ai`.</ParamField>
-    <ParamField path="voiceId" type="string">Default Emma (`YTpq7expH9539ERJ`).</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default Emma (`YTpq7expH9539ERJ`). Legacy alias: `voiceId`.</ParamField>
   </Accordion>
 
   <Accordion title="Inworld">
@@ -865,7 +868,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="apiKey" type="string">Env: `INWORLD_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.inworld.ai`.</ParamField>
     <ParamField path="modelId" type="string">Default `inworld-tts-1.5-max`. Also: `inworld-tts-1.5-mini`, `inworld-tts-1-max`, `inworld-tts-1`.</ParamField>
-    <ParamField path="voiceId" type="string">Default `Sarah`.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default `Sarah`. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="temperature" type="number">Sampling temperature `0..2`.</ParamField>
 
   </Accordion>
@@ -881,7 +884,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
 
   <Accordion title="Microsoft (no API key)">
     <ParamField path="enabled" type="boolean" default="true">Allow Microsoft speech usage.</ParamField>
-    <ParamField path="voice" type="string">Microsoft neural voice name (e.g. `en-US-MichelleNeural`).</ParamField>
+    <ParamField path="speakerVoice" type="string">Microsoft neural voice name (e.g. `en-US-MichelleNeural`). Legacy alias: `voice`.</ParamField>
     <ParamField path="lang" type="string">Language code (e.g. `en-US`).</ParamField>
     <ParamField path="outputFormat" type="string">Microsoft output format. Default `audio-24khz-48kbitrate-mono-mp3`. Not all formats are supported by the bundled Edge-backed transport.</ParamField>
     <ParamField path="rate / pitch / volume" type="string">Percent strings (e.g. `+10%`, `-5%`).</ParamField>
@@ -895,7 +898,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="apiKey" type="string">Falls back to `MINIMAX_API_KEY`. Token Plan auth via `MINIMAX_OAUTH_TOKEN`, `MINIMAX_CODE_PLAN_KEY`, or `MINIMAX_CODING_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.minimax.io`. Env: `MINIMAX_API_HOST`.</ParamField>
     <ParamField path="model" type="string">Default `speech-2.8-hd`. Env: `MINIMAX_TTS_MODEL`.</ParamField>
-    <ParamField path="voiceId" type="string">Default `English_expressive_narrator`. Env: `MINIMAX_TTS_VOICE_ID`.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default `English_expressive_narrator`. Env: `MINIMAX_TTS_VOICE_ID`. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="speed" type="number">`0.5..2.0`. Default `1.0`.</ParamField>
     <ParamField path="vol" type="number">`(0, 10]`. Default `1.0`.</ParamField>
     <ParamField path="pitch" type="number">Integer `-12..12`. Default `0`. Fractional values are truncated before the request.</ParamField>
@@ -904,7 +907,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   <Accordion title="OpenAI">
     <ParamField path="apiKey" type="string">Falls back to `OPENAI_API_KEY`.</ParamField>
     <ParamField path="model" type="string">OpenAI TTS model id (e.g. `gpt-4o-mini-tts`).</ParamField>
-    <ParamField path="voice" type="string">Voice name (e.g. `alloy`, `cedar`).</ParamField>
+    <ParamField path="speakerVoice" type="string">Voice name (e.g. `alloy`, `cedar`). Legacy alias: `voice`.</ParamField>
     <ParamField path="instructions" type="string">Explicit OpenAI `instructions` field. When set, persona prompt fields are **not** auto-mapped.</ParamField>
     <ParamField path="extraBody / extra_body" type="Record<string, unknown>">Extra JSON fields merged into `/audio/speech` request bodies after generated OpenAI TTS fields. Use this for OpenAI-compatible endpoints such as Kokoro that require provider-specific keys like `lang`; unsafe prototype keys are ignored.</ParamField>
     <ParamField path="baseUrl" type="string">
@@ -916,7 +919,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="apiKey" type="string">Env: `OPENROUTER_API_KEY`. Can reuse `models.providers.openrouter.apiKey`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://openrouter.ai/api/v1`. Legacy `https://openrouter.ai/v1` is normalized.</ParamField>
     <ParamField path="model" type="string">Default `hexgrad/kokoro-82m`. Alias: `modelId`.</ParamField>
-    <ParamField path="voice" type="string">Default `af_alloy`. Alias: `voiceId`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Default `af_alloy`. Legacy aliases: `voice`, `voiceId`.</ParamField>
     <ParamField path="responseFormat" type='"mp3" | "pcm"'>Default `mp3`.</ParamField>
     <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
   </Accordion>
@@ -926,7 +929,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="resourceId" type="string">Default `seed-tts-1.0`. Env: `VOLCENGINE_TTS_RESOURCE_ID`. Use `seed-tts-2.0` when your project has TTS 2.0 entitlement.</ParamField>
     <ParamField path="appKey" type="string">App key header. Default `aGjiRDfUWi`. Env: `VOLCENGINE_TTS_APP_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Override the Seed Speech TTS HTTP endpoint. Env: `VOLCENGINE_TTS_BASE_URL`.</ParamField>
-    <ParamField path="voice" type="string">Voice type. Default `en_female_anna_mars_bigtts`. Env: `VOLCENGINE_TTS_VOICE`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Voice type. Default `en_female_anna_mars_bigtts`. Env: `VOLCENGINE_TTS_VOICE`. Legacy alias: `voice`.</ParamField>
     <ParamField path="speedRatio" type="number">Provider-native speed ratio.</ParamField>
     <ParamField path="emotion" type="string">Provider-native emotion tag.</ParamField>
     <ParamField path="appId / token / cluster" type="string" deprecated>Legacy Volcengine Speech Console fields. Env: `VOLCENGINE_TTS_APPID`, `VOLCENGINE_TTS_TOKEN`, `VOLCENGINE_TTS_CLUSTER` (default `volcano_tts`).</ParamField>
@@ -935,7 +938,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
   <Accordion title="xAI">
     <ParamField path="apiKey" type="string">Env: `XAI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.x.ai/v1`. Env: `XAI_BASE_URL`.</ParamField>
-    <ParamField path="voiceId" type="string">Default `eve`. Live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`.</ParamField>
+    <ParamField path="speakerVoiceId" type="string">Default `eve`. Live voices: `ara`, `eve`, `leo`, `rex`, `sal`, `una`. Legacy alias: `voiceId`.</ParamField>
     <ParamField path="language" type="string">BCP-47 language code or `auto`. Default `en`.</ParamField>
     <ParamField path="responseFormat" type='"mp3" | "wav" | "pcm" | "mulaw" | "alaw"'>Default `mp3`.</ParamField>
     <ParamField path="speed" type="number">Provider-native speed override.</ParamField>
@@ -945,7 +948,7 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="apiKey" type="string">Env: `XIAOMI_API_KEY`.</ParamField>
     <ParamField path="baseUrl" type="string">Default `https://api.xiaomimimo.com/v1`. Env: `XIAOMI_BASE_URL`.</ParamField>
     <ParamField path="model" type="string">Default `mimo-v2.5-tts`. Env: `XIAOMI_TTS_MODEL`. Also supports `mimo-v2-tts`.</ParamField>
-    <ParamField path="voice" type="string">Default `mimo_default`. Env: `XIAOMI_TTS_VOICE`.</ParamField>
+    <ParamField path="speakerVoice" type="string">Default `mimo_default`. Env: `XIAOMI_TTS_VOICE`. Legacy alias: `voice`.</ParamField>
     <ParamField path="format" type='"mp3" | "wav"'>Default `mp3`. Env: `XIAOMI_TTS_FORMAT`.</ParamField>
     <ParamField path="style" type="string">Optional natural-language style instruction sent as the user message; not spoken.</ParamField>
   </Accordion>

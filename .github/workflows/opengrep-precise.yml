@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 0
+          fetch-depth: 1
           fetch-tags: false
           persist-credentials: false
           submodules: false
@@ -58,11 +58,11 @@ jobs:
       - name: Install opengrep
         env:
           # Pin both the install script (by commit SHA) and the binary version.
-          # The script SHA must match the v1.19.0 release tag in opengrep/opengrep
+          # The script SHA must match the v1.22.0 release tag in opengrep/opengrep
           # so a compromised or force-pushed `main` cannot RCE in our CI runner.
           # Bump both together when upgrading.
-          OPENGREP_VERSION: v1.19.0
-          OPENGREP_INSTALL_SHA: 9a4c0a68220618441608cd2bad4ff2eddccf8113
+          OPENGREP_VERSION: v1.22.0
+          OPENGREP_INSTALL_SHA: f458d7f0d52cc58eae1ca3cf3d5caf101e637519
         run: |
           curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
             | bash -s -- -v "$OPENGREP_VERSION"

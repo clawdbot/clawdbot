@@ -1,7 +1,7 @@
 import type { CancelNotification } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { promptAgent } from "./translator.prompt-harness.test-support.js";

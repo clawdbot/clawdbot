@@ -1,9 +1,14 @@
 export {
+  createChannelApprovalForwardingEvaluator,
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   createNativeApprovalForwardingFallbackSuppressor,
   nativeApprovalTargetsMatch,
+  resolveApprovalKind,
   shouldSuppressLocalNativeExecApprovalPrompt,
+  type ChannelApprovalExplicitTargetEligibilityParams,
+  type ChannelApprovalForwardingEligibilityParams,
+  type ChannelApprovalPotentialRouteParams,
 } from "./approval-native-helpers.js";
 export {
   resolveApprovalRequestSessionConversation,

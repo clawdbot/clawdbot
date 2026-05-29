@@ -500,6 +500,31 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it.each(["0", "1.5", "9007199254740993"])(
+    "rejects invalid Meet API page sizes: %s",
+    async (pageSize) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(
+        setupCli({}).parseAsync(
+          [
+            "googlemeet",
+            "artifacts",
+            "--access-token",
+            "token",
+            "--conference-record",
+            "rec-1",
+            "--page-size",
+            pageSize,
+          ],
+          { from: "user" },
+        ),
+      ).rejects.toThrow("page-size must be a positive integer");
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("prints markdown artifact and attendance output", async () => {
     stubMeetArtifactsApi();
     const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-google-meet-artifacts-"));
@@ -952,6 +977,36 @@ describe("google-meet CLI", () => {
     } finally {
       stdout.restore();
     }
+  });
+
+  it.each(["0x10", "1e3"])("rejects non-decimal listen timeouts: %s", async (timeoutMs) => {
+    const testListen = vi.fn();
+
+    await expect(
+      setupCli({
+        runtime: { testListen },
+      }).parseAsync(
+        [
+          "googlemeet",
+          "test-listen",
+          "https://meet.google.com/abc-defg-hij",
+          "--timeout-ms",
+          timeoutMs,
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("timeout-ms must be a positive number");
+
+    expect(testListen).not.toHaveBeenCalled();
+  });
+
+  it.each(["0", "-1", "1e3"])("rejects invalid auth callback timeouts: %s", async (timeoutSec) => {
+    await expect(
+      setupCli({}).parseAsync(
+        ["googlemeet", "auth", "login", "--client-id", "client-id", "--timeout-sec", timeoutSec],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("timeout-sec must be a positive number");
   });
 
   it("prints a dry-run export manifest without writing files", async () => {

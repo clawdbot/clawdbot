@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import {
   privateFileStoreSync,
@@ -302,8 +303,8 @@ function toNonNegativeInteger(value: unknown): number | null {
     return normalized >= 0 ? normalized : null;
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
+    const parsed = parseStrictNonNegativeInteger(value);
+    if (parsed !== undefined) {
       return parsed >= 0 ? parsed : null;
     }
   }
@@ -914,6 +915,14 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
     data.quote && typeof data.quote === "object"
       ? toNumberId((data.quote as { ownerId?: unknown }).ownerId)
       : "";
+  const quotedGlobalMsgId =
+    data.quote && typeof data.quote === "object"
+      ? toStringValue((data.quote as { globalMsgId?: unknown }).globalMsgId)
+      : "";
+  const quotedBody =
+    data.quote && typeof data.quote === "object"
+      ? toStringValue((data.quote as { msg?: unknown }).msg)
+      : "";
   const hasAnyMention = mentionIds.length > 0;
   const canResolveExplicitMention = Boolean(normalizedOwnUserId);
   const wasExplicitlyMentioned = Boolean(
@@ -943,10 +952,18 @@ function toInboundMessage(message: Message, ownUserId?: string): ZaloInboundMess
     canResolveExplicitMention,
     wasExplicitlyMentioned,
     implicitMention,
+    quotedGlobalMsgId: quotedGlobalMsgId || undefined,
+    quotedOwnerId: quoteOwnerId || undefined,
+    quotedBody: quotedBody || undefined,
     eventMessage,
     raw: message,
   };
 }
+
+export const testing = {
+  toInboundMessage,
+};
+export { testing as __testing };
 
 function zalouserSessionExists(profileInput?: string | null): boolean {
   const profile = normalizeProfile(profileInput);

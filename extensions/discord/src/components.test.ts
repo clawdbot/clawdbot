@@ -7,8 +7,14 @@ let resolveDiscordComponentEntry: typeof import("./components-registry.js").reso
 let resolveDiscordComponentEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordComponentEntryWithPersistence;
 let resolveDiscordModalEntry: typeof import("./components-registry.js").resolveDiscordModalEntry;
 let resolveDiscordModalEntryWithPersistence: typeof import("./components-registry.js").resolveDiscordModalEntryWithPersistence;
+let buildDiscordComponentCustomId: typeof import("./components.js").buildDiscordComponentCustomId;
 let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
 let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
+let buildDiscordModalCustomId: typeof import("./components.js").buildDiscordModalCustomId;
+let parseDiscordComponentCustomId: typeof import("./components.js").parseDiscordComponentCustomId;
+let parseDiscordComponentCustomIdForInteraction: typeof import("./components.js").parseDiscordComponentCustomIdForInteraction;
+let parseDiscordModalCustomId: typeof import("./components.js").parseDiscordModalCustomId;
+let parseDiscordModalCustomIdForInteraction: typeof import("./components.js").parseDiscordModalCustomIdForInteraction;
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
 
 beforeAll(async () => {
@@ -20,11 +26,57 @@ beforeAll(async () => {
     resolveDiscordModalEntry,
     resolveDiscordModalEntryWithPersistence,
   } = await import("./components-registry.js"));
-  ({ buildDiscordComponentMessage, buildDiscordComponentMessageFlags, readDiscordComponentSpec } =
-    await import("./components.js"));
+  ({
+    buildDiscordComponentCustomId,
+    buildDiscordComponentMessage,
+    buildDiscordComponentMessageFlags,
+    buildDiscordModalCustomId,
+    parseDiscordComponentCustomId,
+    parseDiscordComponentCustomIdForInteraction,
+    parseDiscordModalCustomId,
+    parseDiscordModalCustomIdForInteraction,
+    readDiscordComponentSpec,
+  } = await import("./components.js"));
 });
 
 describe("discord components", () => {
+  it("round-trips custom id values that contain separators", () => {
+    const componentId = "button=a;two space%3B";
+    const modalId = "modal=x;y space%3D";
+
+    const componentCustomId = buildDiscordComponentCustomId({ componentId, modalId });
+    expect(componentCustomId).not.toContain(componentId);
+    expect(componentCustomId).toContain("space");
+    expect(parseDiscordComponentCustomId(componentCustomId)).toEqual({ componentId, modalId });
+    expect(parseDiscordComponentCustomIdForInteraction(componentCustomId).data).toMatchObject({
+      cid: componentId,
+      mid: modalId,
+    });
+
+    const modalCustomId = buildDiscordModalCustomId(modalId);
+    expect(modalCustomId).not.toContain(modalId);
+    expect(modalCustomId).toContain("space");
+    expect(parseDiscordModalCustomId(modalCustomId)).toBe(modalId);
+    expect(parseDiscordModalCustomIdForInteraction(modalCustomId).data).toMatchObject({
+      mid: modalId,
+    });
+  });
+
+  it("keeps legacy percent-like custom id values raw", () => {
+    expect(buildDiscordComponentCustomId({ componentId: "button_v1" })).toBe(
+      "occomp:cid=button_v1",
+    );
+    expect(buildDiscordComponentCustomId({ componentId: "button=v1" })).toBe(
+      "occomp:cid=button=v1",
+    );
+    expect(buildDiscordModalCustomId("modal_v1")).toBe("ocmodal:mid=modal_v1");
+    expect(buildDiscordModalCustomId("modal=v1")).toBe("ocmodal:mid=modal=v1");
+    expect(parseDiscordComponentCustomId("occomp:cid=button%3Bv1")).toEqual({
+      componentId: "button%3Bv1",
+    });
+    expect(parseDiscordModalCustomId("ocmodal:mid=modal%3Dv1")).toBe("modal%3Dv1");
+  });
+
   it("builds v2 containers with modal trigger", () => {
     const spec = readDiscordComponentSpec({
       text: "Choose a path",
@@ -104,6 +156,95 @@ describe("discord components", () => {
         },
       }),
     ).toThrow("options");
+  });
+
+  it("rejects malformed component count and length limits", () => {
+    expect(() =>
+      readDiscordComponentSpec({
+        blocks: [
+          {
+            type: "actions",
+            select: {
+              type: "string",
+              minValues: -1,
+              options: [{ label: "One", value: "one" }],
+            },
+          },
+        ],
+      }),
+    ).toThrow("components.blocks[0].select.minValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [{ type: "text", label: "Name", maxLength: 0 }],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].maxLength");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "select",
+              label: "Priority",
+              minValues: 0,
+              options: [{ label: "High", value: "high" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].minValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "checkbox",
+              label: "Choices",
+              maxValues: 25,
+              options: [{ label: "One", value: "one" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].maxValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        blocks: [
+          {
+            type: "actions",
+            select: {
+              type: "string",
+              maxValues: 0,
+              options: [{ label: "One", value: "one" }],
+            },
+          },
+        ],
+      }),
+    ).toThrow("components.blocks[0].select.maxValues");
+
+    expect(() =>
+      readDiscordComponentSpec({
+        modal: {
+          title: "Details",
+          fields: [
+            {
+              type: "radio",
+              label: "Choice",
+              minValues: 1,
+              options: [{ label: "One", value: "one" }],
+            },
+          ],
+        },
+      }),
+    ).toThrow("components.modal.fields[0].minValues/maxValues");
   });
 
   it("requires attachment references for file blocks", () => {

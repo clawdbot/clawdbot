@@ -23,7 +23,7 @@ import {
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import { lazyStartRuntimeTurn } from "./runtime-turn.js";
+import { createLazyAcpRuntimeProxy } from "./runtime-proxy.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -95,39 +95,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
   }
 
   return {
-    async ensureSession(input) {
-      return await (await resolveRuntime()).ensureSession(input);
-    },
-    startTurn(input) {
-      return lazyStartRuntimeTurn(resolveRuntime, input);
-    },
-    async *runTurn(input) {
-      yield* (await resolveRuntime()).runTurn(input);
-    },
-    async getCapabilities(input) {
-      return (await (await resolveRuntime()).getCapabilities?.(input)) ?? { controls: [] };
-    },
-    async getStatus(input) {
-      return (await (await resolveRuntime()).getStatus?.(input)) ?? {};
-    },
-    async setMode(input) {
-      await (await resolveRuntime()).setMode?.(input);
-    },
-    async setConfigOption(input) {
-      await (await resolveRuntime()).setConfigOption?.(input);
-    },
-    async doctor() {
-      return (await (await resolveRuntime()).doctor?.()) ?? { ok: true, message: "ok" };
-    },
-    async prepareFreshSession(input) {
-      await (await resolveRuntime()).prepareFreshSession?.(input);
-    },
-    async cancel(input) {
-      await (await resolveRuntime()).cancel(input);
-    },
-    async close(input) {
-      await (await resolveRuntime()).close(input);
-    },
+    ...createLazyAcpRuntimeProxy(resolveRuntime),
     async probeAvailability() {
       await (await resolveRuntime()).probeAvailability();
     },

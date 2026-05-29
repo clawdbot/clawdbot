@@ -112,6 +112,7 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
 ]);
 const DISALLOWED_BODY_NEEDLES = ["OTEL-QA-SECRET", "OTEL-QA-OK"];
 const COLLECTOR_OUTPUT_TAIL_BYTES = 16_000;
+const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/u;
 const MAX_OTLP_COMPRESSED_BODY_BYTES = readPositiveIntegerEnv(
   "OPENCLAW_QA_OTEL_MAX_COMPRESSED_BODY_BYTES",
   2 * 1024 * 1024,
@@ -125,9 +126,24 @@ const MAX_CAPTURED_BODY_TEXT_BYTES = readPositiveIntegerEnv(
   512 * 1024,
 );
 
-function readPositiveIntegerEnv(name: string, fallback: number): number {
-  const parsed = Number.parseInt(process.env[name] ?? "", 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+function readPositiveIntegerEnv(
+  name: string,
+  fallback: number,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const raw = env[name];
+  if (raw == null || raw.trim() === "") {
+    return fallback;
+  }
+  const value = raw.trim();
+  if (!POSITIVE_INTEGER_PATTERN.test(value)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a safe integer`);
+  }
+  return parsed;
 }
 
 function oversizedBodyError(
@@ -1318,6 +1334,7 @@ async function main() {
 export const testing = {
   appendCapturedBodyText,
   decodeRequestBody,
+  readPositiveIntegerEnv,
   readRequestBody,
 };
 

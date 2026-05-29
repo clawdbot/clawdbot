@@ -182,6 +182,7 @@ const makeContext = (): GatewayRequestContext =>
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map(),
+    clearChatRunState: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),

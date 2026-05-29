@@ -38,7 +38,7 @@ import {
   SESSIONS_SEND_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam } from "./common.js";
+import { jsonResult, readNonNegativeIntegerParam, readStringParam } from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -55,7 +55,7 @@ const SessionsSendToolSchema = Type.Object({
   label: Type.Optional(Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
 });
 
 type GatewayCaller = typeof callGateway;
@@ -283,6 +283,7 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const gatewayCall = opts?.callGateway ?? callGateway;
       const message = readStringParam(params, "message", { required: true });
+      const timeoutSeconds = readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30;
       const { cfg, mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
         resolveSessionToolContext(opts);
 
@@ -435,10 +436,6 @@ export function createSessionsSendTool(opts?: {
       // Normalize sessionKey/sessionId input into a canonical session key.
       const resolvedKey = visibleSession.key;
       const displayKey = visibleSession.displayKey;
-      const timeoutSeconds =
-        typeof params.timeoutSeconds === "number" && Number.isFinite(params.timeoutSeconds)
-          ? Math.max(0, Math.floor(params.timeoutSeconds))
-          : 30;
       const timeoutMs = timeoutSeconds * 1000;
       const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();

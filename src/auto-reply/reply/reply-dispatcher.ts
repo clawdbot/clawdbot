@@ -9,7 +9,11 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
 import { normalizeReplyPayload, type NormalizeReplySkipReason } from "./normalize-reply.js";
-import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import type {
+  ReplyDispatchBeforeDeliver,
+  ReplyDispatchKind,
+  ReplyDispatcher,
+} from "./reply-dispatcher.types.js";
 import type { ResponsePrefixContext } from "./response-prefix-template.js";
 import type { TypingController } from "./typing.js";
 
@@ -27,10 +31,7 @@ type ReplyDispatchDeliverer = (
   info: { kind: ReplyDispatchKind },
 ) => Promise<unknown>;
 
-export type ReplyDispatchBeforeDeliver = (
-  payload: ReplyPayload,
-  info: { kind: ReplyDispatchKind },
-) => Promise<ReplyPayload | null> | ReplyPayload | null;
+export type { ReplyDispatchBeforeDeliver };
 
 const DEFAULT_HUMAN_DELAY_MIN_MS = 800;
 const DEFAULT_HUMAN_DELAY_MAX_MS = 2500;
@@ -123,6 +124,7 @@ function normalizeReplyPayloadInternal(
 }
 
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
+  let beforeDeliver = options.beforeDeliver;
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
   // Start with pending=1 as a "reservation" to prevent premature gateway restart.
@@ -193,8 +195,8 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
           }
         }
         let deliverPayload: ReplyPayload | null = normalized;
-        if (options.beforeDeliver) {
-          deliverPayload = await options.beforeDeliver(normalized, { kind });
+        if (beforeDeliver) {
+          deliverPayload = await beforeDeliver(normalized, { kind });
           if (!deliverPayload) {
             cancelledCounts[kind] += 1;
             return;
@@ -248,6 +250,15 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
     sendToolResult: (payload) => enqueue("tool", payload),
     sendBlockReply: (payload) => enqueue("block", payload),
     sendFinalReply: (payload) => enqueue("final", payload),
+    appendBeforeDeliver: (hook) => {
+      const previousBeforeDeliver = beforeDeliver;
+      beforeDeliver = previousBeforeDeliver
+        ? async (payload, info) => {
+            const previousPayload = await previousBeforeDeliver(payload, info);
+            return previousPayload ? hook(previousPayload, info) : null;
+          }
+        : hook;
+    },
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
     getCancelledCounts: () => ({ ...cancelledCounts }),

@@ -1,3 +1,4 @@
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { WebFetchProviderPlugin } from "openclaw/plugin-sdk/provider-web-fetch";
 import { enablePluginInConfig } from "openclaw/plugin-sdk/provider-web-fetch";
 import { runFirecrawlScrape } from "./firecrawl-client.js";
@@ -13,10 +14,7 @@ export function createFirecrawlWebFetchProvider(): WebFetchProviderPlugin {
       execute: async (args) => {
         const url = typeof args.url === "string" ? args.url : "";
         const extractMode = args.extractMode === "text" ? "text" : "markdown";
-        const maxChars =
-          typeof args.maxChars === "number" && Number.isFinite(args.maxChars)
-            ? Math.floor(args.maxChars)
-            : undefined;
+        const maxChars = readPositiveIntegerParam(args, "maxChars");
         const proxy =
           args.proxy === "basic" || args.proxy === "stealth" || args.proxy === "auto"
             ? args.proxy

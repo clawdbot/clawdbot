@@ -93,6 +93,83 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
     );
   });
 
+  it("loads a configured Copilot harness plugin before selection", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: {
+        models: {
+          providers: {
+            "github-copilot": {
+              agentRuntime: { id: "copilot" },
+              baseUrl: "https://api.githubcopilot.com",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["copilot"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["copilot"],
+            entries: expect.objectContaining({
+              copilot: expect.objectContaining({ enabled: true }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("does not bypass a restrictive allowlist that omits a configured Copilot harness", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "github-copilot",
+      modelId: "gpt-4o",
+      config: {
+        plugins: {
+          allow: ["telegram"],
+          entries: {
+            telegram: { enabled: true },
+          },
+        },
+        models: {
+          providers: {
+            "github-copilot": {
+              agentRuntime: { id: "copilot" },
+              baseUrl: "https://api.githubcopilot.com",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scope: "all",
+        workspaceDir: "/tmp/workspace",
+        onlyPluginIds: ["copilot"],
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["telegram"],
+            entries: expect.not.objectContaining({
+              copilot: expect.anything(),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
   it("widens a scoped harness allowlist with the provider owner for openai-codex models", async () => {
     await ensureSelectedAgentHarnessPlugin({
       provider: "openai-codex",
@@ -230,6 +307,28 @@ describe("ensureSelectedAgentHarnessPlugin", () => {
           providers: {
             openai: {
               baseUrl: "https://openai-compatible.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not treat CLI backend runtime aliases as plugin ids", async () => {
+    await ensureSelectedAgentHarnessPlugin({
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              agentRuntime: { id: "claude-cli" },
+              baseUrl: "https://api.anthropic.com",
               models: [],
             },
           },

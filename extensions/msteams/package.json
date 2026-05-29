@@ -9,16 +9,14 @@
   "type": "module",
   "dependencies": {
     "@azure/identity": "4.13.1",
-    "@microsoft/teams.api": "2.0.11",
-    "@microsoft/teams.apps": "2.0.11",
+    "@microsoft/teams.api": "2.0.12",
+    "@microsoft/teams.apps": "2.0.12",
     "express": "5.2.1",
-    "jsonwebtoken": "9.0.3",
-    "jwks-rsa": "4.0.1",
     "typebox": "1.1.38"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@types/jsonwebtoken": "9.0.10",
+    "jose": "6.2.3",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {

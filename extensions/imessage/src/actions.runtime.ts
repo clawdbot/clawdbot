@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
 import { resolveIMessageMessageId as resolveIMessageMessageIdImpl } from "./monitor-reply-cache.js";
@@ -182,6 +183,31 @@ async function runIMessageCliJson(
     let stdout = "";
     let stderr = "";
     let killEscalation: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+    const clearTimers = (options: { keepKillEscalation?: boolean } = {}): void => {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (killEscalation && !options.keepKillEscalation) {
+        clearTimeout(killEscalation);
+      }
+    };
+    const fail = (error: Error, options: { keepKillEscalation?: boolean } = {}): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers(options);
+      reject(error);
+    };
+    const succeed = (value: Record<string, unknown>): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimers();
+      resolve(value);
+    };
     const timer =
       options.timeoutMs && options.timeoutMs > 0
         ? setTimeout(() => {
@@ -196,32 +222,43 @@ async function runIMessageCliJson(
                 // best-effort
               }
             }, 2000);
-            reject(new Error(`iMessage action timed out after ${options.timeoutMs}ms`));
+            fail(new Error(`iMessage action timed out after ${options.timeoutMs}ms`), {
+              keepKillEscalation: true,
+            });
           }, options.timeoutMs)
         : null;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      if (settled) {
+        return;
+      }
+      const appended = appendIMessageCliStdout(stdout, chunk);
+      if (!appended.ok) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // best-effort
+        }
+        fail(new Error(appended.message));
+        return;
+      }
+      stdout = appended.value;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr = appendIMessageCliStderrTail(stderr, chunk);
     });
     child.on("error", (error) => {
-      if (timer) {
-        clearTimeout(timer);
+      if (settled) {
+        clearTimers();
+        return;
       }
-      if (killEscalation) {
-        clearTimeout(killEscalation);
-      }
-      reject(error);
+      fail(error);
     });
     child.on("close", (code) => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (killEscalation) {
-        clearTimeout(killEscalation);
+      if (settled) {
+        clearTimers();
+        return;
       }
       const lines = normalizeStringEntries(stdout.split(/\r?\n/));
       const last = lines.at(-1);
@@ -242,11 +279,11 @@ async function runIMessageCliJson(
           stderr.trim() ||
           stdout.trim() ||
           `imsg exited with code ${code}`;
-        reject(new Error(detail));
+        fail(new Error(detail));
         return;
       }
       if (!parsed) {
-        reject(new Error(`imsg returned non-JSON output: ${stdout.trim() || stderr.trim()}`));
+        fail(new Error(`imsg returned non-JSON output: ${stdout.trim() || stderr.trim()}`));
         return;
       }
       if (parsed.success === false) {
@@ -254,10 +291,10 @@ async function runIMessageCliJson(
           typeof parsed.error === "string" && parsed.error.trim()
             ? parsed.error.trim()
             : "iMessage action failed";
-        reject(new Error(error));
+        fail(new Error(error));
         return;
       }
-      resolve(parsed);
+      succeed(parsed);
     });
   });
 }

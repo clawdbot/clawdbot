@@ -241,6 +241,16 @@ describe("media-generation runtime shared normalization", () => {
     expect(deriveAspectRatioFromSize("1024x1536")).toBe("2:3");
   });
 
+  it("rejects unsafe size dimensions before deriving ratios", () => {
+    expect(deriveAspectRatioFromSize("9007199254740993x3")).toBeUndefined();
+    expect(
+      resolveClosestSize({
+        requestedSize: "9007199254740993x3",
+        supportedSizes: ["1024x1024", "1536x1024"],
+      }),
+    ).toBeUndefined();
+  });
+
   it("maps unsupported sizes to the closest supported size", () => {
     expect(
       resolveClosestSize({

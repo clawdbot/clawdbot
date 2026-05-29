@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  listManagedPluginNpmRoots: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   relinkOpenClawPeerDependenciesInManagedNpmRoot: vi.fn(),
   runPluginPayloadSmokeCheck: vi.fn(),
@@ -15,6 +16,9 @@ vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () 
 vi.mock("../../plugins/plugin-peer-link.js", () => ({
   relinkOpenClawPeerDependenciesInManagedNpmRoot:
     mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
+}));
+vi.mock("../../plugins/npm-project-roots.js", () => ({
+  listManagedPluginNpmRoots: mocks.listManagedPluginNpmRoots,
 }));
 vi.mock("./plugin-payload-validation.js", () => ({
   runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
@@ -33,6 +37,9 @@ describe("runPostCorePluginConvergence", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listManagedPluginNpmRoots.mockImplementation((npmRoot: string) =>
+      Promise.resolve([npmRoot]),
+    );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -148,26 +155,41 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
-  it("repairs managed npm openclaw peer links before payload smoke checks", async () => {
+  it("repairs managed npm openclaw peer links in every managed npm project before payload smoke checks", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
       records: { codex: { source: "npm", installPath: "/p/codex" } },
     });
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockResolvedValue({
-      checked: 1,
-      attempted: 1,
-      repaired: 1,
-      skipped: 0,
-    });
+    mocks.listManagedPluginNpmRoots.mockResolvedValue([
+      "/tmp/openclaw-state/npm",
+      "/tmp/openclaw-state/npm/projects/codex",
+    ]);
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot
+      .mockResolvedValueOnce({
+        checked: 0,
+        attempted: 0,
+        repaired: 0,
+        skipped: 0,
+      })
+      .mockResolvedValueOnce({
+        checked: 1,
+        attempted: 1,
+        repaired: 1,
+        skipped: 0,
+      });
 
     const result = await runPostCorePluginConvergence({
       cfg: { plugins: { entries: { codex: { enabled: true } } } } as unknown as OpenClawConfig,
       env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
     });
 
-    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenCalledWith({
+    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(1, {
       npmRoot: "/tmp/openclaw-state/npm",
+      logger: {},
+    });
+    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(2, {
+      npmRoot: "/tmp/openclaw-state/npm/projects/codex",
       logger: {},
     });
     expect(result.changes).toEqual([

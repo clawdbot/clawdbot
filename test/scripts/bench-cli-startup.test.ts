@@ -1,6 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
 
+function withEnv<T>(env: Record<string, string | undefined>, callback: () => T): T {
+  const previous = new Map<string, string | undefined>();
+  for (const [key, value] of Object.entries(env)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("bench-cli-startup", () => {
   it("fails reports with no measured samples", () => {
     expect(
@@ -161,5 +184,74 @@ describe("bench-cli-startup", () => {
     expect(() => testing.parseNonNegativeInt("0b10", 1, "--warmup")).toThrow(
       "--warmup must be an integer >= 0",
     );
+  });
+
+  it("writes a config fixture for config get benchmarks", () => {
+    expect(
+      withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
+        testing.buildConfigFixture({
+          id: "configGetGatewayPort",
+          name: "config get gateway.port",
+          args: ["config", "get", "gateway.port"],
+          presets: ["real"],
+        }),
+      ),
+    ).toEqual({
+      gateway: {
+        auth: { mode: "none" },
+        bind: "loopback",
+        mode: "local",
+        port: 32123,
+      },
+    });
+    expect(
+      withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () =>
+        testing.buildConfigFixture({
+          id: "gatewayHealthJson",
+          name: "gateway health --json",
+          args: ["gateway", "health", "--json"],
+          presets: ["real"],
+        }),
+      ),
+    ).toEqual({
+      gateway: {
+        auth: { mode: "none" },
+        bind: "loopback",
+        mode: "local",
+        port: 32123,
+      },
+    });
+  });
+
+  it("parses config fixture gateway ports strictly from env", () => {
+    expect(testing.parseGatewayPortEnv(undefined)).toBe(32123);
+    expect(testing.parseGatewayPortEnv("127.0.0.1:45678")).toBe(45678);
+    expect(testing.parseGatewayPortEnv("[::1]:45679")).toBe(45679);
+    expect(testing.parseGatewayPortEnv("::1")).toBe(32123);
+    expect(testing.parseGatewayPortEnv("[::1]")).toBe(32123);
+
+    expect(
+      withEnv({ OPENCLAW_GATEWAY_PORT: "45678" }, () =>
+        testing.buildConfigFixture({
+          id: "gatewayHealthJson",
+          name: "gateway health --json",
+          args: ["gateway", "health", "--json"],
+          presets: ["real"],
+        }),
+      ),
+    ).toMatchObject({ gateway: { port: 45678 } });
+
+    for (const invalid of ["45678abc", "127.0.0.1:45678abc"]) {
+      expect(() =>
+        withEnv({ OPENCLAW_GATEWAY_PORT: invalid }, () =>
+          testing.buildConfigFixture({
+            id: "gatewayHealthJson",
+            name: "gateway health --json",
+            args: ["gateway", "health", "--json"],
+            presets: ["real"],
+          }),
+        ),
+      ).toThrow("OPENCLAW_GATEWAY_PORT must be an integer >= 1");
+    }
   });
 });

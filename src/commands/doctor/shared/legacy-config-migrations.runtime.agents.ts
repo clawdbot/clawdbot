@@ -223,6 +223,20 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "systemPromptOverride"],
+    message:
+      'agents.defaults.systemPromptOverride was removed; OpenClaw owns the generated system prompt. Run "openclaw doctor --fix" to remove it.',
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].systemPromptOverride was removed; OpenClaw owns the generated system prompt. Run "openclaw doctor --fix" to remove it.',
+    match: (value) => hasAgentListSystemPromptOverride(value),
+  },
+];
+
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
 }
@@ -312,6 +326,15 @@ function hasAgentListRuntimePolicy(value: unknown): boolean {
     return false;
   }
   return value.some((agent) => getRecord(getRecord(agent)?.agentRuntime) !== null);
+}
+
+function hasAgentListSystemPromptOverride(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) =>
+    Object.prototype.hasOwnProperty.call(getRecord(agent) ?? {}, "systemPromptOverride"),
+  );
 }
 
 function hasOwnTimeoutMs(value: unknown): boolean {
@@ -599,6 +622,30 @@ function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: st
       delete surface.silentReplyRewrite;
       changes.push(`Removed surfaces.${surfaceId}.silentReplyRewrite.`);
     }
+  }
+}
+
+function removeLegacySystemPromptOverride(raw: Record<string, unknown>, changes: string[]): void {
+  const agents = getRecord(raw.agents);
+  const defaults = getRecord(agents?.defaults);
+  if (defaults && Object.prototype.hasOwnProperty.call(defaults, "systemPromptOverride")) {
+    delete defaults.systemPromptOverride;
+    changes.push("Removed agents.defaults.systemPromptOverride.");
+  }
+
+  if (!Array.isArray(agents?.list)) {
+    return;
+  }
+  for (const [index, agent] of agents.list.entries()) {
+    const agentRecord = getRecord(agent);
+    if (
+      !agentRecord ||
+      !Object.prototype.hasOwnProperty.call(agentRecord, "systemPromptOverride")
+    ) {
+      continue;
+    }
+    delete agentRecord.systemPromptOverride;
+    changes.push(`Removed agents.list.${index}.systemPromptOverride.`);
   }
 }
 
@@ -1149,6 +1196,12 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     describe: "Remove legacy silent reply rewrite and direct-chat silent reply config",
     legacyRules: SILENT_REPLY_LEGACY_RULES,
     apply: removeLegacySilentReplyConfig,
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.systemPromptOverride-removed",
+    describe: "Remove legacy agent system prompt override config",
+    legacyRules: SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES,
+    apply: removeLegacySystemPromptOverride,
   }),
   defineLegacyConfigMigration({
     id: "agents.defaults.llm->models.providers.timeoutSeconds",

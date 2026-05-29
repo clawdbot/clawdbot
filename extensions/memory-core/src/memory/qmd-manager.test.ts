@@ -4401,6 +4401,35 @@ describe("QmdMemoryManager", () => {
     readFileSpy.mockRestore();
   });
 
+  it("defaults non-finite partial read line options before streaming canonical memory files", async () => {
+    const readFileSpy = vi.spyOn(fs, "readFile");
+    const relPath = path.join("memory", "non-finite-window.md");
+    await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, relPath),
+      ["line-1", "line-2", "line-3"].join("\n"),
+      "utf-8",
+    );
+
+    const { manager } = await createManager();
+
+    const result = await manager.readFile({
+      relPath,
+      from: Number.NaN,
+      lines: Number.POSITIVE_INFINITY,
+    });
+    expect(result).toEqual({
+      path: relPath,
+      text: "line-1\nline-2\nline-3",
+      from: 1,
+      lines: 3,
+    });
+    expect(readFileSpy).not.toHaveBeenCalled();
+
+    await manager.close();
+    readFileSpy.mockRestore();
+  });
+
   it("returns a bounded default excerpt for qmd memory reads without explicit lines", async () => {
     const relPath = path.join("memory", "default-window.md");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });

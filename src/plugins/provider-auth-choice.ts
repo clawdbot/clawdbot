@@ -189,6 +189,15 @@ async function applyDefaultModelFromAuthChoice(params: {
       });
       nextConfig = migrationResult.config;
     }
+    const { ensureCopilotSdkForModelSelection } =
+      await import("../commands/copilot-sdk-install.js");
+    const copilotInstall = await ensureCopilotSdkForModelSelection({
+      cfg: nextConfig,
+      model: params.selectedModel,
+      prompter: params.prompter,
+      runtime: params.runtime,
+    });
+    nextConfig = copilotInstall.cfg;
   }
   await noteDefaultModelResult({
     previousPrimary,

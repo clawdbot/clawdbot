@@ -21,6 +21,7 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
+  allowRuntimePluginLoad?: boolean;
 };
 
 function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, TResult = unknown>(
@@ -54,6 +55,7 @@ export function normalizeProviderToolSchemas<
     workspaceDir: params.workspaceDir,
     env: params.env,
     runtimeHandle: params.runtimeHandle,
+    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
     context: buildProviderToolSchemaContext(params, provider),
   });
   return Array.isArray(pluginNormalized)
@@ -72,6 +74,7 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     workspaceDir: params.workspaceDir,
     env: params.env,
     runtimeHandle: params.runtimeHandle,
+    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
     context: buildProviderToolSchemaContext(params, provider),
   });
   if (!Array.isArray(diagnostics)) {

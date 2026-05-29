@@ -19,8 +19,7 @@ import { isThinkingLevelSupported, resolveSupportedThinkingLevel } from "../thin
 import { resolveModelSelectionFromDirective } from "./directive-handling.model-selection.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import {
-  canPersistInternalExecDirective,
-  canPersistInternalVerboseDirective,
+  canPersistSessionDirectiveDefaults,
   enqueueModeSwitchEvents,
 } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
@@ -96,6 +95,7 @@ export async function persistInlineDirectives(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  commandAuthorized?: boolean;
   senderIsOwner?: boolean;
   markLiveSwitchPending?: boolean;
   thinkingCatalog?: ModelCatalogEntry[];
@@ -124,15 +124,19 @@ export async function persistInlineDirectives(params: {
   } = params;
   let { provider, model } = params;
   let thinkingRemap: PersistedThinkingLevelRemap | undefined;
-  const allowInternalExecPersistence = canPersistInternalExecDirective({
+  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
   const thinkingCatalog =
     params.thinkingCatalog && params.thinkingCatalog.length > 0

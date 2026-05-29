@@ -38,6 +38,6 @@ export {
   createOperatorApprovalsGatewayClient,
   withOperatorApprovalsGatewayClient,
 } from "../gateway/operator-approvals-client.js";
-export { ErrorCodes, errorShape } from "../gateway/protocol/index.js";
-export type { EventFrame } from "../gateway/protocol/index.js";
+export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+export type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";

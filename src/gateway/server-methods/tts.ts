@@ -1,3 +1,4 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   canonicalizeSpeechProviderId,
@@ -21,7 +22,6 @@ import {
   setTtsProvider,
   textToSpeech,
 } from "../../tts/tts.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 

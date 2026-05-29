@@ -25,6 +25,8 @@ export type {
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Originating message channel used for subsystem log attribution. */
+  messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
@@ -36,7 +38,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
-  onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onReasoningStream?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+    isReasoningSnapshot?: boolean;
+  }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;

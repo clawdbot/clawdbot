@@ -15,7 +15,6 @@ query-filters:
 
 paths:
   - src/infra/net
-  - src/shared/net
   - src/agents/tools/web-fetch.ts
   - src/agents/tools/web-guarded-fetch.ts
   - src/agents/tools/web-shared.ts
@@ -23,6 +22,7 @@ paths:
   - src/web-fetch
   - src/web/provider-runtime-shared.ts
   - packages/memory-host-sdk/src/host/ssrf-policy.ts
+  - packages/net-policy/src
 
 paths-ignore:
   - "**/node_modules"

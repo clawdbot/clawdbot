@@ -5,6 +5,7 @@
  * error handling and priority ordering.
  */
 
+import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
@@ -28,6 +29,10 @@ import type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyPayloadSendingContext,
+  PluginHookReplyPayloadSendingEvent,
+  PluginHookReplyPayloadSendingResult,
+  PluginHookReplyPayload,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -96,6 +101,10 @@ export type {
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
+  PluginHookReplyPayloadSendingContext,
+  PluginHookReplyPayloadSendingEvent,
+  PluginHookReplyPayloadSendingResult,
+  PluginHookReplyPayload,
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
@@ -303,6 +312,42 @@ export function createHookRunner(
   const lastDefined = <T>(prev: T | undefined, next: T | undefined): T | undefined => next ?? prev;
   const stickyTrue = (prev?: boolean, next?: boolean): true | undefined =>
     prev === true || next === true ? true : undefined;
+  const toPluginReplyPayload = (payload: ReplyPayload): PluginHookReplyPayload => {
+    const { trustedLocalMedia: _trustedLocalMedia, ...visiblePayload } = payload;
+    return structuredClone(visiblePayload);
+  };
+  const areMediaUrlArraysEqual = (
+    left: readonly string[] | undefined,
+    right: readonly string[] | undefined,
+  ): boolean => {
+    const normalizedLeft = left ?? [];
+    const normalizedRight = right ?? [];
+    return (
+      normalizedLeft.length === normalizedRight.length &&
+      normalizedLeft.every((value, index) => value === normalizedRight[index])
+    );
+  };
+  const preservesTrustedMediaRefs = (
+    previous: ReplyPayload,
+    next: PluginHookReplyPayload,
+  ): boolean => {
+    return (
+      previous.trustedLocalMedia === true &&
+      previous.mediaUrl === next.mediaUrl &&
+      areMediaUrlArraysEqual(previous.mediaUrls, next.mediaUrls)
+    );
+  };
+  const acceptPluginReplyPayload = (
+    previous: ReplyPayload,
+    next: PluginHookReplyPayload,
+  ): ReplyPayload => {
+    const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
+    const clonedPayload = structuredClone(safePayload);
+    const acceptedPayload = preservesTrustedMediaRefs(previous, clonedPayload)
+      ? { ...clonedPayload, trustedLocalMedia: true }
+      : clonedPayload;
+    return copyReplyPayloadMetadata(previous, acceptedPayload);
+  };
 
   const mergeBeforeModelResolve = (
     acc: PluginHookBeforeModelResolveResult | undefined,
@@ -1049,6 +1094,66 @@ export function createHookRunner(
   }
 
   /**
+   * Run reply_payload_sending hook.
+   * Allows plugins to modify or cancel normalized reply payloads before delivery.
+   * Runs sequentially, passing each handler the latest payload.
+   */
+  async function runReplyPayloadSending(
+    event: PluginHookReplyPayloadSendingEvent,
+    ctx: PluginHookReplyPayloadSendingContext,
+  ): Promise<PluginHookReplyPayloadSendingResult | undefined> {
+    const hooks = getHooksForName(registry, "reply_payload_sending");
+    if (hooks.length === 0) {
+      return undefined;
+    }
+
+    logger?.debug?.(`[hooks] running reply_payload_sending (${hooks.length} handlers, sequential)`);
+
+    let currentPayload: ReplyPayload = event.payload;
+    let result: PluginHookReplyPayloadSendingResult | undefined;
+
+    for (const hook of hooks) {
+      try {
+        const handler = hook.handler as (
+          event: PluginHookReplyPayloadSendingEvent,
+          ctx: PluginHookReplyPayloadSendingContext,
+        ) => Promise<PluginHookReplyPayloadSendingResult | void>;
+        const promise = Promise.resolve(
+          handler({ ...event, payload: toPluginReplyPayload(currentPayload) }, ctx),
+        );
+        const timeoutMs = getModifyingHookTimeoutMs("reply_payload_sending", hook);
+        const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;
+
+        if (!handlerResult) {
+          continue;
+        }
+
+        if (handlerResult.payload !== undefined) {
+          currentPayload = acceptPluginReplyPayload(currentPayload, handlerResult.payload);
+        }
+
+        result = {
+          payload: currentPayload as PluginHookReplyPayload,
+          cancel: stickyTrue(result?.cancel, handlerResult.cancel),
+          reason: lastDefined(result?.reason, handlerResult.reason),
+        };
+
+        if (result.cancel === true) {
+          const priority = hook.priority ?? 0;
+          logger?.debug?.(
+            `[hooks] reply_payload_sending cancel=true decided by ${hook.pluginId} (priority=${priority}); skipping remaining handlers`,
+          );
+          break;
+        }
+      } catch (err) {
+        handleHookError({ hookName: "reply_payload_sending", pluginId: hook.pluginId, error: err });
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Run message_sending hook.
    * Allows plugins to modify or cancel outgoing messages.
    * Runs sequentially.
@@ -1522,6 +1627,7 @@ export function createHookRunner(
     runMessageReceived,
     runBeforeDispatch,
     runReplyDispatch,
+    runReplyPayloadSending,
     runMessageSending,
     runMessageSent,
     // Tool hooks

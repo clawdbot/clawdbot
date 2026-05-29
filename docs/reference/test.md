@@ -8,6 +8,10 @@ title: "Tests"
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
 - Update and plugin package validation: [Testing updates and plugins](/help/testing-updates-plugins)
 
+- Routine local test order:
+  1. `pnpm test:changed` for changed-scope Vitest proof.
+  2. `pnpm test <path-or-filter>` for one file, directory, or explicit target.
+  3. `pnpm test` only when you intentionally need the full local Vitest suite.
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don't collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). This is a default-unit-lane coverage gate, not whole-repo all-file coverage. Thresholds are 70% lines/functions/statements and 55% branches. Because `coverage.all` is false and the default lane scopes coverage includes to non-fast unit tests with sibling source files, the gate measures source owned by this lane instead of every transitive import it happens to load.
 - `pnpm test:coverage:changed`: Runs unit coverage only for files changed since `origin/main`.
@@ -17,7 +21,7 @@ title: "Tests"
 - `pnpm check:changed`: runs the smart changed check gate for the diff against `origin/main`. It runs typecheck, lint, and guard commands for the affected architectural lanes, but does not run Vitest tests. Use `pnpm test:changed` or explicit `pnpm test <target>` for test proof.
 - Codex worktrees and linked/sparse checkouts: avoid direct local `pnpm test*`, `pnpm check*`, and `pnpm crabbox:run` unless you have verified pnpm will not reconcile dependencies. For tiny explicit-file proof use `node scripts/run-vitest.mjs <path-or-filter>`; for changed gates or broad proof use `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... --shell -- "pnpm check:changed"` so pnpm runs inside Testbox.
 - `OPENCLAW_HEAVY_CHECK_LOCK_SCOPE=worktree <local-heavy-check command>`: keeps heavy-check serialization inside the current worktree instead of the Git common dir for commands such as `pnpm check:changed` and targeted `pnpm test ...`. Use it only on high-capacity local hosts when you intentionally run independent checks across linked worktrees.
-- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs use fixed shard groups and expand to leaf configs for local parallel execution; the extension group always expands to the per-extension shard configs instead of one giant root-project process.
+- `pnpm test`: routes explicit file/directory targets through scoped Vitest lanes. Untargeted runs are full-suite proof: they use fixed shard groups, expand to leaf configs for local parallel execution, and print the expected local shard fanout before starting. The extension group always expands to the per-extension shard configs instead of one giant root-project process.
 - Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` summary. Vitest's own duration line stays the per-shard detail.
 - Shared OpenClaw test state: use `src/test-utils/openclaw-test-state.ts` from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
 - Control UI mocked E2E: use `pnpm test:ui:e2e` for the Vitest + Playwright lane that starts the Vite Control UI and drives a real Chromium page against a mocked Gateway WebSocket. Tests live in `ui/src/**/*.e2e.test.ts`; shared mocks and controls live in `ui/src/test-helpers/control-ui-e2e.ts`. `pnpm test:e2e` includes this lane. In Codex worktrees, prefer `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/ui/e2e/chat-flow.e2e.test.ts` for tiny targeted proof after dependencies are installed, or Testbox/Crabbox for broader GUI proof.
@@ -39,6 +43,7 @@ title: "Tests"
 - `pnpm test:perf:profile:runner`: writes CPU + heap profiles for the unit runner (`.artifacts/vitest-runner-profile`).
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. The Test Performance Agent uses this as its baseline before attempting slow-test fixes.
 - `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json`: compares grouped reports after a performance-focused change.
+- `pnpm test:docker:timings <summary.json>` inspects slow Docker lanes after a Docker all run; use `pnpm test:docker:rerun <run-id|summary.json|failures.json>` to print cheap targeted rerun commands from the same artifacts.
 - Gateway integration: opt-in via `OPENCLAW_TEST_INCLUDE_GATEWAY=1 pnpm test` or `pnpm test:gateway`.
 - `pnpm test:e2e`: Runs the repo E2E aggregate: gateway end-to-end smoke tests plus the Control UI mocked browser E2E lane.
 - `pnpm test:e2e:gateway`: Runs gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with adaptive workers in `vitest.e2e.config.ts`; tune with `OPENCLAW_E2E_WORKERS=<n>` and set `OPENCLAW_E2E_VERBOSE=1` for verbose logs.

@@ -224,6 +224,15 @@ describe("agent cleanup timeout", () => {
         },
       }),
     ).toBe(AGENT_CLEANUP_STEP_TIMEOUT_MS);
+    expect(
+      resolveAgentCleanupStepTimeoutMs({
+        step: "openclaw-trajectory-flush",
+        env: {
+          OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "1e3",
+          OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "0x10",
+        },
+      }),
+    ).toBe(AGENT_CLEANUP_STEP_TIMEOUT_MS);
   });
 
   it("logs cleanup rejection without throwing", async () => {

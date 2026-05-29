@@ -2423,6 +2423,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("replaces reasoning snapshots on the reasoning lane", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      const onReasoningStream = replyOptions?.onReasoningStream as
+        | ((payload: {
+            text?: string;
+            delta?: string;
+            isReasoningSnapshot?: boolean;
+          }) => Promise<void> | void)
+        | undefined;
+      await onReasoningStream?.({
+        text: "<think>Checking</think>",
+        delta: "Checking",
+        isReasoningSnapshot: true,
+      });
+      await onReasoningStream?.({
+        text: "<think>Reading\n\nChecking</think>",
+        delta: "Reading\n\nChecking",
+        isReasoningSnapshot: true,
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenLastCalledWith(
+      "Thinking\n\n_Reading_\n\n_Checking_",
+    );
+    const updates = reasoningDraftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.join("\n")).not.toContain("CheckingReading");
+  });
+
   it("streams reasoning from configured defaults", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,

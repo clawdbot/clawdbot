@@ -27,6 +27,9 @@ async function loadMemoryCliRuntime(): Promise<MemoryCliRuntime> {
   return await memoryCliRuntimePromise;
 }
 
+const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
+const DECIMAL_INTEGER_RE = /^\d+$/;
+
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const runtime = await loadMemoryCliRuntime();
   await runtime.runMemoryStatus(opts);
@@ -75,7 +78,8 @@ function invalidCliArgument(message: string): Error & { code: string; exitCode: 
 }
 
 function parseMemoryCliNumberOption(value: string, flag: string): number {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw invalidCliArgument(`${flag} must be a finite number.`);
   }
@@ -83,7 +87,8 @@ function parseMemoryCliNumberOption(value: string, flag: string): number {
 }
 
 function parseMemoryCliPositiveIntegerOption(value: string, flag: string): number {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = DECIMAL_INTEGER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw invalidCliArgument(`${flag} must be a positive integer.`);
   }
@@ -91,7 +96,8 @@ function parseMemoryCliPositiveIntegerOption(value: string, flag: string): numbe
 }
 
 function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): number {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = DECIMAL_INTEGER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw invalidCliArgument(`${flag} must be a non-negative integer.`);
   }

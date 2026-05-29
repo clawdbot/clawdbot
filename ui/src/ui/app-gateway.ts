@@ -1,13 +1,16 @@
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import {
   clearPendingQueueItemsForRun,
   createChatSessionsLoadOverrides,
   flushChatQueueForEvent,
+  hasReconnectableQueuedChatSends,
+  markQueuedChatSendsWaitingForReconnect,
   refreshChatAvatar,
+  retryReconnectableQueuedChatSends,
 } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import {
@@ -581,10 +584,18 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
           clearRunStatus: !hadOrphanedRun,
         },
       );
-      if (shutdownHost.resumeChatQueueAfterReconnect) {
+      const hasReconnectableChatSends = hasReconnectableQueuedChatSends(
+        host as unknown as Parameters<typeof hasReconnectableQueuedChatSends>[0],
+      );
+      if (shutdownHost.resumeChatQueueAfterReconnect || hasReconnectableChatSends) {
         // The interrupted run will never emit its terminal event now that the
         // old client is gone, so resume any deferred commands after hello.
         shutdownHost.resumeChatQueueAfterReconnect = false;
+        if (hasReconnectableChatSends) {
+          void retryReconnectableQueuedChatSends(
+            host as unknown as Parameters<typeof retryReconnectableQueuedChatSends>[0],
+          );
+        }
         void flushChatQueueForEvent(
           host as unknown as Parameters<typeof flushChatQueueForEvent>[0],
         );
@@ -609,6 +620,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      markQueuedChatSendsWaitingForReconnect(
+        host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
+      );
       clearSessionsChangedReloadTimer(host);
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =

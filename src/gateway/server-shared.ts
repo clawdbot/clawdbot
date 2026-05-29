@@ -1,4 +1,4 @@
-import type { ErrorShape } from "./protocol/index.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 
 export type DedupeEntry = {
   ts: number;

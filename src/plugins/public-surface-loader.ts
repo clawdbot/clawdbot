@@ -63,7 +63,7 @@ function resolvePublicSurfaceLocationUncached(params: {
   const bundledPluginsDir = resolveBundledPluginsDir();
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: OPENCLAW_PACKAGE_ROOT,
-    ...(bundledPluginsDir ? { bundledPluginsDir, bundledPluginsDirMode: "auto" as const } : {}),
+    ...(bundledPluginsDir ? { bundledPluginsDir, bundledPluginsDirMode: "explicit" as const } : {}),
     dirName: params.dirName,
     artifactBasename: params.artifactBasename,
   });

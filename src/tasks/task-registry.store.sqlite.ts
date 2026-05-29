@@ -1,11 +1,12 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import { isRecord } from "../utils.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { resolveTaskRegistryDir, resolveTaskRegistrySqlitePath } from "./task-registry.paths.js";
+import {
+  ensureSqliteStorePermissions,
+  normalizeSqliteNumber,
+  parseDeliveryContextJson,
+} from "./task-registry.sqlite.shared.js";
 import type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 
@@ -70,7 +71,6 @@ type TaskRegistryDatabase = {
 let cachedDatabase: TaskRegistryDatabase | null = null;
 const TASK_REGISTRY_DIR_MODE = 0o700;
 const TASK_REGISTRY_FILE_MODE = 0o600;
-const TASK_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 const TASK_RUN_SELECT_COLUMNS = `
   task_id,
   runtime,
@@ -100,50 +100,15 @@ const TASK_RUN_SELECT_COLUMNS = `
   terminal_outcome
 `;
 
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
 function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseJsonValue<T>(raw: string | null): T | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseDeliveryContextJson(raw: string | null): DeliveryContext | undefined {
-  const parsed = parseJsonValue<unknown>(raw);
-  if (!isRecord(parsed)) {
-    return undefined;
-  }
-  return normalizeDeliveryContext({
-    channel: typeof parsed.channel === "string" ? parsed.channel : undefined,
-    to: typeof parsed.to === "string" ? parsed.to : undefined,
-    accountId: typeof parsed.accountId === "string" ? parsed.accountId : undefined,
-    threadId:
-      typeof parsed.threadId === "string" || typeof parsed.threadId === "number"
-        ? parsed.threadId
-        : undefined,
-  });
-}
-
 function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
-  const startedAt = normalizeNumber(row.started_at);
-  const endedAt = normalizeNumber(row.ended_at);
-  const lastEventAt = normalizeNumber(row.last_event_at);
-  const cleanupAfter = normalizeNumber(row.cleanup_after);
+  const startedAt = normalizeSqliteNumber(row.started_at);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const lastEventAt = normalizeSqliteNumber(row.last_event_at);
+  const cleanupAfter = normalizeSqliteNumber(row.cleanup_after);
   const requesterSessionKey =
     row.scope_kind === "system" ? "" : row.requester_session_key?.trim() || row.owner_key;
   return {
@@ -164,7 +129,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
     status: row.status,
     deliveryStatus: row.delivery_status,
     notifyPolicy: row.notify_policy,
-    createdAt: normalizeNumber(row.created_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
     ...(startedAt != null ? { startedAt } : {}),
     ...(endedAt != null ? { endedAt } : {}),
     ...(lastEventAt != null ? { lastEventAt } : {}),
@@ -178,7 +143,7 @@ function rowToTaskRecord(row: TaskRegistryRow): TaskRecord {
 
 function rowToTaskDeliveryState(row: TaskDeliveryStateRow): TaskDeliveryState {
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
-  const lastNotifiedEventAt = normalizeNumber(row.last_notified_event_at);
+  const lastNotifiedEventAt = normalizeSqliteNumber(row.last_notified_event_at);
   return {
     taskId: row.task_id,
     ...(requesterOrigin ? { requesterOrigin } : {}),
@@ -454,16 +419,12 @@ function ensureSchema(db: DatabaseSync) {
 }
 
 function ensureTaskRegistryPermissions(pathname: string) {
-  const dir = resolveTaskRegistryDir(process.env);
-  mkdirSync(dir, { recursive: true, mode: TASK_REGISTRY_DIR_MODE });
-  chmodSync(dir, TASK_REGISTRY_DIR_MODE);
-  for (const suffix of TASK_REGISTRY_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
-    if (!existsSync(candidate)) {
-      continue;
-    }
-    chmodSync(candidate, TASK_REGISTRY_FILE_MODE);
-  }
+  ensureSqliteStorePermissions({
+    dir: resolveTaskRegistryDir(process.env),
+    pathname,
+    dirMode: TASK_REGISTRY_DIR_MODE,
+    fileMode: TASK_REGISTRY_FILE_MODE,
+  });
 }
 
 function openTaskRegistryDatabase(): TaskRegistryDatabase {

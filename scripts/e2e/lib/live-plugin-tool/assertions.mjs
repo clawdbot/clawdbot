@@ -3,9 +3,22 @@ import path from "node:path";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
-const agentTurnTimeoutSeconds = Number.parseInt(
-  process.env.OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS ?? "300",
-  10,
+
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+const agentTurnTimeoutSeconds = readPositiveIntEnv(
+  "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS",
+  300,
 );
 const SCAN_CHUNK_BYTES = 64 * 1024;
 const SCAN_CARRY_CHARS = 256;
@@ -313,7 +326,12 @@ function configure() {
 function findDependencyPackageJson(packageName) {
   const installPath = pluginInstallPath();
   const npmRoot = path.join(stateDir(), "npm");
+  const pluginName = requireEnv("PLUGIN_NAME");
+  const packageRoot = pluginName.split("/").reduce((current) => path.dirname(current), installPath);
+  const projectRoot =
+    path.basename(packageRoot) === "node_modules" ? path.dirname(packageRoot) : npmRoot;
   return [
+    path.join(projectRoot, "node_modules", packageName, "package.json"),
     path.join(installPath, "node_modules", packageName, "package.json"),
     path.join(npmRoot, "node_modules", packageName, "package.json"),
   ].find((candidate) => fs.existsSync(candidate));

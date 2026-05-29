@@ -1675,7 +1675,13 @@ function buildProviderConfigOverrides(
 ): RealtimeVoiceProviderConfig | undefined {
   const overrides = {
     ...(realtimeConfig?.model ? { model: realtimeConfig.model } : {}),
-    ...(realtimeConfig?.voice ? { voice: realtimeConfig.voice } : {}),
+    ...(realtimeConfig?.speakerVoice
+      ? { voice: realtimeConfig.speakerVoice }
+      : realtimeConfig?.speakerVoiceId
+        ? { voice: realtimeConfig.speakerVoiceId }
+        : realtimeConfig?.voice
+          ? { voice: realtimeConfig.voice }
+          : {}),
     ...(typeof realtimeConfig?.minBargeInAudioEndMs === "number"
       ? { minBargeInAudioEndMs: realtimeConfig.minBargeInAudioEndMs }
       : {}),

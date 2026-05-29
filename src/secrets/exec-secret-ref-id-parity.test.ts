@@ -1,7 +1,7 @@
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
+import { SecretRefSchema as GatewaySecretRefSchema } from "../../packages/gateway-protocol/src/schema.js";
 import { validateConfigObjectRaw } from "../config/validation.js";
-import { SecretRefSchema as GatewaySecretRefSchema } from "../gateway/protocol/schema/primitives.js";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
 import {
   INVALID_FILE_SECRET_REF_IDS,

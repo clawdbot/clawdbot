@@ -181,6 +181,57 @@ describe("remote sandbox fs bridge", () => {
       });
     },
   );
+
+  it("does not return NaN or partial values for malformed stat output", async () => {
+    await withTempDir("openclaw-remote-fs-bridge-stat-", async (stateDir) => {
+      const workspaceDir = path.join(stateDir, "workspace");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const runtime: RemoteShellSandboxHandle = {
+        remoteWorkspaceDir: workspaceDir,
+        remoteAgentWorkspaceDir: workspaceDir,
+        runRemoteShellScript: async (command) => {
+          if (command.script.includes('if [ -e "$1" ] || [ -L "$1" ]')) {
+            return { stdout: Buffer.from("1\n"), stderr: Buffer.alloc(0), code: 0 };
+          }
+          if (command.script.includes('readlink -f -- "$cursor"')) {
+            return {
+              stdout: Buffer.from(`${workspaceDir}/note.txt\n`),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (command.script.includes('stat -c "%F|%h"')) {
+            return {
+              stdout: Buffer.from("regular file|1\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          if (command.script.includes('stat -c "%F|%s|%y"')) {
+            return {
+              stdout: Buffer.from("regular file|12oops|not-a-date\n"),
+              stderr: Buffer.alloc(0),
+              code: 0,
+            };
+          }
+          throw new Error(`unexpected remote script: ${command.script}`);
+        },
+      };
+      const bridge = createRemoteShellSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+        runtime,
+      });
+
+      await expect(bridge.stat({ filePath: "note.txt" })).resolves.toEqual({
+        type: "file",
+        size: 0,
+        mtimeMs: 0,
+      });
+    });
+  });
 });
 
 async function withTempDir<T>(prefix: string, run: (stateDir: string) => Promise<T>): Promise<T> {

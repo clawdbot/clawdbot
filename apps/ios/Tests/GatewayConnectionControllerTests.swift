@@ -53,6 +53,21 @@ import UIKit
         }
     }
 
+    @Test @MainActor func locationPermissionRequiresGlobalServicesAndAppAuthorization() {
+        #expect(GatewayConnectionController._test_isLocationAvailable(
+            servicesEnabled: true,
+            status: .authorizedWhenInUse))
+        #expect(GatewayConnectionController._test_isLocationAvailable(
+            servicesEnabled: true,
+            status: .authorizedAlways))
+        #expect(!GatewayConnectionController._test_isLocationAvailable(
+            servicesEnabled: false,
+            status: .authorizedAlways))
+        #expect(!GatewayConnectionController._test_isLocationAvailable(
+            servicesEnabled: true,
+            status: .denied))
+    }
+
     @Test @MainActor func currentCommandsExcludeDangerousSystemExecCommands() {
         withUserDefaults([
             "node.instanceId": "ios-test",
@@ -130,6 +145,96 @@ import UIKit
                 storedOperatorScopes: []))
     }
 
+    @Test @MainActor func savedManualEndpointFallbackUsesOnboardingHostWhenAutoConnectIsEnabled() {
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
+            "gateway.manual.port": 0,
+            "gateway.manual.tls": false,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            let endpoint = controller._test_savedManualEndpointFallback()
+
+            #expect(endpoint?.host == "forges-mac-mini.taila96df5.ts.net")
+            #expect(endpoint?.port == 443)
+            #expect(endpoint?.useTLS == true)
+        }
+    }
+
+    @Test @MainActor func savedManualEndpointFallbackRequiresManualGatewayEnabled() {
+        withUserDefaults([
+            "gateway.autoconnect": true,
+            "gateway.manual.enabled": false,
+            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            #expect(controller._test_savedManualEndpointFallback() == nil)
+        }
+    }
+
+    @Test @MainActor func savedManualEndpointFallbackRequiresAutoConnect() {
+        withUserDefaults([
+            "gateway.autoconnect": false,
+            "gateway.manual.enabled": true,
+            "gateway.manual.host": "forges-mac-mini.taila96df5.ts.net",
+            "gateway.manual.port": 443,
+            "gateway.manual.tls": true,
+            "node.instanceId": "ios-test",
+        ]) {
+            let appModel = NodeAppModel()
+            let controller = GatewayConnectionController(appModel: appModel, startDiscovery: false)
+
+            #expect(controller._test_savedManualEndpointFallback() == nil)
+        }
+    }
+
+    @Test func gatewayConnectConfigMatchesEquivalentInputs() {
+        let lhs = Self.makeGatewayConnectConfig()
+        let rhs = GatewayConnectConfig(
+            url: lhs.url,
+            stableID: lhs.stableID,
+            tls: lhs.tls,
+            token: lhs.token,
+            bootstrapToken: lhs.bootstrapToken,
+            password: lhs.password,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: ["canvas", "screen"],
+                commands: ["location.get", "notify"],
+                permissions: ["screen": true],
+                clientId: "ios",
+                clientMode: "node",
+                clientDisplayName: "Phone"))
+
+        #expect(lhs.hasSameConnectionInputs(as: rhs))
+    }
+
+    @Test @MainActor func applyingDifferentGatewayConfigReconnectsActiveTasks() {
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let first = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://first.gateway.example.com")!,
+            stableID: "manual|first.gateway.example.com|443")
+        let second = Self.makeGatewayConnectConfig(
+            url: URL(string: "wss://second.gateway.example.com")!,
+            stableID: "manual|second.gateway.example.com|443")
+
+        appModel.applyGatewayConnectConfig(first)
+        appModel.applyGatewayConnectConfig(second)
+
+        #expect(appModel.connectedGatewayID == second.stableID)
+    }
+
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
         let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
         defer {
@@ -176,5 +281,31 @@ import UIKit
             let loaded = GatewaySettingsStore.loadLastGatewayConnection()
             #expect(loaded == nil)
         }
+    }
+
+    private static func makeGatewayConnectConfig(
+        url: URL = URL(string: "wss://gateway.example.com")!,
+        stableID: String = "manual|gateway.example.com|443") -> GatewayConnectConfig
+    {
+        GatewayConnectConfig(
+            url: url,
+            stableID: stableID,
+            tls: GatewayTLSParams(
+                required: true,
+                expectedFingerprint: "abc",
+                allowTOFU: false,
+                storeKey: stableID),
+            token: "token",
+            bootstrapToken: nil,
+            password: nil,
+            nodeOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: ["screen", "canvas"],
+                commands: ["notify", "location.get"],
+                permissions: ["screen": true],
+                clientId: "ios",
+                clientMode: "node",
+                clientDisplayName: "Phone"))
     }
 }

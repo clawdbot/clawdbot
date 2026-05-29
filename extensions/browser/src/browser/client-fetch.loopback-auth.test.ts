@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { BrowserControlAuth } from "./control-auth.js";
 import type { BrowserDispatchResponse } from "./routes/dispatcher.js";
+
+type BridgeAuth = NonNullable<
+  ReturnType<typeof import("./bridge-auth-registry.js").getBridgeAuthForPort>
+>;
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
@@ -36,11 +41,10 @@ const mocks = vi.hoisted(() => ({
       },
     },
   })),
-  resolveBrowserControlAuth: vi.fn(() => ({
+  resolveBrowserControlAuth: vi.fn<() => BrowserControlAuth>(() => ({
     token: "loopback-token",
-    password: undefined,
   })),
-  getBridgeAuthForPort: vi.fn(() => null),
+  getBridgeAuthForPort: vi.fn<(port: number) => BridgeAuth | undefined>(() => undefined),
   startBrowserControlServiceFromConfig: vi.fn(async () => ({ ok: true })),
   dispatch: vi.fn(async (): Promise<BrowserDispatchResponse> => okDispatchResponse()),
 }));
@@ -143,9 +147,8 @@ describe("fetchBrowserJson loopback auth", () => {
     mocks.dispatch.mockReset().mockResolvedValue(okDispatchResponse());
     mocks.resolveBrowserControlAuth.mockReset().mockReturnValue({
       token: "loopback-token",
-      password: undefined,
     });
-    mocks.getBridgeAuthForPort.mockReset().mockReturnValue(null);
+    mocks.getBridgeAuthForPort.mockReset().mockReturnValue(undefined);
   });
 
   afterEach(() => {
@@ -206,6 +209,19 @@ describe("fetchBrowserJson loopback auth", () => {
     const init = requireFetchInit(fetchMock);
     const headers = new Headers(init?.headers);
     expect(headers.get("authorization")).toBe("Bearer loopback-token");
+  });
+
+  it("does not treat explicit port zero as the default loopback bridge port", async () => {
+    mocks.resolveBrowserControlAuth.mockReturnValueOnce({});
+    mocks.getBridgeAuthForPort.mockReturnValueOnce({ token: "bridge-token" });
+    const fetchMock = stubJsonFetchOk();
+
+    await fetchBrowserJson<{ ok: boolean }>("http://127.0.0.1:0/");
+
+    const init = requireFetchInit(fetchMock);
+    const headers = new Headers(init?.headers);
+    expect(mocks.getBridgeAuthForPort).not.toHaveBeenCalled();
+    expect(headers.get("authorization")).toBeNull();
   });
 
   it("preserves dispatcher timeout context without no-retry hint", async () => {
@@ -539,6 +555,23 @@ describe("fetchBrowserJson loopback auth", () => {
       {
         contains: ["timed out after 1234ms"],
         omits: ["Do NOT retry the browser tool"],
+      },
+    );
+  });
+
+  it("uses the default timeout for non-finite absolute HTTP timeout failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("timed out");
+      }),
+    );
+
+    await expectThrownBrowserFetchError(
+      () => fetchBrowserJson<{ ok: boolean }>("http://example.com/", { timeoutMs: Number.NaN }),
+      {
+        contains: ["timed out after 5000ms"],
+        omits: ["NaNms", "Do NOT retry the browser tool"],
       },
     );
   });

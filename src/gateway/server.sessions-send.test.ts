@@ -1,16 +1,20 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, type Mock } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { testing as agentStepTesting } from "../agents/tools/agent-step.js";
+import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
   agentCommand,
   getFreePort,
   installGatewayTestHooks,
   startGatewayServer,
+  setTestPluginRegistry,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
@@ -171,6 +175,114 @@ describe("sessions_send gateway loopback", () => {
     expect(firstCall?.inputProvenance?.kind).toBe("inter_session");
     expect(firstCall?.inputProvenance?.sourceTool).toBe("sessions_send");
   });
+
+  it(
+    "announces through gateway send using external deliveryContext over stale webchat session fields",
+    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-route-"));
+      const sendCalls: Array<{
+        to?: string;
+        text?: string;
+        accountId?: string | null;
+        threadId?: string | number | null;
+      }> = [];
+      setTestPluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "whatsapp",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "whatsapp",
+              label: "WhatsApp",
+              outbound: {
+                deliveryMode: "direct",
+                resolveTarget: ({ to }) => {
+                  const target = to?.trim();
+                  return target
+                    ? { ok: true, to: target }
+                    : { ok: false, error: new Error("missing target") };
+                },
+                sendText: async (ctx) => {
+                  sendCalls.push({
+                    to: ctx.to,
+                    text: ctx.text,
+                    accountId: ctx.accountId,
+                    threadId: ctx.threadId,
+                  });
+                  return { channel: "whatsapp", messageId: "wa-proof-msg" };
+                },
+              },
+              messaging: {
+                normalizeTarget: (raw) => raw,
+              },
+            }),
+          },
+        ]),
+      );
+
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      try {
+        await writeSessionStore({
+          entries: {
+            "agent:main:whatsapp:direct:peer-1": {
+              sessionId: "sess-whatsapp-peer",
+              updatedAt: Date.now(),
+              channel: "webchat",
+              lastChannel: "webchat",
+              lastTo: "session:dashboard",
+              route: {
+                channel: "webchat",
+                target: { to: "session:dashboard" },
+              },
+              deliveryContext: {
+                channel: "whatsapp",
+                to: "peer-1",
+              },
+              origin: {
+                provider: "whatsapp",
+                accountId: "work",
+                threadId: "thread-77",
+              },
+            },
+          },
+        });
+
+        agentStepTesting.setDepsForTest({
+          agentCommandFromIngress: async () => ({
+            payloads: [{ text: "announce through channel", mediaUrl: null }],
+            meta: { durationMs: 1 },
+          }),
+        });
+
+        await runSessionsSendA2AFlow({
+          targetSessionKey: "agent:main:whatsapp:direct:peer-1",
+          displayKey: "agent:main:whatsapp:direct:peer-1",
+          message: "ping",
+          announceTimeoutMs: 5_000,
+          maxPingPongTurns: 0,
+          roundOneReply: "target response",
+        });
+
+        await vi.waitFor(
+          () =>
+            expect(sendCalls).toEqual([
+              {
+                to: "peer-1",
+                text: "announce through channel",
+                accountId: "work",
+                threadId: "thread-77",
+              },
+            ]),
+          { timeout: 5_000 },
+        );
+      } finally {
+        agentStepTesting.setDepsForTest();
+        testState.sessionStorePath = undefined;
+        await fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+      }
+    },
+  );
 });
 
 describe("sessions_send label lookup", () => {

@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  clickChromeMcpCoords,
   clickChromeMcpElement,
   buildChromeMcpArgs,
+  decodeChromeMcpStderrTail,
   ensureChromeMcpAvailable,
   evaluateChromeMcpScript,
   listChromeMcpTabs,
@@ -451,6 +453,14 @@ describe("chrome MCP page parsing", () => {
     expect(message).not.toContain(userDataDir);
   });
 
+  it("keeps Chrome MCP stderr tails within the byte cap without splitting UTF-8", () => {
+    const output = decodeChromeMcpStderrTail(Buffer.from(`${"x".repeat(8191)}é`));
+
+    expect(output).toMatch(/é$/);
+    expect(output).not.toContain("�");
+    expect(Buffer.byteLength(output, "utf8")).toBeLessThanOrEqual(8192);
+  });
+
   it("parses new_page text responses and returns the created tab", async () => {
     const factory: ChromeMcpSessionFactory = async () => createFakeSession();
     setChromeMcpSessionFactoryForTest(factory);
@@ -498,6 +508,31 @@ describe("chrome MCP page parsing", () => {
     });
 
     expect(result).toBe(123);
+  });
+
+  it("defaults non-finite coordinate click delays before injecting the browser script", async () => {
+    const session = createFakeSession();
+    const callTool = vi.fn(async ({ name }: ToolCall) => {
+      if (name === "evaluate_script") {
+        return { content: [{ type: "text", text: "```json\nnull\n```" }] };
+      }
+      throw new Error(`unexpected tool ${name}`);
+    });
+    session.client.callTool = callTool as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    await clickChromeMcpCoords({
+      profileName: "chrome-live",
+      targetId: "1",
+      x: 10,
+      y: 20,
+      delayMs: Number.NaN,
+    });
+
+    const callToolMock = callTool as unknown as ToolCallMock;
+    const evaluateCall = callToolMock.mock.calls.find(([call]) => call.name === "evaluate_script");
+    const fn = evaluateCall?.[0].arguments?.function;
+    expect(typeof fn === "string" ? fn : "").toContain("const delayMs = 0;");
   });
 
   it("does not cache an ephemeral availability probe before the next real attach", async () => {

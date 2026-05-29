@@ -35,10 +35,14 @@ async function expectPathMissing(targetPath: string) {
 
 describe("resolveTsdownBuildInvocation", () => {
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
+    const rootDir = createTempDir("openclaw-pnpm-runner-");
+    const npmExecPath = path.join(rootDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
     const result = resolveTsdownBuildInvocation({
       platform: "win32",
       nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
+      npmExecPath,
       env: {},
       ...NO_MEMORY_LIMIT,
     });
@@ -46,7 +50,7 @@ describe("resolveTsdownBuildInvocation", () => {
     expect(result).toEqual({
       command: "C:\\Program Files\\nodejs\\node.exe",
       args: [
-        "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
+        npmExecPath,
         "exec",
         "tsdown",
         "--config-loader",

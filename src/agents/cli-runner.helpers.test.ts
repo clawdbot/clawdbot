@@ -39,6 +39,22 @@ describe("loadPromptRefImages", () => {
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
   });
 
+  it("does not reload OpenClaw CLI image cache paths from prior prompt text", async () => {
+    const loadImageFromRefSpy = vi.spyOn(promptImageUtils, "loadImageFromRef");
+    const sanitizeImageBlocksSpy = vi.spyOn(toolImages, "sanitizeImageBlocks");
+
+    await expect(
+      loadPromptRefImages({
+        prompt:
+          'Called the Read tool with {"file_path":"/workspace/.openclaw-cli-images/stale.png"}',
+        workspaceDir: "/workspace",
+      }),
+    ).resolves.toStrictEqual([]);
+
+    expect(loadImageFromRefSpy).not.toHaveBeenCalled();
+    expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
+  });
+
   it("passes the max-byte guardrail through load and sanitize", async () => {
     const loadedImage: ImageContent = {
       type: "image",

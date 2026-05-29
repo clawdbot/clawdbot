@@ -17,6 +17,7 @@ const runWithModelFallbackMock = vi.fn();
 const compactEmbeddedAgentSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
+const runReplyPayloadSendingHookMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
@@ -37,6 +38,7 @@ let createMockFollowupRun: typeof import("./test-helpers.js").createMockFollowup
 let createMockTypingController: typeof import("./test-helpers.js").createMockTypingController;
 let createReplyOperationForTest: typeof import("./reply-run-registry.js").createReplyOperation;
 let replyRunTestingForTest: typeof import("./reply-run-registry.js").testing;
+let cliBackendsTestingForTest: typeof import("../../agents/cli-backends.js").testing;
 const FOLLOWUP_DEBUG = process.env.OPENCLAW_DEBUG_FOLLOWUP_RUNNER_TEST === "1";
 const FOLLOWUP_TEST_QUEUES = new Map<
   string,
@@ -386,6 +388,9 @@ async function loadFreshFollowupRunnerModuleForTest() {
     isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
   }));
+  vi.doMock("./reply-payload-sending-hook.js", () => ({
+    runReplyPayloadSendingHook: (...args: unknown[]) => runReplyPayloadSendingHookMock(...args),
+  }));
   vi.doMock("../../plugins/provider-runtime.js", async () => {
     const actual = await vi.importActual<typeof import("../../plugins/provider-runtime.js")>(
       "../../plugins/provider-runtime.js",
@@ -442,6 +447,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
       };
     },
   }));
+  ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
+  setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
@@ -452,6 +459,27 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ createMockFollowupRun, createMockTypingController } = await import("./test-helpers.js"));
   ({ createReplyOperation: createReplyOperationForTest, testing: replyRunTestingForTest } =
     await import("./reply-run-registry.js"));
+}
+
+function setFastFollowupCliBackendDeps(): void {
+  cliBackendsTestingForTest.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+    ],
+  });
 }
 
 const ROUTABLE_TEST_CHANNELS = new Set([
@@ -469,6 +497,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setFastFollowupCliBackendDeps();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   runEmbeddedAgentMock.mockReset();
@@ -492,6 +521,10 @@ beforeEach(() => {
   compactEmbeddedAgentSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
+  runReplyPayloadSendingHookMock.mockReset();
+  runReplyPayloadSendingHookMock.mockImplementation(
+    async (params: { payload: unknown }) => params.payload,
+  );
   resolveQueuedReplyExecutionConfigMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReturnValue(undefined);
@@ -524,6 +557,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  cliBackendsTestingForTest?.resetDepsForTest();
   replyRunTestingForTest?.resetReplyRunRegistry();
   clearRuntimeConfigSnapshot?.();
   clearFollowupQueue("main");
@@ -923,6 +957,64 @@ describe("createFollowupRunner runtime config", () => {
     const mediaCall = requireLastMockCallArg(runCliAgentMock, "run cli agent");
     const recorder = requireRecord(mediaCall.userTurnTranscriptRecorder, "cli user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
+  });
+
+  it("keeps queued CLI tool progress quiet when verbose progress is disabled", async () => {
+    const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+      "../../infra/agent-events.js",
+    );
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          cliBackends: {
+            "claude-cli": { command: "claude" },
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    };
+    const onToolStart = vi.fn(async () => {});
+    runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { phase: "start", name: "web_search", args: { query: "hidden" } },
+      });
+      return {
+        payloads: [{ text: "final" }],
+        meta: {
+          agentMeta: {
+            provider: "claude-cli",
+            model: "claude-opus-4-7",
+          },
+        },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      opts: { onToolStart },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        originatingChannel: "telegram",
+        run: {
+          config: runtimeConfig,
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          messageProvider: "telegram",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).not.toHaveBeenCalled();
   });
 
   it("defers queued CLI attempt terminal lifecycle events until fallback settles", async () => {
@@ -1382,6 +1474,7 @@ describe("createFollowupRunner progress forwarding", () => {
         accountId: "acct-1",
         threadId: "thread-1",
         mirror: false,
+        replyKind: "tool",
         payload: expect.objectContaining({ text: "🛠️ Exec: echo queued-progress" }),
       }),
     );
@@ -2615,6 +2708,26 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expectNoBlockReplyTextIncludes(onBlockReply, "could not deliver it to the originating channel");
   });
 
+  it("leaves same-channel route-failure fallback hooks to downstream delivery", async () => {
+    routeReplyMock.mockResolvedValue({
+      ok: false,
+      error: "forced route failure",
+    });
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("discord"),
+        originatingChannel: "discord",
+        originatingTo: "channel:C1",
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(runReplyPayloadSendingHookMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world!");
+  });
+
   it("uses dispatcher when origin routing metadata is incomplete", async () => {
     const { onBlockReply } = await runMessagingCase({
       agentResult: { payloads: [{ text: "hello world!" }] },
@@ -2626,6 +2739,38 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     });
 
     expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world!");
+  });
+
+  it("leaves dispatcher followup hooks to downstream delivery", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(runReplyPayloadSendingHookMock).not.toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expectBlockReplyText(onBlockReply, "hello world!");
+  });
+
+  it("does not run dispatcher followup hooks before downstream delivery", async () => {
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: { payloads: [{ text: "hello world!" }] },
+      queued: {
+        ...baseQueuedRun("webchat"),
+        originatingChannel: "discord",
+        originatingTo: undefined,
+      } as FollowupRun,
+    });
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+    expect(runReplyPayloadSendingHookMock).not.toHaveBeenCalled();
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expectBlockReplyText(onBlockReply, "hello world!");
   });
@@ -2815,6 +2960,8 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(routeArg.to).toBe("channel:C1");
     expect(routeArg.accountId).toBe("work");
     expect(routeArg.threadId).toBe("1739142736.000100");
+    expect(routeArg.replyKind).toBe("final");
+    expect(routeArg.runId).toEqual(expect.any(String));
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 });

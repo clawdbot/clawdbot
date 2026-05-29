@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blockedIpv6MulticastLiterals } from "../../shared/net/ip-test-fixtures.js";
+import { blockedIpv6MulticastLiterals } from "../../../packages/net-policy/src/ip-test-fixtures.js";
 import {
   assertHostnameAllowedWithPolicy,
   isBlockedHostnameOrIp,

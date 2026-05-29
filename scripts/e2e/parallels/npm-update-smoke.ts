@@ -10,6 +10,7 @@ import {
   packOpenClaw,
   parsePlatformList,
   parseProvider,
+  readPositiveIntEnv,
   repoRoot,
   resolveHostIp,
   resolveLatestVersion,
@@ -99,7 +100,7 @@ interface NpmUpdateSummary {
 const macosVm = "macOS Tahoe";
 const windowsVm = "Windows 11";
 const linuxVmDefault = "Ubuntu 26.04";
-const updateTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S || 1200);
+const updateTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200);
 const updateCleanupBackstopMs = 60_000;
 
 function usage(): string {

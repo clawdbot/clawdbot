@@ -13,11 +13,21 @@ const CLI_STATE_ROOT = "/tmp/openclaw";
 const ALPHA_INSTALL_PATH = installedPluginRoot(CLI_STATE_ROOT, "alpha");
 
 describe("npm-resolution helpers", () => {
-  it("keeps original spec when pin is disabled", () => {
+  it("keeps the requested selector when pin is disabled", () => {
     const result = resolvePinnedNpmSpec({
       rawSpec: "@openclaw/plugin-alpha@latest",
       pin: false,
       resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
+    });
+    expect(result).toEqual({
+      recordSpec: "@openclaw/plugin-alpha@latest",
+    });
+  });
+
+  it("keeps original spec when resolution is missing and pin is disabled", () => {
+    const result = resolvePinnedNpmSpec({
+      rawSpec: "@openclaw/plugin-alpha@latest",
+      pin: false,
     });
     expect(result).toEqual({
       recordSpec: "@openclaw/plugin-alpha@latest",
@@ -70,7 +80,7 @@ describe("npm-resolution helpers", () => {
   it("builds common npm install record fields", () => {
     expect(
       buildNpmInstallRecordFields({
-        spec: "@openclaw/plugin-alpha@1.2.3",
+        spec: "@openclaw/plugin-alpha@latest",
         installPath: ALPHA_INSTALL_PATH,
         version: "1.2.3",
         resolution: {
@@ -82,7 +92,7 @@ describe("npm-resolution helpers", () => {
       }),
     ).toEqual({
       source: "npm",
-      spec: "@openclaw/plugin-alpha@1.2.3",
+      spec: "@openclaw/plugin-alpha@latest",
       installPath: ALPHA_INSTALL_PATH,
       version: "1.2.3",
       resolvedName: "@openclaw/plugin-alpha",
@@ -170,5 +180,25 @@ describe("npm-resolution helpers", () => {
     expect(logs).toEqual([
       "[warn] Could not resolve exact npm version for --pin; storing original npm spec.",
     ]);
+  });
+
+  it("keeps install record selector for CLI unless --pin is requested", () => {
+    const logs: string[] = [];
+    const record = resolvePinnedNpmInstallRecordForCli(
+      "@openclaw/plugin-alpha",
+      false,
+      ALPHA_INSTALL_PATH,
+      "1.2.3",
+      {
+        name: "@openclaw/plugin-alpha",
+        version: "1.2.3",
+        resolvedSpec: "@openclaw/plugin-alpha@1.2.3",
+      },
+      (message) => logs.push(message),
+      (message) => `[warn] ${message}`,
+    );
+
+    expect(record.spec).toBe("@openclaw/plugin-alpha");
+    expect(logs).toEqual([]);
   });
 });

@@ -28,6 +28,13 @@ export function normalizeGooglePreviewModelId(id: string): string {
   return id;
 }
 
+export function normalizeTogetherModelId(id: string): string {
+  if (id === "moonshotai/Kimi-K2.5") {
+    return "moonshotai/Kimi-K2.6";
+  }
+  return id;
+}
+
 export function normalizeAntigravityPreviewModelId(id: string): string {
   if (ANTIGRAVITY_BARE_PRO_IDS.has(id)) {
     return `${id}-low`;

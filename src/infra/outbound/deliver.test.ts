@@ -36,6 +36,9 @@ const hookMocks = vi.hoisted(() => ({
     runMessageSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
       async () => undefined,
     ),
+    runReplyPayloadSending: vi.fn<(event: unknown, ctx: unknown) => Promise<unknown>>(
+      async (event) => ({ payload: (event as { payload?: unknown }).payload }),
+    ),
     runMessageSent: vi.fn<(event: unknown, ctx: unknown) => Promise<void>>(async () => {}),
   },
 }));
@@ -294,6 +297,10 @@ describe("deliverOutboundPayloads", () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runMessageSending.mockClear();
     hookMocks.runner.runMessageSending.mockResolvedValue(undefined);
+    hookMocks.runner.runReplyPayloadSending.mockClear();
+    hookMocks.runner.runReplyPayloadSending.mockImplementation(async (event) => ({
+      payload: (event as { payload?: unknown }).payload,
+    }));
     hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
     internalHookMocks.createInternalHookEvent.mockClear();
@@ -1272,6 +1279,56 @@ describe("deliverOutboundPayloads", () => {
     resolveMediaAccessSpy.mockRestore();
   });
 
+  it("scopes media access after reply payload hooks add local media", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockResolvedValueOnce({
+      payload: {
+        text: "hook media",
+        mediaUrl: "file:///tmp/hook-added.png",
+      },
+    });
+    const resolveMediaAccessSpy = vi.spyOn(
+      mediaCapabilityModule,
+      "resolveAgentScopedOutboundMediaAccess",
+    );
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m5", roomId: "!room:example" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello" }],
+      deps: { matrix: sendMatrix },
+      session: {
+        key: "agent:main:matrix:room:ops",
+        agentId: "main",
+        requesterSenderId: "sender-1",
+      },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room:example" },
+      },
+    });
+
+    const [mediaAccessOptions] = requireMockCall(resolveMediaAccessSpy, "media access") as [
+      {
+        mediaSources?: unknown;
+        requesterSenderId?: unknown;
+        sessionKey?: unknown;
+      },
+    ];
+    expect(mediaAccessOptions?.mediaSources).toEqual(["file:///tmp/hook-added.png"]);
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
+    expect(mediaAccessOptions?.requesterSenderId).toBe("sender-1");
+    const sendOptions = requireMatrixSendCall(sendMatrix)[2] as Record<string, unknown>;
+    expect(sendOptions.mediaUrl).toBe("file:///tmp/hook-added.png");
+    expect(typeof sendOptions.mediaReadFile).toBe("function");
+    resolveMediaAccessSpy.mockRestore();
+  });
+
   it("chunks direct adapter text and preserves delivery overrides across sends", async () => {
     const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
       channel: "matrix" as const,
@@ -1551,6 +1608,66 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(requireMockCallArg(sendText, "sendText").text).toBe("visible");
+  });
+
+  it("runs reply payload hooks before the final message_sending policy pass", async () => {
+    hookMocks.runner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "reply_payload_sending" || hookName === "message_sending",
+    );
+    hookMocks.runner.runReplyPayloadSending.mockImplementationOnce(async (event) => {
+      const payload = (event as { payload: { text?: string } }).payload;
+      return {
+        payload: {
+          ...payload,
+          text: `${payload.text} + payload-hook`,
+          replyToId: "hooked-reply",
+        },
+      };
+    });
+    hookMocks.runner.runMessageSending.mockResolvedValue({ content: "redacted" });
+    const sendText = vi.fn().mockResolvedValue({
+      channel: "matrix",
+      messageId: "sent",
+      roomId: "!room",
+    });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "secret", replyToId: "original-reply" }],
+      deps: { matrix: sendText },
+      replyPayloadSendingHook: {
+        kind: "final",
+        channel: "matrix",
+        context: { channelId: "matrix", conversationId: "!room" },
+      },
+    });
+
+    expect(hookMocks.runner.runReplyPayloadSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ text: "secret" }),
+        kind: "final",
+        channel: "matrix",
+      }),
+      expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
+    );
+    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "secret + payload-hook",
+        replyToId: "hooked-reply",
+      }),
+      expect.objectContaining({ channelId: "matrix", conversationId: "!room" }),
+    );
+    expect(requireMatrixSendCall(sendText)[1]).toBe("redacted");
+    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyPayloadSendingHook: expect.objectContaining({
+          kind: "final",
+          channel: "matrix",
+        }),
+      }),
+    );
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {

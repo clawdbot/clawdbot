@@ -6,6 +6,7 @@ import {
   markMigrationItemError,
   markMigrationItemSkipped,
 } from "openclaw/plugin-sdk/migration";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildOauthProviderAuthResult,
@@ -128,8 +129,9 @@ function resolveAccessTokenExpiry(access: string): number | undefined {
   if (typeof exp === "number" && Number.isFinite(exp) && exp > 0) {
     return Math.trunc(exp) * 1000;
   }
-  if (typeof exp === "string" && /^\d+$/u.test(exp.trim())) {
-    return Number.parseInt(exp.trim(), 10) * 1000;
+  if (typeof exp === "string") {
+    const seconds = parseStrictPositiveInteger(exp);
+    return seconds === undefined ? undefined : seconds * 1000;
   }
   return undefined;
 }

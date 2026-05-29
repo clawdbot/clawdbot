@@ -92,6 +92,22 @@ describe("createTtsTool", () => {
     expect(requireRecord(result.details, "TTS result details").timeoutMs).toBe(12_345);
   });
 
+  it("rejects fractional timeout before calling speech generation", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool();
+
+    await expect(tool.execute("call-1", { text: "hello", timeoutMs: 12_345.5 })).rejects.toThrow(
+      "timeoutMs must be a positive integer in milliseconds.",
+    );
+    expect(textToSpeechSpy).not.toHaveBeenCalled();
+  });
+
   it("passes the active agent id to speech generation", async () => {
     textToSpeechSpy.mockResolvedValue({
       success: true,

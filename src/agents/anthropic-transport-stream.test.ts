@@ -116,6 +116,7 @@ function makeAnthropicTransportModel(
     baseUrl?: string;
     reasoning?: boolean;
     maxTokens?: number;
+    thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
     headers?: Record<string, string>;
     requestTransport?: RequestTransportConfig;
   } = {},
@@ -132,6 +133,7 @@ function makeAnthropicTransportModel(
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: params.maxTokens ?? 8192,
+      ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
       ...(params.headers ? { headers: params.headers } : {}),
     } satisfies AnthropicMessagesModel,
     params.requestTransport ?? {
@@ -728,6 +730,11 @@ describe("anthropic transport stream", () => {
           delta: { type: "signature_delta", signature: "sig_2" },
         },
         {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "sig_3" },
+        },
+        {
           type: "content_block_stop",
           index: 0,
         },
@@ -752,7 +759,104 @@ describe("anthropic transport stream", () => {
     expect(result.content[0]).toMatchObject({
       type: "thinking",
       thinking: signedThinking,
-      thinkingSignature: "sig_2",
+      thinkingSignature: "sig_2sig_3",
+    });
+  });
+
+  it("preserves provider-seeded thinking signatures when no signature_delta follows", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "seeded", signature: "seed_signature" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 5 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "seeded",
+      thinkingSignature: "seed_signature",
+    });
+  });
+
+  it("concatenates multiple signature_delta events instead of overwriting", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "step by step", signature: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "chunk1" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "chunk2" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "signature_delta", signature: "chunk3" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 5 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content[0]).toMatchObject({
+      type: "thinking",
+      thinking: "step by step",
+      thinkingSignature: "chunk1chunk2chunk3",
     });
   });
 
@@ -1765,10 +1869,10 @@ describe("anthropic transport stream", () => {
     expect(payload.output_config).toEqual({ effort: "max" });
   });
 
-  it("maps xhigh thinking effort for Claude Opus 4.7 transport runs", async () => {
+  it("maps xhigh thinking effort for Claude Opus 4.8 transport runs", async () => {
     const model = makeAnthropicTransportModel({
-      id: "claude-opus-4-7",
-      name: "Claude Opus 4.7",
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
       maxTokens: 8192,
     });
 
@@ -1786,5 +1890,52 @@ describe("anthropic transport stream", () => {
     const payload = latestAnthropicRequest().payload;
     expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
+  });
+
+  it("preserves max thinking effort for Claude Opus 4.8 transport runs", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 8192,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think as much as needed." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "max",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.output_config).toEqual({ effort: "max" });
+  });
+
+  it("clamps max thinking effort for Claude models without native max support", async () => {
+    const model = makeAnthropicTransportModel({
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      maxTokens: 8192,
+    });
+
+    await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "Think as much as supported." }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+        reasoning: "max",
+      } as AnthropicStreamOptions,
+    );
+
+    const payload = latestAnthropicRequest().payload;
+    expect(payload.thinking).toEqual({ type: "adaptive" });
+    expect(payload.output_config).toEqual({ effort: "high" });
   });
 });

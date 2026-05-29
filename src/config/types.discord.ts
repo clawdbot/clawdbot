@@ -1,5 +1,6 @@
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -17,6 +18,13 @@ import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./typ
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+export type DiscordStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
+};
+export type DiscordChannelStreamingConfig = Omit<ChannelPreviewStreamingConfig, "progress"> & {
+  progress?: DiscordStreamingProgressConfig;
+};
 
 export type DiscordPluralKitConfig = {
   enabled?: boolean;
@@ -149,7 +157,11 @@ export type DiscordVoiceRealtimeConfig = {
   provider?: string;
   /** Provider realtime session model, for example "gpt-realtime-2". */
   model?: string;
-  /** Provider realtime output voice, for example "cedar". */
+  /** Provider realtime output voice name, for example "cedar". */
+  speakerVoice?: string;
+  /** Provider realtime output voice id. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** System instructions passed to the realtime provider. */
   instructions?: string;
@@ -375,7 +387,7 @@ export type DiscordAccountConfig = {
    */
   suppressEmbeds?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: DiscordChannelStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines

@@ -199,6 +199,19 @@ describe("installSessionToolResultGuard", () => {
     expect(text).toContain("truncated");
   });
 
+  it("falls back to the default tool-result cap for non-finite configured caps", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      maxToolResultChars: Number.NaN,
+    });
+
+    appendToolResultText(sm, "x".repeat(80_000));
+
+    const text = getToolResultText(getPersistedMessages(sm));
+    expect(text.length).toBeLessThanOrEqual(16_000);
+    expect(text).toContain("truncated");
+  });
+
   it("backfills blank toolResult names from pending tool calls", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);

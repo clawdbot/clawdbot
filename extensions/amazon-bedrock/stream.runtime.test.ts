@@ -89,3 +89,29 @@ describe("Bedrock profile endpoint resolution", () => {
     ).toBe(false);
   });
 });
+
+describe("Bedrock thinking effort mapping", () => {
+  it("clamps max effort for Claude models without native max support", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "anthropic.claude-sonnet-4-6-v1:0",
+          name: "Claude Sonnet 4.6",
+        }),
+        "max",
+      ),
+    ).toBe("high");
+  });
+
+  it("preserves max effort for Claude Opus 4.8", () => {
+    expect(
+      testing.mapThinkingLevelToEffort(
+        bedrockModel({
+          id: "anthropic.claude-opus-4.8-v1:0",
+          name: "Claude Opus 4.8",
+        }),
+        "max",
+      ),
+    ).toBe("max");
+  });
+});

@@ -20,46 +20,116 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
-function consumeStringFlag(argv, index, flag, currentValue) {
+function consumeStringFlag(argv, index, flag) {
+  const inlineValue = readInlineFlagValue(argv[index], flag);
+  if (inlineValue !== null) {
+    if (!inlineValue) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return {
+      nextIndex: index,
+      value: inlineValue,
+    };
+  }
   if (argv[index] !== flag) {
     return null;
+  }
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${flag} requires a value`);
   }
   return {
     nextIndex: index + 1,
-    value: argv[index + 1] ?? currentValue,
+    value,
   };
 }
 
-function consumeIntFlag(argv, index, flag, currentValue, options = {}) {
-  if (argv[index] !== flag) {
+function consumeIntFlag(argv, index, flag, options = {}) {
+  const raw = readFlagOptionValue(argv, index, flag);
+  if (!raw) {
     return null;
   }
-  const parsed = Number.parseInt(argv[index + 1] ?? "", 10);
+  const parsed = parseIntegerFlagValue(raw.value, flag);
   const min = options.min ?? Number.NEGATIVE_INFINITY;
+  if (parsed < min) {
+    throw new Error(`${flag} must be at least ${min}`);
+  }
   return {
-    nextIndex: index + 1,
-    value: Number.isFinite(parsed) && parsed >= min ? parsed : currentValue,
+    nextIndex: raw.nextIndex,
+    value: parsed,
   };
 }
 
-function consumeFloatFlag(argv, index, flag, currentValue, options = {}) {
-  if (argv[index] !== flag) {
+function consumeFloatFlag(argv, index, flag, options = {}) {
+  const raw = readFlagOptionValue(argv, index, flag);
+  if (!raw) {
     return null;
   }
-  const parsed = Number.parseFloat(argv[index + 1] ?? "");
+  const parsed = parseFloatFlagValue(raw.value, flag);
   const min = options.min ?? Number.NEGATIVE_INFINITY;
   const includeMin = options.includeMin ?? true;
   const isValid = Number.isFinite(parsed) && (includeMin ? parsed >= min : parsed > min);
+  if (!isValid) {
+    const comparator = includeMin ? "at least" : "greater than";
+    throw new Error(`${flag} must be ${comparator} ${min}`);
+  }
   return {
-    nextIndex: index + 1,
-    value: isValid ? parsed : currentValue,
+    nextIndex: raw.nextIndex,
+    value: parsed,
   };
+}
+
+function readInlineFlagValue(arg, flag) {
+  const prefix = `${flag}=`;
+  return arg.startsWith(prefix) ? arg.slice(prefix.length) : null;
+}
+
+function readFlagOptionValue(argv, index, flag) {
+  const inlineValue = readInlineFlagValue(argv[index], flag);
+  if (inlineValue !== null) {
+    if (!inlineValue) {
+      throw new Error(`${flag} requires a value`);
+    }
+    return { nextIndex: index, value: inlineValue };
+  }
+  if (argv[index] !== flag) {
+    return null;
+  }
+  const value = argv[index + 1];
+  if (!value) {
+    throw new Error(`${flag} requires a value`);
+  }
+  return { nextIndex: index + 1, value };
+}
+
+function parseIntegerFlagValue(raw, flag) {
+  const text = String(raw).trim();
+  if (!/^-?\d+$/u.test(text)) {
+    throw new Error(`${flag} must be an integer`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${flag} must be a safe integer`);
+  }
+  return parsed;
+}
+
+function parseFloatFlagValue(raw, flag) {
+  const text = String(raw).trim();
+  if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
+    throw new Error(`${flag} must be a number`);
+  }
+  const parsed = Number(text);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${flag} must be a finite number`);
+  }
+  return parsed;
 }
 
 export function stringFlag(flag, key) {
   return {
-    consume(argv, index, args) {
-      const option = consumeStringFlag(argv, index, flag, args[key]);
+    consume(argv, index) {
+      const option = consumeStringFlag(argv, index, flag);
       if (!option) {
         return null;
       }
@@ -91,15 +161,15 @@ function createAssignedValueFlag(consumeOption) {
 }
 
 export function intFlag(flag, key, options) {
-  return createAssignedValueFlag((argv, index, args) => {
-    const option = consumeIntFlag(argv, index, flag, args[key], options);
+  return createAssignedValueFlag((argv, index) => {
+    const option = consumeIntFlag(argv, index, flag, options);
     return option ? { ...option, key } : null;
   });
 }
 
 export function floatFlag(flag, key, options) {
-  return createAssignedValueFlag((argv, index, args) => {
-    const option = consumeFloatFlag(argv, index, flag, args[key], options);
+  return createAssignedValueFlag((argv, index) => {
+    const option = consumeFloatFlag(argv, index, flag, options);
     return option ? { ...option, key } : null;
   });
 }

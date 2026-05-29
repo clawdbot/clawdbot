@@ -15,6 +15,7 @@ import type {
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { getEnvApiKey } from "../llm/env-api-keys.js";
 import { calculateCost } from "../llm/model-utils.js";
+import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import type { Api, Context, Model } from "../llm/types.js";
@@ -79,6 +80,7 @@ import {
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
+const OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS = "Follow the user request.";
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS = 30_000;
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
@@ -1992,6 +1994,19 @@ function buildOpenAICodexResponsesInstructions(context: Context): string | undef
   return sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt));
 }
 
+function resolveOpenAICodexResponsesInstructions(
+  model: Model,
+  context: Context,
+): string | undefined {
+  const instructions = buildOpenAICodexResponsesInstructions(context);
+  if (instructions && instructions.trim().length > 0) {
+    return instructions;
+  }
+  return usesNativeOpenAICodexResponsesBackend(model)
+    ? OPENAI_CODEX_RESPONSES_DEFAULT_INSTRUCTIONS
+    : undefined;
+}
+
 function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Context): void {
   if (messages.length > 0 || !context.systemPrompt) {
     return;
@@ -2063,7 +2078,9 @@ export function buildOpenAIResponsesParams(
     stream: true,
     prompt_cache_key: promptCacheKey,
     prompt_cache_retention: getPromptCacheRetention(model.baseUrl, cacheRetention),
-    ...(isCodexResponses ? { instructions: buildOpenAICodexResponsesInstructions(context) } : {}),
+    ...(isCodexResponses
+      ? { instructions: resolveOpenAICodexResponsesInstructions(model, context) }
+      : {}),
     ...(metadata ? { metadata } : {}),
   };
   const effectiveMaxTokens = options?.maxTokens || model.maxTokens;
@@ -2253,16 +2270,10 @@ function normalizeAzureBaseUrl(baseUrl: string): string {
 }
 
 function resolveAzureDeploymentName(model: Model): string {
-  const deploymentMap = process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP;
-  if (deploymentMap) {
-    for (const entry of deploymentMap.split(",")) {
-      const [modelId, deploymentName] = entry.split("=", 2).map((value) => value?.trim());
-      if (modelId === model.id && deploymentName) {
-        return deploymentName;
-      }
-    }
-  }
-  return model.id;
+  return resolveAzureDeploymentNameFromMap({
+    modelId: model.id,
+    deploymentMap: process.env.AZURE_OPENAI_DEPLOYMENT_NAME_MAP,
+  });
 }
 
 function createAzureOpenAIClient(
@@ -3398,6 +3409,23 @@ const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
   "mimo-v2.6-pro",
 ]);
 
+// Tier/access suffixes that some providers append to otherwise identical model
+// ids (OpenCode Zen exposes `deepseek-v4-flash-free`, OpenRouter exposes
+// `:free` / `:cloud`, etc.). The base model id before the suffix still owns
+// the same DeepSeek-style reasoning_content replay contract, so reasoning
+// replay must not be stripped just because the catalog id grew a marketing
+// suffix (#87575).
+const REASONING_CONTENT_REPLAY_TIER_SUFFIXES = ["-free", "-paid", "-trial"] as const;
+
+function stripReasoningContentReplayTierSuffix(modelId: string): string {
+  for (const suffix of REASONING_CONTENT_REPLAY_TIER_SUFFIXES) {
+    if (modelId.length > suffix.length && modelId.endsWith(suffix)) {
+      return modelId.slice(0, -suffix.length);
+    }
+  }
+  return modelId;
+}
+
 function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] {
   if (typeof modelId !== "string") {
     return [];
@@ -3412,6 +3440,17 @@ function getReasoningContentReplayModelIdCandidates(modelId: unknown): string[] 
   const colonParts = finalPart.split(":").filter(Boolean);
   if (colonParts.length > 1) {
     candidates.push(colonParts[0] ?? "", colonParts[colonParts.length - 1] ?? "");
+  }
+  const baseCount = candidates.length;
+  for (let index = 0; index < baseCount; index += 1) {
+    const candidate = candidates[index];
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const stripped = stripReasoningContentReplayTierSuffix(candidate);
+    if (stripped !== candidate) {
+      candidates.push(stripped);
+    }
   }
   return uniqueStrings(candidates.filter(Boolean));
 }

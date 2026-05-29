@@ -76,6 +76,20 @@ describe("normalizeClaudeSettingSourcesArgs", () => {
   });
 });
 
+describe("Claude CLI model aliases", () => {
+  it("keeps pinned Claude CLI model refs on exact selectors", () => {
+    const aliases = buildAnthropicCliBackend().config.modelAliases;
+
+    expect(aliases?.["opus"]).toBe("opus");
+    expect(aliases?.["opus-4.8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["opus-4.7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["opus-4.6"]).toBe("claude-opus-4-6");
+    expect(aliases?.["claude-opus-4-8"]).toBe("claude-opus-4-8");
+    expect(aliases?.["claude-opus-4-7"]).toBe("claude-opus-4-7");
+    expect(aliases?.["claude-opus-4-6"]).toBe("claude-opus-4-6");
+  });
+});
+
 describe("resolveClaudeCliExecutionArgs", () => {
   it("omits effort args when thinking is off", () => {
     expect(
@@ -271,8 +285,8 @@ describe("normalizeClaudeBackendConfig", () => {
   });
 
   it("passes system prompt on every turn (issue #80374 — systemPromptWhen must be 'always')", () => {
-    // Before fix this was hardcoded to "first", which silently dropped
-    // systemPromptOverride on every resumed / compacted claude-cli session.
+    // Before fix this was hardcoded to "first", which silently dropped updated
+    // OpenClaw system prompt context on resumed / compacted claude-cli sessions.
     const backend = buildAnthropicCliBackend();
     expect(backend.config.systemPromptWhen).toBe("always");
   });

@@ -120,7 +120,7 @@ describe("web auto-reply", () => {
       body: true,
       arrayBuffer: async () =>
         buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
-      headers: { get: () => mime },
+      headers: new Headers({ "content-type": mime }),
       status: 200,
     } as unknown as Response);
   }
@@ -191,7 +191,7 @@ describe("web auto-reply", () => {
           body: true,
           arrayBuffer: async () =>
             image.buffer.slice(image.byteOffset, image.byteOffset + image.byteLength),
-          headers: { get: () => mime },
+          headers: new Headers({ "content-type": mime }),
           status: 200,
         } as unknown as Response;
       });
@@ -308,7 +308,7 @@ describe("web auto-reply", () => {
       body: true,
       arrayBuffer: async () =>
         smallPng.buffer.slice(smallPng.byteOffset, smallPng.byteOffset + smallPng.byteLength),
-      headers: { get: () => "image/png" },
+      headers: new Headers({ "content-type": "image/png" }),
       status: 200,
     } as unknown as Response);
 
@@ -335,7 +335,7 @@ describe("web auto-reply", () => {
       status: 404,
       body: null,
       arrayBuffer: async () => new ArrayBuffer(0),
-      headers: { get: () => "text/plain" },
+      headers: new Headers({ "content-type": "text/plain" }),
     } as unknown as Response);
 
     await dispatch("msg1");
@@ -364,7 +364,7 @@ describe("web auto-reply", () => {
       ok: true,
       body: true,
       arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength),
-      headers: { get: () => "image/png" },
+      headers: new Headers({ "content-type": "image/png" }),
       status: 200,
     } as unknown as Response);
 

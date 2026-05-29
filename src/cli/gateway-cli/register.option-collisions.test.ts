@@ -170,6 +170,26 @@ describe("gateway register option collisions", () => {
         expect(runtime).toBe(defaultRuntime);
       },
     },
+    {
+      name: "passes decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "7", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 7 });
+      },
+    },
+    {
+      name: "falls back for non-decimal usage-cost --days values",
+      argv: ["gateway", "usage-cost", "--days", "1e3", "--json"],
+      assert: () => {
+        expect(callGatewayCli).toHaveBeenCalledTimes(1);
+        const [method, _opts, params] = firstGatewayCall();
+        expect(method).toBe("usage.cost");
+        expect(params).toEqual({ days: 30 });
+      },
+    },
   ])("$name", async ({ argv, assert }) => {
     await sharedProgram.parseAsync(argv, { from: "user" });
     assert();

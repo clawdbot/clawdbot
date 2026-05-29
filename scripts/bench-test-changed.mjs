@@ -1,7 +1,38 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { floatFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
+
+function parsePositiveInteger(raw, label) {
+  const value = raw?.trim();
+  if (!value) {
+    throw new Error(`${label} requires a value`);
+  }
+  if (!/^\d+$/u.test(value)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a safe positive integer`);
+  }
+  return parsed;
+}
+
+function positiveIntegerFlag(flag, key) {
+  return {
+    consume(argv, index) {
+      if (argv[index] !== flag) {
+        return null;
+      }
+      return {
+        nextIndex: index + 1,
+        apply(target) {
+          target[key] = parsePositiveInteger(argv[index + 1], flag);
+        },
+      };
+    },
+  };
+}
 
 function parseArgs(argv) {
   const args = parseFlagArgs(
@@ -15,7 +46,7 @@ function parseArgs(argv) {
     [
       stringFlag("--cwd", "cwd"),
       stringFlag("--ref", "ref"),
-      floatFlag("--max-workers", "maxWorkers", { min: 1 }),
+      positiveIntegerFlag("--max-workers", "maxWorkers"),
     ],
     {
       allowUnknownOptions: true,
@@ -37,7 +68,7 @@ function parseArgs(argv) {
     mode: args.mode,
     ref: args.ref,
     rss: args.rss,
-    ...(typeof args.maxWorkers === "number" ? { maxWorkers: Math.trunc(args.maxWorkers) } : {}),
+    ...(typeof args.maxWorkers === "number" ? { maxWorkers: args.maxWorkers } : {}),
   };
 }
 
@@ -118,7 +149,13 @@ function printRunSummary(label, result) {
   );
 }
 
-const opts = parseArgs(process.argv.slice(2));
+let opts;
+try {
+  opts = parseArgs(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 const changedPaths = listChangedPaths(opts);
 if (changedPaths.length === 0) {
   console.log(

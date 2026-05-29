@@ -1,9 +1,3 @@
-import {
-  createLazyFacadeValue as createLazyFacadeRuntimeValue,
-  createLazyFacadeObjectValue,
-  loadActivatedBundledPluginPublicSurfaceModuleSync,
-} from "./facade-runtime.js";
-import type { TtsRuntimeFacade } from "./tts-runtime.types.js";
 export {
   TtsAutoSchema,
   TtsConfigSchema,
@@ -11,131 +5,47 @@ export {
   TtsProviderSchema,
 } from "../config/zod-schema.core.js";
 
-// Manual facade. Keep loader boundary explicit and avoid typing this public SDK
-// seam through the bundled speech-core runtime surface.
-type FacadeModule = TtsRuntimeFacade;
+export function prewarmTtsRuntimeFacade(): void {}
 
-function loadFacadeModule(): FacadeModule {
-  return loadActivatedBundledPluginPublicSurfaceModuleSync<FacadeModule>({
-    dirName: "speech-core",
-    artifactBasename: "runtime-api.js",
-  });
-}
-
-export function prewarmTtsRuntimeFacade(): void {
-  loadFacadeModule();
-}
-
-export const testApi: FacadeModule["testApi"] = createLazyFacadeObjectValue(
-  () => loadFacadeModule().testApi,
-);
-/** @deprecated Use `testApi`. */
-export { testApi as _test };
-export const buildTtsSystemPromptHint: FacadeModule["buildTtsSystemPromptHint"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "buildTtsSystemPromptHint");
-export const getLastTtsAttempt: FacadeModule["getLastTtsAttempt"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "getLastTtsAttempt",
-);
-export const getResolvedSpeechProviderConfig: FacadeModule["getResolvedSpeechProviderConfig"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "getResolvedSpeechProviderConfig");
-export const getTtsMaxLength: FacadeModule["getTtsMaxLength"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "getTtsMaxLength",
-);
-export const getTtsPersona: FacadeModule["getTtsPersona"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "getTtsPersona",
-);
-export const getTtsProvider: FacadeModule["getTtsProvider"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "getTtsProvider",
-);
-export const isSummarizationEnabled: FacadeModule["isSummarizationEnabled"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "isSummarizationEnabled");
-export const isTtsEnabled: FacadeModule["isTtsEnabled"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "isTtsEnabled",
-);
-export const isTtsProviderConfigured: FacadeModule["isTtsProviderConfigured"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "isTtsProviderConfigured");
-export const listSpeechVoices: FacadeModule["listSpeechVoices"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "listSpeechVoices",
-);
-export const listTtsPersonas: FacadeModule["listTtsPersonas"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "listTtsPersonas",
-);
-export const maybeApplyTtsToPayload: FacadeModule["maybeApplyTtsToPayload"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "maybeApplyTtsToPayload");
-export const resolveExplicitTtsOverrides: FacadeModule["resolveExplicitTtsOverrides"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveExplicitTtsOverrides");
-export const resolveTtsAutoMode: FacadeModule["resolveTtsAutoMode"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "resolveTtsAutoMode",
-);
-export const resolveTtsConfig: FacadeModule["resolveTtsConfig"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "resolveTtsConfig",
-);
-export const resolveTtsPrefsPath: FacadeModule["resolveTtsPrefsPath"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveTtsPrefsPath");
-export const resolveTtsProviderOrder: FacadeModule["resolveTtsProviderOrder"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "resolveTtsProviderOrder");
-export const setLastTtsAttempt: FacadeModule["setLastTtsAttempt"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "setLastTtsAttempt",
-);
-export const setSummarizationEnabled: FacadeModule["setSummarizationEnabled"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "setSummarizationEnabled");
-export const setTtsAutoMode: FacadeModule["setTtsAutoMode"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "setTtsAutoMode",
-);
-export const setTtsEnabled: FacadeModule["setTtsEnabled"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "setTtsEnabled",
-);
-export const setTtsMaxLength: FacadeModule["setTtsMaxLength"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "setTtsMaxLength",
-);
-export const setTtsPersona: FacadeModule["setTtsPersona"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "setTtsPersona",
-);
-export const setTtsProvider: FacadeModule["setTtsProvider"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "setTtsProvider",
-);
-export const synthesizeSpeech: FacadeModule["synthesizeSpeech"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "synthesizeSpeech",
-);
-export const streamSpeech: FacadeModule["streamSpeech"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "streamSpeech",
-);
-export const textToSpeech: FacadeModule["textToSpeech"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "textToSpeech",
-);
-export const textToSpeechStream: FacadeModule["textToSpeechStream"] = createLazyFacadeRuntimeValue(
-  loadFacadeModule,
-  "textToSpeechStream",
-);
-export const textToSpeechTelephony: FacadeModule["textToSpeechTelephony"] =
-  createLazyFacadeRuntimeValue(loadFacadeModule, "textToSpeechTelephony");
-
-export type {
-  ResolvedTtsConfig,
-  ResolvedTtsModelOverrides,
-  TtsDirectiveOverrides,
-  TtsDirectiveParseResult,
-  TtsResult,
-  TtsSynthesisResult,
-  TtsSynthesisStreamResult,
-  TtsStreamResult,
-  TtsTelephonyResult,
-} from "./tts-runtime.types.js";
+export {
+  buildTtsSystemPromptHint,
+  getLastTtsAttempt,
+  getResolvedSpeechProviderConfig,
+  getTtsMaxLength,
+  getTtsPersona,
+  getTtsProvider,
+  isSummarizationEnabled,
+  isTtsEnabled,
+  isTtsProviderConfigured,
+  listSpeechVoices,
+  listTtsPersonas,
+  maybeApplyTtsToPayload,
+  resolveExplicitTtsOverrides,
+  resolveTtsAutoMode,
+  resolveTtsConfig,
+  resolveTtsPrefsPath,
+  resolveTtsProviderOrder,
+  setLastTtsAttempt,
+  setSummarizationEnabled,
+  setTtsAutoMode,
+  setTtsEnabled,
+  setTtsMaxLength,
+  setTtsPersona,
+  setTtsProvider,
+  synthesizeSpeech,
+  streamSpeech,
+  textToSpeech,
+  textToSpeechStream,
+  textToSpeechTelephony,
+  testApi,
+  testApi as _test,
+  type ResolvedTtsConfig,
+  type ResolvedTtsModelOverrides,
+  type TtsDirectiveOverrides,
+  type TtsDirectiveParseResult,
+  type TtsResult,
+  type TtsSynthesisResult,
+  type TtsSynthesisStreamResult,
+  type TtsStreamResult,
+  type TtsTelephonyResult,
+} from "../../packages/speech-core/runtime-api.js";

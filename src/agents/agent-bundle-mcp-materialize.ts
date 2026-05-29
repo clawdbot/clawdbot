@@ -9,7 +9,12 @@ import {
   normalizeReservedToolNames,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
-import type { BundleMcpToolRuntime, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import type {
+  BundleMcpToolRuntime,
+  McpCatalogTool,
+  McpToolCatalog,
+  SessionMcpRuntime,
+} from "./agent-bundle-mcp-types.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -22,30 +27,33 @@ function toAgentToolResult(params: {
   const content = Array.isArray(params.result.content)
     ? (params.result.content as AgentToolResult<unknown>["content"])
     : [];
-  const normalizedContent: AgentToolResult<unknown>["content"] =
-    content.length > 0
+  const structuredContentBlock =
+    params.result.structuredContent !== undefined
+      ? ({
+          type: "text",
+          text: `structuredContent:\n${JSON.stringify(params.result.structuredContent, null, 2)}`,
+        } as const)
+      : null;
+  // Structured MCP results are the canonical model payload here; replacing
+  // mirrored content avoids duplicating large tool output in the prompt.
+  const normalizedContent: AgentToolResult<unknown>["content"] = structuredContentBlock
+    ? [structuredContentBlock]
+    : content.length > 0
       ? content
-      : params.result.structuredContent !== undefined
-        ? [
-            {
-              type: "text",
-              text: JSON.stringify(params.result.structuredContent, null, 2),
-            },
-          ]
-        : ([
-            {
-              type: "text",
-              text: JSON.stringify(
-                {
-                  status: params.result.isError === true ? "error" : "ok",
-                  server: params.serverName,
-                  tool: params.toolName,
-                },
-                null,
-                2,
-              ),
-            },
-          ] as AgentToolResult<unknown>["content"]);
+      : ([
+          {
+            type: "text",
+            text: JSON.stringify(
+              {
+                status: params.result.isError === true ? "error" : "ok",
+                server: params.serverName,
+                tool: params.toolName,
+              },
+              null,
+              2,
+            ),
+          },
+        ] as AgentToolResult<unknown>["content"]);
   const details: Record<string, unknown> = {
     mcpServer: params.serverName,
     mcpTool: params.toolName,
@@ -62,24 +70,18 @@ function toAgentToolResult(params: {
   };
 }
 
-export async function materializeBundleMcpToolsForRun(params: {
-  runtime: SessionMcpRuntime;
+/**
+ * Projects an already-listed MCP catalog into agent tools. Without `createExecute`,
+ * the projected tools are inventory-only and throw if execution is attempted.
+ */
+export function buildBundleMcpToolsFromCatalog(params: {
+  catalog: McpToolCatalog;
   reservedToolNames?: Iterable<string>;
-  disposeRuntime?: () => Promise<void>;
-}): Promise<BundleMcpToolRuntime> {
-  let disposed = false;
-  const releaseLease = params.runtime.acquireLease?.();
-  params.runtime.markUsed();
-  let catalog;
-  try {
-    catalog = await params.runtime.getCatalog();
-  } catch (error) {
-    releaseLease?.();
-    throw error;
-  }
+  createExecute?: (tool: McpCatalogTool) => AnyAgentTool["execute"];
+}): AnyAgentTool[] {
   const reservedNames = normalizeReservedToolNames(params.reservedToolNames);
-  const tools: BundleMcpToolRuntime["tools"] = [];
-  const sortedCatalogTools = [...catalog.tools].toSorted((a, b) => {
+  const tools: AnyAgentTool[] = [];
+  const sortedCatalogTools = [...params.catalog.tools].toSorted((a, b) => {
     const serverOrder = a.safeServerName.localeCompare(b.safeServerName);
     if (serverOrder !== 0) {
       return serverOrder;
@@ -112,15 +114,11 @@ export async function materializeBundleMcpToolsForRun(params: {
       label: tool.title ?? tool.toolName,
       description: tool.description || tool.fallbackDescription,
       parameters: normalizeToolParameterSchema(tool.inputSchema),
-      execute: async (_toolCallId: string, input: unknown) => {
-        params.runtime.markUsed();
-        const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
-        return toAgentToolResult({
-          serverName: tool.serverName,
-          toolName: tool.toolName,
-          result,
-        });
-      },
+      execute:
+        params.createExecute?.(tool) ??
+        (async () => {
+          throw new Error("bundle-mcp catalog projection cannot execute tools");
+        }),
     };
     setPluginToolMeta(agentTool, {
       pluginId: "bundle-mcp",
@@ -133,9 +131,43 @@ export async function materializeBundleMcpToolsForRun(params: {
   // turns (defensive — listTools() order is usually stable but not guaranteed).
   // Cannot fix name collisions: collision suffixes above are order-dependent.
   tools.sort((a, b) => a.name.localeCompare(b.name));
+  return tools;
+}
+
+export async function materializeBundleMcpToolsForRun(params: {
+  runtime: SessionMcpRuntime;
+  reservedToolNames?: Iterable<string>;
+  disposeRuntime?: () => Promise<void>;
+}): Promise<BundleMcpToolRuntime> {
+  let disposed = false;
+  const releaseLease = params.runtime.acquireLease?.();
+  params.runtime.markUsed();
+  let catalog;
+  try {
+    catalog = await params.runtime.getCatalog();
+  } catch (error) {
+    releaseLease?.();
+    throw error;
+  }
+  const tools = buildBundleMcpToolsFromCatalog({
+    catalog,
+    reservedToolNames: params.reservedToolNames,
+    createExecute: (tool) => async (_toolCallId: string, input: unknown) => {
+      params.runtime.markUsed();
+      const result = await params.runtime.callTool(tool.serverName, tool.toolName, input);
+      return toAgentToolResult({
+        serverName: tool.serverName,
+        toolName: tool.toolName,
+        result,
+      });
+    },
+  });
 
   return {
     tools,
+    ...(catalog.diagnostics && catalog.diagnostics.length > 0
+      ? { diagnostics: catalog.diagnostics }
+      : {}),
     dispose: async () => {
       if (disposed) {
         return;

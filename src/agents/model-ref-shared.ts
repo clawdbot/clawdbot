@@ -1,4 +1,7 @@
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeTogetherModelId,
+} from "../plugin-sdk/provider-model-id-normalize.js";
 import { normalizeProviderModelIdWithManifest } from "../plugins/manifest-model-id-normalization.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -69,6 +72,9 @@ function normalizeBuiltInProviderModelId(provider: string, model: string): strin
       "grok-4.20-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
     };
     return xaiAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;
+  }
+  if (provider === "together") {
+    return normalizeTogetherModelId(model);
   }
   return model;
 }

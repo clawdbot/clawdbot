@@ -54,6 +54,7 @@ import { loadPresence, type PresenceState } from "./controllers/presence.ts";
 import { loadSessions, type SessionsState } from "./controllers/sessions.ts";
 import { loadSkills, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
+import { resolveCronJobLastRunStatus } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
@@ -865,7 +866,7 @@ function buildAttentionItems(host: SettingsAppHost) {
   }
 
   const cronJobs = host.cronJobs ?? [];
-  const failedCron = cronJobs.filter((j) => j.state?.lastStatus === "error");
+  const failedCron = cronJobs.filter((j) => resolveCronJobLastRunStatus(j) === "error");
   if (failedCron.length > 0) {
     items.push({
       severity: "error",
@@ -942,6 +943,7 @@ export async function loadCron(host: SettingsHost) {
   host.controlUiCronRefreshSeq = cronSeq;
   const isCurrentCronRefresh = () =>
     host.controlUiCronRefreshSeq === cronSeq && host.tab === "cron";
+  const useTableFilters = host.tab === "cron";
   const runsStartedAtMs = controlUiNowMs();
   const runsRefresh = loadCronRuns(app, activeCronJobId)
     .catch(() => "error" as const)
@@ -961,5 +963,9 @@ export async function loadCron(host: SettingsHost) {
       );
     });
   void runsRefresh;
-  await Promise.all([loadChannels(app, false), loadCronStatus(app), loadCronJobsPage(app)]);
+  await Promise.all([
+    loadChannels(app, false),
+    loadCronStatus(app),
+    loadCronJobsPage(app, { tableFilters: useTableFilters }),
+  ]);
 }

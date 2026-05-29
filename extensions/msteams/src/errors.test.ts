@@ -59,6 +59,14 @@ describe("msteams errors", () => {
     ).toBeUndefined();
   });
 
+  it("does not parse partial or fractional status codes", () => {
+    expect(classifyMSTeamsSendError({ statusCode: "429oops" }).kind).toBe("unknown");
+    expect(classifyMSTeamsSendError({ statusCode: 429.5 }).kind).toBe("unknown");
+    expect(
+      classifyMSTeamsSendError({ response: { status: "503 temporarily unavailable" } }).kind,
+    ).toBe("unknown");
+  });
+
   it("classifies transient errors", () => {
     const result = classifyMSTeamsSendError({ statusCode: 503 });
     expect(result.kind).toBe("transient");

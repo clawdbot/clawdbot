@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -20,7 +21,6 @@ import {
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import type { SerializedEventPayload } from "./node-registry.js";
-import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";

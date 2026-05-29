@@ -160,6 +160,37 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("defers approval-required tools without opening an approval request", async () => {
+    runBeforeToolCallMock.mockResolvedValue({
+      requireApproval: {
+        pluginId: "test-plugin",
+        title: "Needs approval",
+        description: "Review before running",
+        severity: "info",
+      },
+      params: { adjusted: true },
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "exec",
+      params: { command: "ls" },
+      toolCallId: "call-defer",
+      approvalMode: "defer",
+    });
+
+    expect(result).toMatchObject({
+      blocked: false,
+      params: { command: "ls" },
+      deferredApproval: {
+        toolName: "exec",
+        toolCallId: "call-defer",
+        baseParams: { command: "ls" },
+        overrideParams: { adjusted: true },
+      },
+    });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("sends approval to gateway when NOT in embedded mode", async () => {
     setEmbeddedMode(false);
 
@@ -263,7 +294,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
       ctx: { agentId: "main", sessionKey: "main" },
     });
 
-    expect(result).toEqual({ blocked: false, params: { command: "deploy" } });
+    expect(result).toEqual({
+      blocked: false,
+      params: { command: "deploy" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+    });
     const approvalCall = requireApprovalRequestCall("trusted policy approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(130_000);
     expect(approvalCall.request.pluginId).toBe("trusted-policy");

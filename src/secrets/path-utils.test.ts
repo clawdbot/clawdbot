@@ -35,6 +35,24 @@ describe("secrets path utils", () => {
       },
     });
     expect(getPath(config, ["agents", "list", "foo"])).toBeUndefined();
+    expect(getPath(config, ["agents", "list", "0abc"])).toBeUndefined();
+    expect(getPath(config, ["agents", "list", "+0"])).toBeUndefined();
+    expect(getPath(config, ["agents", "list", "9007199254740993"])).toBeUndefined();
+    expect(getPath(config, ["agents", "list", "4294967294"])).toBeUndefined();
+  });
+
+  it("setPathCreateStrict rejects unsafe array path segments", () => {
+    const config = createAgentListConfig();
+
+    expect(() =>
+      setPathCreateStrict(config, ["agents", "list", "9007199254740993", "id"], "b"),
+    ).toThrow(/Invalid array index segment/);
+    expect(() => setPathCreateStrict(config, ["agents", "list", "4294967294", "id"], "b")).toThrow(
+      /Invalid array index segment/,
+    );
+    expect(() => setPathCreateStrict(config, ["agents", "list", "+0", "id"], "b")).toThrow(
+      /Invalid path shape/,
+    );
   });
 
   it("setPathExistingStrict throws when path does not already exist", () => {

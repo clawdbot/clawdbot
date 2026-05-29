@@ -279,6 +279,14 @@ describe("buildProviderReplayFamilyHooks", () => {
 });
 
 describe("resolveClaudeThinkingProfile", () => {
+  it("leaves Opus 4.8 thinking off by default with xhigh/adaptive/max options", () => {
+    const profile = resolveClaudeThinkingProfile("claude-opus-4-8");
+    expectFields(profile, {
+      defaultLevel: "off",
+    });
+    expectLevelIdsInclude(profile, ["xhigh", "adaptive", "max"]);
+  });
+
   it("exposes Opus 4.7 thinking levels for direct and proxied Claude providers", () => {
     const directProfile = resolveClaudeThinkingProfile("claude-opus-4-7");
     expectFields(directProfile, {

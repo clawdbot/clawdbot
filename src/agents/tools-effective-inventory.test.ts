@@ -228,6 +228,35 @@ describe("resolveEffectiveToolInventory", () => {
     });
   });
 
+  it("groups bundled MCP tools separately from generic plugin tools", async () => {
+    const { resolveEffectiveToolInventory } = await loadHarness({
+      tools: [
+        mockTool({ name: "reproProbe__probe_tool", label: "Probe", description: "Probe MCP" }),
+      ],
+      pluginMeta: { reproProbe__probe_tool: { pluginId: "bundle-mcp" } },
+    });
+
+    const result = resolveEffectiveToolInventory({ cfg: {} });
+
+    expect(result.groups).toEqual([
+      {
+        id: "mcp",
+        label: "MCP server tools",
+        source: "mcp",
+        tools: [
+          {
+            id: "reproProbe__probe_tool",
+            label: "Probe",
+            description: "Probe MCP",
+            rawDescription: "Probe MCP",
+            source: "mcp",
+            pluginId: "bundle-mcp",
+          },
+        ],
+      },
+    ]);
+  });
+
   it("disambiguates duplicate labels with source ids", async () => {
     const { resolveEffectiveToolInventory } = await loadHarness({
       tools: [

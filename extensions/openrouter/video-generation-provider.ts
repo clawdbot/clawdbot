@@ -202,6 +202,19 @@ function resolveResolution(resolution: VideoGenerationRequest["resolution"]): st
   return normalized ? normalized.toLowerCase() : undefined;
 }
 
+function resolveSeed(seed: unknown): number | undefined {
+  if (seed === undefined) {
+    return undefined;
+  }
+  if (typeof seed !== "number") {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(seed)) {
+    throw new Error("OpenRouter video seed must be an integer");
+  }
+  return seed;
+}
+
 function buildRequestBody(req: VideoGenerationRequest, model: string): Record<string, unknown> {
   const { frameImages, inputReferences } = buildImageInputs(req.inputImages);
   const supportedDurations =
@@ -239,9 +252,9 @@ function buildRequestBody(req: VideoGenerationRequest, model: string): Record<st
     body.input_references = inputReferences;
   }
 
-  const seed = typeof req.providerOptions?.seed === "number" ? req.providerOptions.seed : undefined;
-  if (seed != null) {
-    body.seed = Math.trunc(seed);
+  const seed = resolveSeed(req.providerOptions?.seed);
+  if (seed !== undefined) {
+    body.seed = seed;
   }
   const callbackUrl =
     typeof req.providerOptions?.callback_url === "string"

@@ -71,6 +71,10 @@ describe("resolveJsoncOcPath", () => {
     expect(rs(config, "oc://config/limits.99")).toBeNull();
   });
 
+  it("returns null for noncanonical array indexes", () => {
+    expect(rs(config, "oc://config/limits.01")).toBeNull();
+  });
+
   it("returns null when descending past a primitive", () => {
     expect(rs(config, "oc://config/plugins.entries.github.token.x")).toBeNull();
   });

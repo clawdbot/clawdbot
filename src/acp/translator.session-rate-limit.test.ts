@@ -6,8 +6,8 @@ import type {
   SetSessionModeRequest,
 } from "@agentclientprotocol/sdk";
 import { describe, expect, it, vi } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -206,6 +206,26 @@ describe("acp session creation rate limit", () => {
     await expect(agent.loadSession(createLoadSessionRequest("new-session"))).rejects.toThrow(
       /session creation rate limit exceeded/i,
     );
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
+  it("falls back for non-finite session creation rate limit overrides", async () => {
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
+      sessionStore,
+      sessionCreateRateLimit: {
+        maxRequests: Number.NaN,
+        windowMs: Number.NaN,
+      },
+    });
+
+    await expect(agent.newSession(createNewSessionRequest())).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    });
+    await expect(agent.newSession(createNewSessionRequest())).resolves.toMatchObject({
+      sessionId: expect.any(String),
+    });
 
     sessionStore.clearAllSessionsForTest();
   });

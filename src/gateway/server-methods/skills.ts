@@ -1,4 +1,17 @@
 import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateSkillsBinsParams,
+  validateSkillsDetailParams,
+  validateSkillsInstallParams,
+  validateSkillsSearchParams,
+  validateSkillsSecurityVerdictsParams,
+  validateSkillsSkillCardParams,
+  validateSkillsStatusParams,
+  validateSkillsUpdateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -25,19 +38,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateSkillsBinsParams,
-  validateSkillsDetailParams,
-  validateSkillsInstallParams,
-  validateSkillsSearchParams,
-  validateSkillsSecurityVerdictsParams,
-  validateSkillsSkillCardParams,
-  validateSkillsStatusParams,
-  validateSkillsUpdateParams,
-} from "../protocol/index.js";
 import { updateSkillConfigEntry } from "./skills-config-mutations.js";
 import { installUploadedSkillArchive, skillsUploadHandlers } from "./skills-upload.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";

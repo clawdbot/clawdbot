@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "../agents/context-cache.js";
@@ -33,6 +33,19 @@ vi.mock("../plugins/commands.js", () => ({
   listPluginCommands,
 }));
 
+beforeEach(() => {
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [],
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   cliBackendsTesting.resetDepsForTest();
@@ -43,6 +56,13 @@ afterEach(() => {
 
 function registerAnthropicCliBackendForTest(): void {
   cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
     resolveRuntimeCliBackends: () => [
       {
         id: "claude-cli",
@@ -97,6 +117,7 @@ describe("buildStatusMessage", () => {
       sessionScope: "per-sender",
       resolvedThink: "medium",
       resolvedVerbose: "off",
+      resolvedHarness: "openclaw",
       queue: { mode: "collect", depth: 0 },
       modelAuth: "api-key",
       now: 10 * 60_000, // 10 minutes later
@@ -1014,6 +1035,8 @@ describe("buildStatusMessage", () => {
   });
 
   it("prefers active CLI OAuth over selected env API-key labels for runtime aliases", () => {
+    registerAnthropicCliBackendForTest();
+
     const text = buildStatusMessage({
       config: {
         models: {

@@ -2,13 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { ProviderPlugin } from "./types.js";
 
-const mocks = vi.hoisted(() => ({
-  loadPluginMetadataSnapshot: vi.fn(),
-  resolvePluginMetadataSnapshot: vi.fn(),
-  resolveDiscoveredProviderPluginIds: vi.fn(),
-  resolvePluginProviders: vi.fn(),
-  loadSource: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const loadSource = vi.fn();
+  const loaderCache = { kind: "provider-discovery-loader-cache", clear: vi.fn() };
+  return {
+    loadPluginMetadataSnapshot: vi.fn(),
+    resolvePluginMetadataSnapshot: vi.fn(),
+    resolveDiscoveredProviderPluginIds: vi.fn(),
+    resolvePluginProviders: vi.fn(),
+    loadSource,
+    loaderCache,
+    clearNativeRequireJavaScriptModuleCache: vi.fn(),
+    createPluginModuleLoaderCache: vi.fn(() => loaderCache),
+    getCachedPluginModuleLoader: vi.fn(() => loadSource),
+  };
+});
 
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./plugin-metadata-snapshot.js")>();
@@ -27,10 +35,16 @@ vi.mock("./providers.runtime.js", () => ({
   resolvePluginProviders: mocks.resolvePluginProviders,
 }));
 
-vi.mock("./source-loader.js", () => ({
-  createPluginSourceLoader: () => mocks.loadSource,
+vi.mock("./plugin-module-loader-cache.js", () => ({
+  createPluginModuleLoaderCache: mocks.createPluginModuleLoaderCache,
+  getCachedPluginModuleLoader: mocks.getCachedPluginModuleLoader,
 }));
 
+vi.mock("./native-module-require.js", () => ({
+  clearNativeRequireJavaScriptModuleCache: mocks.clearNativeRequireJavaScriptModuleCache,
+}));
+
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 
 function createManifestPlugin(id: string): PluginManifestRecord {
@@ -167,6 +181,79 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
   });
 
+  it("loads discovery entries through the native-capable module loader", () => {
+    const staticProvider = createProvider({ id: "deepseek", mode: "static" });
+    mocks.loadSource.mockReturnValue(staticProvider);
+
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toEqual([
+      { ...staticProvider, pluginId: "deepseek" },
+    ]);
+
+    expect(mocks.getCachedPluginModuleLoader).toHaveBeenCalledOnce();
+    const calls = mocks.getCachedPluginModuleLoader.mock.calls as unknown[][];
+    const params = calls[0]?.[0] as
+      | {
+          cache?: unknown;
+          modulePath?: string;
+          importerUrl?: string;
+          loaderFilename?: string;
+          preferBuiltDist?: boolean;
+          tryNative?: boolean;
+        }
+      | undefined;
+    expect(params).toEqual(
+      expect.objectContaining({
+        cache: mocks.loaderCache,
+        modulePath: "/tmp/deepseek/provider-discovery.ts",
+        importerUrl: expect.stringContaining("provider-discovery.runtime"),
+        loaderFilename: expect.stringContaining("provider-discovery.runtime"),
+        preferBuiltDist: true,
+      }),
+    );
+    expect(params?.tryNative).toBeUndefined();
+  });
+
+  it("clears the discovery module loader cache with plugin metadata lifecycle caches", () => {
+    const staticProvider = createProvider({ id: "deepseek", mode: "static" });
+    mocks.loadSource.mockReturnValue(staticProvider);
+
+    resolvePluginDiscoveryProvidersRuntime({});
+    clearPluginMetadataLifecycleCaches();
+
+    expect(mocks.loaderCache.clear).toHaveBeenCalledOnce();
+    expect(mocks.clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(
+      "/tmp/deepseek/provider-discovery.ts",
+      { dependencyRoot: "/tmp/deepseek" },
+    );
+  });
+
+  it("clears bundled dist discovery chunks from the dist root", () => {
+    const staticProvider = createProvider({ id: "deepseek", mode: "static" });
+    mocks.loadSource.mockReturnValue(staticProvider);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [
+          {
+            ...createManifestPlugin("deepseek"),
+            rootDir: "/tmp/openclaw/dist/extensions/deepseek",
+            manifestPath: "/tmp/openclaw/dist/extensions/deepseek/openclaw.plugin.json",
+            providerDiscoverySource: "/tmp/openclaw/dist/extensions/deepseek/provider-discovery.js",
+          },
+        ],
+        diagnostics: [],
+      },
+    });
+
+    resolvePluginDiscoveryProvidersRuntime({});
+    clearPluginMetadataLifecycleCaches();
+
+    expect(mocks.clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(
+      "/tmp/openclaw/dist/extensions/deepseek/provider-discovery.js",
+      { dependencyRoot: "/tmp/openclaw/dist" },
+    );
+  });
+
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {
     const codexEntryProvider = createProvider({ id: "codex", mode: "catalog" });
     const deepseekEntryProvider = createProvider({ id: "deepseek", mode: "static" });
@@ -242,6 +329,27 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
     const params = requireResolvePluginProvidersParams();
     expect(params.onlyPluginIds).toEqual(["kilocode"]);
+  });
+
+  it("enables bundled provider Vitest compat when falling back from discovery entries", () => {
+    const fullProviders = [createProvider({ id: "deepseek", mode: "catalog" })];
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue([]);
+    mocks.resolvePluginProviders.mockReturnValue(fullProviders);
+
+    expect(
+      resolvePluginDiscoveryProvidersRuntime({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        onlyPluginIds: ["deepseek"],
+      }),
+    ).toEqual(fullProviders);
+
+    expect(mocks.resolvePluginProviders).toHaveBeenCalledTimes(1);
+    expect(requireResolvePluginProvidersParams()).toEqual(
+      expect.objectContaining({
+        bundledProviderVitestCompat: true,
+        onlyPluginIds: ["deepseek"],
+      }),
+    );
   });
 
   it("shares one metadata snapshot between provider id discovery and entry loading", () => {

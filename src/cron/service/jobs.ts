@@ -889,7 +889,16 @@ function mergeCronDelivery(
   };
 
   if (typeof patch.mode === "string") {
+    const previousMode = next.mode;
     next.mode = (patch.mode as string) === "deliver" ? "announce" : patch.mode;
+    if (previousMode !== next.mode && (previousMode === "webhook" || next.mode === "webhook")) {
+      next.to = undefined;
+    }
+    if (next.mode === "webhook") {
+      next.channel = undefined;
+      next.threadId = undefined;
+      next.accountId = undefined;
+    }
   }
   if ("channel" in patch) {
     next.channel = normalizeOptionalString(patch.channel);

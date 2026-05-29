@@ -666,6 +666,58 @@ Teams delivers messages via HTTP webhook. If processing takes too long (e.g., sl
 
 OpenClaw handles this by returning quickly and sending replies proactively, but very slow responses may still cause issues.
 
+### Teams cloud and service URL support
+
+This SDK-backed Teams path is live-validated for Microsoft Teams public cloud.
+
+Inbound replies use the incoming Teams SDK turn context. Out-of-context proactive operations - sends, edits, deletes, cards, polls, file-consent messages, and queued long-running replies - use the stored conversation reference `serviceUrl`. Public cloud defaults to the Teams SDK public cloud environment and allows stored references on the public Teams Connector host: `https://smba.trafficmanager.net/`.
+
+Public cloud is the default. You do not need to set `channels.msteams.cloud` or `channels.msteams.serviceUrl` for normal public-cloud bots.
+
+For non-public Teams clouds, set `cloud` and the matching proactive boundary when Microsoft publishes one:
+
+- `channels.msteams.cloud` selects the Teams SDK cloud preset for authentication, JWT validation, token services, and Graph scope.
+- `channels.msteams.serviceUrl` selects the Bot Connector endpoint boundary used to validate stored conversation references before proactive sends, edits, deletes, cards, polls, file-consent messages, and queued long-running replies. It is required for USGov and DoD SDK clouds. For China/21Vianet, OpenClaw uses the SDK `China` preset and accepts stored/configured service URLs only on Azure China Bot Framework channel hosts.
+
+Microsoft publishes the global proactive Bot Connector endpoints in the [Create the conversation](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages?tabs=dotnet#create-the-conversation) section of the Teams proactive messaging docs. Use the incoming activity's `serviceUrl` when available; if you need a global proactive endpoint, use Microsoft's table.
+
+| Teams environment | OpenClaw config                                             | Proactive `serviceUrl`                             |
+| ----------------- | ----------------------------------------------------------- | -------------------------------------------------- |
+| Public            | no cloud/serviceUrl config needed                           | `https://smba.trafficmanager.net/teams`            |
+| GCC               | set `serviceUrl`; no separate Teams SDK cloud preset exists | `https://smba.infra.gcc.teams.microsoft.com/teams` |
+| GCC High          | `cloud: "USGov"` + `serviceUrl`                             | `https://smba.infra.gov.teams.microsoft.us/teams`  |
+| DoD               | `cloud: "USGovDoD"` + `serviceUrl`                          | `https://smba.infra.dod.teams.microsoft.us/teams`  |
+| China/21Vianet    | `cloud: "China"`                                            | use the incoming activity's `serviceUrl`           |
+
+Example for GCC, where Microsoft documents a separate proactive service URL but the Teams SDK does not expose a separate GCC cloud preset:
+
+```json
+{
+  "channels": {
+    "msteams": {
+      "serviceUrl": "https://smba.infra.gcc.teams.microsoft.com/teams"
+    }
+  }
+}
+```
+
+Example for GCC High:
+
+```json
+{
+  "channels": {
+    "msteams": {
+      "cloud": "USGov",
+      "serviceUrl": "https://smba.infra.gov.teams.microsoft.us/teams"
+    }
+  }
+}
+```
+
+`channels.msteams.serviceUrl` is restricted to supported Microsoft Teams Bot Connector hosts. When a service URL is configured, OpenClaw checks that the stored conversation `serviceUrl` uses the same host before proactive sends, edits, deletes, cards, polls, or queued long-running replies run. With the default public-cloud config, OpenClaw fails closed if a stored conversation points outside the public Teams Connector host. Receive a fresh message from the conversation after changing cloud/service URL settings so the stored conversation reference is current.
+
+China/21Vianet does not have a separate global proactive `smba` URL in Microsoft's Teams proactive endpoint table. Configure `cloud: "China"` so the Teams SDK uses Azure China auth, token, and JWT endpoints. Proactive sends then require a stored conversation reference from an incoming China Teams activity, or an explicitly configured service URL, on the Azure China Bot Framework channel boundary (`*.botframework.azure.cn`). Graph-backed Teams helpers are currently disabled for `cloud: "China"` until OpenClaw routes Graph requests through the Azure China Graph endpoint.
+
 ### Formatting
 
 Teams markdown is more limited than Slack or Discord:
@@ -680,6 +732,8 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 
 - `channels.msteams.enabled`: enable/disable the channel.
 - `channels.msteams.appId`, `channels.msteams.appPassword`, `channels.msteams.tenantId`: bot credentials.
+- `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set this with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing is implemented.
+- `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set this for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.
 - `channels.msteams.webhook.port` (default `3978`)
 - `channels.msteams.webhook.path` (default `/api/messages`)
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)

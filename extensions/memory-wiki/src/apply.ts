@@ -3,6 +3,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
@@ -62,6 +63,27 @@ type ApplyMemoryWikiMutationResult = {
   compile: CompileMemoryWikiResult;
 };
 
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: false },
+): number | undefined;
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: true },
+): number | null | undefined;
+function normalizeMutationConfidence(
+  params: Record<string, unknown>,
+  options: { allowNull: boolean },
+): number | null | undefined {
+  if (options.allowNull && params.confidence === null) {
+    return null;
+  }
+  return readFiniteNumberParam(params, "confidence", {
+    min: 0,
+    max: 1,
+  });
+}
+
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
   const params = rawParams as {
     op: ApplyMemoryWikiMutation["op"];
@@ -85,6 +107,9 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     if (!params.sourceIds || params.sourceIds.length === 0) {
       throw new Error("wiki mutation requires at least one sourceId for create_synthesis.");
     }
+    const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
+      allowNull: false,
+    });
     return {
       op: "create_synthesis",
       title: params.title,
@@ -93,13 +118,16 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
-      ...(typeof params.confidence === "number" ? { confidence: params.confidence } : {}),
+      ...(typeof confidence === "number" ? { confidence } : {}),
       ...(params.status ? { status: params.status } : {}),
     };
   }
   if (!params.lookup?.trim()) {
     throw new Error("wiki mutation requires lookup for update_metadata.");
   }
+  const confidence = normalizeMutationConfidence(params as Record<string, unknown>, {
+    allowNull: true,
+  });
   return {
     op: "update_metadata",
     lookup: params.lookup,
@@ -107,7 +135,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     ...(Array.isArray(params.claims) ? { claims: normalizeWikiClaims(params.claims) } : {}),
     ...(params.contradictions ? { contradictions: params.contradictions } : {}),
     ...(params.questions ? { questions: params.questions } : {}),
-    ...(params.confidence !== undefined ? { confidence: params.confidence } : {}),
+    ...(confidence !== undefined ? { confidence } : {}),
     ...(params.status ? { status: params.status } : {}),
   };
 }

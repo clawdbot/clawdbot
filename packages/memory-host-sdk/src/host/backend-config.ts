@@ -216,10 +216,19 @@ function resolveDebounceMs(raw: number | undefined): number {
 }
 
 function resolveTimeoutMs(raw: number | undefined, fallback: number): number {
-  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
-    return Math.floor(raw);
+  return resolvePositiveIntegerConfig(raw, fallback);
+}
+
+function resolvePositiveIntegerConfig(raw: number | undefined, fallback: number): number;
+function resolvePositiveIntegerConfig(raw: number | undefined): number | undefined;
+function resolvePositiveIntegerConfig(
+  raw: number | undefined,
+  fallback?: number,
+): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+    return fallback;
   }
-  return fallback;
+  return Math.max(1, Math.floor(raw));
 }
 
 function resolveStartupMode(raw: MemoryQmdConfig["update"]): MemoryQmdStartupMode {
@@ -238,20 +247,18 @@ function resolveStartupDelayMs(raw: number | undefined): number {
 }
 
 function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig {
-  const parsed: ResolvedQmdLimitsConfig = { ...DEFAULT_QMD_LIMITS };
-  if (raw?.maxResults && raw.maxResults > 0) {
-    parsed.maxResults = Math.floor(raw.maxResults);
-  }
-  if (raw?.maxSnippetChars && raw.maxSnippetChars > 0) {
-    parsed.maxSnippetChars = Math.floor(raw.maxSnippetChars);
-  }
-  if (raw?.maxInjectedChars && raw.maxInjectedChars > 0) {
-    parsed.maxInjectedChars = Math.floor(raw.maxInjectedChars);
-  }
-  if (raw?.timeoutMs && raw.timeoutMs > 0) {
-    parsed.timeoutMs = Math.floor(raw.timeoutMs);
-  }
-  return parsed;
+  return {
+    maxResults: resolvePositiveIntegerConfig(raw?.maxResults, DEFAULT_QMD_LIMITS.maxResults),
+    maxSnippetChars: resolvePositiveIntegerConfig(
+      raw?.maxSnippetChars,
+      DEFAULT_QMD_LIMITS.maxSnippetChars,
+    ),
+    maxInjectedChars: resolvePositiveIntegerConfig(
+      raw?.maxInjectedChars,
+      DEFAULT_QMD_LIMITS.maxInjectedChars,
+    ),
+    timeoutMs: resolvePositiveIntegerConfig(raw?.timeoutMs, DEFAULT_QMD_LIMITS.timeoutMs),
+  };
 }
 
 function resolveSearchMode(raw?: MemoryQmdConfig["searchMode"]): MemoryQmdSearchMode {
@@ -273,8 +280,7 @@ function resolveSessionConfig(
   const enabled = Boolean(cfg?.enabled);
   const exportDirRaw = cfg?.exportDir?.trim();
   const exportDir = exportDirRaw ? resolvePath(exportDirRaw, workspaceDir) : undefined;
-  const retentionDays =
-    cfg?.retentionDays && cfg.retentionDays > 0 ? Math.floor(cfg.retentionDays) : undefined;
+  const retentionDays = resolvePositiveIntegerConfig(cfg?.retentionDays);
   return {
     enabled,
     exportDir,

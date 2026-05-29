@@ -1,7 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -12,7 +12,7 @@ const FirecrawlSearchToolSchema = Type.Object(
   {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results to return (1-10).",
         minimum: 1,
         maximum: 10,
@@ -34,7 +34,7 @@ const FirecrawlSearchToolSchema = Type.Object(
       }),
     ),
     timeoutSeconds: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Timeout in seconds for the Firecrawl Search request.",
         minimum: 1,
       }),
@@ -52,10 +52,11 @@ export function createFirecrawlSearchTool(api: OpenClawPluginApi) {
     parameters: FirecrawlSearchToolSchema,
     execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
       const query = readStringParam(rawParams, "query", { required: true });
-      const count = readNumberParam(rawParams, "count", { integer: true });
-      const timeoutSeconds = readNumberParam(rawParams, "timeoutSeconds", {
-        integer: true,
+      const count = readPositiveIntegerParam(rawParams, "count", {
+        max: 10,
+        message: "count must be an integer from 1 to 10",
       });
+      const timeoutSeconds = readPositiveIntegerParam(rawParams, "timeoutSeconds");
       const sources = readStringArrayParam(rawParams, "sources");
       const categories = readStringArrayParam(rawParams, "categories");
       const scrapeResults = rawParams.scrapeResults === true;

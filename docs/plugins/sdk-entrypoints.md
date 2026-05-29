@@ -246,11 +246,22 @@ export default defineBundledChannelSetupEntry({
     specifier: "./runtime-api.js",
     exportName: "setMyChannelRuntime",
   },
+  registerSetupRuntime(api) {
+    api.registerHttpRoute({
+      path: "/my-channel/events",
+      auth: "plugin",
+      handler: async (req, res) => {
+        /* setup-safe route */
+      },
+    });
+  },
 });
 ```
 
 Use that bundled contract only when setup flows truly need a lightweight runtime
-setter before the full channel entry loads.
+setter or setup-safe gateway surface before the full channel entry loads.
+`registerSetupRuntime` runs only for `"setup-runtime"` loads; keep it limited to
+config-only routes or methods that must exist before deferred full activation.
 
 ## Registration mode
 

@@ -5,7 +5,7 @@ import {
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -474,7 +474,12 @@ export async function executeExaWebSearchProviderTool(
     ? (rawType as ExaSearchType)
     : "auto";
   const count =
-    readNumberParam(params, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(params, "count", {
+      max: EXA_MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${EXA_MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const rawFreshness = readStringParam(params, "freshness");
   const freshness = normalizeExaFreshness(rawFreshness);
   if (rawFreshness && !freshness) {

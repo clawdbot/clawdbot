@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { ErrorCodes } from "./protocol/index.js";
 
 const hoisted = vi.hoisted(() => ({
   loadSessionStoreMock: vi.fn(),

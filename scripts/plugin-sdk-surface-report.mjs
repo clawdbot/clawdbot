@@ -20,19 +20,41 @@ const deprecatedPublicEntrypointSet = new Set(deprecatedPublicPluginSdkEntrypoin
 const deprecatedBarrelEntrypointSet = new Set(deprecatedBarrelPluginSdkEntrypoints);
 const forbiddenPublicSubpaths = new Set(["test-utils"]);
 
-const budgets = {
-  publicEntrypoints: Number(process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS ?? 303),
-  publicExports: Number(process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS ?? 8449),
-  publicFunctionExports: Number(
-    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS ?? 4656,
-  ),
-  publicDeprecatedExports: Number(
-    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS ?? 2800,
-  ),
-  publicWildcardReexports: Number(
-    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS ?? 207,
-  ),
-};
+function readBudgetEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined) {
+    return fallback;
+  }
+  const value = raw.trim();
+  if (!/^\d+$/u.test(value)) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a safe non-negative integer`);
+  }
+  return parsed;
+}
+
+let budgets;
+try {
+  budgets = {
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 308),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 9920),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5031),
+    publicDeprecatedExports: readBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
+      3143,
+    ),
+    publicWildcardReexports: readBudgetEnv(
+      "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
+      215,
+    ),
+  };
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 function entrypointPath(entrypoint) {
   return path.join(repoRoot, "src", "plugin-sdk", `${entrypoint}.ts`);

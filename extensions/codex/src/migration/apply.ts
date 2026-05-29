@@ -14,6 +14,7 @@ import {
   withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type {
   MigrationApplyResult,
   MigrationItem,
@@ -362,9 +363,13 @@ function hasOpenAiCuratedMarketplace(response: unknown): boolean {
   );
 }
 
-function targetCodexMarketplaceDiscoveryTimeoutMs(): number {
-  const configured = Number(process.env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV]);
-  if (Number.isFinite(configured) && configured >= 0) {
+export function targetCodexMarketplaceDiscoveryTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const configured = parseStrictNonNegativeInteger(
+    env[TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_ENV],
+  );
+  if (configured !== undefined) {
     return configured;
   }
   return TARGET_CODEX_MARKETPLACE_DISCOVERY_TIMEOUT_MS;

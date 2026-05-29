@@ -225,6 +225,7 @@ jobs:
       - name: Checkout harness ref
         uses: actions/checkout@v6
         with:
+          ref: main
           persist-credentials: false
           fetch-depth: 0
 
@@ -240,9 +241,6 @@ jobs:
           set -euo pipefail
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          if [[ -n "${PR_NUMBER:-}" ]]; then
-            git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER}" || true
-          fi
 
           resolve_commit() {
             local input_ref="$2"
@@ -256,7 +254,6 @@ jobs:
           }
 
           baseline_revision="$(resolve_commit baseline "$BASELINE_REF")"
-          candidate_revision="$(resolve_commit candidate "$CANDIDATE_REF")"
           if ! git merge-base --is-ancestor "$baseline_revision" refs/remotes/origin/main; then
             echo "baseline ref '${BASELINE_REF}' resolved to ${baseline_revision}, which is not on main." >&2
             exit 1
@@ -270,6 +267,11 @@ jobs:
           pr_state="$(jq -r '.state' <<<"$pr_head")"
           pr_head_sha="$(jq -r '.head_sha' <<<"$pr_head")"
           pr_head_repo="$(jq -r '.head_repo' <<<"$pr_head")"
+          candidate_revision="$CANDIDATE_REF"
+          if [[ ! "$candidate_revision" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "candidate ref '${CANDIDATE_REF}' is not an immutable commit SHA." >&2
+            exit 1
+          fi
           if [[ "$pr_state" != "open" || "$candidate_revision" != "$pr_head_sha" ]]; then
             echo "candidate ref '${CANDIDATE_REF}' resolved to ${candidate_revision}, which is not the open PR head." >&2
             exit 1

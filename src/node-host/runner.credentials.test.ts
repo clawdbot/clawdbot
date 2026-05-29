@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   handleNodeHostReconnectPaused,

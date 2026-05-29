@@ -473,13 +473,17 @@ function getModelMatchCandidates(modelId: string, modelName?: string): string[] 
 function supportsAdaptiveThinking(modelId: string, modelName?: string): boolean {
   const candidates = getModelMatchCandidates(modelId, modelName);
   return candidates.some(
-    (s) => s.includes("opus-4-6") || s.includes("opus-4-7") || s.includes("sonnet-4-6"),
+    (s) =>
+      s.includes("opus-4-6") ||
+      s.includes("opus-4-7") ||
+      s.includes("opus-4-8") ||
+      s.includes("sonnet-4-6"),
   );
 }
 
 function supportsNativeXhighEffort(model: Model<"bedrock-converse-stream">): boolean {
   const candidates = getModelMatchCandidates(model.id, model.name);
-  return candidates.some((s) => s.includes("opus-4-7"));
+  return candidates.some((s) => s.includes("opus-4-7") || s.includes("opus-4-8"));
 }
 
 function mapThinkingLevelToEffort(
@@ -503,6 +507,8 @@ function mapThinkingLevelToEffort(
       return "medium";
     case "high":
       return "high";
+    case "max":
+      return supportsNativeXhighEffort(model) ? "max" : "high";
     default:
       return "high";
   }
@@ -887,6 +893,7 @@ function buildAdditionalModelRequestFields(
             medium: 8192,
             high: 16384,
             xhigh: 16384, // Claude doesn't support xhigh, clamp to high
+            max: 16384,
           };
 
           // Custom budgets override defaults (xhigh not in ThinkingBudgets, use high)
@@ -945,5 +952,6 @@ export const testing = {
   convertMessages,
   getConfiguredBedrockRegion,
   hasConfiguredBedrockProfile,
+  mapThinkingLevelToEffort,
   shouldUseExplicitBedrockEndpoint,
 };

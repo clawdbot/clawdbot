@@ -39,6 +39,7 @@ describe("acp prompt cwd prefix", () => {
       cwd?: string;
       prefixCwd?: boolean;
       provenanceMode?: "meta" | "meta+receipt";
+      meta?: Record<string, unknown>;
     } = {},
   ) {
     const sessionStore = createInMemorySessionStore();
@@ -59,7 +60,12 @@ describe("acp prompt cwd prefix", () => {
       },
     );
 
-    await expect(agent.prompt(TEST_PROMPT)).rejects.toThrow("stop-after-send");
+    await expect(
+      agent.prompt({
+        ...TEST_PROMPT,
+        _meta: options.meta ?? {},
+      } as unknown as PromptRequest),
+    ).rejects.toThrow("stop-after-send");
     return requestSpy;
   }
 
@@ -126,6 +132,14 @@ describe("acp prompt cwd prefix", () => {
     expect(receipt).toContain("bridge=openclaw-acp");
     expect(receipt).toContain(`originSessionId=${TEST_SESSION_ID}`);
     expect(receipt).toContain(`targetSession=${TEST_SESSION_KEY}`);
+  });
+
+  it("does not forward malformed prompt timeout metadata", async () => {
+    for (const timeoutMs of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      const requestSpy = await runPromptAndCaptureRequest({ meta: { timeoutMs } });
+      const payload = chatSendPayload(requestSpy);
+      expect(payload.timeoutMs).toBeUndefined();
+    }
   });
 
   it("retries without provenance when the gateway rejects admin-only provenance fields", async () => {

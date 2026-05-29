@@ -3,6 +3,7 @@ import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plu
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -214,9 +215,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const auth = await resolveMatrixAuth({ cfg, accountId: effectiveAccountId });
   const resolvedInitialSyncLimit =
-    typeof opts.initialSyncLimit === "number"
-      ? Math.max(0, Math.floor(opts.initialSyncLimit))
-      : auth.initialSyncLimit;
+    resolveOptionalIntegerOption(opts.initialSyncLimit, { min: 0 }) ?? auth.initialSyncLimit;
   const authWithLimit =
     resolvedInitialSyncLimit === auth.initialSyncLimit
       ? auth

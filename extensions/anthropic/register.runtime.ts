@@ -45,10 +45,13 @@ import { wrapAnthropicProviderStream } from "./stream-wrappers.js";
 
 const PROVIDER_ID = "anthropic";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-7";
+const DEFAULT_ANTHROPIC_MODEL = "anthropic/claude-opus-4-8";
+const ANTHROPIC_OPUS_48_MODEL_ID = "claude-opus-4-8";
+const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_GA_1M_CONTEXT_TOKENS = 1_048_576;
+const ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS = 128_000;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
 const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
@@ -58,6 +61,8 @@ const ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS = [
 const ANTHROPIC_SONNET_46_MODEL_ID = "claude-sonnet-4-6";
 const ANTHROPIC_SONNET_46_DOT_MODEL_ID = "claude-sonnet-4.6";
 const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
+  ANTHROPIC_OPUS_48_MODEL_ID,
+  ANTHROPIC_OPUS_48_DOT_MODEL_ID,
   ANTHROPIC_OPUS_46_MODEL_ID,
   ANTHROPIC_OPUS_46_DOT_MODEL_ID,
   ANTHROPIC_OPUS_47_MODEL_ID,
@@ -66,6 +71,8 @@ const ANTHROPIC_GA_1M_MODEL_PREFIXES = [
   ANTHROPIC_SONNET_46_DOT_MODEL_ID,
 ] as const;
 const ANTHROPIC_MODERN_MODEL_PREFIXES = [
+  "claude-opus-4-8",
+  "claude-opus-4.8",
   "claude-opus-4-7",
   "claude-opus-4.7",
   "claude-opus-4-6",
@@ -282,8 +289,10 @@ function buildAnthropicForwardCompatModel(
     reasoning: true,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
-    maxTokens: 64_000,
+    contextWindow: isAnthropicGa1MModel(trimmedModelId) ? ANTHROPIC_GA_1M_CONTEXT_TOKENS : 200_000,
+    maxTokens: isAnthropicOpus48Model(trimmedModelId)
+      ? ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS
+      : 64_000,
   };
 }
 
@@ -291,6 +300,14 @@ function resolveAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
   return (
+    resolveAnthropic46ForwardCompatModel({
+      ctx,
+      dashModelId: ANTHROPIC_OPUS_48_MODEL_ID,
+      dotModelId: ANTHROPIC_OPUS_48_DOT_MODEL_ID,
+      dashTemplateId: ANTHROPIC_OPUS_47_MODEL_ID,
+      dotTemplateId: ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+      fallbackTemplateIds: ANTHROPIC_OPUS_47_TEMPLATE_MODEL_IDS,
+    }) ??
     resolveAnthropic46ForwardCompatModel({
       ctx,
       dashModelId: ANTHROPIC_OPUS_47_MODEL_ID,
@@ -322,6 +339,23 @@ function resolveAnthropicForwardCompatModel(
 function isAnthropicGa1MModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_GA_1M_MODEL_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+}
+
+function isAnthropicOpus48Model(modelId: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return [ANTHROPIC_OPUS_48_MODEL_ID, ANTHROPIC_OPUS_48_DOT_MODEL_ID].some((prefix) =>
+    normalized.startsWith(prefix),
+  );
+}
+
+function isAnthropicOpus47OrNewerModel(modelId: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return [
+    ANTHROPIC_OPUS_48_MODEL_ID,
+    ANTHROPIC_OPUS_48_DOT_MODEL_ID,
+    ANTHROPIC_OPUS_47_MODEL_ID,
+    ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+  ].some((prefix) => normalized.startsWith(prefix));
 }
 
 function hasConfiguredModelContextOverride(
@@ -393,6 +427,45 @@ function applyAnthropicGa1MContextWindow(params: {
   };
 }
 
+function applyAnthropicOpus48MaxTokens(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (!isAnthropicOpus48Model(params.modelId)) {
+    return undefined;
+  }
+  if ((params.model.maxTokens ?? 0) >= ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    maxTokens: ANTHROPIC_OPUS_48_MAX_OUTPUT_TOKENS,
+  };
+}
+
+function applyAnthropicOpusThinkingLevelMap(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (!isAnthropicOpus47OrNewerModel(params.modelId)) {
+    return undefined;
+  }
+  if (
+    params.model.thinkingLevelMap?.xhigh === "xhigh" &&
+    params.model.thinkingLevelMap?.max === "max"
+  ) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    thinkingLevelMap: {
+      ...params.model.thinkingLevelMap,
+      xhigh: "xhigh",
+      max: "max",
+    },
+  };
+}
+
 function matchesAnthropicModernModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);
   return ANTHROPIC_MODERN_MODEL_PREFIXES.some((prefix) => lower.startsWith(prefix));
@@ -413,15 +486,18 @@ function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
     return undefined;
   }
   const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
-  const opus47 = refs.some((ref) =>
-    [ANTHROPIC_OPUS_47_MODEL_ID, ANTHROPIC_OPUS_47_DOT_MODEL_ID].some((prefix) =>
-      normalizeLowercaseStringOrEmpty(ref).startsWith(prefix),
-    ),
+  const largeImageOpus = refs.some((ref) =>
+    [
+      ANTHROPIC_OPUS_48_MODEL_ID,
+      ANTHROPIC_OPUS_48_DOT_MODEL_ID,
+      ANTHROPIC_OPUS_47_MODEL_ID,
+      ANTHROPIC_OPUS_47_DOT_MODEL_ID,
+    ].some((prefix) => normalizeLowercaseStringOrEmpty(ref).startsWith(prefix)),
   );
   return {
     image: {
-      maxSidePx: opus47 ? 2576 : 1568,
-      preferredSidePx: opus47 ? 2576 : 1568,
+      maxSidePx: largeImageOpus ? 2576 : 1568,
+      preferredSidePx: largeImageOpus ? 2576 : 1568,
       tokenMode: "provider" as const,
     },
   };
@@ -461,13 +537,23 @@ function normalizeAnthropicResolvedModel(
         },
       }
     : imageCapableModel;
+  const outputModel =
+    applyAnthropicOpus48MaxTokens({
+      modelId: ctx.modelId,
+      model: mediaInputModel,
+    }) ?? mediaInputModel;
+  const thinkingLevelModel =
+    applyAnthropicOpusThinkingLevelMap({
+      modelId: ctx.modelId,
+      model: outputModel,
+    }) ?? outputModel;
   const contextWindowModel =
     applyAnthropicGa1MContextWindow({
       config: ctx.config,
       provider: ctx.provider,
       modelId: ctx.modelId,
-      model: mediaInputModel,
-    }) ?? mediaInputModel;
+      model: thinkingLevelModel,
+    }) ?? thinkingLevelModel;
   return contextWindowModel === ctx.model ? undefined : contextWindowModel;
 }
 
@@ -682,13 +768,23 @@ export function buildAnthropicProvider(): ProviderPlugin {
           modelId: ctx.modelId,
           model,
         }) ?? model;
+      const outputModel =
+        applyAnthropicOpus48MaxTokens({
+          modelId: ctx.modelId,
+          model: imageCapableModel,
+        }) ?? imageCapableModel;
+      const thinkingLevelModel =
+        applyAnthropicOpusThinkingLevelMap({
+          modelId: ctx.modelId,
+          model: outputModel,
+        }) ?? outputModel;
       return (
         applyAnthropicGa1MContextWindow({
           config: ctx.config,
           provider: ctx.provider,
           modelId: ctx.modelId,
-          model: imageCapableModel,
-        }) ?? imageCapableModel
+          model: thinkingLevelModel,
+        }) ?? thinkingLevelModel
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),

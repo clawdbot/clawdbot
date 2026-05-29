@@ -5,15 +5,10 @@ import {
   type MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  assertOkOrThrowHttpError,
-  postJsonRequest,
-  resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
+import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveFalHttpRequestConfig } from "./http-config.js";
 
-const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_MUSIC_MODEL = "fal-ai/minimax-music/v2.6";
 const FAL_ACE_STEP_MODEL = "fal-ai/ace-step/prompt-to-audio";
 const FAL_STABLE_AUDIO_MODEL = "fal-ai/stable-audio-25/text-to-audio";
@@ -27,10 +22,6 @@ const FAL_MUSIC_MODELS = [
 
 function resolveFalMusicModel(model: string | undefined): string {
   return normalizeOptionalString(model) ?? DEFAULT_FAL_MUSIC_MODEL;
-}
-
-function resolveFalMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
-  return normalizeOptionalString(req.cfg?.models?.providers?.fal?.baseUrl);
 }
 
 function buildFalMinimaxBody(req: MusicGenerationRequest): Record<string, unknown> {
@@ -145,29 +136,8 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         throw new Error("fal music generation does not support image reference inputs.");
       }
 
-      const auth = await resolveApiKeyForProvider({
-        provider: "fal",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("fal API key missing");
-      }
-
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: resolveFalMusicBaseUrl(req),
-          defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Key ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "fal",
-          capability: "audio",
-          transport: "http",
-        });
+        await resolveFalHttpRequestConfig({ req, capability: "audio" });
       const model = resolveFalMusicModel(req.model);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/${model}`,

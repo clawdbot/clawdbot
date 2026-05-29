@@ -449,6 +449,32 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(voiceSetting.pitch).toBe(0);
     });
 
+    it("drops malformed voice settings before synthesis", async () => {
+      const hexAudio = Buffer.from("audio").toString("hex");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { audio: hexAudio } }), { status: 200 }),
+      );
+
+      await provider.synthesize({
+        text: "Test",
+        cfg: {} as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          speed: 3,
+          vol: -1,
+          pitch: 20,
+        },
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      const voiceSetting = firstFetchBody().voice_setting as Record<string, unknown>;
+      expect(voiceSetting.speed).toBe(1);
+      expect(voiceSetting.vol).toBe(1);
+      expect(voiceSetting.pitch).toBe(0);
+    });
+
     it("uses a MiniMax Token Plan env var when no API key is configured", async () => {
       process.env.MINIMAX_CODING_API_KEY = "sk-cp-env";
       const hexAudio = Buffer.from("audio").toString("hex");

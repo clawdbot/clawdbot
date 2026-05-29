@@ -225,6 +225,47 @@ describe("registerTelegramNativeCommands", () => {
     });
   });
 
+  it("drops per-skill commands before truncating an over-limit Telegram menu", async () => {
+    const { bot, commandHandlers, setMyCommands } = createCommandBot();
+    const runtimeLog = vi.fn();
+    listSkillCommandsForAgents.mockReturnValue(
+      Array.from({ length: 120 }, (_, index) => ({
+        name: `demo_skill_${index}`,
+        skillName: `demo-skill-${index}`,
+        description: `Demo skill ${index}`,
+      })),
+    );
+    pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([
+      {
+        name: "demo_skill_0",
+        description: "Conflicting plugin command",
+      },
+    ] as never);
+
+    registerTelegramNativeCommands(
+      createNativeCommandTestParams(
+        {
+          commands: { native: true, nativeSkills: true },
+          agents: { list: [{ id: "main", default: true }] },
+        },
+        {
+          bot,
+          runtime: { log: runtimeLog } as unknown as RuntimeEnv,
+        },
+      ),
+    );
+
+    const registeredCommands = await waitForRegisteredCommands(setMyCommands);
+    expect(registeredCommands.length).toBeLessThanOrEqual(100);
+    expect(registeredCommands.some((entry) => entry.command.startsWith("demo_skill_"))).toBe(false);
+    expect(commandHandlers.has("demo_skill_0")).toBe(true);
+    expect(runtimeLog).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "commands exceeds limit; removing per-skill commands and keeping /skill.",
+      ),
+    );
+  });
+
   it("truncates Telegram command registration to 100 commands", async () => {
     const customCommands = Array.from({ length: 120 }, (_, index) => ({
       command: `cmd_${index}`,

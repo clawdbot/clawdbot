@@ -265,6 +265,35 @@ describe("memory cli", () => {
   });
 
   it.each([
+    [["search", "hello", "--max-results", "0x10"], "--max-results must be a positive integer."],
+    [["search", "hello", "--max-results", "1e2"], "--max-results must be a positive integer."],
+    [["search", "hello", "--min-score", "0x1"], "--min-score must be a finite number."],
+    [["search", "hello", "--min-score", "1e-1"], "--min-score must be a finite number."],
+    [
+      ["promote", "--min-recall-count", "0x1"],
+      "--min-recall-count must be a non-negative integer.",
+    ],
+    [
+      ["promote", "--min-unique-queries", "1e2"],
+      "--min-unique-queries must be a non-negative integer.",
+    ],
+  ])("rejects non-decimal memory numeric option %j", async (args, message) => {
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerMemoryCli(program);
+
+    await expect(program.parseAsync(["memory", ...args], { from: "user" })).rejects.toThrow(
+      message,
+    );
+    expect(getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
+  it.each([
     ["--limit", "1.5", "--limit must be a positive integer."],
     ["--min-recall-count", "1.5", "--min-recall-count must be a non-negative integer."],
     ["--min-unique-queries", "1.5", "--min-unique-queries must be a non-negative integer."],

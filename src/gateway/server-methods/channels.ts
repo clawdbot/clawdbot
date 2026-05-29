@@ -1,3 +1,12 @@
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateChannelsStartParams,
+  validateChannelsStopParams,
+  validateChannelsLogoutParams,
+  validateChannelsStatusParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { buildChannelUiCatalog } from "../../channels/plugins/catalog.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import {
@@ -21,15 +30,6 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
 } from "../channel-health-policy.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateChannelsStartParams,
-  validateChannelsStopParams,
-  validateChannelsLogoutParams,
-  validateChannelsStatusParams,
-} from "../protocol/index.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";

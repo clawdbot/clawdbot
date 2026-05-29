@@ -13,6 +13,10 @@ describe("installQaParentWatchdog", () => {
     expect(
       installQaParentWatchdog({ env: { [QA_PARENT_PID_ENV]: "not-a-pid" }, ownPid: 10 }),
     ).toBeNull();
+    expect(
+      installQaParentWatchdog({ env: { [QA_PARENT_PID_ENV]: "0x10" }, ownPid: 10 }),
+    ).toBeNull();
+    expect(installQaParentWatchdog({ env: { [QA_PARENT_PID_ENV]: "1e3" }, ownPid: 10 })).toBeNull();
   });
 
   it("exits when the QA parent process disappears", async () => {

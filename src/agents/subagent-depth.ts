@@ -18,11 +18,11 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
   }
   if (typeof value === "string") {
     const trimmed = value.trim();
-    if (!trimmed) {
+    if (!/^\d+$/.test(trimmed)) {
       return undefined;
     }
     const numeric = Number(trimmed);
-    return Number.isInteger(numeric) && numeric >= 0 ? numeric : undefined;
+    return Number.isSafeInteger(numeric) ? numeric : undefined;
   }
   return undefined;
 }

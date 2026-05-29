@@ -14,6 +14,18 @@ describe("chunkDiscordText", () => {
     }
   });
 
+  it("uses default chunk limits for non-finite options", () => {
+    const text = "x".repeat(2500);
+    const chunks = chunkDiscordText(text, {
+      maxChars: Number.NaN,
+      maxLines: Number.POSITIVE_INFINITY,
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
+    expect(chunks.join("")).toBe(text);
+  });
+
   it("keeps fenced code blocks balanced across chunks", () => {
     const body = Array.from({ length: 30 }, (_, i) => `console.log(${i});`).join("\n");
     const text = `Here is code:\n\n\`\`\`js\n${body}\n\`\`\`\n\nDone.`;
@@ -38,6 +50,19 @@ describe("chunkDiscordText", () => {
       chunkMode: "newline",
     });
     expect(chunks).toEqual([text]);
+  });
+
+  it("uses default newline chunk limits for non-finite max chars", () => {
+    const text = "x".repeat(2500);
+    const chunks = chunkDiscordTextWithMode(text, {
+      maxChars: Number.NaN,
+      maxLines: 50,
+      chunkMode: "newline",
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 2000)).toBe(true);
+    expect(chunks.join("")).toBe(text);
   });
 
   it("reserves space for closing fences when chunking", () => {

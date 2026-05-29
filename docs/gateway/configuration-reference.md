@@ -1268,11 +1268,11 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
-- `maxAttempts`: maximum retries for one-shot jobs on transient errors (default: `3`; range: `0`-`10`).
+- `maxAttempts`: maximum retries for cron jobs on transient errors (default: `3`; range: `0`-`10`).
 - `backoffMs`: array of backoff delays in ms for each retry attempt (default: `[30000, 60000, 300000]`; 1-10 entries).
 - `retryOn`: error types that trigger retries - `"rate_limit"`, `"overloaded"`, `"network"`, `"timeout"`, `"server_error"`. Omit to retry all transient types.
 
-Applies only to one-shot cron jobs. Recurring jobs use separate failure handling.
+One-shot jobs stay enabled until retry attempts are exhausted, then disable while keeping the final error state. Recurring jobs use the same transient retry policy to run again after backoff before their next scheduled slot; permanent errors or exhausted transient retries fall back to the normal recurring schedule with error backoff.
 
 ### `cron.failureAlert`
 

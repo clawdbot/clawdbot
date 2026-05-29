@@ -75,6 +75,7 @@ jobs:
       contents: read
     outputs:
       digest: ${{ steps.build.outputs.digest }}
+      browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -102,14 +103,18 @@ jobs:
           set -euo pipefail
           tags=()
           slim_tags=()
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main-amd64")
-            slim_tags+=("${IMAGE}:main-slim-amd64")
+          browser_tags=()
+          browser_supported=0
+          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
+            browser_supported=1
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-amd64")
             slim_tags+=("${IMAGE}:${version}-slim-amd64")
+            if [[ "${browser_supported}" == "1" ]]; then
+              browser_tags+=("${IMAGE}:${version}-browser-amd64")
+            fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No amd64 tags resolved for ref ${SOURCE_REF}"
@@ -118,6 +123,9 @@ jobs:
           {
             echo "value<<EOF"
             printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
+            echo "EOF"
+            echo "browser<<EOF"
+            printf "%s\n" "${browser_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -157,6 +165,27 @@ jobs:
           build-args: |
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
+          labels: ${{ steps.labels.outputs.value }}
+          sbom: true
+          provenance: mode=max
+          push: true
+
+      - name: Build and push amd64 browser image
+        id: build-browser
+        if: steps.tags.outputs.browser != ''
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          platforms: linux/amd64
+          cache-from: |
+            type=gha,scope=docker-release-amd64
+            type=gha,scope=docker-release-browser-amd64
+          cache-to: type=gha,mode=max,scope=docker-release-browser-amd64
+          build-args: |
+            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
+            OPENCLAW_INSTALL_BROWSER=1
+          tags: ${{ steps.tags.outputs.browser }}
           labels: ${{ steps.labels.outputs.value }}
           sbom: true
           provenance: mode=max
@@ -206,6 +235,26 @@ jobs:
             fi
           '
 
+      - name: Smoke test amd64 browser image
+        if: steps.tags.outputs.browser != ''
+        shell: bash
+        env:
+          IMAGE_REFS: ${{ steps.tags.outputs.browser }}
+        run: |
+          set -euo pipefail
+          mapfile -t image_refs <<< "${IMAGE_REFS}"
+          image_ref="${image_refs[0]}"
+          if [[ -z "${image_ref}" ]]; then
+            echo "::error::No amd64 browser image ref resolved"
+            exit 1
+          fi
+          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
+            set -eu
+            browser="$(find /home/node/.cache/ms-playwright -maxdepth 5 -type f \( -name chrome -o -name chromium -o -name chrome-headless-shell \) -print | head -1)"
+            test -n "${browser}"
+            "${browser}" --version
+          '
+
   # Build arm64 image. Default and slim tags point to the same slim runtime.
   build-arm64:
     needs: [approve_manual_backfill]
@@ -217,6 +266,7 @@ jobs:
       contents: read
     outputs:
       digest: ${{ steps.build.outputs.digest }}
+      browser_digest: ${{ steps.build-browser.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -244,14 +294,18 @@ jobs:
           set -euo pipefail
           tags=()
           slim_tags=()
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main-arm64")
-            slim_tags+=("${IMAGE}:main-slim-arm64")
+          browser_tags=()
+          browser_supported=0
+          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
+            browser_supported=1
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-arm64")
             slim_tags+=("${IMAGE}:${version}-slim-arm64")
+            if [[ "${browser_supported}" == "1" ]]; then
+              browser_tags+=("${IMAGE}:${version}-browser-arm64")
+            fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No arm64 tags resolved for ref ${SOURCE_REF}"
@@ -260,6 +314,9 @@ jobs:
           {
             echo "value<<EOF"
             printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
+            echo "EOF"
+            echo "browser<<EOF"
+            printf "%s\n" "${browser_tags[@]}"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
@@ -299,6 +356,27 @@ jobs:
           build-args: |
             OPENCLAW_EXTENSIONS=diagnostics-otel,codex
           tags: ${{ steps.tags.outputs.value }}
+          labels: ${{ steps.labels.outputs.value }}
+          sbom: true
+          provenance: mode=max
+          push: true
+
+      - name: Build and push arm64 browser image
+        id: build-browser
+        if: steps.tags.outputs.browser != ''
+        # WARNING: KEEP THE OFFICIAL DOCKER ACTION HERE; DO NOT SWITCH THIS BACK TO BLACKSMITH BLINDLY.
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          platforms: linux/arm64
+          cache-from: |
+            type=gha,scope=docker-release-arm64
+            type=gha,scope=docker-release-browser-arm64
+          cache-to: type=gha,mode=max,scope=docker-release-browser-arm64
+          build-args: |
+            OPENCLAW_EXTENSIONS=diagnostics-otel,codex
+            OPENCLAW_INSTALL_BROWSER=1
+          tags: ${{ steps.tags.outputs.browser }}
           labels: ${{ steps.labels.outputs.value }}
           sbom: true
           provenance: mode=max
@@ -348,6 +426,26 @@ jobs:
             fi
           '
 
+      - name: Smoke test arm64 browser image
+        if: steps.tags.outputs.browser != ''
+        shell: bash
+        env:
+          IMAGE_REFS: ${{ steps.tags.outputs.browser }}
+        run: |
+          set -euo pipefail
+          mapfile -t image_refs <<< "${IMAGE_REFS}"
+          image_ref="${image_refs[0]}"
+          if [[ -z "${image_ref}" ]]; then
+            echo "::error::No arm64 browser image ref resolved"
+            exit 1
+          fi
+          docker run --rm --entrypoint /bin/sh "${image_ref}" -lc '
+            set -eu
+            browser="$(find /home/node/.cache/ms-playwright -maxdepth 5 -type f \( -name chrome -o -name chromium -o -name chrome-headless-shell \) -print | head -1)"
+            test -n "${browser}"
+            "${browser}" --version
+          '
+
   # Create multi-platform manifests
   create-manifest:
     needs: [approve_manual_backfill, build-amd64, build-arm64]
@@ -382,18 +480,25 @@ jobs:
           set -euo pipefail
           tags=()
           slim_tags=()
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            tags+=("${IMAGE}:main")
-            slim_tags+=("${IMAGE}:main-slim")
+          browser_tags=()
+          browser_supported=0
+          if grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
+            browser_supported=1
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}")
             slim_tags+=("${IMAGE}:${version}-slim")
+            if [[ "${browser_supported}" == "1" ]]; then
+              browser_tags+=("${IMAGE}:${version}-browser")
+            fi
             # Manual backfills should only republish the requested version tags.
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              tags+=("${IMAGE}:latest")
-              slim_tags+=("${IMAGE}:slim")
+              tags+=("${IMAGE}:latest" "${IMAGE}:main")
+              slim_tags+=("${IMAGE}:slim" "${IMAGE}:main-slim")
+              if [[ "${browser_supported}" == "1" ]]; then
+                browser_tags+=("${IMAGE}:latest-browser" "${IMAGE}:main-browser")
+              fi
             fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
@@ -404,25 +509,39 @@ jobs:
             echo "value<<EOF"
             printf "%s\n" "${tags[@]}" "${slim_tags[@]}"
             echo "EOF"
+            echo "browser<<EOF"
+            printf "%s\n" "${browser_tags[@]}"
+            echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
       - name: Create and push manifest
         shell: bash
         env:
           TAGS: ${{ steps.tags.outputs.value }}
+          BROWSER_TAGS: ${{ steps.tags.outputs.browser }}
           AMD64_DIGEST: ${{ needs.build-amd64.outputs.digest }}
           ARM64_DIGEST: ${{ needs.build-arm64.outputs.digest }}
+          AMD64_BROWSER_DIGEST: ${{ needs.build-amd64.outputs.browser_digest }}
+          ARM64_BROWSER_DIGEST: ${{ needs.build-arm64.outputs.browser_digest }}
         run: |
           set -euo pipefail
           mapfile -t tags <<< "${TAGS}"
-          args=()
-          for tag in "${tags[@]}"; do
-            [ -z "$tag" ] && continue
-            args+=("-t" "$tag")
-          done
-          docker buildx imagetools create "${args[@]}" \
-            "${AMD64_DIGEST}" \
-            "${ARM64_DIGEST}"
+          mapfile -t browser_tags <<< "${BROWSER_TAGS}"
+          create_manifest() {
+            local amd64_digest="$1"
+            local arm64_digest="$2"
+            shift 2
+            local args=()
+            for tag in "$@"; do
+              [ -z "$tag" ] && continue
+              args+=("-t" "$tag")
+            done
+            docker buildx imagetools create "${args[@]}" "$amd64_digest" "$arm64_digest"
+          }
+          create_manifest "${AMD64_DIGEST}" "${ARM64_DIGEST}" "${tags[@]}"
+          if [[ -n "${BROWSER_TAGS}" ]]; then
+            create_manifest "${AMD64_BROWSER_DIGEST}" "${ARM64_BROWSER_DIGEST}" "${browser_tags[@]}"
+          fi
 
   verify-attestations:
     needs: [create-manifest]
@@ -460,21 +579,39 @@ jobs:
           slim_multi_refs=()
           amd64_refs=()
           arm64_refs=()
-          if [[ "${SOURCE_REF}" == "refs/heads/main" ]]; then
-            multi_refs+=("${IMAGE}:main")
-            slim_multi_refs+=("${IMAGE}:main-slim")
-            amd64_refs+=("${IMAGE}:main-amd64" "${IMAGE}:main-slim-amd64")
-            arm64_refs+=("${IMAGE}:main-arm64" "${IMAGE}:main-slim-arm64")
+          browser_supported=0
+          if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
+            tag="${SOURCE_REF#refs/tags/}"
+            git fetch --depth=1 origin "refs/tags/${tag}:refs/tags/${tag}"
+            if git show "${SOURCE_REF}:Dockerfile" | grep -q '^ARG OPENCLAW_INSTALL_BROWSER'; then
+              browser_supported=1
+            fi
+          elif grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile; then
+            browser_supported=1
           fi
           if [[ "${SOURCE_REF}" == refs/tags/v* ]]; then
             version="${SOURCE_REF#refs/tags/v}"
             multi_refs+=("${IMAGE}:${version}")
             slim_multi_refs+=("${IMAGE}:${version}-slim")
-            amd64_refs+=("${IMAGE}:${version}-amd64" "${IMAGE}:${version}-slim-amd64")
-            arm64_refs+=("${IMAGE}:${version}-arm64" "${IMAGE}:${version}-slim-arm64")
+            amd64_refs+=(
+              "${IMAGE}:${version}-amd64"
+              "${IMAGE}:${version}-slim-amd64"
+            )
+            arm64_refs+=(
+              "${IMAGE}:${version}-arm64"
+              "${IMAGE}:${version}-slim-arm64"
+            )
+            if [[ "${browser_supported}" == "1" ]]; then
+              multi_refs+=("${IMAGE}:${version}-browser")
+              amd64_refs+=("${IMAGE}:${version}-browser-amd64")
+              arm64_refs+=("${IMAGE}:${version}-browser-arm64")
+            fi
             if [[ "${IS_MANUAL_BACKFILL}" != "1" && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
-              multi_refs+=("${IMAGE}:latest")
-              slim_multi_refs+=("${IMAGE}:slim")
+              multi_refs+=("${IMAGE}:latest" "${IMAGE}:main")
+              slim_multi_refs+=("${IMAGE}:slim" "${IMAGE}:main-slim")
+              if [[ "${browser_supported}" == "1" ]]; then
+                multi_refs+=("${IMAGE}:latest-browser" "${IMAGE}:main-browser")
+              fi
             fi
           fi
           if [[ ${#multi_refs[@]} -eq 0 || ${#amd64_refs[@]} -eq 0 || ${#arm64_refs[@]} -eq 0 ]]; then

@@ -291,8 +291,28 @@ describe("Dockerfile", () => {
     const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
     const releaseKeepList = "OPENCLAW_EXTENSIONS=diagnostics-otel,codex";
 
-    expect(workflow.match(new RegExp(releaseKeepList, "g"))).toHaveLength(2);
+    expect(workflow.match(new RegExp(releaseKeepList, "g"))).toHaveLength(4);
     expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
+  });
+
+  it("publishes official Docker browser images with baked Chromium", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+
+    expect(workflow).toContain("Build and push amd64 browser image");
+    expect(workflow).toContain("Build and push arm64 browser image");
+    expect(workflow).toContain("OPENCLAW_INSTALL_BROWSER=1");
+    expect(workflow).toContain('${IMAGE}:${version}-browser"');
+    expect(workflow).toContain('${IMAGE}:latest-browser"');
+    expect(workflow).toContain('${IMAGE}:main-browser"');
+    expect(workflow).not.toContain("main-browser-amd64");
+    expect(workflow).not.toContain("main-browser-arm64");
+    expect(workflow).toContain("Smoke test amd64 browser image");
+    expect(workflow).toContain("Smoke test arm64 browser image");
+    expect(workflow).toContain("chrome-headless-shell");
+    expect(workflow).toContain("grep -q '^ARG OPENCLAW_INSTALL_BROWSER' Dockerfile");
+    expect(workflow).toContain("if: steps.tags.outputs.browser != ''");
+    expect(workflow).toContain('git show "${SOURCE_REF}:Dockerfile"');
+    expect(workflow).toContain('if [[ -n "${BROWSER_TAGS}" ]]; then');
   });
 
   it("smokes runtime workspace templates before Docker release manifests publish", async () => {

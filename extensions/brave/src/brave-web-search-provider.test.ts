@@ -88,6 +88,23 @@ function fetchRequestInit(mockFetch: { mock: { calls: Array<Array<unknown>> } },
   return fetchCall(mockFetch, index)[1];
 }
 
+function createBodyOnlyErrorResponse(params: { body: string; status: number }): Response {
+  const bytes = new TextEncoder().encode(params.body);
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    },
+  });
+  return {
+    ok: false,
+    status: params.status,
+    statusText: "Too Many Requests",
+    headers: new Headers(),
+    body,
+  } as Response;
+}
+
 describe("brave web search provider", () => {
   const priorFetch = global.fetch;
 
@@ -345,6 +362,66 @@ describe("brave web search provider", () => {
     await expect(tool.execute({ query: "latest ai news" })).rejects.toThrow(
       "Brave LLM Context API error: malformed JSON response",
     );
+  });
+
+  it("bounds Brave web error bodies without using response.text", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) =>
+      createBodyOnlyErrorResponse({
+        status: 429,
+        body: `${"x".repeat(24 * 1024)}tail-marker`,
+      }),
+    );
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "web" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const error = await tool.execute({ query: "latest ai news" }).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("Brave Search API error (429):");
+    expect(message).not.toContain("tail-marker");
+    expect(message.length).toBeLessThan(700);
+  });
+
+  it("bounds Brave llm-context error bodies without using response.text", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) =>
+      createBodyOnlyErrorResponse({
+        status: 429,
+        body: `${"x".repeat(24 * 1024)}tail-marker`,
+      }),
+    );
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const error = await tool.execute({ query: "latest ai news" }).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(Error);
+    const message = error instanceof Error ? error.message : String(error);
+    expect(message).toContain("Brave LLM Context API error (429):");
+    expect(message).not.toContain("tail-marker");
+    expect(message.length).toBeLessThan(700);
   });
 
   it("keeps Brave cache entries isolated by baseUrl", async () => {

@@ -16,6 +16,7 @@ export type NpmSpecResolution = {
   integrity?: string;
   shasum?: string;
   resolvedAt?: string;
+  packageOpenClaw?: Record<string, unknown>;
 };
 
 export type NpmResolutionFields = {
@@ -65,6 +66,7 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
     resolvedSpec,
     integrity: toOptionalString(rec["dist.integrity"]) ?? toOptionalString(dist.integrity),
     shasum: toOptionalString(rec["dist.shasum"]) ?? toOptionalString(dist.shasum),
+    ...(isRecord(rec.openclaw) ? { packageOpenClaw: rec.openclaw } : {}),
   };
 }
 
@@ -79,7 +81,17 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
     }
 > {
   const res = await runCommandWithTimeout(
-    ["npm", "view", params.spec, "name", "version", "dist.integrity", "dist.shasum", "--json"],
+    [
+      "npm",
+      "view",
+      params.spec,
+      "name",
+      "version",
+      "dist.integrity",
+      "dist.shasum",
+      "openclaw",
+      "--json",
+    ],
     {
       timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
       env: createNpmMetadataEnv(),
@@ -148,6 +160,10 @@ function toOptionalString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseResolvedSpecFromId(id: string): string | undefined {

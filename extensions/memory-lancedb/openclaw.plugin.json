@@ -103,7 +103,8 @@
             "type": "string"
           },
           "dimensions": {
-            "type": "number"
+            "type": "integer",
+            "minimum": 1
           }
         }
       },

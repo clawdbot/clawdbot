@@ -111,6 +111,14 @@ export type MatrixRoomKeyBackupStatus = {
 };
 
 const MATRIX_STATUS_DIAGNOSTIC_TIMEOUT_MS = 10_000;
+const DEFAULT_MATRIX_LOCAL_TIMEOUT_MS = 60_000;
+
+function resolveMatrixLocalTimeoutMs(raw: number | undefined): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return DEFAULT_MATRIX_LOCAL_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(raw));
+}
 
 function unresolvedMatrixRoomKeyBackupStatus(): MatrixRoomKeyBackupStatus {
   return {
@@ -375,7 +383,7 @@ export class MatrixClient {
       ssrfPolicy: opts.ssrfPolicy,
       dispatcherPolicy: opts.dispatcherPolicy,
     });
-    this.localTimeoutMs = Math.max(1, opts.localTimeoutMs ?? 60_000);
+    this.localTimeoutMs = resolveMatrixLocalTimeoutMs(opts.localTimeoutMs);
     this.initialSyncLimit = opts.initialSyncLimit;
     this.syncFilter = opts.syncFilter;
     this.encryptionEnabled = opts.encryption === true;

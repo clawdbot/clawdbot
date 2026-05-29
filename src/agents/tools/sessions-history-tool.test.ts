@@ -83,4 +83,12 @@ describe("sessions_history redaction", () => {
     expect(serialized).toContain("intern");
     expect((result.details as { contentRedacted?: unknown }).contentRedacted).toBe(true);
   });
+
+  it.each([0, 1.5])("rejects invalid limit value %s", async (limit) => {
+    const tool = createHistoryToolWithMessage("hello");
+
+    await expect(tool.execute("call-1", { sessionKey: "main", limit })).rejects.toThrow(
+      "limit must be a positive integer",
+    );
+  });
 });

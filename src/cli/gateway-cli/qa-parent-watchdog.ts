@@ -40,7 +40,7 @@ function resolveQaParentPid(env: NodeJS.ProcessEnv, ownPid: number): number | nu
   if (!raw) {
     return null;
   }
-  const parentPid = Number(raw);
+  const parentPid = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
   if (!Number.isSafeInteger(parentPid) || parentPid <= 0 || parentPid === ownPid) {
     return null;
   }

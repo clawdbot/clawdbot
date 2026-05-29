@@ -878,16 +878,27 @@ export function resolveReadOnlyChannelPluginsForConfig(
   }).plugins;
   const bundledManifestRecords = listBundledChannelManifestRecords(manifestRecords);
   const externalManifestRecords = listExternalChannelManifestRecords(manifestRecords);
-  const configuredChannelIds = uniqueStrings(
-    listConfiguredChannelIdsForReadOnlyScope({
+  const activationSourceConfig = options.activationSourceConfig ?? cfg;
+  const configuredChannelIds = uniqueStrings([
+    ...listConfiguredChannelIdsForReadOnlyScope({
       config: cfg,
-      activationSourceConfig: options.activationSourceConfig ?? cfg,
+      activationSourceConfig,
       workspaceDir,
       env,
       includePersistedAuthState: options.includePersistedAuthState,
       manifestRecords,
     }),
-  ).filter(isSafeManifestChannelId);
+    ...(activationSourceConfig === cfg
+      ? []
+      : listConfiguredChannelIdsForReadOnlyScope({
+          config: activationSourceConfig,
+          activationSourceConfig,
+          workspaceDir,
+          env,
+          includePersistedAuthState: options.includePersistedAuthState,
+          manifestRecords,
+        })),
+  ]).filter(isSafeManifestChannelId);
   const byId = new Map<string, ChannelPlugin>();
   const loadFailures: ReadOnlyChannelPluginLoadFailure[] = [];
 

@@ -1,0 +1,49 @@
+{
+  "name": "@openclaw/gateway-protocol",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./client-info": {
+      "types": "./dist/client-info.d.mts",
+      "import": "./dist/client-info.mjs",
+      "default": "./dist/client-info.mjs"
+    },
+    "./connect-error-details": {
+      "types": "./dist/connect-error-details.d.mts",
+      "import": "./dist/connect-error-details.mjs",
+      "default": "./dist/connect-error-details.mjs"
+    },
+    "./schema": {
+      "types": "./dist/schema.d.mts",
+      "import": "./dist/schema.mjs",
+      "default": "./dist/schema.mjs"
+    },
+    "./startup-unavailable": {
+      "types": "./dist/startup-unavailable.d.mts",
+      "import": "./dist/startup-unavailable.mjs",
+      "default": "./dist/startup-unavailable.mjs"
+    },
+    "./version": {
+      "types": "./dist/version.d.mts",
+      "import": "./dist/version.mjs",
+      "default": "./dist/version.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/client-info.ts src/connect-error-details.ts src/schema.ts src/startup-unavailable.ts src/version.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "typebox": "1.1.38"
+  }
+}

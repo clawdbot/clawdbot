@@ -11,13 +11,21 @@ const CLICKCLACK_HTTP_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
   5000,
 );
+const CLICKCLACK_HTTP_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
+  1024 * 1024,
+);
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
 function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -36,6 +44,55 @@ async function withClickClackFixtureResponse(url, init, consume, options = {}) {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function bodyTooLargeError(label, byteLimit) {
+  return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
+}
+
+async function readBoundedResponseText(
+  response,
+  label,
+  byteLimit = CLICKCLACK_HTTP_BODY_MAX_BYTES,
+) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw bodyTooLargeError(label, byteLimit);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw bodyTooLargeError(label, byteLimit);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function readBoundedResponseJson(response, label) {
+  return JSON.parse(await readBoundedResponseText(response, label));
 }
 
 function resolveHomePath(value) {
@@ -242,7 +299,8 @@ async function postClickClackInbound() {
       body: JSON.stringify({ body }),
     },
     async (response) => {
-      assert(response.ok, `fixture inbound failed: ${response.status} ${await response.text()}`);
+      const text = response.ok ? "" : await readBoundedResponseText(response, "ClickClack inbound");
+      assert(response.ok, `fixture inbound failed: ${response.status} ${text}`);
     },
   );
 }
@@ -256,7 +314,10 @@ async function waitClickClackSocket() {
     const state = await withClickClackFixtureResponse(
       `${baseUrl}/fixture/state`,
       {},
-      async (response) => (response.ok ? await response.json() : undefined),
+      async (response) =>
+        response.ok
+          ? await readBoundedResponseJson(response, "ClickClack fixture state")
+          : undefined,
       {
         timeoutMs: Math.min(CLICKCLACK_HTTP_TIMEOUT_MS, remainingMs),
       },

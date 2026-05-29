@@ -319,7 +319,7 @@ Legacy aliases still normalize to the canonical bundled ids:
           provider: "xai",
           providers: {
             xai: {
-              voiceId: "eve",
+              speakerVoiceId: "eve",
             },
           },
         },

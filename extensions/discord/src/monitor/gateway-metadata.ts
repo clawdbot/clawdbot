@@ -1,5 +1,6 @@
 import type { APIGatewayBotInfo } from "discord-api-types/v10";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { captureHttpExchange } from "openclaw/plugin-sdk/proxy-capture";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -64,12 +65,11 @@ async function materializeGuardedResponse(response: Response): Promise<Response>
 }
 
 function normalizeGatewayInfoTimeoutMs(value: unknown): number | undefined {
-  const numeric =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric <= 0) {
+  const numeric = parseStrictPositiveInteger(value);
+  if (numeric === undefined) {
     return undefined;
   }
-  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
+  return Math.min(numeric, MAX_DISCORD_GATEWAY_INFO_TIMEOUT_MS);
 }
 
 export function resolveDiscordGatewayInfoTimeoutMs(params?: {

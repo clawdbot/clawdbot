@@ -7,14 +7,15 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createJiti } from "jiti/static";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { createJiti } from "jiti/static";
 import * as bundledLlm from "openclaw/plugin-sdk/llm";
 // Static imports of packages that extensions may use.
 // These MUST be static so Bun bundles them into the compiled binary.
 // The virtualModules option then makes them available to extensions.
 import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
+import * as bundledTypeboxFormat from "typebox/format";
 import * as bundledTypeboxValue from "typebox/value";
 import {
   buildPluginLoaderAliasMap,
@@ -44,9 +45,11 @@ import type {
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
+  "typebox/format": bundledTypeboxFormat,
   "typebox/value": bundledTypeboxValue,
   "@sinclair/typebox": bundledTypebox,
   "@sinclair/typebox/compile": bundledTypeboxCompile,
+  "@sinclair/typebox/format": bundledTypeboxFormat,
   "@sinclair/typebox/value": bundledTypeboxValue,
   "openclaw/plugin-sdk/agent-core": bundledAgentCore,
   "@openclaw/plugin-sdk/agent-core": bundledAgentCore,
@@ -59,6 +62,26 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 const require = createRequire(import.meta.url);
 
 let aliases: Record<string, string> | null = null;
+let createJitiLoaderFactory: typeof createJiti | undefined;
+let extensionSourceTransformLoader: ReturnType<typeof createJiti> | undefined;
+let nativeExtensionLoadCounter = 0;
+const EXTENSION_LOADER_ALIAS_IMPORT_PATTERN =
+  /(?:@openclaw\/plugin-sdk|openclaw\/plugin-sdk|@sinclair\/typebox|typebox)(?:\/[A-Za-z0-9_-]+)?/u;
+const RELATIVE_EXTENSION_IMPORT_PATTERN =
+  /(?:import\s*(?:[^'"]*?\s*from\s*)?["']\.{1,2}\/|export\s*(?:[^'"]*?\s*from\s*)["']\.{1,2}\/|import\s*\(\s*["']\.{1,2}\/|require\s*\(\s*["']\.{1,2}\/)/u;
+const COMMONJS_EXTENSION_EXPORT_PATTERN = /\b(?:module\.exports|exports\.)/u;
+
+async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
+  if (createJitiLoaderFactory) {
+    return createJitiLoaderFactory;
+  }
+  const loaded = (await import("jiti/static")) as { createJiti?: typeof createJiti };
+  if (typeof loaded.createJiti !== "function") {
+    throw new Error("jiti/static module did not export createJiti");
+  }
+  createJitiLoaderFactory = loaded.createJiti;
+  return createJitiLoaderFactory;
+}
 
 function resolveExtensionSafeAgentSessionsEntry(): string {
   const currentDirname = path.dirname(fileURLToPath(import.meta.url));
@@ -74,6 +97,7 @@ function getExtensionLoaderAliases(): Record<string, string> {
   const agentSessionsEntry = resolveExtensionSafeAgentSessionsEntry();
   const typeboxEntry = require.resolve("typebox");
   const typeboxCompileEntry = require.resolve("typebox/compile");
+  const typeboxFormatEntry = require.resolve("typebox/format");
   const typeboxValueEntry = require.resolve("typebox/value");
   const loaderModulePath = fileURLToPath(import.meta.url);
 
@@ -85,9 +109,11 @@ function getExtensionLoaderAliases(): Record<string, string> {
     "@openclaw/plugin-sdk/agent-sessions": agentSessionsEntry,
     typebox: typeboxEntry,
     "typebox/compile": typeboxCompileEntry,
+    "typebox/format": typeboxFormatEntry,
     "typebox/value": typeboxValueEntry,
     "@sinclair/typebox": typeboxEntry,
     "@sinclair/typebox/compile": typeboxCompileEntry,
+    "@sinclair/typebox/format": typeboxFormatEntry,
     "@sinclair/typebox/value": typeboxValueEntry,
   };
 
@@ -338,23 +364,97 @@ function createExtensionAPI(
   return api;
 }
 
-async function loadExtensionModule(extensionPath: string) {
-  const jiti = createJiti(import.meta.url, {
-    ...(isBunBinary
-      ? {
-          ...buildPluginLoaderJitiOptions({}),
-          // Bun binaries need virtual modules because extension SDK files are
-          // bundled into the executable rather than present on disk.
-          tryNative: false,
-          virtualModules: VIRTUAL_MODULES,
-        }
-      : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
-    moduleCache: false,
-  });
+function resolveExtensionFactory(module: unknown): ExtensionFactory | undefined {
+  const candidate =
+    typeof module === "object" && module !== null && "default" in module
+      ? (module as { default?: unknown }).default
+      : module;
+  if (typeof candidate === "function") {
+    return candidate as ExtensionFactory;
+  }
+  const nestedCandidate =
+    typeof candidate === "object" && candidate !== null && "default" in candidate
+      ? (candidate as { default?: unknown }).default
+      : undefined;
+  return typeof nestedCandidate === "function" ? (nestedCandidate as ExtensionFactory) : undefined;
+}
 
-  const module = await jiti.import(extensionPath, { default: true });
-  const factory = module as ExtensionFactory;
-  return typeof factory !== "function" ? undefined : factory;
+function isJavaScriptExtensionPath(extensionPath: string): boolean {
+  switch (path.extname(extensionPath).toLowerCase()) {
+    case ".cjs":
+    case ".mjs":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function extensionSourceNeedsJitiAliasResolution(extensionPath: string): boolean {
+  try {
+    const source = fs.readFileSync(extensionPath, "utf8");
+    return (
+      EXTENSION_LOADER_ALIAS_IMPORT_PATTERN.test(source) ||
+      RELATIVE_EXTENSION_IMPORT_PATTERN.test(source) ||
+      (path.extname(extensionPath).toLowerCase() === ".js" &&
+        COMMONJS_EXTENSION_EXPORT_PATTERN.test(source))
+    );
+  } catch {
+    return true;
+  }
+}
+
+function shouldLoadExtensionWithNativeImport(extensionPath: string): boolean {
+  return (
+    !isBunBinary &&
+    isJavaScriptExtensionPath(extensionPath) &&
+    !extensionSourceNeedsJitiAliasResolution(extensionPath)
+  );
+}
+
+async function loadNativeExtensionModule(
+  extensionPath: string,
+): Promise<ExtensionFactory | undefined> {
+  const url = pathToFileURL(extensionPath);
+  url.searchParams.set("v", String(++nativeExtensionLoadCounter));
+  try {
+    const cachedPath = require.resolve(extensionPath);
+    delete require.cache[cachedPath];
+  } catch {
+    // ESM-only entries are not present in require's cache.
+  }
+  return resolveExtensionFactory(await import(url.href));
+}
+
+async function loadExtensionSourceTransformModule(
+  extensionPath: string,
+): Promise<ExtensionFactory | undefined> {
+  if (!extensionSourceTransformLoader) {
+    const createJitiLoader = await loadCreateJitiLoaderFactory();
+    extensionSourceTransformLoader = createJitiLoader(import.meta.url, {
+      ...(isBunBinary
+        ? {
+            ...buildPluginLoaderJitiOptions({}),
+            // Bun binaries need virtual modules because extension SDK files are
+            // bundled into the executable rather than present on disk.
+            tryNative: false,
+            virtualModules: VIRTUAL_MODULES,
+          }
+        : buildPluginLoaderJitiOptions(getExtensionLoaderAliases())),
+      moduleCache: false,
+    });
+  }
+
+  return resolveExtensionFactory(
+    await extensionSourceTransformLoader.import(extensionPath, { default: true }),
+  );
+}
+
+async function loadExtensionModule(extensionPath: string) {
+  if (shouldLoadExtensionWithNativeImport(extensionPath)) {
+    return loadNativeExtensionModule(extensionPath);
+  }
+
+  return loadExtensionSourceTransformModule(extensionPath);
 }
 
 /**

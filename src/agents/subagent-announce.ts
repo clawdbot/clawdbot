@@ -273,7 +273,10 @@ export async function runSubagentAnnounceFlow(params: {
       const settled = await waitForEmbeddedAgentRunEnd(childSessionId, settleTimeoutMs);
       if (!settled && isEmbeddedAgentRunActive(childSessionId)) {
         shouldDeleteChildSession = false;
-        return false;
+        // Keep delete cleanup retryable until the active child can be removed.
+        if (outcome?.status !== "timeout" || params.cleanup === "delete") {
+          return false;
+        }
       }
     }
 

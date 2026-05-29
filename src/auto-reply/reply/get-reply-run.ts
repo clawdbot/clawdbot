@@ -623,7 +623,7 @@ export async function runPreparedReply(
   const isWholeMessageCommand =
     normalizedCommandBody === rawBodyTrimmed ||
     normalizedCommandBody === rawBodyTrimmed.toLowerCase();
-  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/.test(normalizedCommandBody);
+  const isResetOrNewCommand = /^\/(new|reset)(?:\s|$)/i.test(normalizedCommandBody);
   if (
     allowTextCommands &&
     (!commandAuthorized || !command.isAuthorizedSender) &&
@@ -633,7 +633,7 @@ export async function runPreparedReply(
     typing.cleanup();
     return undefined;
   }
-  const isBareNewOrReset = /^\/(new|reset)$/.test(normalizedCommandBody);
+  const isBareNewOrReset = /^\/(new|reset)$/i.test(normalizedCommandBody);
   const isBareSessionReset =
     softResetTriggered ||
     (isNewSession &&
@@ -642,7 +642,7 @@ export async function runPreparedReply(
           baseBodyTrimmedRaw.length === 0 &&
           rawBodyTrimmed.length > 0)));
   const startupAction =
-    softResetTriggered || /^\/reset(?:\s|$)/.test(normalizedCommandBody) ? "reset" : "new";
+    softResetTriggered || /^\/reset(?:\s|$)/i.test(normalizedCommandBody) ? "reset" : "new";
   const spawnedWorkspaceOverride = resolveIngressWorkspaceOverrideForSpawnedRun({
     spawnedBy: sessionEntry?.spawnedBy,
     workspaceDir: sessionEntry?.spawnedWorkspaceDir,

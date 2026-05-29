@@ -159,6 +159,26 @@ describe("browser cli snapshot defaults", () => {
     expect(params?.query?.urls).toBe(true);
   });
 
+  it("rejects non-integer snapshot numeric options before dispatch", async () => {
+    await expect(runSnapshot(["--limit", "1e3"])).rejects.toThrow("__exit__:1");
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
+      "Invalid --limit: must be an integer >= 1",
+    );
+
+    resetRuntimeCapture();
+    await expect(runSnapshot(["--depth", "-1"])).rejects.toThrow("__exit__:1");
+    expect(runtime.error.mock.calls.at(-1)?.[0]).toContain(
+      "Invalid --depth: must be an integer >= 0",
+    );
+
+    expect(sharedMocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it("passes zero snapshot depth because root depth is valid", async () => {
+    const params = await runSnapshot(["--depth", "0"]);
+    expect(params?.query?.depth).toBe(0);
+  });
+
   it("sends screenshot request with trimmed target id and jpeg type", async () => {
     const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
     expect(params?.path).toBe("/screenshot");

@@ -110,9 +110,25 @@ function normalizeProviderConfig(
     language: trimToUndefined(raw?.language),
     model: trimToUndefined(raw?.model) ?? trimToUndefined(raw?.sttModel),
     prompt: trimToUndefined(raw?.prompt),
-    silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
-    vadThreshold: asFiniteNumber(raw?.vadThreshold),
+    silenceDurationMs: normalizeNonNegativeInteger(raw?.silenceDurationMs),
+    vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
   };
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  if (number === undefined || !Number.isSafeInteger(number) || number < 0) {
+    return undefined;
+  }
+  return number;
+}
+
+function normalizeVadThreshold(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  if (number === undefined || number < 0 || number > 1) {
+    return undefined;
+  }
+  return number;
 }
 
 function buildOpenAIRealtimeTranscriptionSessionCreateConfig(

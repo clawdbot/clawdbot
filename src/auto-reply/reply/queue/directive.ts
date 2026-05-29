@@ -1,4 +1,5 @@
 import { parseDurationMs } from "../../../cli/parse-duration.js";
+import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
@@ -23,15 +24,7 @@ function parseQueueCap(raw?: string): number | undefined {
   if (!raw) {
     return undefined;
   }
-  const num = Number(raw);
-  if (!Number.isFinite(num)) {
-    return undefined;
-  }
-  const cap = Math.floor(num);
-  if (cap < 1) {
-    return undefined;
-  }
-  return cap;
+  return parseStrictPositiveInteger(raw);
 }
 
 function parseQueueDirectiveArgs(raw: string): {

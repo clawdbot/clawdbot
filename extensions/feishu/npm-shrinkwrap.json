@@ -8,7 +8,7 @@
       "name": "@openclaw/feishu",
       "version": "2026.5.28",
       "dependencies": {
-        "@larksuiteoapi/node-sdk": "1.65.0",
+        "@larksuiteoapi/node-sdk": "1.66.0",
         "typebox": "1.1.38",
         "zod": "4.4.3"
       },
@@ -22,9 +22,9 @@
       }
     },
     "node_modules/@larksuiteoapi/node-sdk": {
-      "version": "1.65.0",
-      "resolved": "https://registry.npmjs.org/@larksuiteoapi/node-sdk/-/node-sdk-1.65.0.tgz",
-      "integrity": "sha512-SkMeiFvi4mMVGrmBBh50vWPOgAvfbcpdcAW+iryheFFHUmji49aDch/YtxsKGFtzFlL/rseQXFzNFL8+LdQQ5Q==",
+      "version": "1.66.0",
+      "resolved": "https://registry.npmjs.org/@larksuiteoapi/node-sdk/-/node-sdk-1.66.0.tgz",
+      "integrity": "sha512-ueKbbdvmVGVie3KvKbvHZqvDC/gg3M0rRDeyQanQWK+i2bQgiiTpIfpqVWvxuTgprV31yqV7HPMjN6KegWSCfA==",
       "license": "MIT",
       "dependencies": {
         "axios": "~1.13.3",

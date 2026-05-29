@@ -14,12 +14,17 @@ vi.mock("../plugins/provider-runtime.js", () => {
 import { normalizeModelCompat } from "../plugins/provider-model-compat.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
+  DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   isHighSignalLiveModelRef,
   isModernModelRef,
   isPrioritizedHighSignalLiveModelRef,
+  isPrioritizedSmallLiveModelRef,
+  isSmallLiveModelRef,
   listPrioritizedHighSignalLiveModelRefs,
+  listPrioritizedSmallLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   selectHighSignalLiveItems,
+  selectSmallLiveItems,
 } from "./live-model-filter.js";
 
 const baseModel = (): Model =>
@@ -577,7 +582,7 @@ describe("isHighSignalLiveModelRef", () => {
     expect(isHighSignalLiveModelRef({ provider: "zai", id: "glm-5.1" })).toBe(true);
     expect(
       isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5" }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isHighSignalLiveModelRef({ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }),
     ).toBe(true);
@@ -656,6 +661,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 
   it("lists priority refs as provider/id pairs", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toStrictEqual([
+      { provider: "anthropic", id: "claude-opus-4-8" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
@@ -672,9 +678,35 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
       { provider: "openrouter", id: "ai21/jamba-large-1.7" },
       { provider: "xai", id: "grok-4.3" },
       { provider: "zai", id: "glm-5.1" },
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "minimax-portal", id: "minimax-m2.7" },
+    ]);
+  });
+});
+
+describe("isSmallLiveModelRef", () => {
+  it("matches the small-model live matrix without requiring provider modern hooks", () => {
+    expect(isSmallLiveModelRef({ provider: "lmstudio", id: "Qwen/Qwen3.5-9B" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openrouter", id: "qwen/qwen3.5-9b" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openrouter", id: "z-ai/glm-5.1" })).toBe(true);
+    expect(isSmallLiveModelRef({ provider: "openai", id: "gpt-5.5" })).toBe(false);
+    expect(providerRuntimeMocks.resolveProviderModernModelRef).not.toHaveBeenCalled();
+  });
+});
+
+describe("isPrioritizedSmallLiveModelRef", () => {
+  it("lists priority refs as provider/id pairs", () => {
+    expect(isPrioritizedSmallLiveModelRef({ provider: "lmstudio", id: "qwen/qwen3.5-9b" })).toBe(
+      true,
+    );
+    expect(listPrioritizedSmallLiveModelRefs()).toStrictEqual([
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "sglang", id: "qwen/qwen3-8b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+      { provider: "openrouter", id: "z-ai/glm-5.1" },
+      { provider: "openrouter", id: "z-ai/glm-5" },
+      { provider: "zai", id: "glm-5.1" },
     ]);
   });
 });
@@ -682,6 +714,7 @@ describe("isPrioritizedHighSignalLiveModelRef", () => {
 describe("selectHighSignalLiveItems", () => {
   it("prefers curated Google replacements before fallback provider spread", () => {
     const items = [
+      { provider: "anthropic", id: "claude-opus-4-8" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "anthropic", id: "claude-opus-4-6" },
@@ -700,10 +733,10 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item.provider,
       ),
     ).toEqual([
+      { provider: "anthropic", id: "claude-opus-4-8" },
       { provider: "anthropic", id: "claude-sonnet-4-6" },
       { provider: "anthropic", id: "claude-opus-4-7" },
       { provider: "google", id: "gemini-3.1-pro-preview" },
-      { provider: "google", id: "gemini-3-flash-preview" },
     ]);
   });
 
@@ -729,13 +762,14 @@ describe("selectHighSignalLiveItems", () => {
     ]);
   });
 
-  it("prioritizes Fireworks GLM 5 models over GLM 4.x fallback entries", () => {
+  it("prioritizes supported Fireworks GLM 5 models over GLM 4.x fallback entries", () => {
+    providerRuntimeMocks.resolveProviderModernModelRef.mockReturnValue(true);
     const items = [
       { provider: "fireworks", id: "accounts/fireworks/models/glm-4p7" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
       { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
       { provider: "fireworks", id: "accounts/fireworks/models/gpt-oss-120b" },
-    ];
+    ].filter(isHighSignalLiveModelRef);
 
     expect(
       selectHighSignalLiveItems(
@@ -744,9 +778,31 @@ describe("selectHighSignalLiveItems", () => {
         (item) => item,
         (item) => item.provider,
       ),
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
+  });
+});
+
+describe("selectSmallLiveItems", () => {
+  it("prefers constrained local and hosted small-model routes before fallback spread", () => {
+    const items = [
+      { provider: "openrouter", id: "z-ai/glm-5" },
+      { provider: "openai", id: "gpt-5.5" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
+    ];
+
+    expect(
+      selectSmallLiveItems(
+        items,
+        3,
+        (item) => item,
+        (item) => item.provider,
+      ),
     ).toEqual([
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5" },
-      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" },
+      { provider: "lmstudio", id: "qwen/qwen3.5-9b" },
+      { provider: "vllm", id: "qwen/qwen3-8b" },
+      { provider: "openrouter", id: "qwen/qwen3.5-9b" },
     ]);
   });
 });
@@ -758,6 +814,15 @@ describe("resolveHighSignalLiveModelLimit", () => {
         useExplicitModels: false,
       }),
     ).toBe(DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT);
+  });
+
+  it("can default small live sweeps to the curated small-model cap", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        useExplicitModels: false,
+        defaultLimit: DEFAULT_SMALL_LIVE_MODEL_LIMIT,
+      }),
+    ).toBe(DEFAULT_SMALL_LIVE_MODEL_LIMIT);
   });
 
   it("leaves explicit model lists uncapped unless a cap is provided", () => {

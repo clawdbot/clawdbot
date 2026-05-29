@@ -37,7 +37,7 @@ import { applyMatrixProfileUpdate } from "./profile-update.js";
 import {
   createActionGate,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
   readStringParam,
@@ -118,33 +118,29 @@ function readStringAliasParam(
   return undefined;
 }
 
-function readNumericArrayParam(
-  params: Record<string, unknown>,
-  key: string,
-  options: { integer?: boolean } = {},
-): number[] {
-  const { integer = false } = options;
+function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: string): number[] {
   const raw = readRawParam(params, key);
-  if (raw === undefined) {
+  if (raw == null) {
     return [];
   }
-  return (Array.isArray(raw) ? raw : [raw])
-    .map((value) => {
-      if (typeof value === "number" && Number.isFinite(value)) {
-        return value;
+  return (Array.isArray(raw) ? raw : [raw]).flatMap((value) => {
+    if (value == null || value === "") {
+      return [];
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!trimmed) {
+        return [];
       }
-      if (typeof value === "string") {
-        const trimmed = value.trim();
-        if (!trimmed) {
-          return null;
-        }
-        const parsed = Number(trimmed);
-        return Number.isFinite(parsed) ? parsed : null;
+      if (!/^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/i.test(trimmed)) {
+        return [];
       }
-      return null;
-    })
-    .filter((value): value is number => value !== null)
-    .map((value) => (integer ? Math.trunc(value) : value));
+    }
+    const index = readPositiveIntegerParam({ [key]: value }, key, {
+      message: `${key} must contain positive integers.`,
+    });
+    return index === undefined ? [] : [index];
+  });
 }
 
 export async function handleMatrixAction(
@@ -180,7 +176,9 @@ export async function handleMatrixAction(
       await reactMatrixMessage(roomId, messageId, emoji, clientOpts);
       return jsonResult({ ok: true, added: emoji });
     }
-    const limit = readNumberParam(params, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(params, "limit", {
+      message: "limit must be a positive integer.",
+    });
     const reactions = await listMatrixReactions(roomId, messageId, {
       ...clientOpts,
       limit: limit ?? undefined,
@@ -195,13 +193,15 @@ export async function handleMatrixAction(
       throw new Error("pollId required");
     }
     const optionId = readStringParam(params, "pollOptionId");
-    const optionIndex = readNumberParam(params, "pollOptionIndex", { integer: true });
+    const optionIndex = readPositiveIntegerParam(params, "pollOptionIndex", {
+      message: "pollOptionIndex must be a positive integer.",
+    });
     const optionIds = [
       ...(readStringArrayParam(params, "pollOptionIds") ?? []),
       ...(optionId ? [optionId] : []),
     ];
     const optionIndexes = [
-      ...readNumericArrayParam(params, "pollOptionIndexes", { integer: true }),
+      ...readPositiveIntegerArrayParam(params, "pollOptionIndexes"),
       ...(optionIndex !== undefined ? [optionIndex] : []),
     ];
     const result = await voteMatrixPoll(roomId, pollId, {
@@ -266,7 +266,9 @@ export async function handleMatrixAction(
       }
       case "readMessages": {
         const roomId = readRoomId(params);
-        const limit = readNumberParam(params, "limit", { integer: true });
+        const limit = readPositiveIntegerParam(params, "limit", {
+          message: "limit must be a positive integer.",
+        });
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const result = await readMatrixMessages(roomId, {

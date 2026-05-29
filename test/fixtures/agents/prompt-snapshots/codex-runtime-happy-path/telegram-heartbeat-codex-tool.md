@@ -222,8 +222,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 41093,
-    "roughTokens": 10274
+    "chars": 41962,
+    "roughTokens": 10491
   },
   "openClawDeveloperInstructions": {
     "chars": 1983,
@@ -234,8 +234,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6780
   },
   "totalWithDynamicToolsJson": {
-    "chars": 68214,
-    "roughTokens": 17054
+    "chars": 69083,
+    "roughTokens": 17271
   },
   "userInputText": {
     "chars": 1367,
@@ -706,7 +706,8 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],

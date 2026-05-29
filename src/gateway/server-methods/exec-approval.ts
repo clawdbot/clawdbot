@@ -1,3 +1,12 @@
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateExecApprovalGetParams,
+  validateExecApprovalRequestParams,
+  validateExecApprovalResolveParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveExecCommandHighlighting } from "../../config/exec-command-highlighting.js";
 import { resolveCommandAnalysisSummaryForDisplay } from "../../infra/command-analysis/explain.js";
 import {
@@ -22,15 +31,6 @@ import {
 import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
-import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateExecApprovalGetParams,
-  validateExecApprovalRequestParams,
-  validateExecApprovalResolveParams,
-} from "../protocol/index.js";
 import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,

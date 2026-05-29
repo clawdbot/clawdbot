@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createFeishuClientMockModule,
   createFeishuRuntimeMockModule,
@@ -48,6 +48,10 @@ import {
 } from "./monitor.js";
 import { buildFeishuWebhookRateLimitKeyForTest, monitorWebhook } from "./monitor.transport.js";
 import type { ResolvedFeishuAccount } from "./types.js";
+
+beforeAll(async () => {
+  await import("./monitor.account.js");
+});
 
 async function waitForSlowBodyTimeoutResponse(
   url: string,

@@ -29,6 +29,7 @@ function createMessageUpdateContext(
     debug?: ReturnType<typeof vi.fn>;
     shouldEmitPartialReplies?: boolean;
     consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
+    stripBlockTags?: ReturnType<typeof vi.fn>;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -64,7 +65,7 @@ function createMessageUpdateContext(
     },
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
-    stripBlockTags: (text: string) => text,
+    stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
     consumePartialReplyDirectives: params.consumePartialReplyDirectives ?? vi.fn(() => null),
     emitReasoningStream: vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
@@ -289,6 +290,81 @@ describe("pending assistant reply directives", () => {
 });
 
 describe("handleMessageUpdate text signatures", () => {
+  it("uses incremental text deltas for non-phase streams", () => {
+    const onAgentEvent = vi.fn();
+    const stripBlockTags = vi.fn((text: string) => text);
+    const context = createMessageUpdateContext({ onAgentEvent, stripBlockTags });
+
+    const createNonPhaseEvent = (text: string, delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+          partial: {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            stopReason: "stop",
+            provider: "test",
+            model: "local",
+            usage: {},
+            timestamp: 0,
+          },
+        },
+      }) as never;
+
+    handleMessageUpdate(context, createNonPhaseEvent("Hello ", "Hello "));
+    handleMessageUpdate(context, createNonPhaseEvent("Hello world", "world"));
+
+    expect(stripBlockTags.mock.calls.map(([text]) => text)).toEqual(["Hello ", "world"]);
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "Hello", delta: "Hello" },
+      },
+      {
+        stream: "assistant",
+        data: { text: "Hello world", delta: " world" },
+      },
+    ]);
+  });
+
+  it("uses full partial text for suffix deltas after a suppressed commentary item", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+
+    handleMessageUpdate(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Hello",
+        delta: "Hello",
+        id: "item-commentary",
+        signaturePhase: "commentary",
+        partialPhase: "commentary",
+      }),
+    );
+    handleMessageUpdate(
+      context,
+      createTextUpdateEvent({
+        type: "text_delta",
+        text: "Hello world",
+        delta: " world",
+        id: "item-final",
+        signaturePhase: "final_answer",
+        partialPhase: "final_answer",
+      }),
+    );
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "Hello world", delta: "Hello world", phase: "final_answer" },
+      },
+    ]);
+  });
+
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();

@@ -39,6 +39,31 @@ describe("extractPdfContent", () => {
     });
   });
 
+  it("passes PDF passwords through to document extractors", async () => {
+    extractDocumentContentMock.mockResolvedValue({
+      text: "encrypted pdf",
+      images: [],
+      extractor: "pdf",
+    });
+
+    await extractPdfContent({
+      buffer: Buffer.from("%PDF-1.4"),
+      maxPages: 2,
+      maxPixels: 100,
+      minTextChars: 10,
+      password: "secret",
+    });
+
+    expect(extractDocumentContentMock).toHaveBeenCalledWith({
+      buffer: Buffer.from("%PDF-1.4"),
+      mimeType: "application/pdf",
+      maxPages: 2,
+      maxPixels: 100,
+      minTextChars: 10,
+      password: "secret",
+    });
+  });
+
   it("throws a clear disabled error when no document extractor is available", async () => {
     extractDocumentContentMock.mockResolvedValue(null);
 

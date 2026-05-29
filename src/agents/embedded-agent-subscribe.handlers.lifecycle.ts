@@ -177,6 +177,9 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
     ctx.state.blockState.thinking = false;
     ctx.state.blockState.final = false;
     ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.blockState.fence = undefined;
+    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
+    ctx.state.blockState.pendingFenceFragment = undefined;
 
     if (ctx.state.pendingCompactionRetry > 0) {
       ctx.resolveCompactionRetry();
@@ -236,7 +239,7 @@ export function handleAgentEnd(ctx: EmbeddedAgentSubscribeContext): void | Promi
   };
 
   try {
-    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
+    const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
     finalizeAgentEnd();
     const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
       ? Promise.resolve(flushBlockReplyBufferResult).then(() => flushPendingMediaAndChannel())

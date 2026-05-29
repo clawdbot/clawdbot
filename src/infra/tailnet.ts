@@ -1,4 +1,4 @@
-import { isIpInCidr } from "../shared/net/ip.js";
+import { isIpInCidr } from "@openclaw/net-policy/ip";
 import { uniqueStrings } from "../shared/string-normalization.js";
 import { listExternalInterfaceAddresses, readNetworkInterfaces } from "./network-interfaces.js";
 

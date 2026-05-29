@@ -238,9 +238,9 @@ model entry:
 {
   "agents": {
     "defaults": {
-      "model": "anthropic/claude-opus-4-7",
+      "model": "anthropic/claude-opus-4-8",
       "models": {
-        "anthropic/claude-opus-4-7": {
+        "anthropic/claude-opus-4-8": {
           "agentRuntime": {
             "id": "claude-cli"
           }

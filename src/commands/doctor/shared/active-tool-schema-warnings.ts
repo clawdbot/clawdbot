@@ -6,6 +6,7 @@ import {
 } from "../../../agents/agent-scope.js";
 import { createOpenClawCodingTools } from "../../../agents/agent-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+import { resolveModel } from "../../../agents/embedded-agent-runner/model.js";
 import { parseModelRef } from "../../../agents/model-selection-normalize.js";
 import { normalizeAgentRuntimeTools } from "../../../agents/runtime-plan/tools.js";
 import {
@@ -15,6 +16,8 @@ import {
 import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
+import type { ProviderRuntimeModel } from "../../../plugins/provider-runtime-model.types.js";
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 
@@ -32,6 +35,34 @@ function resolvePrimaryModelRef(
       model: DEFAULT_MODEL,
     }
   );
+}
+
+function resolveRuntimeModelContext(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  workspaceDir: string;
+  provider: string;
+  modelId: string;
+}): {
+  modelApi?: string;
+  model?: ProviderRuntimeModel;
+  modelCompat?: ReturnType<typeof extractModelCompat>;
+  modelContextWindowTokens?: number;
+} {
+  const model = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+    workspaceDir: params.workspaceDir,
+  }).model as ProviderRuntimeModel | undefined;
+  if (!model) {
+    return {};
+  }
+  return {
+    modelApi: model.api,
+    model,
+    modelCompat: extractModelCompat(model),
+    ...(typeof model.contextWindow === "number"
+      ? { modelContextWindowTokens: model.contextWindow }
+      : {}),
+  };
 }
 
 function formatDiagnostic(params: {
@@ -60,6 +91,22 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
     const modelRef = resolvePrimaryModelRef(params.cfg, agentConfig?.model);
     const agentDir = resolveAgentDir(params.cfg, agentId, env);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId, env);
+    let runtimeModelContext: ReturnType<typeof resolveRuntimeModelContext> = {};
+    try {
+      runtimeModelContext = resolveRuntimeModelContext({
+        cfg: params.cfg,
+        agentDir,
+        workspaceDir,
+        provider: modelRef.provider,
+        modelId: modelRef.model,
+      });
+    } catch (error) {
+      warnings.push(
+        sanitizeForLog(
+          `- agents.${agentId}: active tool schema validation could not resolve the runtime model context (${formatErrorMessage(error)}). Fix provider/model loading errors before relying on assistant tool startup.`,
+        ),
+      );
+    }
     let tools: ReturnType<typeof createOpenClawCodingTools>;
     try {
       tools = createOpenClawCodingTools({
@@ -69,6 +116,9 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
         config: params.cfg,
         modelProvider: modelRef.provider,
         modelId: modelRef.model,
+        modelApi: runtimeModelContext.modelApi,
+        modelCompat: runtimeModelContext.modelCompat,
+        modelContextWindowTokens: runtimeModelContext.modelContextWindowTokens,
         allowGatewaySubagentBinding: true,
       });
     } catch (error) {
@@ -90,6 +140,8 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
         workspaceDir,
         env,
         modelId: modelRef.model,
+        modelApi: runtimeModelContext.modelApi,
+        model: runtimeModelContext.model,
       });
     } catch (error) {
       warnings.push(

@@ -104,6 +104,19 @@ describe("qa suite gateway helpers", () => {
     ).toBe(false);
   });
 
+  it("ignores prototype keys when detecting no-op config patches", () => {
+    expect(
+      isConfigPatchNoopForSnapshot(
+        {
+          tools: {
+            profile: "coding",
+          },
+        },
+        '{"tools":{"profile":"coding"},"__proto__":{"polluted":true},"constructor":{"polluted":true},"prototype":{"polluted":true}}',
+      ),
+    ).toBe(true);
+  });
+
   it("detects full config applies that only differ by gateway-written metadata", () => {
     const config = {
       gateway: {

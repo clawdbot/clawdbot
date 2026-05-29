@@ -1128,6 +1128,11 @@ export const uk: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Повторити",
+      retrySend: "Повторити надсилання",
+      retryQueuedMessage: "Повторити надсилання повідомлення в черзі",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

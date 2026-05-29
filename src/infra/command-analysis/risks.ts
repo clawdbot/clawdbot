@@ -10,6 +10,7 @@ import {
 import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
+import { parseStrictPositiveInteger } from "../parse-finite-number.js";
 import { POSIX_INLINE_COMMAND_FLAGS, resolveInlineCommandMatch } from "../shell-inline-command.js";
 import {
   extractShellWrapperInlineCommand,
@@ -101,7 +102,8 @@ function normalizeShellPositionalToken(
   if (value === "0") {
     return { kind: "zero" };
   }
-  return { kind: "index", index: Number.parseInt(value, 10) };
+  const index = parseStrictPositiveInteger(value);
+  return index === undefined ? null : { kind: "index", index };
 }
 
 function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarrierPlan | null {

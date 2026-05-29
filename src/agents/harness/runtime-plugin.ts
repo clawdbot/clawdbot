@@ -5,9 +5,11 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
-import { isDefaultAgentRuntimeId } from "../agent-runtime-id.js";
+import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
+
+const COLD_LOADABLE_HARNESS_PLUGIN_IDS = new Set(["codex", "copilot"]);
 
 function dedupePluginIds(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -28,11 +30,15 @@ function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, plu
   return allow.length > 0 && !allow.includes(pluginId);
 }
 
-function resolveCodexHarnessPluginIds(params: {
+function resolveHarnessPluginIds(params: {
+  runtime: string;
   provider: string;
   config?: OpenClawConfig;
   workspaceDir: string;
 }): string[] {
+  if (params.runtime !== "codex") {
+    return [params.runtime];
+  }
   if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
     return ["codex"];
   }
@@ -106,20 +112,25 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   });
   const runtime =
     runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride) ? runtimeOverride : policy.runtime;
-  if (runtime !== "codex") {
+  if (
+    isDefaultAgentRuntimeId(runtime) ||
+    runtime === OPENCLAW_AGENT_RUNTIME_ID ||
+    !COLD_LOADABLE_HARNESS_PLUGIN_IDS.has(runtime)
+  ) {
     return;
   }
 
   const { ensurePluginRegistryLoaded } =
     await import("../../plugins/runtime/runtime-registry-loader.js");
-  const pluginIds = resolveCodexHarnessPluginIds({
+  const pluginIds = resolveHarnessPluginIds({
+    runtime,
     provider: params.provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
   const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
     config: params.config,
-    requiredPluginId: "codex",
+    requiredPluginId: runtime,
     pluginIds,
   });
   const activatedConfig =

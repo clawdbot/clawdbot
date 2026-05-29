@@ -62,9 +62,22 @@ function readOptionalStringArray(value: unknown, label: string): string[] | unde
   return value.map((entry, index) => readString(entry, `${label}[${index}]`));
 }
 
-function readOptionalNumber(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+function readOptionalInteger(
+  value: unknown,
+  label: string,
+  bounds?: { min?: number; max?: number },
+): number | undefined {
+  if (value == null) {
     return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new Error(`${label} must be an integer`);
+  }
+  if (bounds?.min !== undefined && value < bounds.min) {
+    throw new Error(`${label} must be at least ${bounds.min}`);
+  }
+  if (bounds?.max !== undefined && value > bounds.max) {
+    throw new Error(`${label} must be at most ${bounds.max}`);
   }
   return value;
 }
@@ -197,8 +210,8 @@ function parseSelectSpec(raw: unknown, label: string): DiscordComponentSelectSpe
     type,
     callbackData: readOptionalString(obj.callbackData),
     placeholder: readOptionalString(obj.placeholder),
-    minValues: readOptionalNumber(obj.minValues),
-    maxValues: readOptionalNumber(obj.maxValues),
+    minValues: readOptionalInteger(obj.minValues, `${label}.minValues`, { min: 0, max: 25 }),
+    maxValues: readOptionalInteger(obj.maxValues, `${label}.maxValues`, { min: 1, max: 25 }),
     options: parseSelectOptions(obj.options, `${label}.options`),
     allowedUsers: readOptionalStringArray(obj.allowedUsers, `${label}.allowedUsers`),
   };
@@ -224,18 +237,29 @@ function parseModalField(raw: unknown, label: string, index: number): DiscordMod
   if (["checkbox", "radio", "select"].includes(type) && (!options || options.length === 0)) {
     throw new Error(`${label}.options is required for ${type} fields`);
   }
+  if (type === "radio" && (obj.minValues != null || obj.maxValues != null)) {
+    throw new Error(`${label}.minValues/maxValues are not supported for radio fields`);
+  }
+  const required = typeof obj.required === "boolean" ? obj.required : undefined;
+  const maxValues = type === "checkbox" ? 10 : 25;
   return {
     type,
     name: normalizeModalFieldName(readOptionalString(obj.name), index),
     label: readString(obj.label, `${label}.label`),
     description: readOptionalString(obj.description),
     placeholder: readOptionalString(obj.placeholder),
-    required: typeof obj.required === "boolean" ? obj.required : undefined,
+    required,
     options,
-    minValues: readOptionalNumber(obj.minValues),
-    maxValues: readOptionalNumber(obj.maxValues),
-    minLength: readOptionalNumber(obj.minLength),
-    maxLength: readOptionalNumber(obj.maxLength),
+    minValues: readOptionalInteger(obj.minValues, `${label}.minValues`, {
+      min: required === false ? 0 : 1,
+      max: maxValues,
+    }),
+    maxValues: readOptionalInteger(obj.maxValues, `${label}.maxValues`, {
+      min: 1,
+      max: maxValues,
+    }),
+    minLength: readOptionalInteger(obj.minLength, `${label}.minLength`, { min: 0, max: 4000 }),
+    maxLength: readOptionalInteger(obj.maxLength, `${label}.maxLength`, { min: 1, max: 4000 }),
     style: readOptionalString(obj.style) as DiscordModalFieldSpec["style"],
   };
 }

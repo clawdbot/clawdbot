@@ -101,4 +101,12 @@ metadata:
     const content = "# No frontmatter";
     expect(parseFrontmatterBlock(content)).toStrictEqual({});
   });
+
+  it("parses frontmatter after a leading UTF-8 BOM", () => {
+    const content = "\uFEFF---\nname: windows-skill\ndescription: Written by PowerShell\n---\n";
+    const result = parseFrontmatterBlock(content);
+
+    expect(result.name).toBe("windows-skill");
+    expect(result.description).toBe("Written by PowerShell");
+  });
 });

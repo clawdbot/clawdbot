@@ -199,4 +199,48 @@ describe("buildChannelsTable", () => {
     ]);
     expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
   });
+
+  it("keeps explicit configured channels visible when the fast path skips their plugin", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+
+    const table = await buildChannelsTable(
+      { channels: { feishu: { appId: "cli_xxx" } } },
+      { includeSetupFallbackPlugins: false },
+    );
+
+    expect(table.rows).toStrictEqual([
+      {
+        id: "feishu",
+        label: "feishu",
+        enabled: true,
+        state: "setup",
+        detail: "configured; status unavailable in fast mode",
+      },
+    ]);
+    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes fast-path configured-channel labels", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    const osc = (value: string) =>
+      `${String.fromCharCode(0x1b)}]0;${value}${String.fromCharCode(0x07)}`;
+    const unsafeChannel = `${osc("owned")}telegram`;
+
+    const table = await buildChannelsTable(
+      {
+        channels: {
+          [unsafeChannel]: { botToken: "123:abc" },
+          [osc("only-control")]: { botToken: "123:abc" },
+        },
+      },
+      { includeSetupFallbackPlugins: false },
+    );
+
+    expect(table.rows.find((row) => row.id === unsafeChannel)).toMatchObject({
+      id: unsafeChannel,
+      label: "telegram",
+    });
+    expect(table.rows.find((row) => row.label === "configured-channel")).toBeDefined();
+    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+  });
 });

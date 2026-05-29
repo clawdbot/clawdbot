@@ -40,6 +40,7 @@ start_npm_fixture_registry "$package_name" 1.0.0 /tmp/lifecycle-claw-1.0.0.tgz "
 
 run_measured install-v1 node "$entry" plugins install "npm:$package_name@1.0.0"
 node "$probe" assert-version "$plugin_id" 1.0.0
+node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
 
 run_measured inspect-v1 bash -c 'node "$1" plugins inspect "$2" --runtime --json >/tmp/plugin-lifecycle-inspect-v1.json' bash "$entry" "$plugin_id"
 
@@ -51,9 +52,11 @@ node "$probe" assert-enabled "$plugin_id" true
 
 run_measured upgrade-v2 node "$entry" plugins update "$package_name@2.0.0"
 node "$probe" assert-version "$plugin_id" 2.0.0
+node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
 
 run_measured downgrade-v1 node "$entry" plugins update "$package_name@1.0.0"
 node "$probe" assert-version "$plugin_id" 1.0.0
+node "$probe" assert-npm-project-root "$plugin_id" "$package_name"
 
 install_path="$(node "$probe" install-path "$plugin_id")"
 rm -rf "$install_path"

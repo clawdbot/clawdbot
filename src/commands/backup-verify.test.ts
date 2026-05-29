@@ -282,6 +282,21 @@ describe("backupVerifyCommand", () => {
     );
   });
 
+  it("rejects oversized manifest entries without retaining the full body", async () => {
+    await createArchiveWithManifestContent(
+      {
+        tempPrefix: "openclaw-backup-huge-manifest-",
+        manifestContent: "x".repeat(1024 * 1024 + 1),
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /Backup manifest exceeds 1048576 byte limit/,
+        );
+      },
+    );
+  });
+
   it("rejects unsafe archive paths", async () => {
     for (const { tempPrefix, archivePath, error } of [
       {

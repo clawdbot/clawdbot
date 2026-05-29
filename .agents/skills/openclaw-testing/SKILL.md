@@ -213,7 +213,7 @@ workflow only spends setup and queue time on that suite.
 ### Release Evidence
 
 After release-candidate validation or before a release decision, record the
-important run ids in the private `openclaw/releases-private` evidence ledger.
+important run ids in the public `openclaw/releases` evidence ledger.
 Use the manual `OpenClaw Release Evidence`
 (`openclaw-release-evidence.yml`) workflow there. It writes durable summaries
 under `evidence/<release-id>/` and commits:
@@ -236,13 +236,13 @@ short release-manager notes there. Do not store raw logs, provider
 prompts/responses, channel transcripts, signing material, or secret-bearing
 config in git; raw logs stay in Actions artifacts.
 
-When `Full Release Validation` completes and
-`OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN` is configured in the public repo, it
-requests the private `OpenClaw Release Evidence From Full Validation` workflow.
-That private workflow reads the parent full-validation run, extracts the child
-CI/release-checks/Telegram run ids from the parent logs, and opens the evidence
-PR automatically. If the token is absent or the run predates this wiring, trigger
-that private workflow manually with the full-validation run id.
+When `Full Release Validation` completes and `OPENCLAW_RELEASES_DISPATCH_TOKEN`
+is configured in the source repo, it requests the public
+`OpenClaw Release Evidence From Full Validation` workflow. That workflow reads
+the parent full-validation run, extracts the child CI/release-checks/Telegram
+run ids from the parent logs, and opens the evidence PR automatically. If the
+token is absent or the run predates this wiring, trigger that workflow manually
+with the full-validation run id.
 
 ### Release Checks
 

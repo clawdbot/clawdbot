@@ -265,6 +265,11 @@ async function main() {
     isFullSuiteRun || isFullExtensionsProjectRun(runSpecs) || isExplicitParallelMultiConfigRun;
   if (isParallelShardRun) {
     const concurrency = resolveParallelFullSuiteConcurrency(runSpecs.length, baseEnv);
+    if (!isCiLikeEnv(baseEnv) && runSpecs.length > 1) {
+      console.warn(
+        `[test] warning: broad local run will start ${runSpecs.length} Vitest shards; use \`pnpm test:changed\` for routine checks.`,
+      );
+    }
     if (concurrency > 1) {
       const localFullSuiteProfile = resolveLocalFullSuiteProfile(baseEnv);
       const shardTimings = readShardTimings(process.cwd(), baseEnv);

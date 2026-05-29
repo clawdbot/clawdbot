@@ -1,10 +1,6 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
-import {
-  assertOkOrThrowHttpError,
-  resolveProviderHttpRequestConfig,
-} from "openclaw/plugin-sdk/provider-http";
+import { assertOkOrThrowHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   type SsrFPolicy,
@@ -20,8 +16,8 @@ import type {
   VideoGenerationProvider,
   VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
+import { resolveFalHttpRequestConfig } from "./http-config.js";
 
-const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_QUEUE_BASE_URL = "https://queue.fal.run";
 const DEFAULT_FAL_VIDEO_MODEL = "fal-ai/minimax/video-01-live";
 const HEYGEN_VIDEO_AGENT_MODEL = "fal-ai/heygen/v2/video-agent";
@@ -252,7 +248,11 @@ function resolveFalDuration(
   }
   const duration = Math.max(1, Math.round(durationSeconds));
   if (isFalSeedance2Model(model)) {
-    return String(duration);
+    return SEEDANCE_2_DURATION_SECONDS.includes(
+      duration as (typeof SEEDANCE_2_DURATION_SECONDS)[number],
+    )
+      ? String(duration)
+      : undefined;
   }
   return duration;
 }
@@ -569,28 +569,8 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
     async generateVideo(req) {
       const model = normalizeOptionalString(req.model) || DEFAULT_FAL_VIDEO_MODEL;
       validateFalVideoReferenceInputs({ req, model });
-      const auth = await resolveApiKeyForProvider({
-        provider: "fal",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("fal API key missing");
-      }
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: normalizeOptionalString(req.cfg?.models?.providers?.fal?.baseUrl),
-          defaultBaseUrl: DEFAULT_FAL_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Key ${auth.apiKey}`,
-            "Content-Type": "application/json",
-          },
-          provider: "fal",
-          capability: "video",
-          transport: "http",
-        });
+        await resolveFalHttpRequestConfig({ req, capability: "video" });
       const requestBody = buildFalVideoRequestBody({ req, model });
       const policy = buildPolicy(allowPrivateNetwork);
       const queueBaseUrl = resolveFalQueueBaseUrl(baseUrl);

@@ -280,6 +280,7 @@ export function createOpenAiCompatibleSpeechProvider<
     id: options.id,
     label: options.label,
     autoSelectOrder: options.autoSelectOrder,
+    defaultModel: options.defaultModel,
     models: [...options.models],
     voices: [...options.voices],
     resolveConfig: ({ rawConfig }) => normalizeConfig(rawConfig),

@@ -8,23 +8,26 @@ describe("resolvePnpmRunner", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
   it("uses npm_execpath when it points to a JS pnpm entrypoint", () => {
-    expect(
-      resolvePnpmRunner({
-        npmExecPath: "/home/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
-        nodeExecPath: "/usr/local/bin/node",
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "/usr/local/bin/node",
-      args: [
-        "/home/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
-        "exec",
-        "vitest",
-        "run",
-      ],
-      shell: false,
-    });
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
+    try {
+      expect(
+        resolvePnpmRunner({
+          npmExecPath,
+          nodeExecPath: "/usr/local/bin/node",
+          pnpmArgs: ["exec", "vitest", "run"],
+          platform: "linux",
+        }),
+      ).toEqual({
+        command: "/usr/local/bin/node",
+        args: [npmExecPath, "exec", "vitest", "run"],
+        shell: false,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("uses npm_execpath when it points to a shebang pnpm script", () => {
@@ -51,25 +54,27 @@ describe("resolvePnpmRunner", () => {
   });
 
   it("prepends node args when launching pnpm through node", () => {
-    expect(
-      resolvePnpmRunner({
-        npmExecPath: "/home/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
-        nodeArgs: ["--no-maglev"],
-        nodeExecPath: "/usr/local/bin/node",
-        pnpmArgs: ["exec", "vitest", "run"],
-        platform: "linux",
-      }),
-    ).toEqual({
-      command: "/usr/local/bin/node",
-      args: [
-        "--no-maglev",
-        "/home/test/.cache/node/corepack/v1/pnpm/10.32.1/bin/pnpm.cjs",
-        "exec",
-        "vitest",
-        "run",
-      ],
-      shell: false,
-    });
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
+    try {
+      expect(
+        resolvePnpmRunner({
+          npmExecPath,
+          nodeArgs: ["--no-maglev"],
+          nodeExecPath: "/usr/local/bin/node",
+          pnpmArgs: ["exec", "vitest", "run"],
+          platform: "linux",
+        }),
+      ).toEqual({
+        command: "/usr/local/bin/node",
+        args: ["--no-maglev", npmExecPath, "exec", "vitest", "run"],
+        shell: false,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("executes native pnpm binaries from npm_execpath directly on non-Windows", () => {
@@ -138,23 +143,43 @@ describe("resolvePnpmRunner", () => {
   });
 
   it("uses pnpm.cjs through node for Windows-style paths", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
+    try {
+      expect(
+        resolvePnpmRunner({
+          npmExecPath,
+          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+          pnpmArgs: ["exec", "vitest", "run"],
+          platform: "win32",
+        }),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "exec", "vitest", "run"],
+        shell: false,
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to pnpm.cmd on Windows when npm_execpath points to a missing JS entrypoint", () => {
     expect(
       resolvePnpmRunner({
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
         npmExecPath:
-          "C:\\Users\\test\\AppData\\Local\\node\\corepack\\v1\\pnpm\\10.32.1\\bin\\pnpm.cjs",
+          "C:\\Users\\test\\AppData\\Local\\Temp\\cache\\corepack\\v1\\pnpm\\10.32.1\\bin\\pnpm.mjs",
         nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
         pnpmArgs: ["exec", "vitest", "run"],
         platform: "win32",
       }),
     ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [
-        "C:\\Users\\test\\AppData\\Local\\node\\corepack\\v1\\pnpm\\10.32.1\\bin\\pnpm.cjs",
-        "exec",
-        "vitest",
-        "run",
-      ],
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: ["/d", "/s", "/c", "pnpm.cmd exec vitest run"],
       shell: false,
+      windowsVerbatimArguments: true,
     });
   });
 

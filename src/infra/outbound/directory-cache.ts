@@ -1,5 +1,6 @@
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveNonNegativeIntegerOption } from "../numeric-options.js";
 
 type CacheEntry<T> = {
   value: T;
@@ -22,13 +23,12 @@ export function buildDirectoryCacheKey(key: DirectoryCacheKey): string {
 export class DirectoryCache<T> {
   private readonly cache = new Map<string, CacheEntry<T>>();
   private lastConfigRef: OpenClawConfig | null = null;
+  private readonly ttlMs: number;
   private readonly maxSize: number;
 
-  constructor(
-    private readonly ttlMs: number,
-    maxSize = 2000,
-  ) {
-    this.maxSize = Math.max(1, Math.floor(maxSize));
+  constructor(ttlMs: number, maxSize = 2000) {
+    this.ttlMs = resolveNonNegativeIntegerOption(ttlMs, 0);
+    this.maxSize = Math.max(1, resolveNonNegativeIntegerOption(maxSize, 2000));
   }
 
   get(key: string, cfg: OpenClawConfig): T | undefined {

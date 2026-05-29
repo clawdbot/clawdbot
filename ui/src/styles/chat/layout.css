@@ -1025,7 +1025,8 @@
   gap: 6px;
 }
 
-.chat-queue__steer {
+.chat-queue__steer,
+.chat-queue__retry {
   align-self: start;
   display: inline-flex;
   align-items: center;
@@ -1036,7 +1037,8 @@
   line-height: 1;
 }
 
-.chat-queue__steer svg {
+.chat-queue__steer svg,
+.chat-queue__retry svg {
   width: 13px;
   height: 13px;
   fill: none;
@@ -1046,7 +1048,8 @@
   stroke-linejoin: round;
 }
 
-.chat-queue__steer:hover:not(:disabled) {
+.chat-queue__steer:hover:not(:disabled),
+.chat-queue__retry:hover:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 12%, transparent);
 }
 

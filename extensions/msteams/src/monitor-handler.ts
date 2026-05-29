@@ -1,23 +1,9 @@
-import path from "node:path";
-import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { tryNormalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import { formatUnknownError } from "./errors.js";
-import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
-import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";
-import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
 import { createMSTeamsReactionHandler } from "./monitor-handler/reaction-handler.js";
-import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
-import {
-  handleSigninTokenExchangeInvoke,
-  handleSigninVerifyStateInvoke,
-  parseSigninTokenExchangeValue,
-  parseSigninVerifyStateValue,
-} from "./sso.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 export type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
@@ -110,7 +96,7 @@ async function isInvokeAuthorized(params: {
   return true;
 }
 
-async function isFeedbackInvokeAuthorized(
+export async function isFeedbackInvokeAuthorized(
   context: MSTeamsTurnContext,
   deps: MSTeamsMessageHandlerDeps,
 ): Promise<boolean> {
@@ -125,7 +111,7 @@ async function isFeedbackInvokeAuthorized(
   });
 }
 
-async function isSigninInvokeAuthorized(
+export async function isSigninInvokeAuthorized(
   context: MSTeamsTurnContext,
   deps: MSTeamsMessageHandlerDeps,
 ): Promise<boolean> {
@@ -141,183 +127,20 @@ async function isSigninInvokeAuthorized(
   });
 }
 
-/**
- * Parse and handle feedback invoke activities (thumbs up/down).
- * Returns true if the activity was a feedback invoke, false otherwise.
- */
-async function handleFeedbackInvoke(
+export async function isCardActionInvokeAuthorized(
   context: MSTeamsTurnContext,
   deps: MSTeamsMessageHandlerDeps,
 ): Promise<boolean> {
-  const activity = context.activity;
-  const value = activity.value as
-    | {
-        actionName?: string;
-        actionValue?: { reaction?: string; feedback?: string };
-        replyToId?: string;
-      }
-    | undefined;
-
-  if (!value) {
-    return false;
-  }
-
-  // Teams feedback invoke format: actionName="feedback", actionValue.reaction="like"|"dislike"
-  if (value.actionName !== "feedback") {
-    return false;
-  }
-
-  const reaction = value.actionValue?.reaction;
-  if (reaction !== "like" && reaction !== "dislike") {
-    deps.log.debug?.("ignoring feedback with unknown reaction", { reaction });
-    return false;
-  }
-
-  const msteamsCfg = deps.cfg.channels?.msteams;
-  if (msteamsCfg?.feedbackEnabled === false) {
-    deps.log.debug?.("feedback handling disabled");
-    return true; // Still consume the invoke
-  }
-
-  if (!(await isFeedbackInvokeAuthorized(context, deps))) {
-    return true;
-  }
-
-  // Extract user comment from the nested JSON string
-  let userComment: string | undefined;
-  if (value.actionValue?.feedback) {
-    try {
-      const parsed = JSON.parse(value.actionValue.feedback) as { feedbackText?: string };
-      userComment = parsed.feedbackText || undefined;
-    } catch {
-      // Best effort — feedback text is optional
-    }
-  }
-
-  // Strip ;messageid=... suffix to match the normalized ID used by the message handler.
-  const rawConversationId = activity.conversation?.id ?? "unknown";
-  const conversationId = normalizeMSTeamsConversationId(rawConversationId);
-  const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
-  const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
-  const isNegative = reaction === "dislike";
-
-  // Route feedback using the same chat-type logic as normal messages
-  // so session keys, agent IDs, and transcript paths match.
-  const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
-  const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
-  const isChannel = convType === "channel";
-
-  const core = getMSTeamsRuntime();
-  const route = core.channel.routing.resolveAgentRoute({
-    cfg: deps.cfg,
-    channel: "msteams",
-    peer: {
-      kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
-      id: isDirectMessage ? senderId : conversationId,
+  return isInvokeAuthorized({
+    context,
+    deps,
+    deniedLogs: {
+      dm: "dropping card action invoke (dm sender not allowlisted)",
+      channel: "dropping card action invoke (not in team/channel allowlist)",
+      group: "dropping card action invoke (group sender not allowlisted)",
     },
+    includeInvokeName: true,
   });
-
-  // Match the thread-aware session key used by the message handler so feedback
-  // events land in the correct per-thread transcript. For channel threads, the
-  // thread root ID comes from the ;messageid= suffix on the conversation ID or
-  // from activity.replyToId.
-  const feedbackThreadId = isChannel
-    ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId ?? undefined)
-    : undefined;
-  if (feedbackThreadId) {
-    const threadKeys = resolveThreadSessionKeys({
-      baseSessionKey: route.sessionKey,
-      threadId: feedbackThreadId,
-      parentSessionKey: route.sessionKey,
-    });
-    route.sessionKey = threadKeys.sessionKey;
-  }
-
-  // Log feedback event to session JSONL
-  const feedbackEvent = buildFeedbackEvent({
-    messageId,
-    value: isNegative ? "negative" : "positive",
-    comment: userComment,
-    sessionKey: route.sessionKey,
-    agentId: route.agentId,
-    conversationId,
-  });
-
-  deps.log.info("received feedback", {
-    value: feedbackEvent.value,
-    messageId,
-    conversationId,
-    hasComment: Boolean(userComment),
-  });
-
-  // Write feedback event to session transcript
-  try {
-    const storePath = core.channel.session.resolveStorePath(deps.cfg.session?.store, {
-      agentId: route.agentId,
-    });
-    const safeKey = route.sessionKey.replace(/[^a-zA-Z0-9_-]/g, "_");
-    const transcriptFile = path.join(storePath, `${safeKey}.jsonl`);
-    await appendRegularFile({
-      filePath: transcriptFile,
-      content: `${JSON.stringify(feedbackEvent)}\n`,
-      rejectSymlinkParents: true,
-    }).catch(() => {
-      // Best effort — transcript dir may not exist yet
-    });
-  } catch {
-    // Best effort
-  }
-
-  // Build conversation reference for proactive messages (ack + reflection follow-up)
-  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
-  const conversationRef = {
-    activityId: activity.id,
-    user: {
-      id: activity.from?.id,
-      name: activity.from?.name,
-      aadObjectId: activity.from?.aadObjectId,
-    },
-    agent: activity.recipient
-      ? { id: activity.recipient.id, name: activity.recipient.name }
-      : undefined,
-    bot: activity.recipient
-      ? { id: activity.recipient.id, name: activity.recipient.name }
-      : undefined,
-    conversation: {
-      id: conversationId,
-      conversationType: activity.conversation?.conversationType,
-      tenantId: activity.conversation?.tenantId,
-    },
-    channelId: activity.channelId ?? "msteams",
-    ...(serviceUrl ? { serviceUrl } : {}),
-    locale: activity.locale,
-  };
-
-  // For negative feedback, trigger background reflection (fire-and-forget).
-  // No ack message — the reflection follow-up serves as the acknowledgement.
-  // Sending anything during the invoke handler causes "unable to reach app" errors.
-  if (isNegative && msteamsCfg?.feedbackReflection !== false) {
-    // Note: thumbedDownResponse is not populated here because we don't cache
-    // sent message text. The agent still has full session context for reflection
-    // since the reflection runs in the same session. The user comment (if any)
-    // provides additional signal.
-    runFeedbackReflection({
-      cfg: deps.cfg,
-      adapter: deps.adapter,
-      appId: deps.appId,
-      conversationRef,
-      sessionKey: route.sessionKey,
-      agentId: route.agentId,
-      conversationId,
-      feedbackMessageId: messageId,
-      userComment,
-      log: deps.log,
-    }).catch((err) => {
-      deps.log.error("feedback reflection failed", { error: formatUnknownError(err) });
-    });
-  }
-
-  return true;
 }
 
 export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
@@ -332,23 +155,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   if (originalRun) {
     handler.run = async (context: unknown) => {
       const ctx = context as MSTeamsTurnContext;
-      // Handle file consent invokes before passing to normal flow
-      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "fileConsent/invoke") {
-        await respondToMSTeamsFileConsentInvoke(ctx, deps.log);
-        return;
-      }
-
-      // Handle feedback invokes (thumbs up/down on AI-generated messages).
-      // Just return after handling — the process() handler sends HTTP 200 automatically.
-      // Do NOT call sendActivity with invokeResponse; our custom adapter would POST
-      // a new activity to Bot Framework instead of responding to the HTTP request.
-      if (ctx.activity?.type === "invoke" && ctx.activity?.name === "message/submitAction") {
-        const handled = await handleFeedbackInvoke(ctx, deps);
-        if (handled) {
-          return;
-        }
-      }
-
+      // Non-poll adaptiveCard/action invokes get dispatched here as text so the
+      // agent can react. Poll votes are intercepted in monitor.ts's
+      // app.on("card.action") handler which returns the InvokeResponse to Teams.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
         const text = serializeAdaptiveCardActionValue(ctx.activity?.value);
         if (text) {
@@ -359,95 +168,6 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
               type: "message",
               text,
             },
-          });
-          return;
-        }
-        deps.log.debug?.("skipping adaptive card action invoke without value payload");
-      }
-
-      // Bot Framework OAuth SSO: Teams sends signin/tokenExchange (with a
-      // Teams-provided exchangeable token) or signin/verifyState (magic
-      // code fallback) after an oauthCard is presented. We must ack with
-      // HTTP 200 and, if configured, exchange the token with the Bot
-      // Framework User Token service and persist it for downstream tools.
-      if (
-        ctx.activity?.type === "invoke" &&
-        (ctx.activity?.name === "signin/tokenExchange" ||
-          ctx.activity?.name === "signin/verifyState")
-      ) {
-        // Always ack immediately — silently dropping the invoke causes
-        // the Teams card UI to report "Something went wrong".
-        await ctx.sendActivity({ type: "invokeResponse", value: { status: 200, body: {} } });
-
-        if (!(await isSigninInvokeAuthorized(ctx, deps))) {
-          return;
-        }
-
-        if (!deps.sso) {
-          deps.log.debug?.("signin invoke received but msteams.sso is not configured", {
-            name: ctx.activity.name,
-          });
-          return;
-        }
-
-        const user = {
-          userId: ctx.activity.from?.aadObjectId ?? ctx.activity.from?.id ?? "",
-          channelId: ctx.activity.channelId ?? "msteams",
-        };
-
-        try {
-          if (ctx.activity.name === "signin/tokenExchange") {
-            const parsed = parseSigninTokenExchangeValue(ctx.activity.value);
-            if (!parsed) {
-              deps.log.debug?.("invalid signin/tokenExchange invoke value");
-              return;
-            }
-            const result = await handleSigninTokenExchangeInvoke({
-              value: parsed,
-              user,
-              deps: deps.sso,
-            });
-            if (result.ok) {
-              deps.log.info("msteams sso token exchanged", {
-                userId: user.userId,
-                hasExpiry: Boolean(result.expiresAt),
-              });
-            } else {
-              deps.log.error("msteams sso token exchange failed", {
-                code: result.code,
-                status: result.status,
-                message: result.message,
-              });
-            }
-            return;
-          }
-
-          // signin/verifyState
-          const parsed = parseSigninVerifyStateValue(ctx.activity.value);
-          if (!parsed) {
-            deps.log.debug?.("invalid signin/verifyState invoke value");
-            return;
-          }
-          const result = await handleSigninVerifyStateInvoke({
-            value: parsed,
-            user,
-            deps: deps.sso,
-          });
-          if (result.ok) {
-            deps.log.info("msteams sso verifyState succeeded", {
-              userId: user.userId,
-              hasExpiry: Boolean(result.expiresAt),
-            });
-          } else {
-            deps.log.error("msteams sso verifyState failed", {
-              code: result.code,
-              status: result.status,
-              message: result.message,
-            });
-          }
-        } catch (err) {
-          deps.log.error("msteams sso invoke handler error", {
-            error: formatUnknownError(err),
           });
         }
         return;

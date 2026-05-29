@@ -15,6 +15,12 @@ describe("cross-OS release checks workflow", () => {
     expect(workflow).not.toContain('pnpm dlx "tsx@${TSX_VERSION}"');
   });
 
+  it("bounds npm baseline packing during prepare", () => {
+    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(workflow).toContain("timeout --preserve-status 300s npm pack --ignore-scripts");
+  });
+
   it("uses Windows-safe npm resolution for the TypeScript loader bootstrap", () => {
     const wrapper = readFileSync(WRAPPER_PATH, "utf8");
 

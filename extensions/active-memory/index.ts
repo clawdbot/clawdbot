@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
@@ -390,9 +391,9 @@ function parseOptionalPositiveInt(value: unknown, fallback: number): number {
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseInt(value, 10)
+        ? parseStrictPositiveInteger(value)
         : Number.NaN;
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return parsed !== undefined && Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {

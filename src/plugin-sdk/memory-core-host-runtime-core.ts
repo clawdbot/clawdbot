@@ -7,7 +7,9 @@ export {
 export {
   asToolParamsRecord,
   jsonResult,
+  readFiniteNumberParam,
   readNumberParam,
+  readPositiveIntegerParam,
   readStringParam,
   type AnyAgentTool,
 } from "../agents/tools/common.js";

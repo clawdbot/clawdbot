@@ -311,6 +311,9 @@ function parseSizeValue(raw?: string | null): ParsedSize | null {
   if (!pair) {
     return null;
   }
+  if (!Number.isSafeInteger(pair.width) || !Number.isSafeInteger(pair.height)) {
+    return null;
+  }
   return {
     width: pair.width,
     height: pair.height,

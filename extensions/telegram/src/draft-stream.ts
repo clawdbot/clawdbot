@@ -112,11 +112,16 @@ export function createTelegramDraftStream(params: {
   let streamVisibleSinceMs: number | undefined;
   let lastSentText = "";
   let lastDeliveredText = "";
+  let lastRequestedText = "";
   let lastSentParseMode: "HTML" | undefined;
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
-  let resetStreamToNewMessage: (options?: { keepPending?: boolean; resetOffset?: boolean }) => void;
+  let resetStreamToNewMessage: (options?: {
+    keepFinal?: boolean;
+    keepPending?: boolean;
+    resetOffset?: boolean;
+  }) => void;
   type PreviewSendParams = {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
@@ -184,6 +189,13 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = visibleSinceMs;
     return true;
   };
+  const stopOversizedPreview = (renderedText: string): false => {
+    streamState.stopped = true;
+    params.warn?.(
+      `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
+    );
+    return false;
+  };
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
@@ -204,13 +216,22 @@ export function createTelegramDraftStream(params: {
       return false;
     }
     if (renderedText.length > maxChars) {
+      const chunkLength = findTelegramDraftChunkLength(currentText, maxChars, params.renderText);
+      if (!streamState.final) {
+        if (chunkLength > 0) {
+          return await sendOrEditStreamMessage(
+            trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
+          );
+        }
+        return stopOversizedPreview(renderedText);
+      }
       if (lastDeliveredText.length > deliveredTextOffset) {
         const supersededMessageId = streamMessageId;
         const supersededTextSnapshot = lastSentText;
         const supersededParseMode = lastSentParseMode;
         const supersededVisibleSinceMs = streamVisibleSinceMs;
         deliveredTextOffset = lastDeliveredText.length;
-        resetStreamToNewMessage({ keepPending: true, resetOffset: false });
+        resetStreamToNewMessage({ keepFinal: true, keepPending: true, resetOffset: false });
         if (typeof supersededMessageId === "number") {
           params.onSupersededPreview?.({
             messageId: supersededMessageId,
@@ -222,7 +243,6 @@ export function createTelegramDraftStream(params: {
         }
         return await sendOrEditStreamMessage(trimmed);
       }
-      const chunkLength = findTelegramDraftChunkLength(currentText, maxChars, params.renderText);
       if (chunkLength > 0) {
         const sent = await sendOrEditStreamMessage(
           trimmed.slice(0, deliveredTextOffset) + currentText.slice(0, chunkLength),
@@ -232,11 +252,7 @@ export function createTelegramDraftStream(params: {
         }
         return await sendOrEditStreamMessage(trimmed);
       }
-      streamState.stopped = true;
-      params.warn?.(
-        `telegram stream preview stopped (text length ${renderedText.length} > ${maxChars})`,
-      );
-      return false;
+      return stopOversizedPreview(renderedText);
     }
     if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
       return true;
@@ -269,15 +285,40 @@ export function createTelegramDraftStream(params: {
     }
   };
 
-  const { loop, update, stop, stopForClear } = createFinalizableDraftStreamControlsForState({
+  const {
+    loop,
+    update: updateDraft,
+    stopForClear,
+  } = createFinalizableDraftStreamControlsForState({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
   });
 
+  const update = (text: string) => {
+    if (streamState.stopped || streamState.final) {
+      return;
+    }
+    lastRequestedText = text;
+    updateDraft(text);
+  };
+
+  const stop = async () => {
+    streamState.final = true;
+    await loop.flush();
+    if (streamState.stopped) {
+      return;
+    }
+    const finalText = lastRequestedText.trimEnd();
+    if (finalText && finalText !== lastDeliveredText.trimEnd()) {
+      await sendOrEditStreamMessage(finalText);
+    }
+    streamState.final = true;
+  };
+
   resetStreamToNewMessage = (options) => {
     streamState.stopped = false;
-    streamState.final = false;
+    streamState.final = options?.keepFinal === true;
     generation += 1;
     messageSendAttempted = false;
     streamMessageId = undefined;
@@ -286,6 +327,7 @@ export function createTelegramDraftStream(params: {
     lastSentParseMode = undefined;
     if (options?.resetOffset !== false) {
       deliveredTextOffset = 0;
+      lastRequestedText = "";
     }
     if (!options?.keepPending) {
       loop.resetPending();

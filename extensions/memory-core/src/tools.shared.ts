@@ -1,4 +1,4 @@
-import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import {
   listMemoryCorpusSupplements,
   resolveMemorySearchConfig,
@@ -30,15 +30,15 @@ export async function loadMemoryToolRuntime(): Promise<MemoryToolRuntime> {
 
 export const MemorySearchSchema = Type.Object({
   query: Type.String(),
-  maxResults: Type.Optional(Type.Number()),
-  minScore: Type.Optional(Type.Number()),
+  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
+  minScore: optionalFiniteNumberSchema(),
   corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
 });
 
 export const MemoryGetSchema = Type.Object({
   path: Type.String(),
-  from: Type.Optional(Type.Number()),
-  lines: Type.Optional(Type.Number()),
+  from: Type.Optional(Type.Integer()),
+  lines: Type.Optional(Type.Integer()),
   corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
 });
 

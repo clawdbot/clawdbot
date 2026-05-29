@@ -2,14 +2,69 @@
  * Tests for Nostr Profile Import
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
-import { mergeProfiles } from "./nostr-profile-import.js";
+import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 
-// Note: importProfileFromRelays requires real network calls or complex mocking
-// of nostr-tools SimplePool, so we focus on unit testing mergeProfiles
+const mockState = vi.hoisted(() => ({
+  subscribeMany: vi.fn(),
+}));
+
+vi.mock("nostr-tools", () => {
+  class MockSimplePool {
+    subscribeMany(
+      relays: string[],
+      filters: unknown,
+      handlers: {
+        onevent: (event: Record<string, unknown>) => void;
+        oneose?: () => void;
+        onclose?: () => void;
+      },
+    ) {
+      mockState.subscribeMany(relays, filters, handlers);
+      queueMicrotask(() => handlers.oneose?.());
+      return {
+        close: vi.fn(),
+      };
+    }
+
+    close = vi.fn();
+  }
+
+  return {
+    SimplePool: MockSimplePool,
+    verifyEvent: vi.fn(() => true),
+  };
+});
+
+// Mock SimplePool so importProfileFromRelays can assert the relay subscription shape.
 
 describe("nostr-profile-import", () => {
+  beforeEach(() => {
+    mockState.subscribeMany.mockClear();
+  });
+
+  describe("importProfileFromRelays", () => {
+    it("subscribes to profiles with a single Nostr filter object", async () => {
+      const pubkey = "a".repeat(64);
+
+      await importProfileFromRelays({
+        pubkey,
+        relays: ["wss://relay.example"],
+        timeoutMs: 1,
+      });
+
+      expect(mockState.subscribeMany).toHaveBeenCalledTimes(1);
+      const filters = mockState.subscribeMany.mock.calls[0]?.[1];
+      expect(Array.isArray(filters)).toBe(false);
+      expect(filters).toMatchObject({
+        kinds: [0],
+        authors: [pubkey],
+        limit: 1,
+      });
+    });
+  });
+
   describe("mergeProfiles", () => {
     it("returns empty object when both are undefined", () => {
       const result = mergeProfiles(undefined, undefined);

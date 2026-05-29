@@ -772,6 +772,103 @@ describe("startGatewayPostAttachRuntime", () => {
     }
   });
 
+  it("cleans startup session locks with bounded concurrency", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const cleanedLock = {
+      lockPath: "/tmp/openclaw-state/agents/main/sessions/a.jsonl.lock",
+      pid: null,
+      pidAlive: false,
+      createdAt: null,
+      ageMs: null,
+      stale: true,
+      staleReasons: ["missing-pid"],
+      removed: true,
+    };
+    const releaseQueue: Array<() => void> = [];
+    const cleanStaleLockFiles = vi.fn(
+      async ({ sessionsDir }: { sessionsDir: string }) =>
+        await new Promise<{ locks: []; cleaned: (typeof cleanedLock)[] }>((resolve) => {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          releaseQueue.push(() => {
+            active -= 1;
+            resolve({
+              locks: [],
+              cleaned: sessionsDir.endsWith("/b") ? [cleanedLock] : [],
+            });
+          });
+        }),
+    );
+    const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
+    const cleanupPromise = testing.cleanupStaleSessionLocks({
+      sessionDirs: ["/sessions/a", "/sessions/b", "/sessions/c", "/sessions/d"],
+      cfg: {} as never,
+      log: { warn: vi.fn() },
+      isStopped: () => false,
+      cleanStaleLockFiles: cleanStaleLockFiles as never,
+      markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
+      concurrency: 2,
+    });
+
+    await vi.waitFor(() => {
+      expect(cleanStaleLockFiles).toHaveBeenCalledTimes(2);
+    });
+    expect(maxActive).toBe(2);
+
+    releaseQueue.shift()?.();
+    releaseQueue.shift()?.();
+    await vi.waitFor(() => {
+      expect(cleanStaleLockFiles).toHaveBeenCalledTimes(4);
+    });
+    releaseQueue.shift()?.();
+    releaseQueue.shift()?.();
+    await cleanupPromise;
+
+    expect(cleanStaleLockFiles).toHaveBeenCalledTimes(4);
+    expect(maxActive).toBe(2);
+    expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({
+      sessionsDir: "/sessions/b",
+      cleanedLocks: [cleanedLock],
+    });
+  });
+
+  it("marks cleaned startup session locks even when cleanup is stopped after removal", async () => {
+    let stopped = false;
+    const cleanedLock = {
+      lockPath: "/tmp/openclaw-state/agents/main/sessions/a.jsonl.lock",
+      pid: null,
+      pidAlive: false,
+      createdAt: null,
+      ageMs: null,
+      stale: true,
+      staleReasons: ["missing-pid"],
+      removed: true,
+    };
+    const cleanStaleLockFiles = vi.fn(async () => {
+      stopped = true;
+      return {
+        locks: [],
+        cleaned: [cleanedLock],
+      };
+    });
+    const markRestartAbortedMainSessionsFromLocks = vi.fn(async () => {});
+
+    await testing.cleanupStaleSessionLocks({
+      sessionDirs: ["/sessions/a"],
+      cfg: {} as never,
+      log: { warn: vi.fn() },
+      isStopped: () => stopped,
+      cleanStaleLockFiles: cleanStaleLockFiles as never,
+      markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
+    });
+
+    expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({
+      sessionsDir: "/sessions/a",
+      cleanedLocks: [cleanedLock],
+    });
+  });
+
   it("waits for sidecars by default before returning", async () => {
     let resumeSidecars: (() => void) | undefined;
     const sidecarsReady = new Promise<{ pluginServices: null; postReadySidecars: [] }>(

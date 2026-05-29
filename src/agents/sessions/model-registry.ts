@@ -3,7 +3,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
@@ -22,6 +22,13 @@ import {
 import { registerOAuthProvider, resetOAuthProviders } from "../../llm/utils/oauth/index.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { getAgentDir } from "../config.js";
+import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
+import {
+  filterGeneratedPluginModelCatalogProviders,
+  isGeneratedPluginModelCatalog,
+  listPluginModelCatalogFiles,
+  type PluginModelCatalogMetadataSnapshot,
+} from "../plugin-model-catalog.js";
 import type { AuthStatus, AuthStorage } from "./auth-storage.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
@@ -86,6 +93,7 @@ const ThinkingLevelMapSchema = Type.Object({
   medium: Type.Optional(ThinkingLevelMapValueSchema),
   high: Type.Optional(ThinkingLevelMapValueSchema),
   xhigh: Type.Optional(ThinkingLevelMapValueSchema),
+  max: Type.Optional(ThinkingLevelMapValueSchema),
 });
 
 const OpenAICompletionsCompatSchema = Type.Object({
@@ -179,6 +187,7 @@ const ProviderConfigSchema = Type.Object({
 });
 
 const ModelsConfigSchema = Type.Object({
+  generatedBy: Type.Optional(Type.String()),
   providers: Type.Record(Type.String(), ProviderConfigSchema),
 });
 
@@ -239,6 +248,11 @@ function emptyCustomModelsResult(error?: string): CustomModelsResult {
   return { models: [], error };
 }
 
+type ModelRegistryOptions = {
+  pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
+  workspaceDir?: string;
+};
+
 function mergeCompat(
   baseCompat: Model["compat"],
   overrideCompat: Model["compat"],
@@ -289,18 +303,32 @@ export class ModelRegistry {
   private loadError: string | undefined = undefined;
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
+  private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
 
-  private constructor(authStorage: AuthStorage, modelsJsonPath: string | undefined) {
+  private constructor(
+    authStorage: AuthStorage,
+    modelsJsonPath: string | undefined,
+    options: ModelRegistryOptions = {},
+  ) {
     this.authStorage = authStorage;
     this.modelsJsonPath = modelsJsonPath;
+    this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
+      ...(options.pluginMetadataSnapshot
+        ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
+        : {}),
+      ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+      allowWorkspaceScopedCurrent: true,
+      useRuntimeConfig: true,
+    });
     this.loadModels();
   }
 
   static create(
     authStorage: AuthStorage,
     modelsJsonPath: string = join(getAgentDir(), "models.json"),
+    options: ModelRegistryOptions = {},
   ): ModelRegistry {
-    return new ModelRegistry(authStorage, modelsJsonPath);
+    return new ModelRegistry(authStorage, modelsJsonPath, options);
   }
 
   static inMemory(authStorage: AuthStorage): ModelRegistry {
@@ -334,7 +362,8 @@ export class ModelRegistry {
   }
 
   private loadModels(): void {
-    // Load configured models and request settings from models.json
+    // Load configured models and request settings from models.json plus
+    // generated plugin-owned catalog shards under the agent plugin state.
     const { models: customModels, error } = this.modelsJsonPath
       ? this.loadCustomModels(this.modelsJsonPath)
       : emptyCustomModelsResult();
@@ -357,7 +386,16 @@ export class ModelRegistry {
     this.models = combined;
   }
 
-  private loadCustomModels(modelsJsonPath: string): CustomModelsResult {
+  private loadCustomModels(
+    modelsJsonPath: string,
+    options: {
+      catalogPluginId?: string;
+      includePluginCatalogs?: boolean;
+      requireGeneratedCatalog?: boolean;
+    } = {
+      includePluginCatalogs: true,
+    },
+  ): CustomModelsResult {
     if (!existsSync(modelsJsonPath)) {
       return emptyCustomModelsResult();
     }
@@ -365,6 +403,9 @@ export class ModelRegistry {
     try {
       const content = readFileSync(modelsJsonPath, "utf-8");
       const parsed = JSON.parse(stripJsonComments(content)) as unknown;
+      if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
+        return emptyCustomModelsResult();
+      }
 
       if (!validateModelsConfig.Check(parsed)) {
         const errors =
@@ -378,19 +419,50 @@ export class ModelRegistry {
       }
 
       const config = parsed;
+      const providers =
+        options.requireGeneratedCatalog === true
+          ? filterGeneratedPluginModelCatalogProviders({
+              catalogPluginId: options.catalogPluginId,
+              parsedCatalog: parsed,
+              pluginMetadataSnapshot: this.pluginMetadataSnapshot,
+              providers: config.providers,
+            })
+          : config.providers;
+      const configForUse = { ...config, providers };
+      if (options.requireGeneratedCatalog === true && Object.keys(providers).length === 0) {
+        return emptyCustomModelsResult();
+      }
 
       // Additional validation
-      this.validateConfig(config);
+      this.validateConfig(configForUse);
 
-      for (const [providerName, providerConfig] of Object.entries(config.providers)) {
+      for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
         if ((providerConfig.models ?? []).length > 0) {
           this.storeProviderRequestConfig(providerName, providerConfig);
         }
       }
 
-      return { models: this.parseModels(config), error: undefined };
+      const models = this.parseModels(configForUse);
+      if (options.includePluginCatalogs !== false) {
+        for (const pluginCatalog of listPluginModelCatalogFiles(dirname(modelsJsonPath))) {
+          const pluginResult = this.loadCustomModels(pluginCatalog.path, {
+            catalogPluginId: pluginCatalog.pluginId,
+            includePluginCatalogs: false,
+            requireGeneratedCatalog: true,
+          });
+          if (pluginResult.error) {
+            return pluginResult;
+          }
+          models.push(...pluginResult.models);
+        }
+      }
+
+      return { models, error: undefined };
     } catch (error) {
       if (error instanceof SyntaxError) {
+        if (options.requireGeneratedCatalog === true) {
+          return emptyCustomModelsResult();
+        }
         return emptyCustomModelsResult(
           `Failed to parse models.json: ${error.message}\n\nFile: ${modelsJsonPath}`,
         );

@@ -10,6 +10,16 @@ export function resolveSafeTimeoutDelayMs(delayMs: number, opts?: { minMs?: numb
   return Math.min(MAX_SAFE_TIMEOUT_DELAY_MS, Math.max(minMs, candidateMs));
 }
 
+export function resolveFiniteTimeoutDelayMs(
+  delayMs: number | null | undefined,
+  fallbackMs: number,
+  opts?: { minMs?: number },
+): number {
+  const candidateMs =
+    typeof delayMs === "number" && Number.isFinite(delayMs) ? delayMs : fallbackMs;
+  return resolveSafeTimeoutDelayMs(candidateMs, opts);
+}
+
 export function setSafeTimeout(
   callback: () => void,
   delayMs: number,

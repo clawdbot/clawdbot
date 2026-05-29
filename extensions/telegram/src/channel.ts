@@ -229,13 +229,13 @@ const telegramChannelOutbound = createTelegramOutboundAdapter({
       typeof target.threadId === "number"
         ? target.threadId
         : typeof target.threadId === "string"
-          ? Number.parseInt(target.threadId, 10)
+          ? parseTelegramThreadId(target.threadId)
           : undefined;
     const { sendTypingTelegram } = await loadTelegramSendModule();
     await sendTypingTelegram(target.to, {
       cfg,
       accountId: target.accountId ?? undefined,
-      ...(Number.isFinite(threadId) ? { messageThreadId: threadId } : {}),
+      ...(threadId !== undefined ? { messageThreadId: threadId } : {}),
     }).catch(() => {});
   },
   shouldTreatDeliveredTextAsVisible: shouldTreatTelegramDeliveredTextAsVisible,

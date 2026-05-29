@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { HealthSummary } from "../commands/health.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { createChatRunState } from "./server-chat-state.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
 
 const cleanOldMediaMock = vi.fn(async () => {});
@@ -32,6 +33,7 @@ function createActiveRun(
 }
 
 function createMaintenanceTimerDeps() {
+  const chatRunState = createChatRunState();
   return {
     broadcast: () => {},
     nodeSendToAllSubscribed: () => {},
@@ -41,15 +43,10 @@ function createMaintenanceTimerDeps() {
     logHealth: { error: () => {} },
     dedupe: new Map(),
     chatAbortControllers: new Map(),
-    chatRunState: {
-      abortedRuns: new Map(),
-      deltaLastBroadcastText: new Map(),
-      agentDeltaSentAt: new Map(),
-      bufferedAgentEvents: new Map(),
-    },
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
-    chatDeltaLastBroadcastLen: new Map(),
+    chatRunState,
+    chatRunBuffers: chatRunState.buffers,
+    chatDeltaSentAt: chatRunState.deltaSentAt,
+    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
     removeChatRun: () => undefined,
     agentRunSeq: new Map(),
     nodeSendToSession: () => {},
@@ -193,6 +190,8 @@ describe("startGatewayMaintenanceTimers", () => {
     const runId = "run-active";
     deps.chatAbortControllers.set(runId, createActiveRun("main"));
     deps.chatRunBuffers.set(runId, "buffer");
+    deps.chatRunState.rawBuffers.set(runId, "raw buffer");
+    deps.chatRunState.bufferUpdatedAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaLastBroadcastLen.set(runId, 6);
     deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
@@ -202,6 +201,8 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(deps.chatRunBuffers.get(runId)).toBe("buffer");
+    expect(deps.chatRunState.rawBuffers.get(runId)).toBe("raw buffer");
+    expect(deps.chatRunState.bufferUpdatedAt.has(runId)).toBe(true);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(true);
     expect(deps.chatDeltaLastBroadcastLen.get(runId)).toBe(6);
     expect(deps.chatRunState.deltaLastBroadcastText.get(runId)).toBe("buffer");
@@ -216,6 +217,8 @@ describe("startGatewayMaintenanceTimers", () => {
     const deps = createMaintenanceTimerDeps();
     const runId = "run-orphaned";
     deps.chatRunBuffers.set(runId, "buffer");
+    deps.chatRunState.rawBuffers.set(runId, "raw buffer");
+    deps.chatRunState.bufferUpdatedAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaLastBroadcastLen.set(runId, 6);
     deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
@@ -225,6 +228,8 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(deps.chatRunBuffers.has(runId)).toBe(false);
+    expect(deps.chatRunState.rawBuffers.has(runId)).toBe(false);
+    expect(deps.chatRunState.bufferUpdatedAt.has(runId)).toBe(false);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
     expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
     expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
@@ -238,8 +243,9 @@ describe("startGatewayMaintenanceTimers", () => {
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
     const deps = createMaintenanceTimerDeps();
     const runId = "run-agent-orphaned";
-    deps.chatRunState.agentDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
-    deps.chatRunState.bufferedAgentEvents.set(runId, {
+    const throttleKey = `${runId}:assistant`;
+    deps.chatRunState.agentDeltaSentAt.set(throttleKey, Date.now() - ABORTED_RUN_TTL_MS - 1);
+    deps.chatRunState.bufferedAgentEvents.set(throttleKey, {
       payload: {
         runId,
         seq: 1,
@@ -254,7 +260,9 @@ describe("startGatewayMaintenanceTimers", () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(deps.chatRunState.agentDeltaSentAt.has(runId)).toBe(false);
+    expect(deps.chatRunState.agentDeltaSentAt.has(throttleKey)).toBe(false);
     expect(deps.chatRunState.bufferedAgentEvents.has(runId)).toBe(false);
+    expect(deps.chatRunState.bufferedAgentEvents.has(throttleKey)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });
@@ -267,6 +275,8 @@ describe("startGatewayMaintenanceTimers", () => {
     const runId = "run-aborted";
     deps.chatRunState.abortedRuns.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatRunBuffers.set(runId, "buffer");
+    deps.chatRunState.rawBuffers.set(runId, "raw buffer");
+    deps.chatRunState.bufferUpdatedAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaSentAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
     deps.chatDeltaLastBroadcastLen.set(runId, 6);
     deps.chatRunState.deltaLastBroadcastText.set(runId, "buffer");
@@ -287,11 +297,34 @@ describe("startGatewayMaintenanceTimers", () => {
 
     expect(deps.chatRunState.abortedRuns.has(runId)).toBe(false);
     expect(deps.chatRunBuffers.has(runId)).toBe(false);
+    expect(deps.chatRunState.rawBuffers.has(runId)).toBe(false);
+    expect(deps.chatRunState.bufferUpdatedAt.has(runId)).toBe(false);
     expect(deps.chatDeltaSentAt.has(runId)).toBe(false);
     expect(deps.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
     expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
     expect(deps.chatRunState.agentDeltaSentAt.has(runId)).toBe(false);
     expect(deps.chatRunState.bufferedAgentEvents.has(runId)).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
+  it("sweeps orphaned raw buffers that never emitted a delta", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const runId = "run-raw-only";
+    deps.chatRunState.rawBuffers.set(runId, "suppressed raw buffer");
+    deps.chatRunState.bufferUpdatedAt.set(runId, Date.now() - ABORTED_RUN_TTL_MS - 1);
+    deps.chatRunState.deltaLastBroadcastText.set(runId, "suppressed raw buffer");
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.chatRunState.rawBuffers.has(runId)).toBe(false);
+    expect(deps.chatRunState.bufferUpdatedAt.has(runId)).toBe(false);
+    expect(deps.chatRunState.deltaLastBroadcastText.has(runId)).toBe(false);
 
     stopMaintenanceTimers(timers);
   });

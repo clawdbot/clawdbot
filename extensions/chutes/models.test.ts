@@ -145,6 +145,41 @@ describe("chutes-models", () => {
     });
   });
 
+  it("falls back from malformed live token metadata", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: [
+          {
+            id: "provider/bad-window",
+            context_length: -1,
+            max_output_length: 16384.5,
+          },
+          {
+            id: "provider/bad-max-output",
+            context_length: Number.POSITIVE_INFINITY,
+            max_output_length: 0,
+          },
+        ],
+      }),
+    });
+
+    await withLiveChutesDiscovery(mockFetch, async () => {
+      const models = await discoverChutesModels("malformed-token-metadata");
+
+      expect(requireChutesModel(models, 0)).toMatchObject({
+        id: "provider/bad-window",
+        contextWindow: 128000,
+        maxTokens: 4096,
+      });
+      expect(requireChutesModel(models, 1)).toMatchObject({
+        id: "provider/bad-max-output",
+        contextWindow: 128000,
+        maxTokens: 4096,
+      });
+    });
+  });
+
   it("discoverChutesModels retries without auth on 401", async () => {
     const mockFetch = vi.fn().mockImplementation((url, init) => {
       if (init?.headers?.Authorization === "Bearer test-token-error") {

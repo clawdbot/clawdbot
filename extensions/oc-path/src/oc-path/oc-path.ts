@@ -362,6 +362,14 @@ export function parseOrdinalSeg(seg: string): number | null {
   return m === null || m[1] === undefined ? null : Number(m[1]);
 }
 
+export function parseArrayIndexSegment(seg: string, length: number): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(seg)) {
+    return null;
+  }
+  const index = Number(seg);
+  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
+}
+
 /** Indexable containers provide `size`; keyed containers provide ordered `keys`. */
 export interface PositionalContainer {
   readonly indexable: boolean;

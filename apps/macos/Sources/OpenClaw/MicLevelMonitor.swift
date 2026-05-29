@@ -8,12 +8,18 @@ actor MicLevelMonitor {
     private var update: (@Sendable (Double) -> Void)?
     private var running = false
     private var smoothedLevel: Double = 0
+    private var lastUpdate = ContinuousClock.now
+    private var lastPublishedLevel: Double = 0
+    private let minimumUpdateInterval: Duration = .milliseconds(125)
+    private let minimumLevelDelta = 0.02
 
     func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
         self.update = onLevel
         if self.running { return }
         self.logger.info(
             "mic level monitor start (\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public))")
+        self.lastUpdate = .now
+        self.lastPublishedLevel = self.smoothedLevel
         guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
             self.engine = nil
             throw NSError(
@@ -56,7 +62,13 @@ actor MicLevelMonitor {
     private func push(level: Double) {
         self.smoothedLevel = (self.smoothedLevel * 0.45) + (level * 0.55)
         guard let update else { return }
+        let now = ContinuousClock.now
+        guard now - self.lastUpdate >= self.minimumUpdateInterval ||
+            abs(self.smoothedLevel - self.lastPublishedLevel) >= self.minimumLevelDelta
+        else { return }
+        self.lastUpdate = now
         let value = self.smoothedLevel
+        self.lastPublishedLevel = value
         Task { @MainActor in update(value) }
     }
 

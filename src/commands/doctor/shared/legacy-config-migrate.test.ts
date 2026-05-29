@@ -198,6 +198,45 @@ describe("legacy silent reply config migrate", () => {
   });
 });
 
+describe("legacy agent system prompt override config migrate", () => {
+  it("removes default and per-agent system prompt overrides", () => {
+    const raw = {
+      agents: {
+        defaults: {
+          systemPromptOverride: "old default prompt",
+          model: {
+            primary: "openai/gpt-5.5",
+          },
+        },
+        list: [
+          {
+            id: "alpha",
+            systemPromptOverride: "old alpha prompt",
+          },
+          {
+            id: "beta",
+          },
+        ],
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual([
+      "agents.defaults.systemPromptOverride",
+      "agents.list",
+    ]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.defaults).not.toHaveProperty("systemPromptOverride");
+    expect(res.config?.agents?.list?.[0]).not.toHaveProperty("systemPromptOverride");
+    expect(res.config?.agents?.list?.[1]).toEqual({ id: "beta" });
+    expect(res.changes).toEqual([
+      "Removed agents.defaults.systemPromptOverride.",
+      "Removed agents.list.0.systemPromptOverride.",
+    ]);
+  });
+});
+
 describe("profile configured tool section migrate", () => {
   it("does not add grants when configured sections are the only signal", () => {
     const raw = {
@@ -1707,7 +1746,7 @@ describe("legacy model compat migrate", () => {
       },
     });
 
-    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-sonnet-4-6");
+    expect(res.config?.agents?.defaults?.imageModel).toBe("anthropic/claude-haiku-4-5");
     expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
       primary: "github-copilot/claude-sonnet-4.6",
       fallbacks: ["github-copilot/gpt-5.4-mini"],
@@ -1751,6 +1790,7 @@ describe("legacy model compat migrate", () => {
     });
     expect(res.config?.agents?.defaults?.workspace).toBe("/tmp/claude-3-sonnet");
     expect(res.config?.agents?.defaults?.models).toEqual({
+      "anthropic/claude-haiku-4-5": { alias: "haiku" },
       "anthropic/claude-sonnet-4-6": { alias: "current-sonnet" },
       "github-copilot/claude-opus-4.7": { alias: "copilot-opus" },
       "openai/gpt-5.5-pro": { alias: "old-pro" },
@@ -1770,10 +1810,9 @@ describe("legacy model compat migrate", () => {
           subagent?: { allowedModels?: string[] };
         }
       )?.subagent?.allowedModels,
-    ).toEqual(["anthropic/claude-sonnet-4-6", "*"]);
+    ).toEqual(["anthropic/claude-haiku-4-5", "*"]);
     expect(res.config?.channels?.modelByChannel?.telegram?.["*"]).toBe("anthropic/claude-opus-4-7");
     expectMigrationChangesToIncludeFragments(res.changes, [
-      'config.agents.defaults.imageModel from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.agents.defaults.imageGenerationModel.primary from "github-copilot/claude-sonnet-4" to "github-copilot/claude-sonnet-4.6"',
       'config.agents.defaults.imageGenerationModel.fallbacks.0 from "github-copilot/grok-code-fast-1" to "github-copilot/gpt-5.4-mini"',
       'config.agents.defaults.musicGenerationModel from "vercel-ai-gateway/anthropic/claude-opus-4-5" to "vercel-ai-gateway/anthropic/claude-opus-4-6"',
@@ -1800,7 +1839,6 @@ describe("legacy model compat migrate", () => {
       'config.agents.defaults.models key from "openai/gpt-5.2-pro" to "openai/gpt-5.5-pro"',
       'config.agents.defaults.models key from "github-copilot/gpt-5-mini" to "github-copilot/gpt-5.4-mini"',
       'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
-      'config.plugins.entries.lossless-claw.subagent.allowedModels.0 from "anthropic/claude-haiku-4-5" to "anthropic/claude-sonnet-4-6"',
       'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
     ]);
   });

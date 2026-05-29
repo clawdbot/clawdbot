@@ -75,6 +75,63 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
+function resolveSubagentRunDeadlineMs(
+  entry: SubagentRunRecord,
+  observedStartedAt?: number,
+): number | undefined {
+  const timeoutSeconds = entry.runTimeoutSeconds;
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return undefined;
+  }
+  const startedAt =
+    typeof observedStartedAt === "number" && Number.isFinite(observedStartedAt)
+      ? observedStartedAt
+      : typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
+        ? entry.startedAt
+        : entry.createdAt;
+  return Number.isFinite(startedAt) ? startedAt + Math.floor(timeoutSeconds * 1000) : undefined;
+}
+
+function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
+  if (
+    typeof params.entry.runTimeoutSeconds !== "number" ||
+    !Number.isFinite(params.entry.runTimeoutSeconds) ||
+    params.entry.runTimeoutSeconds <= 0 ||
+    params.entry.outcome?.status !== "timeout" ||
+    typeof params.entry.endedAt !== "number"
+  ) {
+    return false;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
+  if (deadlineMs === undefined || params.entry.endedAt < deadlineMs) {
+    return false;
+  }
+  if (
+    params.entry.cleanupHandled ||
+    typeof params.entry.cleanupCompletedAt === "number" ||
+    typeof params.entry.endedHookEmittedAt === "number" ||
+    params.entry.delivery?.status === "delivered" ||
+    typeof params.entry.delivery?.announcedAt === "number"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function resolveExpiredExplicitRunDeadlineMs(params: {
+  entry: SubagentRunRecord;
+  nextOutcome: SubagentRunOutcome;
+  nextEndedAt: number;
+  observedStartedAt?: number;
+}): number | undefined {
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry, params.observedStartedAt);
+  return deadlineMs !== undefined && params.nextEndedAt > deadlineMs ? deadlineMs : undefined;
+}
+
 export function createSubagentRegistryLifecycleController(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<string>;
@@ -513,6 +570,26 @@ export function createSubagentRegistryLifecycleController(params: {
     delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
     delivery.lastError = args.error ?? null;
     delivery.payload = payload;
+  };
+
+  const refreshPendingFinalDeliveryPayload = (entry: SubagentRunRecord): boolean => {
+    const delivery = entry.delivery;
+    if (
+      !delivery?.payload ||
+      delivery.status === "delivered" ||
+      typeof delivery.announcedAt === "number"
+    ) {
+      return false;
+    }
+    delivery.payload = {
+      ...delivery.payload,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      outcome: entry.outcome,
+      frozenResultText: entry.completion?.resultText,
+      fallbackFrozenResultText: entry.completion?.fallbackResultText,
+    };
+    return true;
   };
 
   const suspendPendingFinalDelivery = (args: {
@@ -1016,6 +1093,7 @@ export function createSubagentRegistryLifecycleController(params: {
     sendFarewell?: boolean;
     accountId?: string;
     triggerCleanup: boolean;
+    startedAt?: number;
   }) => {
     params.clearPendingLifecycleError(completeParams.runId);
     const entry = params.runs.get(completeParams.runId);
@@ -1036,8 +1114,40 @@ export function createSubagentRegistryLifecycleController(params: {
       mutated = true;
     }
 
-    const endedAt =
-      typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
+    let endedAt = typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
+    let completionOutcome = completeParams.outcome;
+    let completionReason = completeParams.reason;
+    if (
+      shouldPreservePublishedExplicitRunTimeout({
+        entry,
+      })
+    ) {
+      return;
+    }
+
+    const observedStartedAt =
+      typeof completeParams.startedAt === "number" && Number.isFinite(completeParams.startedAt)
+        ? completeParams.startedAt
+        : undefined;
+    if (observedStartedAt !== undefined && entry.startedAt !== observedStartedAt) {
+      entry.startedAt = observedStartedAt;
+      if (typeof entry.sessionStartedAt !== "number") {
+        entry.sessionStartedAt = observedStartedAt;
+      }
+      mutated = true;
+    }
+
+    const expiredDeadlineMs = resolveExpiredExplicitRunDeadlineMs({
+      entry,
+      nextOutcome: completionOutcome,
+      nextEndedAt: endedAt,
+      observedStartedAt,
+    });
+    if (expiredDeadlineMs !== undefined) {
+      endedAt = expiredDeadlineMs;
+      completionOutcome = { status: "timeout" };
+      completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+    }
     if (entry.endedAt !== endedAt) {
       entry.endedAt = endedAt;
       entry.execution = {
@@ -1048,7 +1158,7 @@ export function createSubagentRegistryLifecycleController(params: {
       };
       mutated = true;
     }
-    const outcome = withSubagentOutcomeTiming(completeParams.outcome, {
+    const outcome = withSubagentOutcomeTiming(completionOutcome, {
       startedAt: entry.startedAt,
       endedAt,
     });
@@ -1070,8 +1180,8 @@ export function createSubagentRegistryLifecycleController(params: {
       };
       mutated = true;
     }
-    if (entry.endedReason !== completeParams.reason) {
-      entry.endedReason = completeParams.reason;
+    if (entry.endedReason !== completionReason) {
+      entry.endedReason = completionReason;
       mutated = true;
     }
     if (entry.pauseReason !== undefined) {
@@ -1080,6 +1190,9 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (await freezeRunResultAtCompletion(entry, outcome)) {
+      mutated = true;
+    }
+    if (refreshPendingFinalDeliveryPayload(entry)) {
       mutated = true;
     }
 
@@ -1114,7 +1227,7 @@ export function createSubagentRegistryLifecycleController(params: {
       !suppressedForSteerRestart &&
       params.shouldEmitEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason: completionReason,
       });
     const shouldDeferEndedHook =
       shouldEmitEndedHook &&
@@ -1124,7 +1237,7 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!shouldDeferEndedHook && shouldEmitEndedHook) {
       await params.emitSubagentEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason: completionReason,
         sendFarewell: completeParams.sendFarewell,
         accountId: completeParams.accountId,
       });

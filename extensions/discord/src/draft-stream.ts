@@ -18,6 +18,7 @@ type DiscordDraftStream = {
   flush: () => Promise<void>;
   messageId: () => string | undefined;
   clear: () => Promise<void>;
+  deleteCurrentMessage: () => Promise<void>;
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
@@ -146,6 +147,22 @@ export function createDiscordDraftStream(params: {
     lastSentText = "";
     loop.resetPending();
   };
+  const deleteCurrentMessage = async () => {
+    loop.resetPending();
+    await loop.waitForInFlight();
+    const messageId = streamMessageId;
+    streamMessageId = undefined;
+    lastSentText = "";
+    loop.resetThrottleWindow();
+    if (!isValidStreamMessageId(messageId)) {
+      return;
+    }
+    try {
+      await deleteStreamMessage(messageId);
+    } catch (err) {
+      params.warn?.(`discord stream preview cleanup failed: ${formatErrorMessage(err)}`);
+    }
+  };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
 
@@ -154,6 +171,7 @@ export function createDiscordDraftStream(params: {
     flush: loop.flush,
     messageId: () => streamMessageId,
     clear,
+    deleteCurrentMessage,
     discardPending,
     seal,
     stop,

@@ -8,6 +8,7 @@ import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
   getModelProviderLocalService,
+  hasLocalServiceProcessExited,
   stopManagedProviderLocalServicesForTest,
 } from "./provider-local-service.js";
 
@@ -63,6 +64,12 @@ describe("provider local service", () => {
       command: process.execPath,
       args: ["--version"],
     });
+  });
+
+  it("treats signaled local service children as exited", () => {
+    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
+    expect(hasLocalServiceProcessExited({ exitCode: 0, signalCode: null })).toBe(true);
+    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: null })).toBe(false);
   });
 
   it("starts an on-demand local service and stops it after idle", async () => {
@@ -319,6 +326,29 @@ describe("provider local service", () => {
     const startedAt = Date.now();
     await expect(ensureModelProviderLocalService(model)).rejects.toThrow(
       "local-fast-exit local service exited before readiness with code 17",
+    );
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("reports a local service startup signal exit without waiting for readiness timeout", async () => {
+    const port = await freePort();
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-signal-exit",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["-e", "process.kill(process.pid, 'SIGTERM')"],
+        readyTimeoutMs: 60_000,
+      },
+    );
+
+    const startedAt = Date.now();
+    await expect(ensureModelProviderLocalService(model)).rejects.toThrow(
+      "local-signal-exit local service exited before readiness with signal SIGTERM",
     );
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });

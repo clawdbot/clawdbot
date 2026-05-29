@@ -132,4 +132,51 @@ describe("embedded gateway stub", () => {
       },
     );
   });
+
+  it("normalizes string chat history limits before projection", async () => {
+    const rawMessages = [
+      { role: "user", content: "older" },
+      { role: "assistant", content: "newer" },
+    ];
+    runtime.readSessionMessagesAsync.mockResolvedValueOnce(rawMessages);
+
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway<{ messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", limit: "2" },
+    });
+
+    expect(runtime.projectRecentChatDisplayMessages).toHaveBeenCalledWith(rawMessages, {
+      maxChars: 100_000,
+      maxMessages: 2,
+    });
+    expect(runtime.readSessionMessagesAsync).toHaveBeenCalledWith(
+      "sess-main",
+      "/tmp/openclaw-sessions.json",
+      undefined,
+      {
+        mode: "recent",
+        maxMessages: 2,
+        maxBytes: 1024 * 1024,
+      },
+    );
+  });
+
+  it("rejects malformed chat history limits before reading session files", async () => {
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({
+        method: "chat.history",
+        params: { sessionKey: "agent:main:main", limit: "2.5" },
+      }),
+    ).rejects.toThrow("limit must be a positive integer");
+    await expect(
+      callGateway({
+        method: "chat.history",
+        params: { sessionKey: "agent:main:main", limit: -1 },
+      }),
+    ).rejects.toThrow("limit must be a positive integer");
+    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+  });
 });

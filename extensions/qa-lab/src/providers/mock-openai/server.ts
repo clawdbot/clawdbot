@@ -81,7 +81,7 @@ export function resolveProviderVariant(model: string | undefined): MockOpenAiPro
     return "anthropic";
   }
   // Fall back to model-name prefix matching for bare model strings like
-  // `gpt-5.5` or `claude-opus-4-7`.
+  // `gpt-5.5` or `claude-opus-4-8`.
   if (/^(?:gpt-|o1-|openai-)/.test(trimmed)) {
     return "openai";
   }
@@ -645,7 +645,7 @@ function execCommandFromToolProgressPrompt(prompt: string) {
 
 function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
   const serialized = JSON.stringify(args);
-  const callSuffix = createHash("sha1")
+  const callSuffix = createHash("sha256")
     .update(name)
     .update("\0")
     .update(serialized)
@@ -2591,7 +2591,7 @@ async function buildResponsesPayload(
 //
 // The QA parity gate needs two comparable scenario runs: one against the
 // "candidate" (openai/gpt-5.5) and one against the "baseline"
-// (anthropic/claude-opus-4-7). The OpenAI mock above already dispatches all
+// (anthropic/claude-opus-4-8). The OpenAI mock above already dispatches all
 // the scenario prompt branches we care about. Rather than duplicating that
 // machinery, the /v1/messages route below translates Anthropic request
 // shapes into the shared ResponsesInputItem[] format, calls the same
@@ -2814,7 +2814,7 @@ function buildAnthropicMessageResponse(params: {
     id: `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`,
     type: "message",
     role: "assistant",
-    model: params.model || "claude-opus-4-7",
+    model: params.model || "claude-opus-4-8",
     content,
     stop_reason: stopReason,
     stop_sequence: null,
@@ -2842,7 +2842,7 @@ function buildAnthropicMessageStreamEvents(params: {
         id: messageId,
         type: "message",
         role: "assistant",
-        model: params.model || "claude-opus-4-7",
+        model: params.model || "claude-opus-4-8",
         content: [],
         stop_reason: null,
         stop_sequence: null,
@@ -2941,7 +2941,7 @@ async function buildMessagesPayload(
   // which then confuses parity consumers that assume the mock always
   // echoes the real provider label. Normalize once and reuse everywhere.
   const normalizedModel =
-    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-7";
+    typeof body.model === "string" && body.model.trim() !== "" ? body.model : "claude-opus-4-8";
   // Dispatch through the same scenario logic the /v1/responses route uses.
   // Preserve declared tools so route-specific adapters mirror what the
   // real provider request made available to the model.
@@ -2986,7 +2986,7 @@ export async function startQaMockOpenAiServer(params?: { host?: string; port?: n
           { id: "gpt-5.5-alt", object: "model" },
           { id: "gpt-image-1", object: "model" },
           { id: "text-embedding-3-small", object: "model" },
-          { id: "claude-opus-4-7", object: "model" },
+          { id: "claude-opus-4-8", object: "model" },
           { id: "claude-sonnet-4-6", object: "model" },
         ],
       });

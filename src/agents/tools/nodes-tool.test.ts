@@ -124,16 +124,70 @@ describe("createNodesTool screen_record duration guardrails", () => {
     nodesCameraMocks.writeCameraPayloadToFile.mockClear();
   });
 
-  it("caps durationMs schema at 300000", () => {
+  it("bounds durationMs schema to positive values capped at 300000", () => {
     const tool = createNodesTool();
     const schema = tool.parameters as {
       properties?: {
         durationMs?: {
+          minimum?: number;
           maximum?: number;
+          type?: string;
         };
       };
     };
+    expect(schema.properties?.durationMs?.type).toBe("integer");
+    expect(schema.properties?.durationMs?.minimum).toBe(1);
     expect(schema.properties?.durationMs?.maximum).toBe(300_000);
+  });
+
+  it("bounds photos_latest limit schema to positive values capped at 20", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        limit?: {
+          minimum?: number;
+          maximum?: number;
+          type?: string;
+        };
+      };
+    };
+    expect(schema.properties?.limit?.type).toBe("integer");
+    expect(schema.properties?.limit?.minimum).toBe(1);
+    expect(schema.properties?.limit?.maximum).toBe(20);
+  });
+
+  it("advertises node media numeric constraints in the tool schema", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        maxWidth?: { minimum?: number; type?: string };
+        quality?: { minimum?: number; maximum?: number; type?: string };
+        delayMs?: { minimum?: number; type?: string };
+        fps?: { exclusiveMinimum?: number; type?: string };
+        screenIndex?: { minimum?: number; type?: string };
+      };
+    };
+    expect(schema.properties?.maxWidth).toMatchObject({ type: "integer", minimum: 1 });
+    expect(schema.properties?.quality).toMatchObject({ type: "number", minimum: 0, maximum: 1 });
+    expect(schema.properties?.delayMs).toMatchObject({ type: "integer", minimum: 0 });
+    expect(schema.properties?.fps).toMatchObject({ type: "number", exclusiveMinimum: 0 });
+    expect(schema.properties?.screenIndex).toMatchObject({ type: "integer", minimum: 0 });
+  });
+
+  it("advertises node command timeout constraints in the tool schema", () => {
+    const tool = createNodesTool();
+    const schema = tool.parameters as {
+      properties?: {
+        timeoutMs?: { minimum?: number; type?: string };
+        maxAgeMs?: { minimum?: number; type?: string };
+        locationTimeoutMs?: { minimum?: number; type?: string };
+        invokeTimeoutMs?: { minimum?: number; type?: string };
+      };
+    };
+    expect(schema.properties?.timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
+    expect(schema.properties?.maxAgeMs).toMatchObject({ type: "integer", minimum: 0 });
+    expect(schema.properties?.locationTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
+    expect(schema.properties?.invokeTimeoutMs).toMatchObject({ type: "integer", minimum: 1 });
   });
 
   it("clamps screen_record durationMs argument to 300000 before gateway invoke", async () => {
@@ -156,6 +210,48 @@ describe("createNodesTool screen_record duration guardrails", () => {
     expect(call[0]).toBe("node.invoke");
     expect(call[1]).toStrictEqual({});
     expect(call[2].params?.durationMs).toBe(300_000);
+  });
+
+  it("clamps camera_clip durationMs argument to 300000 before gateway invoke", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    nodesCameraMocks.parseCameraClipPayload.mockReturnValue({
+      base64: "ZmFrZQ==",
+      format: "mp4",
+      durationMs: 300_000,
+      hasAudio: true,
+    });
+    nodesCameraMocks.writeCameraClipPayloadToFile.mockResolvedValue("/tmp/clip.mp4");
+    const tool = createNodesTool();
+
+    await tool.execute("call-clip", {
+      action: "camera_clip",
+      node: "macbook",
+      durationMs: 900_000,
+    });
+
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { durationMs?: unknown } }]
+      | undefined;
+    expect(call?.[0]).toBe("node.invoke");
+    expect(call?.[2].params?.durationMs).toBe(300_000);
+  });
+
+  it.each([
+    ["screen_record", 0],
+    ["screen_record", 1.5],
+    ["camera_clip", -1],
+    ["camera_clip", "1sec"],
+  ])("rejects invalid %s durationMs value %s", async (action, durationMs) => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-invalid-duration", {
+        action,
+        node: "macbook",
+        durationMs,
+      }),
+    ).rejects.toThrow("durationMs must be a positive integer");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("rejects the removed run action", async () => {
@@ -247,6 +343,123 @@ describe("createNodesTool screen_record duration guardrails", () => {
       },
     });
     expect(JSON.stringify(result?.content ?? [])).not.toContain("MEDIA:");
+  });
+
+  it("rejects invalid photos_latest limit values before gateway invoke", async () => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-photos-limit", {
+        action: "photos_latest",
+        node: "macbook",
+        limit: 1.5,
+      }),
+    ).rejects.toThrow("limit must be a positive integer");
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("caps photos_latest limit at 20 before gateway invoke", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { photos: [] } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-photos-limit", {
+      action: "photos_latest",
+      node: "macbook",
+      limit: 99,
+    });
+
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { limit?: unknown } }]
+      | undefined;
+    expect(call?.[0]).toBe("node.invoke");
+    expect(call?.[2].params?.limit).toBe(20);
+  });
+
+  it.each([
+    ["camera_snap", { maxWidth: 640.5 }, "maxWidth must be a positive integer"],
+    ["camera_snap", { delayMs: -1 }, "delayMs must be a non-negative integer"],
+    ["camera_snap", { quality: 1.1 }, "quality must be between 0 and 1"],
+    ["photos_latest", { maxWidth: "wide" }, "maxWidth must be a positive integer"],
+    ["photos_latest", { quality: -0.1 }, "quality must be between 0 and 1"],
+    ["screen_record", { fps: 0 }, "fps must be greater than 0"],
+    ["screen_record", { screenIndex: 1.5 }, "screenIndex must be a non-negative integer"],
+  ])("rejects invalid %s numeric params %s", async (action, params, message) => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-invalid-media-number", {
+        action,
+        node: "macbook",
+        ...params,
+      }),
+    ).rejects.toThrow(message);
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("forwards validated camera_snap numeric params to gateway invoke", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { ok: true } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-camera-numbers", {
+      action: "camera_snap",
+      node: "macbook",
+      facing: "front",
+      maxWidth: "640",
+      quality: "0.8",
+      delayMs: "2000",
+    });
+
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { maxWidth?: unknown; quality?: unknown; delayMs?: unknown } }]
+      | undefined;
+    expect(call?.[0]).toBe("node.invoke");
+    expect(call?.[2].params).toMatchObject({
+      maxWidth: 640,
+      quality: 0.8,
+      delayMs: 2000,
+    });
+  });
+
+  it.each([
+    ["location_get", { maxAgeMs: -1 }, "maxAgeMs must be a non-negative integer"],
+    ["location_get", { locationTimeoutMs: 0 }, "locationTimeoutMs must be a positive integer"],
+    [
+      "invoke",
+      { invokeCommand: "device.status", invokeTimeoutMs: "15s" },
+      "invokeTimeoutMs must be a positive integer",
+    ],
+  ])("rejects invalid %s command numeric params %s", async (action, params, message) => {
+    const tool = createNodesTool();
+
+    await expect(
+      tool.execute("call-invalid-command-number", {
+        action,
+        node: "macbook",
+        ...params,
+      }),
+    ).rejects.toThrow(message);
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("forwards validated location_get numeric params to gateway invoke", async () => {
+    gatewayMocks.callGatewayTool.mockResolvedValue({ payload: { lat: 1, lon: 2 } });
+    const tool = createNodesTool();
+
+    await tool.execute("call-location-numbers", {
+      action: "location_get",
+      node: "macbook",
+      maxAgeMs: "5000",
+      locationTimeoutMs: "10000",
+    });
+
+    const call = gatewayMocks.callGatewayTool.mock.calls[0] as
+      | [string, unknown, { params?: { maxAgeMs?: unknown; timeoutMs?: unknown } }]
+      | undefined;
+    expect(call?.[0]).toBe("node.invoke");
+    expect(call?.[2].params).toMatchObject({
+      maxAgeMs: 5000,
+      timeoutMs: 10000,
+    });
   });
 
   it("uses operator.pairing plus operator.admin to approve exec-capable node pair requests", async () => {

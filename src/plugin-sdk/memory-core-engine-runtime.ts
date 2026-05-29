@@ -55,6 +55,7 @@ export type ShortTermAuditIssue = {
     | "recall-store-unreadable"
     | "recall-store-empty"
     | "recall-store-invalid"
+    | "recall-store-over-limit"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
     | "qmd-index-missing"
@@ -88,6 +89,7 @@ export type ShortTermAuditSummary = {
 export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
+  removedOverflowEntries?: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };

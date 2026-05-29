@@ -94,6 +94,7 @@ describe("fireworks provider plugin", () => {
     expect(resolved?.api).toBe("openai-completions");
     expect(resolved?.baseUrl).toBe(FIREWORKS_BASE_URL);
     expect(resolved?.reasoning).toBe(true);
+    expect(resolved?.input).toEqual(["text", "image"]);
   });
 
   it("disables reasoning metadata for Fireworks Kimi dynamic models", async () => {
@@ -109,6 +110,22 @@ describe("fireworks provider plugin", () => {
     expect(resolved?.provider).toBe("fireworks");
     expect(resolved?.id).toBe("accounts/fireworks/models/kimi-k2p5");
     expect(resolved?.reasoning).toBe(false);
+    expect(resolved?.input).toEqual(["text", "image"]);
+  });
+
+  it("keeps Fireworks GLM dynamic models text-only", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const resolved = provider.resolveDynamicModel?.(
+      createProviderDynamicModelContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/glm-5p1",
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+      }),
+    );
+
+    expect(resolved?.provider).toBe("fireworks");
+    expect(resolved?.id).toBe("accounts/fireworks/models/glm-5p1");
+    expect(resolved?.input).toEqual(["text"]);
   });
 
   it("disables reasoning metadata for Fireworks Kimi k2.5 aliases", async () => {

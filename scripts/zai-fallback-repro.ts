@@ -13,6 +13,11 @@ type RunResult = {
   stderr: string;
 };
 
+type OutputCapture = {
+  text: string;
+  truncatedChars: number;
+};
+
 type PnpmCommand = {
   args: string[];
   command: string;
@@ -29,9 +34,31 @@ type ResolvePnpmCommandOptions = {
   platform?: NodeJS.Platform;
 };
 
+const COMMAND_OUTPUT_MAX_CHARS = 512 * 1024;
+
 function resolveEnvValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === name.toLowerCase());
   return key === undefined ? undefined : env[key];
+}
+
+export function appendBoundedReproOutput(
+  capture: OutputCapture,
+  chunk: unknown,
+  maxChars = COMMAND_OUTPUT_MAX_CHARS,
+): OutputCapture {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatBoundedReproOutput(capture: OutputCapture): string {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
 }
 
 export function resolveZaiFallbackPnpmCommand(
@@ -83,25 +110,31 @@ async function runCommand(
       stdio: ["ignore", "pipe", "pipe"],
       windowsVerbatimArguments: command.windowsVerbatimArguments,
     });
-    let stdout = "";
-    let stderr = "";
+    let stdout: OutputCapture = { text: "", truncatedChars: 0 };
+    let stderr: OutputCapture = { text: "", truncatedChars: 0 };
     child.stdout.on("data", (chunk) => {
       const text = String(chunk);
-      stdout += text;
+      stdout = appendBoundedReproOutput(stdout, text);
       process.stdout.write(text);
     });
     child.stderr.on("data", (chunk) => {
       const text = String(chunk);
-      stderr += text;
+      stderr = appendBoundedReproOutput(stderr, text);
       process.stderr.write(text);
     });
     child.on("error", (err) => reject(err));
     child.on("close", (code, signal) => {
+      const result = {
+        code,
+        signal,
+        stdout: formatBoundedReproOutput(stdout),
+        stderr: formatBoundedReproOutput(stderr),
+      };
       if (code === 0) {
-        resolve({ code, signal, stdout, stderr });
+        resolve(result);
         return;
       }
-      resolve({ code, signal, stdout, stderr });
+      resolve(result);
       const summary = signal
         ? `${label} exited with signal ${signal}`
         : `${label} exited with code ${code}`;

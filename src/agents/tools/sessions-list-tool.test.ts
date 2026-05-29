@@ -193,4 +193,16 @@ describe("sessions-list-tool", () => {
     expect(session?.elevatedLevel).toBe("on");
     expect(session?.responseUsage).toBe("full");
   });
+
+  it.each([
+    [{ limit: 1.5 }, "limit must be a positive integer"],
+    [{ activeMinutes: 0 }, "activeMinutes must be a positive integer"],
+    [{ messageLimit: 1.5 }, "messageLimit must be a non-negative integer"],
+    [{ messageLimit: -1 }, "messageLimit must be a non-negative integer"],
+  ])("rejects invalid numeric parameter %o", async (params, message) => {
+    const tool = createSessionsListTool({ config: {} as never });
+
+    await expect(tool.execute("call-4", params)).rejects.toThrow(message);
+    expect(mocks.gatewayCall).not.toHaveBeenCalled();
+  });
 });

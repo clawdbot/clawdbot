@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { probeGateway } from "./probe.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 const tempRoots: string[] = [];
 

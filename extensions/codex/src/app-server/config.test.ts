@@ -714,6 +714,23 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
         marketplaceSource: "github:example/plugins",
       },
     );
+
+    for (const value of ["0x10", "1e3"]) {
+      expectFields(
+        resolveCodexComputerUseConfig({
+          pluginConfig: {},
+          env: {
+            OPENCLAW_CODEX_COMPUTER_USE: "1",
+            OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS: value,
+          },
+        }),
+        "computer use config",
+        {
+          enabled: true,
+          marketplaceDiscoveryTimeoutMs: 60_000,
+        },
+      );
+    }
   });
 
   it("allows plugin config to opt in to guardian-reviewed local execution", () => {

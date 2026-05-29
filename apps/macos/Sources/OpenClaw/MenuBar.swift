@@ -50,7 +50,8 @@ struct OpenClawApp: App {
                 sendCelebrationTick: self.state.sendCelebrationTick,
                 gatewayStatus: self.gatewayManager.status,
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
-                iconState: self.effectiveIconState)
+                iconState: self.effectiveIconState,
+                voiceWakeMeterActive: self.state.voiceWakeMeterActive)
                 .background(SettingsWindowOpenRegistrar())
         }
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
@@ -73,6 +74,9 @@ struct OpenClawApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
         }
         .onChange(of: self.gatewayManager.status) { _, _ in
+            self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
+        }
+        .onChange(of: self.state.voiceWakeMeterActive) { _, _ in
             self.applyStatusItemAppearance(paused: self.state.isPaused, sleeping: self.isGatewaySleeping)
         }
         .onChange(of: self.state.connectionMode) { _, mode in
@@ -107,6 +111,9 @@ struct OpenClawApp: App {
         // The SwiftUI label already renders those states; AppKit's disabled appearance can
         // leak into menu item validation and grey out app-level commands like Settings.
         self.statusItem?.button?.appearsDisabled = false
+        self.statusItem?.button?.toolTip = self.state.voiceWakeMeterActive
+            ? "OpenClaw - Voice Wake live meter active"
+            : "OpenClaw"
     }
 
     private static func applyAttachOnlyOverrideIfNeeded() {

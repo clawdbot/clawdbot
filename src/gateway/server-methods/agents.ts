@@ -1,5 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateAgentsCreateParams,
+  validateAgentsDeleteParams,
+  validateAgentsFilesGetParams,
+  validateAgentsFilesListParams,
+  validateAgentsFilesSetParams,
+  validateAgentsListParams,
+  validateAgentsUpdateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { findOverlappingWorkspaceAgentIds } from "../../agents/agent-delete-safety.js";
 import {
   listAgentIds,
@@ -32,18 +44,6 @@ import { movePathToTrash } from "../../plugin-sdk/browser-maintenance.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString as resolveOptionalStringParam } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateAgentsCreateParams,
-  validateAgentsDeleteParams,
-  validateAgentsFilesGetParams,
-  validateAgentsFilesListParams,
-  validateAgentsFilesSetParams,
-  validateAgentsListParams,
-  validateAgentsUpdateParams,
-} from "../protocol/index.js";
 import { listAgentsForGateway } from "../session-utils.js";
 import {
   AgentConfigPreconditionError,

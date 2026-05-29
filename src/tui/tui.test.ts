@@ -172,6 +172,20 @@ describe("resolveTuiShutdownHardExitMs", () => {
       }
     }
   });
+
+  it("ignores partial local run shutdown grace values", () => {
+    const previous = process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
+    process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = "3456abc";
+    try {
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(122000);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS;
+      } else {
+        process.env.OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS = previous;
+      }
+    }
+  });
 });
 
 describe("resolveTuiSessionKey", () => {

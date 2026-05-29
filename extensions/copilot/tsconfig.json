@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.package-boundary.base.json",
+  "compilerOptions": {
+    "rootDir": "."
+  },
+  "include": ["./*.ts", "./src/**/*.ts"],
+  "exclude": [
+    "./**/*.test.ts",
+    "./dist/**",
+    "./node_modules/**",
+    "./src/test-support/**",
+    "./src/**/*test-helpers.ts",
+    "./src/**/*test-harness.ts",
+    "./src/**/*test-support.ts"
+  ]
+}

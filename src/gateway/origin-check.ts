@@ -1,5 +1,5 @@
 import net from "node:net";
-import { isPrivateOrLoopbackIpAddress } from "../shared/net/ip.js";
+import { isPrivateOrLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

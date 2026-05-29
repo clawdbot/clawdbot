@@ -349,6 +349,12 @@ describe("fuzz: parseBrowserHttpUrl", () => {
       expect(() => parseBrowserHttpUrl(url, "test")).toThrow(/must be http\(s\) or ws\(s\)/);
     }
   });
+
+  it("rejects explicitly configured port zero", () => {
+    for (const scheme of ["http", "https", "ws", "wss"]) {
+      expect(() => parseBrowserHttpUrl(`${scheme}://127.0.0.1:0`, "test")).toThrow(/invalid port/);
+    }
+  });
 });
 
 describe("fuzz: redactCdpUrl", () => {

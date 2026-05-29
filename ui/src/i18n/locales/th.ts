@@ -1095,6 +1095,11 @@ export const th: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "ลองอีกครั้ง",
+      retrySend: "ลองส่งอีกครั้ง",
+      retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

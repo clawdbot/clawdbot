@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { parseStrictInteger } from "../infra/parse-finite-number.js";
 import { completeSimple } from "../llm/stream.js";
 import { type Api, type AssistantMessage, type Model } from "../llm/types.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
@@ -32,8 +33,7 @@ function toInt(value: string | undefined, fallback: number): number {
   if (!trimmed) {
     return fallback;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return parseStrictInteger(trimmed) ?? fallback;
 }
 
 export function logLiveCache(message: string): void {

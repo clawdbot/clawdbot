@@ -135,19 +135,6 @@ async function loadModelFallbackProbeModules() {
 
 beforeAll(loadModelFallbackProbeModules);
 
-function expectFallbackUsed(
-  result: { result: unknown; attempts: Array<{ reason?: string }> },
-  run: {
-    (...args: unknown[]): unknown;
-    mock: { calls: unknown[][] };
-  },
-) {
-  expect(result.result).toBe("ok");
-  expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
-  expect(result.attempts[0]?.reason).toBe("rate_limit");
-}
-
 function expectPrimarySkippedForReason(
   result: { result: unknown; attempts: Array<{ reason?: string }> },
   run: {
@@ -259,9 +246,14 @@ describe("runWithModelFallback – probe logic", () => {
     hasFallbackCandidates?: boolean;
     requestedModel?: boolean;
     throttleKey?: string;
+    usageStats?: AuthProfileStore["usageStats"];
   }) {
     mockedGetSoonestCooldownExpiry.mockReturnValue(params.soonest);
     mockedResolveProfilesUnavailableReason.mockReturnValue(params.reason);
+    const authStore: AuthProfileStore = { version: 1, profiles: {} };
+    if (params.usageStats) {
+      authStore.usageStats = params.usageStats;
+    }
     return modelFallbackTesting.resolveCooldownDecision({
       candidate: OPENAI_PROBE_CANDIDATE,
       isPrimary: params.isPrimary ?? true,
@@ -275,7 +267,7 @@ describe("runWithModelFallback – probe logic", () => {
       } as unknown as Parameters<
         typeof modelFallbackTesting.resolveCooldownDecision
       >[0]["authRuntime"],
-      authStore: { version: 1, profiles: {} },
+      authStore,
       profileIds: ["openai-profile-1"],
     });
   }
@@ -291,7 +283,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
   }
 
-  async function expectPrimarySkippedAfterLongCooldown(reason: "billing" | "rate_limit") {
+  async function expectPrimarySkippedAfterLongCooldown(reason: "billing") {
     const cfg = makeCfg();
     const expiresIn30Min = NOW + 30 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
@@ -348,9 +340,8 @@ describe("runWithModelFallback – probe logic", () => {
     vi.restoreAllMocks();
   });
 
-  it("skips primary model when far from cooldown expiry (30 min remaining)", async () => {
+  it("probes rate-limited primary model when far from cooldown expiry", async () => {
     const cfg = makeCfg();
-    // Cooldown expires in 30 min — well beyond the 2-min margin
     const expiresIn30Min = NOW + 30 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
 
@@ -358,8 +349,7 @@ describe("runWithModelFallback – probe logic", () => {
 
     const result = await runPrimaryCandidate(cfg, run);
 
-    // Should skip primary and use fallback
-    expectFallbackUsed(result, run);
+    expectPrimaryProbeSuccess(result, run, "ok");
   });
 
   it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
@@ -367,6 +357,26 @@ describe("runWithModelFallback – probe logic", () => {
   });
 
   it("decides when cooldowned primary probes are allowed", () => {
+    expect(
+      resolveOpenAiCooldownDecision({
+        reason: "rate_limit",
+        soonest: NOW + 30 * 60 * 1000,
+      }),
+    ).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
+    expectOpenAiProbeSuspension(
+      resolveOpenAiCooldownDecision({
+        reason: "rate_limit",
+        soonest: NOW + 30 * 60 * 1000,
+        usageStats: {
+          "openai-profile-1": {
+            blockedUntil: NOW + 30 * 60 * 1000,
+            blockedReason: "subscription_limit",
+            blockedSource: "wham",
+          },
+        },
+      }),
+      "rate_limit",
+    );
     expect(
       resolveOpenAiCooldownDecision({
         reason: "rate_limit",

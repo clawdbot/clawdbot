@@ -27,6 +27,9 @@ function createMockDraftStream() {
     clear: vi.fn(async () => {
       messageId = undefined;
     }),
+    deleteCurrentMessage: vi.fn(async () => {
+      messageId = undefined;
+    }),
     discardPending: vi.fn(async () => {}),
     seal: vi.fn(async () => {}),
     stop: vi.fn(async () => {}),
@@ -115,7 +118,10 @@ type DispatchInboundParams = {
     waitForIdle: () => Promise<void>;
   };
   replyOptions?: {
-    onReasoningStream?: (payload?: { text?: string }) => Promise<void> | void;
+    onReasoningStream?: (payload?: {
+      text?: string;
+      isReasoningSnapshot?: boolean;
+    }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
       name?: string;
@@ -124,6 +130,7 @@ type DispatchInboundParams = {
       detailMode?: "explain" | "raw";
     }) => Promise<void> | void;
     onItemEvent?: (payload: {
+      itemId?: string;
       kind?: string;
       progressText?: string;
       summary?: string;
@@ -2491,6 +2498,196 @@ describe("processDiscordMessage draft streaming", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["unset", undefined],
+    ["false", false],
+  ])("hides Discord commentary progress when commentary is %s", async (_label, commentary) => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking private context before replying.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        progressText: "curl weather api",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const progress =
+      commentary === undefined
+        ? {
+            label: false,
+            toolProgress: true,
+          }
+        : {
+            label: false,
+            toolProgress: true,
+            commentary,
+          };
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress,
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).toContain("Exec");
+    expect(updates).toContain("curl weather api");
+    expect(updates).not.toContain("Checking private context");
+  });
+
+  it("shows opt-in Discord commentary progress independently from tool progress", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the current weather source before summarizing.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the current weather source before summarizing clearly.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "[[reply_to_current]] Checking route impacts.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "NO_REPLY",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-3",
+        kind: "preamble",
+        progressText: "**NO_REPLY",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        progressText: "curl weather api",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            toolProgress: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "_Checking the current weather source before summarizing clearly._",
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).not.toContain("Exec");
+    expect(updates).not.toContain("curl weather api");
+    expect(updates).not.toContain("reply_to_current");
+    expect(updates).not.toContain("NO_REPLY");
+  });
+
+  it("keeps Discord progress drafts usable after the last commentary line becomes silent", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Temporary note.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "NO_REPLY",
+      });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
+  });
+
+  it("does not update Discord commentary progress after final answer delivery starts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking source data.",
+      });
+      void params?.dispatcher.sendFinalReply({ text: "done" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "Late commentary should not edit the draft.",
+      });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates).toEqual(["_Checking source data._"]);
+    expectPreviewEditContent("done");
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
   it("does not start Discord progress drafts for text-only accepted turns", async () => {
     const draftStream = createMockDraftStreamForTest();
 
@@ -2738,9 +2935,13 @@ describe("processDiscordMessage draft streaming", () => {
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await params?.replyOptions?.onReasoningStream?.({ text: "Checking files" });
       await params?.replyOptions?.onReasoningStream?.({
-        text: "Checking files and tests",
+        text: "Checking ",
+        isReasoningSnapshot: true,
+      });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Reading \n\nChecking ",
+        isReasoningSnapshot: true,
       });
       return createNoQueuedDispatchResult();
     });
@@ -2759,11 +2960,10 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n• _Checking files and tests_",
+      "Clawing...\n\n🛠️ Exec\n• _Reading _ _Checking_",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.join("\n")).not.toContain("_Checking files_Reasoning:");
-    expect(updates.join("\n")).not.toContain("_Checking files_Thinking");
+    expect(updates.join("\n")).not.toContain("_Checking Reading");
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {

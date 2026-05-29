@@ -71,6 +71,59 @@ describe("RequestClient", () => {
     expect(client.queueSize).toBe(0);
   });
 
+  it("defaults non-finite REST client numeric options before scheduling requests", async () => {
+    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+      expect(new URL(readRequestUrl(input)).pathname).toBe("/api/v10/guilds/g1/roles");
+      return createJsonResponse({ ok: true });
+    });
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      apiVersion: Number.NaN,
+      timeout: Number.NaN,
+      maxQueueSize: Number.NaN,
+      scheduler: {
+        maxConcurrency: Number.NaN,
+        maxRateLimitRetries: Number.NaN,
+        lanes: {
+          background: {
+            maxQueueSize: Number.NaN,
+            staleAfterMs: Number.NaN,
+            weight: Number.NaN,
+          },
+        },
+      },
+    });
+
+    await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
+    expect(client.getSchedulerMetrics().maxConcurrentWorkers).toBe(4);
+  });
+
+  it("uses the default background stale timeout for non-finite lane overrides", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => await firstResponse.promise);
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: {
+        maxConcurrency: 1,
+        lanes: {
+          background: { staleAfterMs: Number.NaN },
+        },
+      },
+    });
+
+    const first = client.get("/guilds/g1/roles");
+    const stale = client.get("/guilds/g2/roles");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(20_001);
+    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(stale).rejects.toThrow(/Dropped stale background request/);
+  });
+
   it("dispatches critical interaction callbacks before older background requests", async () => {
     const firstResponse = createDeferred<Response>();
     const responses = new Map<string, Promise<Response>>([
@@ -530,6 +583,23 @@ describe("RequestClient", () => {
     });
 
     await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
+  });
+
+  it.each([
+    ["hex", "0x10"],
+    ["fractional", "1.5"],
+    ["overflow", `1${"0".repeat(309)}`],
+  ])("rejects invalid Retry-After numeric strings: %s", async (_label, header) => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(JSON.stringify({ message: "Slow down", retry_after: "1e3", global: false }), {
+          status: 429,
+          headers: { "Retry-After": header },
+        }),
+    });
+
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 1 });
   });
 
   it("tracks invalid requests and exposes bucket scheduler metrics", async () => {

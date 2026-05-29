@@ -188,10 +188,10 @@ describe("createScopedVitestConfig", () => {
     expect(requireTestConfig(config).include).toEqual(["slack/**/*.test.*"]);
   });
 
-  it("keeps broad scoped cli directory filters aligned with repo-root include patterns", () => {
-    const config = createScopedVitestConfig([BUNDLED_PLUGIN_TEST_GLOB], {
-      argv: ["vitest", "run", "extensions/speech-core"],
-      dir: "extensions",
+  it("keeps broad package scoped cli directory filters aligned with repo-root include patterns", () => {
+    const config = createScopedVitestConfig(["packages/**/*.test.ts"], {
+      argv: ["vitest", "run", "packages/speech-core"],
+      dir: "packages",
       env: {},
       passWithNoTests: true,
     });
@@ -464,6 +464,10 @@ describe("scoped vitest configs", () => {
 
   it("defaults extension tests to threads with the non-isolated runner", () => {
     expectThreadedNonIsolatedRunner(defaultExtensionsConfig);
+  });
+
+  it("serializes Slack extension files that share process globals", () => {
+    expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
   });
 
   it("normalizes split extension channel include patterns relative to the scoped dir", () => {

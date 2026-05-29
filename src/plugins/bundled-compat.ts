@@ -18,12 +18,18 @@ export function withBundledPluginEnablementCompat(params: {
   let hasEligiblePlugin = false;
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
+  const nextAllow = bypassAllowlist && Array.isArray(allow) ? new Set(allow) : undefined;
 
   for (const pluginId of params.pluginIds) {
     if (allowSet && !allowSet.has(pluginId)) {
       continue;
     }
     hasEligiblePlugin = true;
+    const beforeAllowSize = nextAllow?.size;
+    nextAllow?.add(pluginId);
+    if (nextAllow && nextAllow.size !== beforeAllowSize) {
+      changed = true;
+    }
     if (existingEntries[pluginId] !== undefined) {
       continue;
     }
@@ -42,6 +48,7 @@ export function withBundledPluginEnablementCompat(params: {
     plugins: {
       ...params.config?.plugins,
       ...(forcePluginsEnabled ? { enabled: true } : {}),
+      ...(nextAllow ? { allow: [...nextAllow] } : {}),
       entries: {
         ...existingEntries,
         ...nextEntries,

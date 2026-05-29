@@ -214,7 +214,7 @@ export function readEnvInt(key: string, legacyKey?: string) {
     return undefined;
   }
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 export function chunkString(input: string, limit = CHUNK_LIMIT) {

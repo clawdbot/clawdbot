@@ -32,6 +32,10 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  concurrency?: {
+    group?: string;
+    "cancel-in-progress"?: boolean | string;
+  };
   env?: Record<string, string>;
   if?: string;
   name?: string;
@@ -96,7 +100,7 @@ describe("package acceptance workflow", () => {
       "if: ${{ inputs.use-actions-cache == 'true' && runner.os != 'Windows' }}",
     );
     expect(setupPnpmAction).toContain(
-      "key: pnpm-store-${{ runner.os }}-${{ inputs.node-version }}-${{ hashFiles(inputs.lockfile-path) }}",
+      "key: pnpm-store-${{ runner.os }}-${{ runner.arch }}-${{ inputs.node-version }}-${{ hashFiles(inputs.package-manager-file) }}-${{ hashFiles(inputs.lockfile-path) }}",
     );
     expect(setupPnpmAction).not.toContain("pnpm/action-setup");
     expect(setupPnpmAction).not.toContain("shasum");
@@ -137,7 +141,13 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
     expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
-      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+      "timeout --signal=TERM --kill-after=10s 30s git",
+    );
+    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+      "fetch --no-tags --prune --no-recurse-submodules --depth=50 origin",
+    );
+    expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
+      '"+refs/heads/main:refs/remotes/origin/main"',
     );
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
     expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
@@ -175,8 +185,24 @@ describe("package acceptance workflow", () => {
     const hydrateWindowsFetch = workflowStep(hydrateWindowsDaemon, "Fetch main ref");
     expect(hydrateWindowsFetch.shell).toBe("powershell");
     expect(hydrateWindowsFetch.run).toContain(
-      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+      "$fetchInfo = New-Object System.Diagnostics.ProcessStartInfo",
     );
+    expect(hydrateWindowsFetch.run).toContain('$fetchInfo.FileName = "git"');
+    expect(hydrateWindowsFetch.run).toContain("$fetchInfo.WorkingDirectory = $repo");
+    expect(hydrateWindowsFetch.run).toContain("$fetchInfo.UseShellExecute = $false");
+    expect(hydrateWindowsFetch.run).not.toContain("$fetchInfo.RedirectStandardOutput = $true");
+    expect(hydrateWindowsFetch.run).not.toContain("$fetchInfo.RedirectStandardError = $true");
+    expect(hydrateWindowsFetch.run).toContain("$fetch = New-Object System.Diagnostics.Process");
+    expect(hydrateWindowsFetch.run).toContain("$fetch.StartInfo = $fetchInfo");
+    expect(hydrateWindowsFetch.run).toContain("$fetch.WaitForExit(30000)");
+    expect(hydrateWindowsFetch.run).toContain("$fetch.Kill()");
+    expect(hydrateWindowsFetch.run).not.toContain("StandardOutput.ReadToEnd()");
+    expect(hydrateWindowsFetch.run).not.toContain("StandardError.ReadToEnd()");
+    expect(hydrateWindowsFetch.run).toContain("git fetch failed with exit code $($fetch.ExitCode)");
+    expect(hydrateWindowsFetch.run).toContain(
+      '--no-tags --no-progress --prune --no-recurse-submodules --depth=50',
+    );
+    expect(hydrateWindowsFetch.run).toContain('"+refs/heads/main:refs/remotes/origin/main"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").shell).toBe("powershell");
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"NODE_BIN"');
     expect(workflowStep(hydrateWindowsDaemon, "Mark Crabbox ready").run).toContain('"PNPM_HOME"');
@@ -573,7 +599,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
     expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-anthropic");
-    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-8");
     expect(workflow).toContain("anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5");
     expect(workflow).toMatch(
       /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?advisory: true/u,
@@ -1180,9 +1206,30 @@ describe("package artifact reuse", () => {
     ]);
   });
 
+  it("lets CI Telegram consumers wait on Convex leases instead of GitHub concurrency", () => {
+    const telegramJobs = [
+      [NPM_TELEGRAM_WORKFLOW, "run_package_telegram_e2e", "Run package Telegram E2E"],
+      [RELEASE_CHECKS_WORKFLOW, "qa_live_telegram_release_checks", "Run Telegram live lane"],
+      [QA_LIVE_TRANSPORTS_WORKFLOW, "run_live_telegram", "Run Telegram live lane"],
+      [
+        ".github/workflows/mantis-telegram-live.yml",
+        "run_telegram_live",
+        "Run Telegram live scenario and capture desktop evidence",
+      ],
+    ] as const;
+
+    for (const [workflowPath, jobName, stepName] of telegramJobs) {
+      const job = workflowJob(workflowPath, jobName);
+      expect(job.concurrency).toBeUndefined();
+      const step = workflowStep(job, stepName);
+      expect(step.env?.OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS).toBe("1800000");
+    }
+  });
+
   it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
     const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+    const liveE2eWorkflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
 
     for (const jobName of [
       "qa_lab_parity_lane_release_checks",
@@ -1206,6 +1253,10 @@ describe("package artifact reuse", () => {
         new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
       );
     }
+    expectTextToIncludeAll(liveE2eWorkflow, [
+      "OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000",
+      "OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000",
+    ]);
   });
 
   it("summarizes queue time separately from execution time in full validation", () => {

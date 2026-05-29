@@ -71,8 +71,8 @@ pnpm openclaw onboard --mode local
 Verify the installed package under the state directory:
 
 ```bash
-find "$OPENCLAW_STATE_DIR/npm/node_modules" -maxdepth 3 -name package.json -print
-grep -R '"@openclaw/codex"' "$OPENCLAW_STATE_DIR/npm/package-lock.json"
+find "$OPENCLAW_STATE_DIR/npm/projects" -path '*/node_modules/@openclaw/codex/package.json' -print
+grep -R '"@openclaw/codex"' "$OPENCLAW_STATE_DIR/npm/projects"/*/package-lock.json
 ```
 
 For live provider E2E, source the real API key from a trusted shell or CI secret

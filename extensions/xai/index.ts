@@ -2,19 +2,26 @@ import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-en
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
 import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
-import { Type } from "typebox";
 import {
   applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
 } from "./api.js";
+import {
+  buildMissingCodeExecutionApiKeyPayload,
+  createCodeExecutionToolDefinition,
+} from "./code-execution-tool-shared.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
+import {
+  readPluginCodeExecutionConfig,
+  resolveCodeExecutionEnabled,
+} from "./src/code-execution-config.js";
 import {
   isXaiToolEnabled,
   resolveFallbackXaiAuth,
@@ -71,30 +78,12 @@ function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boo
 }
 
 function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
-  if (!config || typeof config !== "object") {
-    return hasResolvableXaiApiKey(config, auth);
-  }
-  const entries = (config as Record<string, unknown>).plugins;
-  const pluginEntries =
-    entries && typeof entries === "object"
-      ? ((entries as Record<string, unknown>).entries as Record<string, unknown> | undefined)
-      : undefined;
-  const xaiEntry =
-    pluginEntries && typeof pluginEntries.xai === "object"
-      ? (pluginEntries.xai as Record<string, unknown>)
-      : undefined;
-  const pluginConfig =
-    xaiEntry && typeof xaiEntry.config === "object"
-      ? (xaiEntry.config as Record<string, unknown>)
-      : undefined;
-  const codeExecution =
-    pluginConfig && typeof pluginConfig.codeExecution === "object"
-      ? (pluginConfig.codeExecution as Record<string, unknown>)
-      : undefined;
-  if (codeExecution?.enabled === false) {
-    return false;
-  }
-  return hasResolvableXaiApiKey(config, auth);
+  return resolveCodeExecutionEnabled({
+    sourceConfig: config,
+    runtimeConfig: config,
+    config: readPluginCodeExecutionConfig(config),
+    auth,
+  });
 }
 
 function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
@@ -119,18 +108,8 @@ function createLazyCodeExecutionTool(ctx: {
     return null;
   }
 
-  return {
-    label: "Code Execution",
-    name: "code_execution",
-    description:
-      "Run sandboxed Python analysis with xAI. Use for calculations, tabulation, summaries, and chart-style analysis without local machine access.",
-    parameters: Type.Object({
-      task: Type.String({
-        description:
-          "The full analysis task for xAI's remote Python sandbox. Include any data to analyze directly in the task.",
-      }),
-    }),
-    execute: async (toolCallId: string, args: Record<string, unknown>) => {
+  return createCodeExecutionToolDefinition(
+    async (toolCallId: string, args: Record<string, unknown>) => {
       const { createCodeExecutionTool } = await loadCodeExecutionModule();
       const tool = createCodeExecutionTool({
         config: ctx.config as never,
@@ -138,16 +117,11 @@ function createLazyCodeExecutionTool(ctx: {
         auth: ctx,
       });
       if (!tool) {
-        return jsonResult({
-          error: "missing_xai_api_key",
-          message:
-            "code_execution needs xAI credentials. Run `openclaw onboard --auth-choice xai-oauth` to sign in with Grok, run `openclaw onboard --auth-choice xai-api-key`, set `XAI_API_KEY` in the Gateway environment, or configure `plugins.entries.xai.config.webSearch.apiKey`.",
-          docs: "https://docs.openclaw.ai/tools/code-execution",
-        });
+        return jsonResult(buildMissingCodeExecutionApiKeyPayload());
       }
       return await tool.execute(toolCallId, args);
     },
-  };
+  );
 }
 
 function createLazyXSearchTool(ctx: {

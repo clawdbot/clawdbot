@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { build } from "tsdown";
-import { buildPluginSdkEntrySources, pluginSdkEntrypoints } from "./lib/plugin-sdk-entries.mjs";
+import {
+  buildPluginSdkEntrySources,
+  pluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
+} from "./lib/plugin-sdk-entries.mjs";
 
 const RUNTIME_SHIMS: Partial<Record<string, string>> = {
   "webhook-path": [
@@ -67,6 +71,11 @@ function copyFlatDeclarations(fromDir: string, toDir: string): void {
 
 const distPluginSdkDir = path.join(process.cwd(), "dist/plugin-sdk");
 const flatDeclarationTempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-sdk-dts-"));
+const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+const flatDeclarationEntrypoints = shouldBuildPrivateQaEntries
+  ? pluginSdkEntrypoints
+  : publicPluginSdkEntrypoints;
+const flatDeclarationEntrypointSet = new Set(flatDeclarationEntrypoints);
 
 try {
   await build({
@@ -74,7 +83,7 @@ try {
     config: false,
     deps: { neverBundle: (id) => isBareImportSpecifier(id) },
     dts: true,
-    entry: buildPluginSdkEntrySources(),
+    entry: buildPluginSdkEntrySources(flatDeclarationEntrypoints),
     failOnWarn: false,
     fixedExtension: false,
     format: "esm",
@@ -96,6 +105,10 @@ try {
 // The private workspace package keeps source-shaped declaration paths for local
 // package-boundary projects, so bridge them back to the packaged flat entries.
 for (const entry of pluginSdkEntrypoints) {
+  if (!flatDeclarationEntrypointSet.has(entry)) {
+    continue;
+  }
+
   const packageTypeOut = path.join(
     process.cwd(),
     `packages/plugin-sdk/dist/src/plugin-sdk/${entry}.d.ts`,

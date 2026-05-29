@@ -175,12 +175,16 @@ function buildLiveCases(params: {
     },
   ];
   if (params.editEnabled) {
+    const providerModel = resolveProviderModelForLiveTest(params.providerId, params.modelRef);
+    const useReferenceResolution = !(
+      params.providerId === "fal" && providerModel.startsWith("krea/v2/")
+    );
     cases.push({
       id: `${params.providerId}:edit`,
       providerId: params.providerId,
       modelRef: params.modelRef,
       prompt: editPrompt,
-      resolution: "1K",
+      ...(useReferenceResolution ? { resolution: "1K" as const } : {}),
       inputImages: [
         {
           buffer: createEditReferencePng(),

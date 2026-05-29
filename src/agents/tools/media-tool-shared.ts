@@ -2,12 +2,12 @@ import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import type { Model } from "../../llm/types.js";
-import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
-import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
 import {
   findCapabilityProviderById,
   resolveCapabilityModelRefForProviders,
 } from "../../media-generation/capability-model-ref.js";
+import { resolveChannelInboundAttachmentRootsForChannel } from "../../media/channel-inbound-roots.js";
+import { normalizeInboundPathRoots } from "../../media/inbound-path-policy.js";
 import { getDefaultLocalRoots } from "../../media/local-media-access.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
@@ -22,7 +22,7 @@ import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
   ToolInputError,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "./common.js";
@@ -99,17 +99,9 @@ export function applyMusicGenerationModelConfigDefaults(
 }
 
 export function readGenerationTimeoutMs(args: Record<string, unknown>): number | undefined {
-  const timeoutMs = readNumberParam(args, "timeoutMs", {
-    integer: true,
-    strict: true,
+  return readPositiveIntegerParam(args, "timeoutMs", {
+    message: "timeoutMs must be a positive integer in milliseconds.",
   });
-  if (timeoutMs === undefined) {
-    return undefined;
-  }
-  if (timeoutMs <= 0) {
-    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
-  }
-  return timeoutMs;
 }
 
 export function resolveRemoteMediaSsrfPolicy(

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   listCliRuntimeModelBackendBindings,
   resolveCliBackendLiveTest,
@@ -22,7 +23,6 @@ import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
-import type { EventFrame } from "./protocol/index.js";
 
 // Aggregate docker live runs can contend on startup enough that the gateway
 // websocket handshake needs a wider budget than the single-provider reruns.
@@ -314,6 +314,7 @@ export async function connectTestGatewayClient(params: {
   maxAttemptTimeoutMs?: number;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
   onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
@@ -354,6 +355,7 @@ async function connectClientOnce(params: {
   deviceIdentity?: DeviceIdentity;
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
+  tickWatchTimeoutMs?: number;
   onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
@@ -398,6 +400,9 @@ async function connectClientOnce(params: {
     }
     if (params.requestTimeoutMs !== undefined) {
       clientOptions.requestTimeoutMs = params.requestTimeoutMs;
+    }
+    if (params.tickWatchTimeoutMs !== undefined) {
+      clientOptions.tickWatchTimeoutMs = params.tickWatchTimeoutMs;
     }
 
     client = new GatewayClient(clientOptions);

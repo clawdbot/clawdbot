@@ -17,6 +17,7 @@ vi.mock("../config.js", async () => ({
   getRuntimeConfig: vi.fn().mockReturnValue({}),
 }));
 
+import { getSessionSkillPromptRefCacheStatsForTest } from "./skill-prompt-blobs.js";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
@@ -215,6 +216,40 @@ describe("session store strips resolvedSkills from persistence", () => {
       `${firstRef.hash}.txt`,
     );
     expect(await fs.readFile(blobPath, "utf-8")).toBe(prompt);
+    expect(getSessionSkillPromptRefCacheStatsForTest().entries).toBe(1);
+  });
+
+  it("clears cached prompt refs with the session store caches", async () => {
+    const prompt = `<available_skills>\n${"clear cache prompt\n".repeat(200)}</available_skills>`;
+    await saveSessionStore(
+      storePath,
+      {
+        "agent:main:test:1": makeEntry("session-1", makeSnapshotWithPrompt(prompt)),
+      },
+      { skipMaintenance: true },
+    );
+    expect(getSessionSkillPromptRefCacheStatsForTest().entries).toBe(1);
+
+    clearSessionStoreCacheForTest();
+
+    expect(getSessionSkillPromptRefCacheStatsForTest().entries).toBe(0);
+  });
+
+  it("bounds cached prompt refs for distinct large skills prompts", async () => {
+    const entries = Object.fromEntries(
+      Array.from({ length: 260 }, (_, index) => {
+        const prompt = `<available_skills>\n${`bounded prompt ${index}\n`.repeat(200)}</available_skills>`;
+        return [
+          `agent:main:test:${index}`,
+          makeEntry(`session-${index}`, makeSnapshotWithPrompt(prompt)),
+        ];
+      }),
+    );
+
+    await saveSessionStore(storePath, entries, { skipMaintenance: true });
+
+    const stats = getSessionSkillPromptRefCacheStatsForTest();
+    expect(stats.entries).toBe(stats.maxEntries);
   });
 
   it("hydrates content-addressed skills prompt blobs on load", async () => {

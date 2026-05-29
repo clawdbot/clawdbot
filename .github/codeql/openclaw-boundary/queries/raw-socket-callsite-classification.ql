@@ -76,6 +76,8 @@ predicate allowedRawSocketClientCall(Expr call) {
   or
   allowedOwnerScope(call, "src/proxy-capture/proxy-server.ts", "startDebugProxyServer")
   or
+  allowedOwnerScope(call, "extensions/codex-supervisor/src/json-rpc-client.ts", "connectCodexSupervisorUnixSocket")
+  or
   allowedOwnerScope(call, "extensions/irc/src/client.ts", "connectIrcClient")
   or
   allowedOwnerScope(call, "extensions/qa-lab/src/lab-server-capture.ts", "probeTcpReachability")

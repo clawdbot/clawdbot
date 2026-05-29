@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuth } from "../gateway/auth-resolve.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -407,8 +408,8 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
     return false;
   }
   const ipVersion = isIP(rawIp.trim());
-  const prefix = Number.parseInt(rawPrefix.trim(), 10);
-  if (!Number.isInteger(prefix)) {
+  const prefix = parseStrictNonNegativeInteger(rawPrefix);
+  if (prefix === undefined) {
     return false;
   }
   if (ipVersion === 4) {

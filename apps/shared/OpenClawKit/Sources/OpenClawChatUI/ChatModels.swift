@@ -310,6 +310,12 @@ public struct OpenClawChatSendResponse: Codable, Sendable {
     public let status: String
 }
 
+public struct OpenClawChatCreateSessionResponse: Codable, Sendable {
+    public let ok: Bool?
+    public let key: String
+    public let sessionId: String?
+}
+
 public struct OpenClawChatEventPayload: Codable, Sendable {
     public let runId: String?
     public let sessionKey: String?

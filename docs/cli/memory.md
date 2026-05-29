@@ -170,7 +170,7 @@ Notes:
 - `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal; use CLI flags on `memory promote` when you need one-off manual overrides.
+- Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal except for `dreaming.phases.deep.maxPromotedSnippetTokens`, which bounds promoted snippet length while keeping provenance visible. Use CLI flags on `memory promote` when you need one-off manual threshold overrides.
 - `memory rem-harness --path <file-or-dir> --grounded` previews grounded `What Happened`, `Reflections`, and `Possible Lasting Updates` from historical daily notes without writing anything.
 - `memory rem-backfill --path <file-or-dir>` writes reversible grounded diary entries into `DREAMS.md` for UI review.
 - `memory rem-backfill --path <file-or-dir> --stage-short-term` also seeds grounded durable candidates into the live short-term promotion store so the normal deep phase can rank them.

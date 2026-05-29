@@ -1,8 +1,8 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   invokeNativeHookRelay,
   type NativeHookRelayProcessResponse,
 } from "../../agents/harness/native-hook-relay.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const nativeHookRelayHandlers: GatewayRequestHandlers = {

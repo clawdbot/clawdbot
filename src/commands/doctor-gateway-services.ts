@@ -354,6 +354,7 @@ export async function maybeRepairGatewayServiceConfig(
   mode: "local" | "remote",
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
+  options: { allowExecSecretRefs?: boolean } = {},
 ) {
   if (resolveIsNixMode(process.env)) {
     note("Nix mode detected; skip service updates.", "Gateway");
@@ -394,7 +395,9 @@ export async function maybeRepairGatewayServiceConfig(
       defaults: cfg.secrets?.defaults,
     }).ref,
   );
-  const gatewayTokenResolution = await resolveGatewayAuthTokenForService(cfg, process.env);
+  const gatewayTokenResolution = await resolveGatewayAuthTokenForService(cfg, process.env, {
+    allowExecSecretRefs: options.allowExecSecretRefs === true,
+  });
   if (gatewayTokenResolution.unavailableReason) {
     note(
       `Unable to verify gateway service token drift: ${gatewayTokenResolution.unavailableReason}`,

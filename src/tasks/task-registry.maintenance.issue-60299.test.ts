@@ -420,6 +420,35 @@ describe("task-registry maintenance issue #60299", () => {
     expect(storedTask.terminalSummary).toBe("done");
   });
 
+  it("does not recover cron tasks from malformed run id timestamps", async () => {
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "cron-job-run-log-ok",
+      runId: "cron:cron-job-run-log-ok:1e3",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      cronRunLogEntries: {
+        "cron-job-run-log-ok": [
+          {
+            ts: 1250,
+            jobId: "cron-job-run-log-ok",
+            action: "finished",
+            status: "ok",
+            summary: "done",
+            runAtMs: 1000,
+            durationMs: 250,
+          },
+        ],
+      },
+    });
+
+    expectMaintenanceCounts(previewTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
   it("recovers interrupted cron tasks from durable cron job state when run logs are absent", async () => {
     const startedAt = Date.now() - GRACE_EXPIRED_MS;
     const task = makeStaleTask({

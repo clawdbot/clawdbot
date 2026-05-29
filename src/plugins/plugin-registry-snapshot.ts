@@ -2,12 +2,15 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { normalizePluginsConfig } from "./config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
-import { fileSignatureMatches } from "./installed-plugin-index-hash.js";
+import { fileSignatureMatches, hashJson } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
+import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
@@ -27,7 +30,9 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
+import { resolvePluginCacheInputs } from "./roots.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
@@ -53,6 +58,35 @@ export type PluginRegistrySnapshotResult = {
 };
 
 export const DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV = "OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY";
+const MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS = 8;
+const REGISTRY_SNAPSHOT_MEMO_ENV_KEYS = [
+  "APPDATA",
+  "HOME",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+  "OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS",
+  DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV,
+  "OPENCLAW_HOME",
+  "OPENCLAW_NIX_MODE",
+  "OPENCLAW_STATE_DIR",
+  "USERPROFILE",
+  "XDG_CONFIG_HOME",
+] as const;
+
+type PluginRegistrySnapshotMemo = {
+  key: string;
+  result: PluginRegistrySnapshotResult;
+};
+
+let pluginRegistrySnapshotMemos: PluginRegistrySnapshotMemo[] = [];
+
+function clearLoadPluginRegistrySnapshotMemo(): void {
+  pluginRegistrySnapshotMemos = [];
+}
+
+registerPluginMetadataProcessMemoLifecycleClear(clearLoadPluginRegistrySnapshotMemo);
 
 function formatDeprecatedPersistedRegistryDisableWarning(): string {
   return `${DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV} is a deprecated break-glass compatibility switch; use \`openclaw plugins registry --refresh\` or \`openclaw doctor --fix\` to repair registry state.`;
@@ -71,6 +105,115 @@ export type GetPluginRecordParams = LoadPluginRegistryParams & {
 function hasEnvFlag(env: NodeJS.ProcessEnv, name: string): boolean {
   const value = env[name]?.trim().toLowerCase();
   return Boolean(value && value !== "0" && value !== "false" && value !== "no");
+}
+
+function pickRegistrySnapshotMemoEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(
+    REGISTRY_SNAPSHOT_MEMO_ENV_KEYS.flatMap((key) => {
+      const value = env[key];
+      return value === undefined ? [] : [[key, value]];
+    }),
+  );
+}
+
+function canMemoizePluginRegistrySnapshot(params: LoadPluginRegistryParams): boolean {
+  return (
+    params.index === undefined &&
+    params.candidates === undefined &&
+    params.diagnostics === undefined &&
+    params.discovery === undefined &&
+    params.installRecords === undefined &&
+    params.now === undefined &&
+    params.filePath === undefined &&
+    params.pluginIndexFilePath === undefined
+  );
+}
+
+function resolvePluginRegistrySnapshotMemoKey(
+  params: LoadPluginRegistryParams,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  if (!canMemoizePluginRegistrySnapshot(params)) {
+    return undefined;
+  }
+  return hashJson({
+    config: params.config ?? null,
+    cwd: process.cwd(),
+    env: pickRegistrySnapshotMemoEnv(env),
+    hostContractVersion: resolveCompatibilityHostVersion(env),
+    preferPersisted: params.preferPersisted ?? null,
+    // Plugin manifests are process-stable inside the Gateway, while the persisted
+    // registry envelope can change through explicit refresh/install flows.
+    registryFile: fileFingerprint(
+      resolveInstalledPluginIndexStorePath({
+        env,
+        ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+      }),
+    ),
+    pluginRoots: fingerprintPluginSourceRoots(params, env),
+    stateDir: params.stateDir ? resolveUserPath(params.stateDir, env) : null,
+    workspaceDir: params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : null,
+  });
+}
+
+function fingerprintPluginSourceRoots(
+  params: LoadPluginRegistryParams,
+  env: NodeJS.ProcessEnv,
+): unknown {
+  const workspaceDir = params.workspaceDir ? resolveUserPath(params.workspaceDir, env) : undefined;
+  const cacheInputs = resolvePluginCacheInputs({
+    workspaceDir,
+    loadPaths: normalizePluginsConfig(params.config?.plugins).loadPaths,
+    env,
+  });
+  return {
+    global: fileFingerprint(cacheInputs.roots.global),
+    loadPaths: cacheInputs.loadPaths.map((entry) => fileFingerprint(entry)),
+    stock: cacheInputs.roots.stock ? fileFingerprint(cacheInputs.roots.stock) : null,
+    workspace: cacheInputs.roots.workspace ? fileFingerprint(cacheInputs.roots.workspace) : null,
+  };
+}
+
+function fileFingerprint(filePath: string): unknown {
+  try {
+    const stat = fs.statSync(filePath, { bigint: true });
+    const kind = stat.isFile() ? "file" : stat.isDirectory() ? "dir" : "other";
+    return [filePath, kind, stat.size.toString(), stat.mtimeNs.toString(), stat.ctimeNs.toString()];
+  } catch {
+    return [filePath, "missing"];
+  }
+}
+
+function findPluginRegistrySnapshotMemo(
+  key: string | undefined,
+): PluginRegistrySnapshotResult | undefined {
+  if (!key) {
+    return undefined;
+  }
+  const index = pluginRegistrySnapshotMemos.findIndex((memo) => memo.key === key);
+  if (index === -1) {
+    return undefined;
+  }
+  const [memo] = pluginRegistrySnapshotMemos.splice(index, 1);
+  if (!memo) {
+    return undefined;
+  }
+  pluginRegistrySnapshotMemos.unshift(memo);
+  return memo.result;
+}
+
+function rememberPluginRegistrySnapshotMemo(
+  key: string | undefined,
+  result: PluginRegistrySnapshotResult,
+): PluginRegistrySnapshotResult {
+  if (!key) {
+    return result;
+  }
+  pluginRegistrySnapshotMemos = [
+    { key, result },
+    ...pluginRegistrySnapshotMemos.filter((memo) => memo.key !== key),
+  ].slice(0, MAX_PLUGIN_REGISTRY_SNAPSHOT_MEMOS);
+  return result;
 }
 
 function canReuseCurrentPluginMetadataSnapshot(params: LoadPluginRegistryParams): boolean {
@@ -288,6 +431,11 @@ export function loadPluginRegistrySnapshotWithMetadata(
   }
 
   const env = params.env ?? process.env;
+  const memoKey = resolvePluginRegistrySnapshotMemoKey(params, env);
+  const memo = findPluginRegistrySnapshotMemo(memoKey);
+  if (memo) {
+    return memo;
+  }
   const diagnostics: PluginRegistrySnapshotDiagnostic[] = [];
   const disabledByCaller = params.preferPersisted === false;
   const disabledByEnv = hasEnvFlag(env, DISABLE_PERSISTED_PLUGIN_REGISTRY_ENV);
@@ -354,7 +502,7 @@ export function loadPluginRegistrySnapshotWithMetadata(
           source: "persisted",
           diagnostics,
         };
-        return persistedResult;
+        return rememberPluginRegistrySnapshotMemo(memoKey, persistedResult);
       }
     } else if (persistedReadsEnabled) {
       diagnostics.push({
@@ -379,12 +527,12 @@ export function loadPluginRegistrySnapshotWithMetadata(
       ? params.installRecords
       : (params.installRecords ?? {}),
   });
-  return {
+  return rememberPluginRegistrySnapshotMemo(memoKey, {
     snapshot: derived.index,
     source: "derived",
     diagnostics,
     discovery: derived.discovery,
-  };
+  });
 }
 
 function resolveSnapshot(params: LoadPluginRegistryParams = {}): PluginRegistrySnapshot {

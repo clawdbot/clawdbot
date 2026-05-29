@@ -1,4 +1,8 @@
 import { Type, type TSchema } from "typebox";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import {
@@ -21,7 +25,6 @@ import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { resolveAllowedMessageActions } from "../../infra/outbound/outbound-policy.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -37,10 +40,17 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
-import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
+import {
+  channelTargetSchema,
+  channelTargetsSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  stringEnum,
+} from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readNumberParam, readStringParam } from "./common.js";
-import { resolveGatewayOptions } from "./gateway.js";
+import { jsonResult, readStringParam } from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
+import { readGatewayCallOptions, resolveGatewayOptions } from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
@@ -297,8 +307,8 @@ function buildReactionSchema() {
 
 function buildFetchSchema() {
   return {
-    limit: Type.Optional(Type.Number()),
-    pageSize: Type.Optional(Type.Number()),
+    limit: optionalPositiveIntegerSchema(),
+    pageSize: optionalPositiveIntegerSchema(),
     pageToken: Type.Optional(Type.String()),
     before: Type.Optional(Type.String()),
     after: Type.Optional(Type.String()),
@@ -324,13 +334,15 @@ function buildPollSchema() {
       ),
     ),
     pollOptionIndex: Type.Optional(
-      Type.Number({
+      Type.Integer({
+        minimum: 1,
         description: "1-based poll option number.",
       }),
     ),
     pollOptionIndexes: Type.Optional(
       Type.Array(
-        Type.Number({
+        Type.Integer({
+          minimum: 1,
           description: "1-based poll option numbers for multiselect.",
         }),
       ),
@@ -345,8 +357,8 @@ function buildPollSchema() {
       case "stringArray":
         props[name] = Type.Optional(Type.Array(Type.String()));
         break;
-      case "number":
-        props[name] = Type.Optional(Type.Number());
+      case "positiveInteger":
+        props[name] = optionalPositiveIntegerSchema();
         break;
       case "boolean":
         props[name] = Type.Optional(Type.Boolean());
@@ -393,7 +405,7 @@ function buildStickerSchema() {
 function buildThreadSchema() {
   return {
     threadName: Type.Optional(Type.String()),
-    autoArchiveMin: Type.Optional(Type.Number()),
+    autoArchiveMin: optionalPositiveIntegerSchema(),
     appliedTags: Type.Optional(Type.Array(Type.String())),
   };
 }
@@ -408,7 +420,7 @@ function buildEventSchema() {
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
     image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
-    durationMin: Type.Optional(Type.Number()),
+    durationMin: optionalNonNegativeIntegerSchema(),
     until: Type.Optional(Type.String()),
   };
 }
@@ -416,16 +428,12 @@ function buildEventSchema() {
 function buildModerationSchema() {
   return {
     reason: Type.Optional(Type.String()),
-    deleteDays: Type.Optional(Type.Number()),
+    deleteDays: optionalNonNegativeIntegerSchema({ maximum: 7 }),
   };
 }
 
 function buildGatewaySchema() {
-  return {
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  };
+  return gatewayCallOptionSchemaProperties();
 }
 
 function buildPresenceSchema() {
@@ -460,15 +468,16 @@ function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
     channelType: Type.Optional(
-      Type.Number({
+      Type.Integer({
+        minimum: 0,
         description: "Numeric channel type, e.g. Discord. Avoids JSON Schema `type` collision.",
       }),
     ),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
-    position: Type.Optional(Type.Number()),
+    position: optionalNonNegativeIntegerSchema(),
     nsfw: Type.Optional(Type.Boolean()),
-    rateLimitPerUser: Type.Optional(Type.Number()),
+    rateLimitPerUser: optionalNonNegativeIntegerSchema(),
     categoryId: Type.Optional(Type.String()),
     clearParent: Type.Optional(
       Type.Boolean({
@@ -1014,11 +1023,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params.accountId = accountId;
       }
 
-      const gatewayResolved = resolveGatewayOptions({
-        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
-        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
-        timeoutMs: readNumberParam(params, "timeoutMs"),
-      });
+      const gatewayResolved = resolveGatewayOptions(readGatewayCallOptions(params));
       const gateway = {
         url: gatewayResolved.url,
         token: gatewayResolved.token,

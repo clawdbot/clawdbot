@@ -105,6 +105,20 @@ function isSourceModulePath(modulePath: string): boolean {
   return /\.(?:c|m)?tsx?$/iu.test(modulePath);
 }
 
+function isPackageLocalBundledDistModulePath(params: {
+  rootScope: BundledChannelRootScope;
+  metadata: BundledChannelPluginMetadata;
+  modulePath: string;
+}): boolean {
+  const distRoots = [
+    ...(params.rootScope.pluginsDir
+      ? [path.join(params.rootScope.pluginsDir, params.metadata.dirName, "dist")]
+      : []),
+    path.join(params.rootScope.packageRoot, "extensions", params.metadata.dirName, "dist"),
+  ];
+  return distRoots.some((root) => isPathInside(root, params.modulePath));
+}
+
 function resolveChannelPluginModuleEntry(
   moduleExport: unknown,
 ): BundledChannelEntryRuntimeContract | null {
@@ -259,7 +273,15 @@ function loadGeneratedBundledChannelModule(params: {
       boundaryRootDir: boundaryRoot,
     });
   } catch (error) {
-    if (!isSourceModulePath(modulePath)) {
+    const canRetryWithCachedLoader =
+      isSourceModulePath(modulePath) ||
+      (isPackageLocalBundledDistModulePath({
+        rootScope: params.rootScope,
+        metadata: params.metadata,
+        modulePath,
+      }) &&
+        findMissingModuleCodeInChain(error) !== undefined);
+    if (!canRetryWithCachedLoader) {
       throw error;
     }
     const loader = getCachedPluginModuleLoader({
@@ -267,7 +289,7 @@ function loadGeneratedBundledChannelModule(params: {
       modulePath,
       importerUrl: import.meta.url,
       preferBuiltDist: true,
-      cacheScopeKey: "bundled-channel-source-entry",
+      cacheScopeKey: "bundled-channel-entry",
     });
     return loader(modulePath);
   }

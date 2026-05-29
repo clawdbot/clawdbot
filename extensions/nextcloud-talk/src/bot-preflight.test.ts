@@ -107,6 +107,19 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
     });
   });
 
+  it("does not treat negative feature masks as having every feature", async () => {
+    mockBotAdmin(-1);
+
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+      ok: false,
+      code: "missing_response_feature",
+      botId: "7",
+      botName: "OpenClaw",
+      message:
+        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
+    });
+  });
+
   it("reports malformed bot admin JSON with a stable channel error", async () => {
     hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
       response: new Response("{ nope", {

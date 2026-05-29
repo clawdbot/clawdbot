@@ -82,8 +82,6 @@ function createModalFieldComponent(
     customId = field.id;
     override options = options;
     override required = field.required;
-    override minValues = field.minValues;
-    override maxValues = field.maxValues;
   }
   return new DynamicRadioGroup();
 }

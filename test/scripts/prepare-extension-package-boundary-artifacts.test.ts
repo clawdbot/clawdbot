@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,11 +7,21 @@ import {
   createPrefixedOutputWriter,
   isArtifactSetFresh,
   parseMode,
+  resolveBoundaryRootShimsTimeoutMs,
+  runNodeStep,
   runNodeSteps,
   runNodeStepsInParallel,
 } from "../../scripts/prepare-extension-package-boundary-artifacts.mjs";
 
 const tempRoots = new Set<string>();
+
+function createMockPipe() {
+  const pipe = new EventEmitter() as EventEmitter & {
+    setEncoding: (encoding: string) => void;
+  };
+  pipe.setEncoding = () => {};
+  return pipe;
+}
 
 afterEach(() => {
   for (const rootDir of tempRoots) {
@@ -57,6 +68,33 @@ describe("prepare-extension-package-boundary-artifacts", () => {
 
     expect(Date.now() - startedAt).toBeLessThan(abortBudgetMs);
   }, 45_000);
+
+  it("hard-kills timed out prep steps", async () => {
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    const child = new EventEmitter() as EventEmitter & {
+      kill: (signal?: NodeJS.Signals | number) => boolean;
+      stderr: ReturnType<typeof createMockPipe>;
+      stdout: ReturnType<typeof createMockPipe>;
+    };
+    child.stdout = createMockPipe();
+    child.stderr = createMockPipe();
+    child.kill = (signal) => {
+      signals.push(signal);
+      return true;
+    };
+
+    await expect(
+      runNodeStep("hung-prep", ["--eval", "setTimeout(() => {}, 60_000)"], 5, {
+        spawnImpl(command: string, args: string[]) {
+          expect(command).toBe(process.execPath);
+          expect(args).toEqual(["--eval", "setTimeout(() => {}, 60_000)"]);
+          return child;
+        },
+      }),
+    ).rejects.toThrow("hung-prep timed out after 5ms");
+
+    expect(signals).toEqual(["SIGKILL"]);
+  });
 
   it("runs boundary prep steps serially for local checks", async () => {
     const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-serial-"));
@@ -140,5 +178,19 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(parseMode([])).toBe("all");
     expect(parseMode(["--mode=package-boundary"])).toBe("package-boundary");
     expect(() => parseMode(["--mode=nope"])).toThrow("Unknown mode: nope");
+  });
+
+  it("gives cold root shim generation macOS runner headroom", () => {
+    expect(resolveBoundaryRootShimsTimeoutMs({})).toBe(300_000);
+    expect(
+      resolveBoundaryRootShimsTimeoutMs({
+        OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "450000",
+      }),
+    ).toBe(450_000);
+    expect(
+      resolveBoundaryRootShimsTimeoutMs({
+        OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "120s",
+      }),
+    ).toBe(300_000);
   });
 });

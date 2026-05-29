@@ -226,6 +226,7 @@ export function buildQaRuntimeEnv(params: {
     OPENCLAW_SKIP_CANVAS_HOST: "1",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_TEST_FAST: "1",
+    OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS: "2000",
     OPENCLAW_QA_PARENT_PID: String(process.pid),
     OPENCLAW_QA_TEMP_ROOT: params.tempRoot,
     ...(params.stagedBundledPluginsRoot

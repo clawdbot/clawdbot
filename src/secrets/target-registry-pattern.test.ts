@@ -23,6 +23,24 @@ describe("target registry pattern helpers", () => {
         tokens,
       ),
     ).toBeNull();
+    expect(
+      matchPathTokens(
+        ["agents", "list", "02", "memorySearch", "providers", "openai", "apiKey"],
+        tokens,
+      ),
+    ).toBeNull();
+    expect(
+      matchPathTokens(
+        ["agents", "list", "+2", "memorySearch", "providers", "openai", "apiKey"],
+        tokens,
+      ),
+    ).toBeNull();
+    expect(
+      matchPathTokens(
+        ["agents", "list", "4294967294", "memorySearch", "providers", "openai", "apiKey"],
+        tokens,
+      ),
+    ).toBeNull();
   });
 
   it("materializes sibling ref paths from wildcard and array captures", () => {
@@ -37,6 +55,9 @@ describe("target registry pattern helpers", () => {
       "apiKeyRef",
     ]);
     expect(materializePathTokens(refTokens, ["anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens, ["01", "anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens, ["+1", "anthropic"])).toBeNull();
+    expect(materializePathTokens(refTokens, ["4294967294", "anthropic"])).toBeNull();
   });
 
   it("matches two wildcard captures in five-segment header paths", () => {

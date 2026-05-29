@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import http from "node:http";
+import { readPositiveIntEnv } from "../env-limits.mjs";
 
-const port = Number(process.env.MOCK_PORT);
+const port = readPositiveIntEnv("MOCK_PORT");
 const requestLog = process.env.MOCK_REQUEST_LOG;
 const successMarker = process.env.SUCCESS_MARKER;
 const rawSchemaError = process.env.RAW_SCHEMA_ERROR;

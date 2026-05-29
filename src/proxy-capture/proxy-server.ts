@@ -64,6 +64,9 @@ export function parseConnectTarget(rawTarget: string | undefined): {
   }
   const hostname = trimmed.slice(0, lastColon).trim() || "127.0.0.1";
   const portText = trimmed.slice(lastColon + 1).trim();
+  if (!/^\d+$/.test(portText)) {
+    throw new Error("Invalid CONNECT target port");
+  }
   const port = Number(portText);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error("Invalid CONNECT target port");

@@ -29,6 +29,30 @@ vi.mock("../provider-auth-aliases.js", () => ({
     provider.trim().toLowerCase() === "codex-cli" ? "openai-codex" : provider.trim().toLowerCase(),
 }));
 
+vi.mock("../model-runtime-aliases.js", async () => {
+  const actual = await vi.importActual<typeof import("../model-runtime-aliases.js")>(
+    "../model-runtime-aliases.js",
+  );
+  return {
+    ...actual,
+    resolveCliRuntimeExecutionProvider: ({
+      provider,
+      cfg,
+      modelId,
+    }: {
+      provider?: string;
+      cfg?: OpenClawConfig;
+      modelId?: string;
+    }) => {
+      const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+      const runtime = key
+        ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+        : undefined;
+      return runtime || provider;
+    },
+  };
+});
+
 vi.mock("../embedded-agent.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
@@ -1100,7 +1124,7 @@ describe("CLI attempt execution", () => {
         agents: {
           defaults: {
             models: {
-              "openai/gpt-5.4": { agentRuntime: { id: "codex-cli" } },
+              "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
             },
           },
         },

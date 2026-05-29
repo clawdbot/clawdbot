@@ -1,5 +1,5 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "../../infra/voicewake.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { normalizeVoiceWakeTriggers } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";

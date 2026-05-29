@@ -6,7 +6,7 @@ import {
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   enablePluginInConfig,
-  readNumberParam,
+  readPositiveIntegerParam,
   readResponseText,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -32,7 +32,7 @@ const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results to return (1-10).",
         minimum: 1,
         maximum: 10,
@@ -330,7 +330,10 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
         await runOllamaWebSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
-          count: readNumberParam(args, "count", { integer: true }),
+          count: readPositiveIntegerParam(args, "count", {
+            max: 10,
+            message: "count must be an integer from 1 to 10.",
+          }),
         }),
     }),
   };

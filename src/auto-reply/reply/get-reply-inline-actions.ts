@@ -12,6 +12,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import {
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
@@ -126,6 +127,23 @@ export type InlineActionResult =
       abortedLastRun: boolean;
       cleanedBody: string;
     };
+
+// Command / skill-dispatch handlers ("/compact", "/status", tool-not-available
+// errors, etc.) emit system-meta feedback for an explicit user action; they
+// are not assistant source content. Mark them so dispatch-from-config does
+// not silently drop them when sourceReplyDeliveryMode === "message_tool_only"
+// (the default for many channels and group chats). See #87107.
+function markCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (!reply) {
+    return reply;
+  }
+  if (Array.isArray(reply)) {
+    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+  }
+  return markReplyPayloadForSourceSuppressionDelivery(reply);
+}
 
 function extractTextFromToolResult(result: unknown): string | null {
   if (!result || typeof result !== "object") {
@@ -307,7 +325,12 @@ export async function handleInlineActions(params: {
       const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
+        return {
+          kind: "reply",
+          reply: markCommandReplyForDelivery({
+            text: `❌ Tool not available: ${dispatch.toolName}`,
+          }),
+        };
       }
 
       const toolCallId = `cmd_${generateSecureToken(8)}`;
@@ -323,16 +346,19 @@ export async function handleInlineActions(params: {
           typing.cleanup();
           return {
             kind: "reply",
-            reply: { text: `❌ Tool call blocked: ${blockedReason}` },
+            reply: markCommandReplyForDelivery({ text: `❌ Tool call blocked: ${blockedReason}` }),
           };
         }
         const text = extractTextFromToolResult(result) ?? "✅ Done.";
         typing.cleanup();
-        return { kind: "reply", reply: { text } };
+        return { kind: "reply", reply: markCommandReplyForDelivery({ text }) };
       } catch (err) {
         const message = formatErrorMessage(err);
         typing.cleanup();
-        return { kind: "reply", reply: { text: `❌ ${message}` } };
+        return {
+          kind: "reply",
+          reply: markCommandReplyForDelivery({ text: `❌ ${message}` }),
+        };
       }
     }
 
@@ -494,7 +520,7 @@ export async function handleInlineActions(params: {
     if (inlineResult.reply) {
       if (!inlineCommand.cleaned) {
         typing.cleanup();
-        return { kind: "reply", reply: inlineResult.reply };
+        return { kind: "reply", reply: markCommandReplyForDelivery(inlineResult.reply) };
       }
       await sendInlineReply(inlineResult.reply);
     }
@@ -558,7 +584,7 @@ export async function handleInlineActions(params: {
   const commandResult = await runCommands(command);
   if (!commandResult.shouldContinue) {
     typing.cleanup();
-    return { kind: "reply", reply: commandResult.reply };
+    return { kind: "reply", reply: markCommandReplyForDelivery(commandResult.reply) };
   }
   if (command.commandBodyNormalized !== commandBodyBeforeRun) {
     cleanedBody = command.commandBodyNormalized;

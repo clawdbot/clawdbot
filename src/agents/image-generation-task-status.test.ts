@@ -378,6 +378,34 @@ describe("image generation task status", () => {
     ).toBeUndefined();
   });
 
+  it("does not keep stale recent starts forever for non-finite maxAgeMs", () => {
+    const now = Date.now();
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-stale",
+      runId: "run-stale",
+      taskLabel: "stale prompt",
+      requestKey: "image-request:stale",
+      providerId: "xai",
+      progressSummary: "Generating stale image",
+      nowMs: now - 1,
+    });
+
+    expect(
+      findRecentStartedMediaGenerationTaskForSession({
+        sessionKey: "agent:main",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourcePrefix: "image_generate",
+        taskLabel: "stale prompt",
+        requestKey: "image-request:stale",
+        maxAgeMs: Number.POSITIVE_INFINITY,
+        nowMs: now,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not block a distinct prompt from a cached active recent start", () => {
     recordRecentMediaGenerationTaskStartForSession({
       sessionKey: "agent:main",

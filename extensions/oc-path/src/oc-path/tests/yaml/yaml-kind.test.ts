@@ -62,6 +62,11 @@ describe("resolveYamlOcPath — direct", () => {
     }
   });
 
+  it("does not resolve noncanonical sequence indexes", () => {
+    const { ast } = parseYaml(LOBSTER);
+    expect(resolveYamlOcPath(ast, parseOcPath("oc://workflow.lobster/steps.01.id"))).toBeNull();
+  });
+
   it("returns root when no segments", () => {
     const { ast } = parseYaml(LOBSTER);
     const m = resolveYamlOcPath(ast, parseOcPath("oc://workflow.lobster"));
@@ -90,6 +95,15 @@ describe("setYamlOcPath — direct", () => {
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.ast.raw).toContain("id: fetch-renamed");
+    }
+  });
+
+  it("reports unresolved for noncanonical sequence indexes", () => {
+    const { ast } = parseYaml(LOBSTER);
+    const r = setYamlOcPath(ast, parseOcPath("oc://workflow.lobster/steps.01.id"), "nope");
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toBe("unresolved");
     }
   });
 

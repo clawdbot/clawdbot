@@ -85,6 +85,12 @@ const ROUTE_QUESTION_STOP_WORDS = new Set([
   "would",
 ]);
 
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(1, Math.floor(value))
+    : fallback;
+}
+
 export const WIKI_SEARCH_MODES = [
   "auto",
   "find-person",
@@ -1467,7 +1473,7 @@ export async function searchMemoryWiki(params: {
     operation: "wiki_search",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const maxResults = Math.max(1, params.maxResults ?? 10);
+  const maxResults = normalizePositiveInteger(params.maxResults, 10);
   const mode = params.mode ?? "auto";
 
   const wikiResults = shouldSearchWiki(effectiveConfig)
@@ -1534,8 +1540,8 @@ export async function getMemoryWikiPage(params: {
     operation: "wiki_get",
   });
   await initializeMemoryWikiVault(effectiveConfig);
-  const fromLine = Math.max(1, params.fromLine ?? 1);
-  const lineCount = Math.max(1, params.lineCount ?? 200);
+  const fromLine = normalizePositiveInteger(params.fromLine, 1);
+  const lineCount = normalizePositiveInteger(params.lineCount, 200);
 
   if (shouldSearchWiki(effectiveConfig)) {
     const digest = await readQueryDigestBundle(effectiveConfig.vault.path);

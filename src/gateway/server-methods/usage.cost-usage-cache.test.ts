@@ -86,14 +86,14 @@ describe("costUsageCache bounded growth", () => {
     // oldest-first, never the newest.
     const lastStartMs = Date.UTC(2026, 0, 1) + (ITERATIONS - 1) * DAY_MS;
     const lastEndMs = lastStartMs + ((ITERATIONS - 1) % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-    const lastCacheKey = `${lastStartMs}-${lastEndMs}`;
+    const lastCacheKey = `agent:__default__:${lastStartMs}-${lastEndMs}`;
     expect(testApi.costUsageCache.has(lastCacheKey)).toBe(true);
 
     // Tertiary: the oldest entry must have been evicted once the cap was
     // exceeded. Pre-fix all 600 entries remain and this fails too.
     const firstStartMs = Date.UTC(2026, 0, 1);
     const firstEndMs = firstStartMs + DAY_MS - 1;
-    const firstCacheKey = `${firstStartMs}-${firstEndMs}`;
+    const firstCacheKey = `agent:__default__:${firstStartMs}-${firstEndMs}`;
     expect(testApi.costUsageCache.has(firstCacheKey)).toBe(false);
   });
 
@@ -125,7 +125,7 @@ describe("costUsageCache bounded growth", () => {
     });
     await Promise.resolve();
 
-    expect(testApi.costUsageCache.has("1-2")).toBe(true);
+    expect(testApi.costUsageCache.has("agent:__default__:1-2")).toBe(true);
     expect(mocks.loadCostUsageSummaryFromCache).toHaveBeenCalledTimes(257);
     void inFlight.catch(() => {});
     void repeated.catch(() => {});

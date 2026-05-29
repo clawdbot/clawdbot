@@ -32,20 +32,6 @@
       "activation": ["tools.web.fetch.readability", "plugins.entries.web-readability.enabled"],
       "risk": ["parser", "untrusted-html"]
     },
-    "@napi-rs/canvas": {
-      "owner": "plugin:document-extract",
-      "class": "optional-peer-runtime",
-      "activation": [
-        "input_file.application_pdf.image_fallback",
-        "plugins.entries.document-extract.enabled"
-      ],
-      "risk": ["native", "parser", "untrusted-files"]
-    },
-    "ajv": {
-      "owner": "core:json-schema-validation",
-      "class": "core-runtime",
-      "risk": ["schema-validation"]
-    },
     "chalk": {
       "owner": "core:cli",
       "class": "core-runtime",
@@ -85,16 +71,6 @@
       "owner": "core:proxy",
       "class": "core-runtime",
       "risk": ["network", "proxy"]
-    },
-    "https-proxy-agent": {
-      "owner": "core:proxy",
-      "class": "core-runtime",
-      "risk": ["network", "proxy"]
-    },
-    "ipaddr.js": {
-      "owner": "core:ssrf-guard",
-      "class": "core-runtime",
-      "risk": ["network-policy"]
     },
     "jiti": {
       "owner": "core:plugin-loader",
@@ -137,16 +113,11 @@
       "class": "core-runtime",
       "risk": ["browser-automation", "cdp"]
     },
-    "pdfjs-dist": {
+    "clawpdf": {
       "owner": "plugin:document-extract",
       "class": "plugin-runtime",
       "activation": ["input_file.application_pdf", "plugins.entries.document-extract.enabled"],
-      "risk": ["parser", "untrusted-files"]
-    },
-    "proxy-agent": {
-      "owner": "core:proxy",
-      "class": "core-runtime",
-      "risk": ["network", "proxy"]
+      "risk": ["wasm", "parser", "untrusted-files"]
     },
     "qrcode": {
       "owner": "core:qr-setup",

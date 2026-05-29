@@ -1,7 +1,10 @@
 import { Cron } from "croner";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
+import { coerceFiniteScheduleNumber } from "./schedule-number.js";
 import type { CronSchedule } from "./types.js";
+
+export { coerceFiniteScheduleNumber } from "./schedule-number.js";
 
 const CRON_EVAL_CACHE_MAX = 512;
 const cronEvalCache = new Map<string, Cron>();
@@ -48,21 +51,6 @@ function resolveCronFromSchedule(schedule: {
     return undefined;
   }
   return resolveCachedCron(expr, resolveCronTimezone(schedule.tz));
-}
-
-export function coerceFiniteScheduleNumber(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : undefined;
-  }
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return undefined;
-    }
-    const parsed = Number(trimmed);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
 }
 
 export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): number | undefined {

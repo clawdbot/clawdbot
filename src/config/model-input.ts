@@ -1,5 +1,8 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeTogetherModelId,
+} from "../plugin-sdk/provider-model-id-normalize.js";
 import { isRecord as isPlainRecord } from "../shared/record-coerce.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -78,7 +81,9 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   const normalizedModel =
     GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
       ? normalizeGooglePreviewModelId(modelSuffix)
-      : modelSuffix;
+      : provider === "together"
+        ? normalizeTogetherModelId(modelSuffix)
+        : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 

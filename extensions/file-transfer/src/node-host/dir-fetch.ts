@@ -1,12 +1,13 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
-  FsSafeError,
-  resolveAbsolutePathForRead,
-  root as fsRoot,
-} from "openclaw/plugin-sdk/security-runtime";
+  classifyFsSafeReadError,
+  readAbsolutePath,
+  resolveCanonicalReadPath,
+  statRequiredDirectory,
+} from "./path-errors.js";
 
 const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
@@ -55,16 +56,9 @@ function clampMaxBytes(input: unknown): number {
 }
 
 function classifyFsError(err: unknown): DirFetchErrCode {
-  if (err instanceof FsSafeError) {
-    if (err.code === "not-found") {
-      return "NOT_FOUND";
-    }
-    if (err.code === "symlink") {
-      return "SYMLINK_REDIRECT";
-    }
-    if (err.code === "invalid-path") {
-      return "INVALID_PATH";
-    }
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
   }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
@@ -184,15 +178,9 @@ async function listTreeEntries(root: string, maxEntries: number): Promise<string
 }
 
 export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchResult> {
-  const requestedPath = params.path;
-  if (typeof requestedPath !== "string" || requestedPath.length === 0) {
-    return { ok: false, code: "INVALID_PATH", message: "path required" };
-  }
-  if (requestedPath.includes("\0")) {
-    return { ok: false, code: "INVALID_PATH", message: "path contains NUL byte" };
-  }
-  if (!path.isAbsolute(requestedPath)) {
-    return { ok: false, code: "INVALID_PATH", message: "path must be absolute" };
+  const requestedPath = readAbsolutePath(params.path);
+  if (typeof requestedPath !== "string") {
+    return requestedPath;
   }
 
   const maxBytes = clampMaxBytes(params.maxBytes);
@@ -200,51 +188,19 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 
-  let canonical: string;
-  try {
-    canonical = (
-      await resolveAbsolutePathForRead(requestedPath, {
-        symlinks: followSymlinks ? "follow" : "reject",
-      })
-    ).canonicalPath;
-  } catch (err) {
-    const code = classifyFsError(err);
-    const canonicalPath =
-      err instanceof FsSafeError &&
-      err.cause &&
-      typeof err.cause === "object" &&
-      "canonicalPath" in err.cause &&
-      typeof err.cause.canonicalPath === "string"
-        ? err.cause.canonicalPath
-        : undefined;
-    return {
-      ok: false,
-      code,
-      message:
-        code === "NOT_FOUND"
-          ? "directory not found"
-          : code === "SYMLINK_REDIRECT"
-            ? "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)"
-            : `realpath failed: ${String(err)}`,
-      ...(canonicalPath ? { canonicalPath } : {}),
-    };
+  const canonical = await resolveCanonicalReadPath({
+    requestedPath,
+    followSymlinks,
+    classifyError: classifyFsError,
+    notFoundMessage: "directory not found",
+  });
+  if (typeof canonical !== "string") {
+    return canonical;
   }
 
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stats = await fs.stat(canonical);
-  } catch (err) {
-    const code = classifyFsError(err);
-    return { ok: false, code, message: `stat failed: ${String(err)}`, canonicalPath: canonical };
-  }
-
-  if (!stats.isDirectory()) {
-    return {
-      ok: false,
-      code: "IS_FILE",
-      message: "path is not a directory",
-      canonicalPath: canonical,
-    };
+  const directory = await statRequiredDirectory(canonical, classifyFsError);
+  if (!directory.ok) {
+    return directory;
   }
 
   if (preflightOnly) {

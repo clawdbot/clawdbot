@@ -39,8 +39,8 @@ describe("cron tool", () => {
     opts?: Parameters<typeof createCronTool>[0],
   ): ReturnType<typeof createCronTool> {
     return createCronTool(opts, {
-      callGatewayTool: async (method, _gatewayOpts, params) =>
-        await callGatewayMock({ method, params }),
+      callGatewayTool: async (method, gatewayOpts, params) =>
+        await callGatewayMock({ method, params }, gatewayOpts),
     });
   }
 
@@ -50,6 +50,10 @@ describe("cron tool", () => {
         | { method?: string; params?: Record<string, unknown> }
         | undefined) ?? { method: undefined, params: undefined }
     );
+  }
+
+  function readGatewayOpts(index = 0): Record<string, unknown> | undefined {
+    return callGatewayMock.mock.calls[index]?.[1] as Record<string, unknown> | undefined;
   }
 
   function readCronPayloadText(index = 0): string {
@@ -254,6 +258,19 @@ describe("cron tool", () => {
     const params = expectSingleGatewayCallMethod("cron.status");
     expect(params).toStrictEqual({});
     expect(result.details).toEqual({ enabled: true });
+  });
+
+  it("passes parsed string timeoutMs values through to gateway calls", async () => {
+    callGatewayMock.mockResolvedValueOnce({ enabled: true });
+    const tool = createTestCronTool();
+
+    await tool.execute("call-status-timeout", {
+      action: "status",
+      timeoutMs: "5000",
+    });
+
+    expectSingleGatewayCallMethod("cron.status");
+    expect(readGatewayOpts(0)?.timeoutMs).toBe(5000);
   });
 
   it("allows scoped isolated cron runs to get the current job", async () => {
@@ -699,6 +716,26 @@ describe("cron tool", () => {
     expect(text).toContain("Message 3");
     expect(text).toContain("Message 12");
   });
+
+  it.each([1.5, -1, "2messages"])(
+    "rejects invalid contextMessages value %s",
+    async (contextMessages) => {
+      const tool = createTestCronTool({ agentSessionKey: "main" });
+
+      await expect(
+        tool.execute("call-invalid-context", {
+          action: "add",
+          contextMessages,
+          job: {
+            name: "reminder",
+            schedule: { at: new Date(123).toISOString() },
+            payload: { kind: "systemEvent", text: "Reminder: the thing." },
+          },
+        }),
+      ).rejects.toThrow("contextMessages must be a non-negative integer");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not add context when contextMessages is 0 (default)", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });

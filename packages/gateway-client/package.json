@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/gateway-client",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./readiness": {
+      "types": "./dist/readiness.d.mts",
+      "import": "./dist/readiness.mjs",
+      "default": "./dist/readiness.mjs"
+    },
+    "./timeouts": {
+      "types": "./dist/timeouts.d.mts",
+      "import": "./dist/timeouts.mjs",
+      "default": "./dist/timeouts.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown src/index.ts src/readiness.ts src/timeouts.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
+  },
+  "dependencies": {
+    "@openclaw/gateway-protocol": "workspace:*",
+    "ipaddr.js": "2.4.0",
+    "ws": "8.21.0"
+  }
+}

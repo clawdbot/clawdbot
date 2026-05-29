@@ -611,6 +611,59 @@ describe("fetchCopilotModelCatalog", () => {
     expect(out[0].name).toBe("GPT-5.5");
   });
 
+  it("falls back from malformed live token limits", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: [
+          {
+            id: "gpt-bad-window",
+            name: "GPT Bad Window",
+            object: "model",
+            capabilities: {
+              type: "chat",
+              limits: {
+                max_context_window_tokens: -1,
+                max_output_tokens: 128000.5,
+              },
+            },
+          },
+          {
+            id: "gpt-bad-output",
+            name: "GPT Bad Output",
+            object: "model",
+            capabilities: {
+              type: "chat",
+              limits: {
+                max_context_window_tokens: Number.POSITIVE_INFINITY,
+                max_output_tokens: 0,
+              },
+            },
+          },
+        ],
+      }),
+    });
+
+    const out = await fetchCopilotModelCatalog({
+      copilotApiToken: "tid=test",
+      baseUrl: "https://api.githubcopilot.com",
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({
+      id: "gpt-bad-window",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+    expect(out[1]).toMatchObject({
+      id: "gpt-bad-output",
+      contextWindow: 128000,
+      maxTokens: 8192,
+    });
+  });
+
   it("throws on non-2xx HTTP responses so the caller can fall back to the static catalog", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: false,

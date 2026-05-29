@@ -44,7 +44,8 @@ type WebChannelLightRuntimeModule = {
   formatError: (error: unknown) => string;
   getStatusCode: (error: unknown) => number | undefined;
   pickWebChannel: (pref: string, authDir?: string) => Promise<string>;
-  WA_WEB_AUTH_DIR: string;
+  resolveDefaultWebAuthDir?: () => string;
+  WA_WEB_AUTH_DIR?: string;
 };
 
 type WebChannelHeavyRuntimeModule = {
@@ -293,8 +294,20 @@ export function pickWebChannel(
   return getLightExport("pickWebChannel")(...args);
 }
 
-export function resolveWebChannelAuthDir(): WebChannelLightRuntimeModule["WA_WEB_AUTH_DIR"] {
-  return getLightExport("WA_WEB_AUTH_DIR");
+export function resolveWebChannelAuthDir(): ReturnType<
+  NonNullable<WebChannelLightRuntimeModule["resolveDefaultWebAuthDir"]>
+> {
+  const loaded = loadWebChannelLightModule();
+  if (loaded.resolveDefaultWebAuthDir) {
+    return loaded.resolveDefaultWebAuthDir();
+  }
+  // Older light runtimes expose the default auth dir as a primitive string.
+  // Do not accept string-like objects here; Node path APIs reject them before
+  // coercion.
+  if (typeof loaded.WA_WEB_AUTH_DIR === "string") {
+    return loaded.WA_WEB_AUTH_DIR;
+  }
+  throw new Error("web channel plugin runtime is missing export 'resolveDefaultWebAuthDir'");
 }
 
 export async function handleWebChannelAction(

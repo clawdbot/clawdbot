@@ -6,8 +6,23 @@ export type FenceSpan = {
   indent: string;
 };
 
-export function parseFenceSpans(buffer: string): FenceSpan[] {
+export type FenceScanState = {
+  atLineStart?: boolean;
+  open?: {
+    markerChar: string;
+    markerLen: number;
+    openLine: string;
+    marker: string;
+    indent: string;
+  };
+};
+
+export function scanFenceSpans(
+  buffer: string,
+  state?: FenceScanState,
+): { spans: FenceSpan[]; state: FenceScanState } {
   const spans: FenceSpan[] = [];
+  const startsAtLineStart = state?.atLineStart ?? true;
   let open:
     | {
         start: number;
@@ -17,7 +32,7 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
         marker: string;
         indent: string;
       }
-    | undefined;
+    | undefined = state?.open ? { ...state.open, start: 0 } : undefined;
 
   let offset = 0;
   while (offset <= buffer.length) {
@@ -26,7 +41,7 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
     const line = buffer.slice(offset, lineEnd);
 
     const match = line.match(/^( {0,3})(`{3,}|~{3,})(.*)$/);
-    if (match) {
+    if (match && (offset > 0 || startsAtLineStart)) {
       const indent = match[1];
       const marker = match[2];
       const markerChar = marker[0];
@@ -69,7 +84,26 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
     });
   }
 
-  return spans;
+  const atLineStart = buffer.length === 0 ? startsAtLineStart : buffer.endsWith("\n");
+  const nextState: FenceScanState = {
+    atLineStart,
+    ...(open
+      ? {
+          open: {
+            markerChar: open.markerChar,
+            markerLen: open.markerLen,
+            openLine: open.openLine,
+            marker: open.marker,
+            indent: open.indent,
+          },
+        }
+      : {}),
+  };
+  return { spans, state: nextState };
+}
+
+export function parseFenceSpans(buffer: string): FenceSpan[] {
+  return scanFenceSpans(buffer).spans;
 }
 
 export function findFenceSpanAt(spans: FenceSpan[], index: number): FenceSpan | undefined {

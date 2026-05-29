@@ -1,3 +1,4 @@
+import type { SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -6,7 +7,6 @@ import {
   type SessionPatchHookContext,
   type SessionPatchHookEvent,
 } from "../hooks/internal-hooks.js";
-import type { SessionsPatchParams } from "./protocol/index.js";
 
 export function triggerSessionPatchHook(params: {
   cfg: OpenClawConfig;

@@ -1,3 +1,25 @@
+import type {
+  CommandEntry,
+  CommandsListResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateCommandsListParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  COMMAND_ALIAS_MAX_ITEMS,
+  COMMAND_ARG_CHOICES_MAX_ITEMS,
+  COMMAND_ARG_DESCRIPTION_MAX_LENGTH,
+  COMMAND_ARG_NAME_MAX_LENGTH,
+  COMMAND_ARGS_MAX_ITEMS,
+  COMMAND_CHOICE_LABEL_MAX_LENGTH,
+  COMMAND_CHOICE_VALUE_MAX_LENGTH,
+  COMMAND_DESCRIPTION_MAX_LENGTH,
+  COMMAND_LIST_MAX_ITEMS,
+  COMMAND_NAME_MAX_LENGTH,
+} from "../../../packages/gateway-protocol/src/schema.js";
 import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { listChatCommandsForConfig } from "../../auto-reply/commands-registry.js";
 import type {
@@ -11,25 +33,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginCommandSpecs } from "../../plugins/command-specs.js";
 import { listPluginCommands } from "../../plugins/commands.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import type { CommandEntry, CommandsListResult } from "../protocol/index.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateCommandsListParams,
-} from "../protocol/index.js";
-import {
-  COMMAND_ALIAS_MAX_ITEMS,
-  COMMAND_ARG_CHOICES_MAX_ITEMS,
-  COMMAND_ARG_DESCRIPTION_MAX_LENGTH,
-  COMMAND_ARG_NAME_MAX_LENGTH,
-  COMMAND_ARGS_MAX_ITEMS,
-  COMMAND_CHOICE_LABEL_MAX_LENGTH,
-  COMMAND_CHOICE_VALUE_MAX_LENGTH,
-  COMMAND_DESCRIPTION_MAX_LENGTH,
-  COMMAND_LIST_MAX_ITEMS,
-  COMMAND_NAME_MAX_LENGTH,
-} from "../protocol/schema/commands.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type SerializedArg = NonNullable<CommandEntry["args"]>[number];

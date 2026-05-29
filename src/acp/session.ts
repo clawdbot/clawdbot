@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveIntegerOption } from "./numeric-options.js";
 import type { AcpSession } from "./types.js";
 
 export type AcpSessionStore = {
@@ -28,8 +29,8 @@ const DEFAULT_MAX_SESSIONS = 5_000;
 const DEFAULT_IDLE_TTL_MS = 24 * 60 * 60 * 1_000;
 
 export function createInMemorySessionStore(options: AcpSessionStoreOptions = {}): AcpSessionStore {
-  const maxSessions = Math.max(1, options.maxSessions ?? DEFAULT_MAX_SESSIONS);
-  const idleTtlMs = Math.max(1_000, options.idleTtlMs ?? DEFAULT_IDLE_TTL_MS);
+  const maxSessions = resolveIntegerOption(options.maxSessions, DEFAULT_MAX_SESSIONS, { min: 1 });
+  const idleTtlMs = resolveIntegerOption(options.idleTtlMs, DEFAULT_IDLE_TTL_MS, { min: 1_000 });
   const now = options.now ?? Date.now;
   const sessions = new Map<string, AcpSession>();
   const runIdToSessionId = new Map<string, string>();

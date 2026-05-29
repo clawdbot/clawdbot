@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { callGateway } from "../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export function createPluginCliGatewayNodesRuntime(): PluginRuntime["nodes"] {

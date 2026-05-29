@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
@@ -426,6 +427,32 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
 
     expect(result.source).toBe("persisted");
     expect(result.diagnostics).toStrictEqual([]);
+  });
+
+  it("refreshes a memoized derived snapshot when workspace plugins are installed", () => {
+    const tempRoot = makeTempDir();
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+
+    const first = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, workspaceDir });
+    expect(first.snapshot.plugins.map((plugin) => plugin.pluginId)).not.toContain("demo");
+
+    writePackagePlugin(path.join(workspaceDir, ".openclaw", "extensions", "demo"));
+
+    const second = loadPluginRegistrySnapshotWithMetadata({ config: {}, env, workspaceDir });
+    expect(second.snapshot.plugins.map((plugin) => plugin.pluginId)).toContain("demo");
+  });
+
+  it("ignores malformed load paths while fingerprinting memoized snapshots", () => {
+    const tempRoot = makeTempDir();
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {
+      plugins: {
+        load: { paths: "not-an-array" },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => loadPluginRegistrySnapshotWithMetadata({ config, env })).not.toThrow();
   });
 
   it("keeps persisted package plugins when file hashes match", () => {

@@ -1,4 +1,11 @@
 import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  type ToolsCatalogResult,
+  validateToolsCatalogParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   listAgentIds,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -19,13 +26,6 @@ import {
   resolvePluginTools,
 } from "../../plugins/tools.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  type ToolsCatalogResult,
-  validateToolsCatalogParams,
-} from "../protocol/index.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type ToolCatalogEntry = {

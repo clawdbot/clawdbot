@@ -1,3 +1,11 @@
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateMessageActionParams,
+  validatePollParams,
+  validateSendParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
@@ -31,14 +39,6 @@ import {
   readStringValue,
 } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateMessageActionParams,
-  validatePollParams,
-  validateSendParams,
-} from "../protocol/index.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";

@@ -72,6 +72,7 @@ type ClawHubPublishablePluginPackageFilters = {
 };
 
 const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
+const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   ".github/workflows/plugin-clawhub-release.yml",
@@ -96,6 +97,63 @@ function getRegistryBaseUrl(explicit?: string) {
     process.env.CLAWHUB_SITE?.trim() ||
     CLAWHUB_DEFAULT_REGISTRY
   );
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  label: string,
+  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+): Promise<string> {
+  const contentLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`${label} response body exceeded ${maxBytes} bytes.`);
+  }
+
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let totalBytes = 0;
+  let canceled = false;
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        const tail = decoder.decode();
+        if (tail) {
+          chunks.push(tail);
+        }
+        break;
+      }
+
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        canceled = true;
+        await reader.cancel().catch(() => undefined);
+        throw new Error(`${label} response body exceeded ${maxBytes} bytes.`);
+      }
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+  } finally {
+    if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return chunks.join("");
+}
+
+async function readClawHubPackageOwnerDetail(
+  response: Response,
+  packageName: string,
+): Promise<ClawHubPackageOwnerDetail> {
+  return JSON.parse(
+    await readBoundedResponseText(response, `ClawHub package owner response for ${packageName}`),
+  ) as ClawHubPackageOwnerDetail;
 }
 
 export function collectClawHubPublishablePluginPackages(
@@ -390,7 +448,7 @@ export async function collectClawHubOpenClawOwnerErrors(params: {
         return;
       }
 
-      const detail = (await response.json()) as ClawHubPackageOwnerDetail;
+      const detail = await readClawHubPackageOwnerDetail(response, plugin.packageName);
       const ownerHandle = typeof detail.owner?.handle === "string" ? detail.owner.handle : null;
       if (ownerHandle !== requiredOwnerHandle) {
         errors.push(

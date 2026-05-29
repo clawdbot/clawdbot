@@ -91,6 +91,11 @@ describe("port allocation", () => {
     }
     expect(allocateCdpPort(usedPorts)).toBeNull();
   });
+
+  it("rejects fractional or out-of-range allocation ranges", () => {
+    expect(allocateCdpPort(new Set(), { start: 20000.5, end: 20002 })).toBeNull();
+    expect(allocateCdpPort(new Set(), { start: 20000, end: 65536 })).toBeNull();
+  });
 });
 
 describe("getUsedPorts", () => {
@@ -120,9 +125,21 @@ describe("getUsedPorts", () => {
   it("ignores invalid cdpUrl values", () => {
     const profiles = {
       bad: { cdpUrl: "notaurl" },
+      portZero: { cdpUrl: "http://127.0.0.1:0" },
     };
     const used = getUsedPorts(profiles);
     expect(used.size).toBe(0);
+  });
+
+  it("ignores invalid numeric cdpPort values", () => {
+    const profiles = {
+      fractional: { cdpPort: 18800.5 },
+      zero: { cdpPort: 0 },
+      outOfRange: { cdpPort: 65536 },
+      valid: { cdpPort: 18801 },
+    };
+    const used = getUsedPorts(profiles);
+    expect(used).toEqual(new Set([18801]));
   });
 });
 

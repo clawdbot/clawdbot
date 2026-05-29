@@ -24,6 +24,14 @@ declare module "qrcode" {
     width?: number;
   };
 
+  export type QrCodeSymbol = {
+    modules: {
+      data: ArrayLike<boolean | number>;
+      size: number;
+    };
+  };
+
+  export function create(text: string, options?: QrCodeRenderOptions): QrCodeSymbol;
   export function toString(text: string, options?: QrCodeRenderOptions): Promise<string>;
   export function toDataURL(text: string, options?: QrCodeRenderOptions): Promise<string>;
   export function toFile(
@@ -33,6 +41,7 @@ declare module "qrcode" {
   ): Promise<void>;
 
   const qrcode: {
+    create: typeof create;
     toString: typeof toString;
     toDataURL: typeof toDataURL;
     toFile: typeof toFile;

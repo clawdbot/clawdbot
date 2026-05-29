@@ -98,6 +98,7 @@ export async function generateImage(
       });
       const sanitized = resolveImageGenerationOverrides({
         provider,
+        model: candidate.model,
         size: params.size,
         aspectRatio: params.aspectRatio,
         resolution: params.resolution,

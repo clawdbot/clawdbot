@@ -837,8 +837,9 @@ permission modes, see
 <Note>
 `Command blocked by PreToolUse hook: Native hook relay unavailable` belongs to
 the native Codex hook relay, not ACP/acpx. In a bound Codex chat, start a fresh
-session with `/new` or `/reset`; if it persists, restart the Codex app-server or
-OpenClaw Gateway. See [Codex harness troubleshooting](/plugins/codex-harness#troubleshooting).
+session with `/new` or `/reset`; if it works once and then returns on the next
+native tool call, restart the Codex app-server or OpenClaw Gateway instead of
+repeating `/new`. See [Codex harness troubleshooting](/plugins/codex-harness#troubleshooting).
 </Note>
 
 ## Related

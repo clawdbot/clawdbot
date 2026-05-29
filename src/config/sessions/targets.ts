@@ -324,22 +324,23 @@ export async function resolveAllAgentSessionStoreTargets(
 ): Promise<SessionStoreTarget[]> {
   const env = params.env ?? process.env;
   const { configuredTargets, agentsRoots } = resolveSessionStoreDiscoveryState(cfg, env);
-  const realAgentsRoots = new Map<string, string>();
-  const getRealAgentsRoot = async (agentsRoot: string): Promise<string | undefined> => {
-    const cached = realAgentsRoots.get(agentsRoot);
-    if (cached !== undefined) {
-      return cached;
+  const realAgentsRootPromises = new Map<string, Promise<string | undefined>>();
+  const getRealAgentsRoot = (agentsRoot: string): Promise<string | undefined> => {
+    const existing = realAgentsRootPromises.get(agentsRoot);
+    if (existing) {
+      return existing;
     }
-    try {
-      const realAgentsRoot = await fs.realpath(agentsRoot);
-      realAgentsRoots.set(agentsRoot, realAgentsRoot);
-      return realAgentsRoot;
-    } catch (err) {
-      if (shouldSkipDiscoveryError(err)) {
-        return undefined;
-      }
-      throw err;
-    }
+    const p = fs.realpath(agentsRoot).then(
+      (result) => result,
+      (err: unknown) => {
+        if (shouldSkipDiscoveryError(err)) {
+          return undefined;
+        }
+        throw err;
+      },
+    );
+    realAgentsRootPromises.set(agentsRoot, p);
+    return p;
   };
   const validatedConfiguredTargets = (
     await Promise.all(

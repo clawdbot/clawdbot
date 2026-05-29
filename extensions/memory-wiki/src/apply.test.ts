@@ -1,13 +1,43 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyMemoryWikiMutation } from "./apply.js";
+import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("applyMemoryWikiMutation", () => {
+  it("normalizes string confidence in wiki mutations", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "create_synthesis",
+        title: "Alpha Synthesis",
+        body: "Alpha summary body.",
+        sourceIds: ["source.alpha"],
+        confidence: "0.7",
+      }),
+    ).toMatchObject({ confidence: 0.7 });
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        confidence: "0.4",
+      }),
+    ).toMatchObject({ confidence: 0.4 });
+  });
+
+  it("rejects out-of-range string confidence in wiki mutations", () => {
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        confidence: "1.5",
+      }),
+    ).toThrow("confidence must be a finite number");
+  });
+
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 

@@ -87,6 +87,18 @@ function providerHttpConfigRequest(): Record<string, unknown> {
   return request as Record<string, unknown>;
 }
 
+function streamedVideoResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
+}
+
 describe("openai video generation provider", () => {
   it("declares the openai-codex alias for default-model ordering", () => {
     const provider = buildOpenAIVideoGenerationProvider();
@@ -154,6 +166,38 @@ describe("openai video generation provider", () => {
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata?.videoId).toBe("vid_123");
     expect(result.metadata?.status).toBe("completed");
+  });
+
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_too_large",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_too_large",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce(streamedVideoResponse("too-large"));
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "short video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("OpenAI generated video download exceeds 1 bytes");
   });
 
   it("uses JSON input_reference.image_url for image-to-video requests", async () => {

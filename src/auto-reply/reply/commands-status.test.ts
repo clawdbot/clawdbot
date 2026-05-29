@@ -4,6 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
@@ -111,6 +112,7 @@ function registerStatusCodexHarness(): void {
 }
 
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   clearAgentHarnesses();
   providerUsageMock.loadProviderUsageSummary.mockReset();
   providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -156,6 +158,24 @@ function writeTranscriptUsageLog(params: {
 
 describe("buildStatusReply subagent summary", () => {
   beforeEach(() => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          pluginId: "claude-cli",
+          modelProvider: "anthropic",
+          config: { command: "claude" },
+          bundleMcp: false,
+        },
+      ],
+    });
     resetSubagentRegistryForTests();
     resetTaskRegistryForTests({ persist: false });
     configureInMemoryTaskRegistryStoreForTests();

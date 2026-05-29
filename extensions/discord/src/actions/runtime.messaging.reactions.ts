@@ -1,6 +1,6 @@
 import {
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringParam,
 } from "../runtime-api.js";
@@ -53,7 +53,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
-      const limit = readNumberParam(ctx.params, "limit");
+      const limit = readPositiveIntegerParam(ctx.params, "limit");
       await ctx.assertReadTargetAllowed({ channelId });
       const reactions = await discordMessagingActionRuntime.fetchReactionsDiscord(
         channelId,

@@ -259,10 +259,11 @@ function appendOutputWithCap(
   maxChars: number,
 ): { text: string; truncated: boolean } {
   const appended = current + chunk;
-  if (appended.length <= maxChars) {
+  const chars = Array.from(appended);
+  if (chars.length <= maxChars) {
     return { text: appended, truncated: false };
   }
-  return { text: appended.slice(-maxChars), truncated: true };
+  return { text: chars.slice(-maxChars).join(""), truncated: true };
 }
 
 function formatQmdAvailabilityError(err: unknown): string {

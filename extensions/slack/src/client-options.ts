@@ -1,9 +1,6 @@
+import type { Agent } from "node:http";
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
-import { HttpsProxyAgent } from "https-proxy-agent";
-import {
-  resolveActiveManagedProxyTlsOptions,
-  resolveEnvHttpProxyUrl,
-} from "openclaw/plugin-sdk/fetch-runtime";
+import { createNodeProxyAgent } from "openclaw/plugin-sdk/fetch-runtime";
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
@@ -16,38 +13,6 @@ export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
 export const SLACK_WRITE_RETRY_OPTIONS: RetryOptions = {
   retries: 0,
 };
-
-/**
- * Check whether a hostname is excluded from proxying by `NO_PROXY` / `no_proxy`.
- * Supports comma-separated entries with optional leading dots (e.g. `.slack.com`).
- */
-function isHostExcludedByNoProxy(hostname: string, env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env.no_proxy ?? env.NO_PROXY;
-  if (!raw) {
-    return false;
-  }
-  const entries = raw
-    .split(/[,\s]+/)
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  const lower = hostname.toLowerCase();
-  for (const entry of entries) {
-    if (entry === "*") {
-      return true;
-    }
-    // Strip optional wildcard/leading dot so `*.slack.com` and `.slack.com`
-    // match both `slack.com` (apex) and Slack subdomains.
-    const bare = entry.startsWith("*.")
-      ? entry.slice(2)
-      : entry.startsWith(".")
-        ? entry.slice(1)
-        : entry;
-    if (lower === bare || lower.endsWith(`.${bare}`)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 /**
  * Build an HTTPS proxy agent from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
@@ -64,19 +29,13 @@ function isHostExcludedByNoProxy(hostname: string, env: NodeJS.ProcessEnv = proc
  * Returns `undefined` when no proxy env var is configured or when Slack hosts
  * are excluded by `NO_PROXY`.
  */
-function resolveSlackProxyAgent(): HttpsProxyAgent<string> | undefined {
-  const proxyUrl = resolveEnvHttpProxyUrl("https");
-  if (!proxyUrl) {
-    return undefined;
-  }
-  // Slack Socket Mode connects to these hosts; skip proxy if excluded.
-  if (isHostExcludedByNoProxy("slack.com")) {
-    return undefined;
-  }
-  const proxyTls = resolveActiveManagedProxyTlsOptions({ proxyUrl });
-  const proxyAgentOptions = proxyTls?.ca ? { ca: proxyTls.ca } : undefined;
+function resolveSlackProxyAgent(): Agent | undefined {
   try {
-    return new HttpsProxyAgent(proxyUrl, proxyAgentOptions);
+    return createNodeProxyAgent({
+      mode: "env",
+      targetUrl: "https://slack.com/",
+      protocol: "https",
+    });
   } catch {
     // Malformed proxy URL; degrade gracefully to direct connection.
     return undefined;

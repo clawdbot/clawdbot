@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 import { createBundleMcpJsonSchemaValidator } from "./agent-bundle-mcp-runtime.js";
 import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
 import {
@@ -13,6 +12,7 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
 
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: (params: {
@@ -35,6 +35,7 @@ async function writeListToolsMcpServer(params: {
   logPath: string;
   delayMs?: number;
   hang?: boolean;
+  inputSchema?: unknown;
 }): Promise<void> {
   await writeExecutable(
     params.filePath,
@@ -44,6 +45,7 @@ import fs from "node:fs/promises";
 const logPath = ${JSON.stringify(params.logPath)};
 const delayMs = ${params.delayMs ?? 0};
 const hang = ${params.hang === true};
+const inputSchema = ${JSON.stringify(params.inputSchema ?? { type: "object", properties: {} })};
 
 let buffer = "";
 let pendingTimer;
@@ -90,7 +92,7 @@ function handle(message) {
             {
               name: "slow_tool",
               description: "Returned after a slow catalog response.",
-              inputSchema: { type: "object", properties: {} },
+              inputSchema,
             },
           ],
         },
@@ -168,6 +170,7 @@ function makeRuntime(
     markUsed: () => {
       lastUsedAt = Date.now();
     },
+    peekCatalog: () => null,
     getCatalog: async () => ({
       version: 1,
       generatedAt: 0,
@@ -655,6 +658,46 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("records diagnostics when tools/list returns an invalid tool schema", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-invalid-schema-"));
+    const serverPath = path.join(tempDir, "invalid-schema.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      inputSchema: { type: "array", items: { type: "number" } },
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-invalid-schema",
+      sessionKey: "agent:test:session-invalid-schema",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            dofbot: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+
+      expect(catalog.servers).toEqual({});
+      expect(catalog.tools).toEqual([]);
+      expect(catalog.diagnostics?.[0]?.serverName).toBe("dofbot");
+      expect(catalog.diagnostics?.[0]?.message).toContain("Invalid input: expected");
+      expect(catalog.diagnostics?.[0]?.message).toContain("object");
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("reuses repeated materialization and recreates after explicit disposal", async () => {
     const created: SessionMcpRuntime[] = [];
     const disposed: string[] = [];
@@ -722,6 +765,46 @@ describe("session MCP runtime", () => {
 
     expect(disposed).toEqual(["session-a", "session-a"]);
     expect(manager.listSessionIds()).not.toContain("session-a");
+  });
+
+  it("peeks existing runtimes and populated catalogs without creating new runtimes", async () => {
+    let catalogReady = false;
+    const createRuntime: RuntimeFactory = (params) => {
+      const base = makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]);
+      let cachedCatalog: ReturnType<SessionMcpRuntime["peekCatalog"]> = null;
+      return {
+        ...base,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        peekCatalog: () => cachedCatalog,
+        getCatalog: async () => {
+          const catalog = await base.getCatalog();
+          cachedCatalog = catalog;
+          catalogReady = true;
+          return catalog;
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    expect(manager.peekSession({ sessionId: "session-peek" })).toBeUndefined();
+
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-peek",
+      sessionKey: "agent:test:session-peek",
+      workspaceDir: "/workspace",
+    });
+    expect(manager.peekSession({ sessionId: "session-peek" })).toBe(runtime);
+    expect(manager.peekSession({ sessionKey: "agent:test:session-peek" })).toBe(runtime);
+    expect(runtime.peekCatalog()).toBeNull();
+    expect(catalogReady).toBe(false);
+
+    await runtime.getCatalog();
+
+    expect(catalogReady).toBe(true);
+    expect(runtime.peekCatalog()?.tools.map((tool) => tool.toolName)).toEqual(["bundle_probe"]);
   });
 
   it("recreates the session runtime when MCP config changes", async () => {

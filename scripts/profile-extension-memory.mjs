@@ -4,12 +4,16 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mjs";
 import { formatErrorMessage } from "./lib/error-format.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
 const DEFAULT_COMBINED_TIMEOUT_MS = 180_000;
 const DEFAULT_TOP = 10;
+const OUTPUT_CAPTURE_MAX_CHARS = 128 * 1024;
+const STDERR_PREVIEW_MAX_CHARS = 8 * 1024;
 const RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 
 function printHelp() {
@@ -120,13 +124,62 @@ function parseMaxRssMb(stderr) {
   return last ? Number(last[1]) / 1024 : null;
 }
 
-function summarizeStderr(stderr, lines = 8) {
-  return stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+function createOutputCapture() {
+  return { text: "", truncatedChars: 0 };
 }
 
-async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
+function appendBoundedOutput(capture, chunk, maxChars = OUTPUT_CAPTURE_MAX_CHARS) {
+  const nextText = capture.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return capture.truncatedChars === 0
+      ? { text: nextText, truncatedChars: 0 }
+      : { text: nextText, truncatedChars: capture.truncatedChars };
+  }
+  const truncatedChars = capture.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedOutput(capture) {
+  if (capture.truncatedChars === 0) {
+    return capture.text;
+  }
+  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
+}
+
+function scanMaxRssMb(tail, chunk, current) {
+  const text = `${tail}${String(chunk)}`;
+  const parsed = parseMaxRssMb(text);
+  const lineBreakIndex = Math.max(text.lastIndexOf("\n"), text.lastIndexOf("\r"));
+  const openLine = lineBreakIndex === -1 ? text : text.slice(lineBreakIndex + 1);
+  return {
+    maxRssMb: parsed ?? current,
+    tail: openLine.slice(-(RSS_MARKER.length + 32)),
+  };
+}
+
+function summarizeStderr(stderr, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS) {
+  const text = stderr.trim().split("\n").filter(Boolean).slice(0, lines).join("\n");
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const firstLine = text.split("\n", 1)[0] ?? "";
+  const prefix = firstLine.startsWith("[output truncated") ? `${firstLine}\n` : "";
+  return `${prefix}[stderr preview truncated ${text.length - maxChars} chars; showing tail]\n${text.slice(
+    -maxChars,
+  )}`;
+}
+
+export async function runCase({
+  repoRoot,
+  env,
+  hookPath,
+  name,
+  body,
+  timeoutMs,
+  spawnImpl = spawn,
+}) {
   return await new Promise((resolve) => {
-    const child = spawn(
+    const child = spawnImpl(
       process.execPath,
       ["--import", hookPath, "--input-type=module", "--eval", body],
       {
@@ -136,30 +189,60 @@ async function runCase({ repoRoot, env, hookPath, name, body, timeoutMs }) {
       },
     );
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = createOutputCapture();
+    let stderr = createOutputCapture();
+    let stderrRssTail = "";
+    let maxRssMb = null;
     let timedOut = false;
+    let settled = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, timeoutMs);
+    timer.unref?.();
+
+    function settle(result) {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    }
 
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      stdout = appendBoundedOutput(stdout, chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      const rssScan = scanMaxRssMb(stderrRssTail, chunk, maxRssMb);
+      stderrRssTail = rssScan.tail;
+      maxRssMb = rssScan.maxRssMb;
+      stderr = appendBoundedOutput(stderr, chunk);
+    });
+    child.on("error", (error) => {
+      const stderrText = formatCapturedOutput(stderr);
+      settle({
+        name,
+        code: null,
+        signal: null,
+        timedOut,
+        error: formatErrorMessage(error),
+        stdout: formatCapturedOutput(stdout),
+        stderr: stderrText,
+        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
+      });
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      resolve({
+      const stderrText = formatCapturedOutput(stderr);
+      settle({
         name,
         code,
         signal,
         timedOut,
-        stdout,
-        stderr,
-        maxRssMb: parseMaxRssMb(stderr),
+        error: null,
+        stdout: formatCapturedOutput(stdout),
+        stderr: stderrText,
+        maxRssMb: maxRssMb ?? parseMaxRssMb(stderrText),
       });
     });
   });
@@ -192,6 +275,10 @@ function findExtensionEntries(repoRoot) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = process.cwd();
+  ensureExtensionMemoryBuild({
+    rootDir: repoRoot,
+    requiredExtensionIds: options.extensions,
+  });
   const allEntries = findExtensionEntries(repoRoot);
   const selectedEntries =
     options.extensions.length === 0
@@ -213,9 +300,10 @@ async function main() {
   writeFileSync(
     hookPath,
     [
+      "import { writeSync } from 'node:fs';",
       "process.on('exit', () => {",
       "  const usage = typeof process.resourceUsage === 'function' ? process.resourceUsage() : null;",
-      `  if (usage && typeof usage.maxRSS === 'number') console.error('${RSS_MARKER}' + String(usage.maxRSS));`,
+      `  if (usage && typeof usage.maxRSS === 'number') writeSync(2, '${RSS_MARKER}' + String(usage.maxRSS) + '\\n');`,
       "});",
       "",
     ].join("\n"),
@@ -356,9 +444,11 @@ async function main() {
   }
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`[extension-memory] ${formatErrorMessage(error)}`);
-  process.exit(1);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    await main();
+  } catch (error) {
+    console.error(`[extension-memory] ${formatErrorMessage(error)}`);
+    process.exit(1);
+  }
 }

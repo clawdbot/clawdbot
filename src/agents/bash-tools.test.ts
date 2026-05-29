@@ -984,6 +984,42 @@ describe("exec backgrounded onUpdate suppression", () => {
     isWin ? 10_000 : 5_000,
   );
 
+  it("removes the abort listener after a foreground exec process exits", async () => {
+    const abortController = new AbortController();
+    const addListenerSpy = vi.spyOn(abortController.signal, "addEventListener");
+    const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
+
+    await execTool.execute(
+      nextCallId(),
+      { command: shellEcho("foreground-cleanup") },
+      abortController.signal,
+      vi.fn(),
+    );
+
+    const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+  });
+
+  it("removes the abort listener when an exec process is backgrounded", async () => {
+    const abortController = new AbortController();
+    const addListenerSpy = vi.spyOn(abortController.signal, "addEventListener");
+    const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
+    const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+
+    const result = await tool.execute(
+      nextCallId(),
+      { command: shellEcho("background-cleanup"), background: true },
+      abortController.signal,
+      vi.fn(),
+    );
+
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+    const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+  });
+
   it(
     "suppresses onUpdate after abort signal fires",
     async () => {

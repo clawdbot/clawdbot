@@ -1,9 +1,11 @@
+import { readPositiveIntEnv } from "../env-limits.mjs";
+
 const [url, expectedRaw = "200"] = process.argv.slice(2);
 if (!url) {
   throw new Error("usage: http-probe.mjs <url> [status|lt500]");
 }
 
-const timeoutMs = Number(process.env.OPENCLAW_HTTP_PROBE_TIMEOUT_MS ?? 30_000);
+const timeoutMs = readPositiveIntEnv("OPENCLAW_HTTP_PROBE_TIMEOUT_MS", 30_000);
 const controller = new AbortController();
 const timer = setTimeout(() => controller.abort(), timeoutMs);
 

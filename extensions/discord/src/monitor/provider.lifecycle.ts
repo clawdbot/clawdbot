@@ -2,6 +2,7 @@ import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { attachDiscordGatewayLogging } from "../gateway-logging.js";
@@ -33,12 +34,11 @@ const DISCORD_GATEWAY_TRANSPORT_ACTIVITY_STATUS_MIN_INTERVAL_MS = 30_000;
 type GatewayReadyWaitResult = "ready" | "stopped" | "timeout";
 
 function normalizeGatewayReadyTimeoutMs(value: unknown): number | undefined {
-  const numeric =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(numeric) || numeric <= 0) {
+  const numeric = parseStrictPositiveInteger(value);
+  if (numeric === undefined) {
     return undefined;
   }
-  return Math.min(Math.floor(numeric), MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
+  return Math.min(numeric, MAX_DISCORD_GATEWAY_READY_TIMEOUT_MS);
 }
 
 export function resolveDiscordGatewayReadyTimeoutMs(params?: {

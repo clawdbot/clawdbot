@@ -1075,6 +1075,67 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBe("false");
     });
 
+    function formatObsoleteHttpDates(date: Date): Array<[string, string]> {
+      const dayNames = [
+        ["Sun", "Sunday"],
+        ["Mon", "Monday"],
+        ["Tue", "Tuesday"],
+        ["Wed", "Wednesday"],
+        ["Thu", "Thursday"],
+        ["Fri", "Friday"],
+        ["Sat", "Saturday"],
+      ] as const;
+      const monthNames = [
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+      ] as const;
+      const [shortDay, longDay] = dayNames[date.getUTCDay()] ?? dayNames[0];
+      const month = monthNames[date.getUTCMonth()] ?? monthNames[0];
+      const day = String(date.getUTCDate()).padStart(2, "0");
+      const shortYear = String(date.getUTCFullYear() % 100).padStart(2, "0");
+      const hours = String(date.getUTCHours()).padStart(2, "0");
+      const minutes = String(date.getUTCMinutes()).padStart(2, "0");
+      const seconds = String(date.getUTCSeconds()).padStart(2, "0");
+      const time = `${hours}:${minutes}:${seconds}`;
+      return [
+        ["RFC 850", `${longDay}, ${day}-${month}-${shortYear} ${time} GMT`],
+        [
+          "asctime",
+          `${shortDay} ${month} ${day.padStart(2, " ")} ${time} ${date.getUTCFullYear()}`,
+        ],
+      ];
+    }
+
+    it.each([...formatObsoleteHttpDates(new Date(Date.now() + 120_000))])(
+      "parses obsolete HTTP-date retry-after values: %s",
+      async (_label, retryAfter) => {
+        fetchWithSsrFGuardMock.mockResolvedValue({
+          response: new Response(null, {
+            status: 503,
+            headers: { "retry-after": retryAfter },
+          }),
+          finalUrl: "https://api.anthropic.com/v1/messages",
+          release: vi.fn(async () => undefined),
+        });
+        const response = await buildGuardedModelFetch(anthropicModel)(
+          "https://api.anthropic.com/v1/messages",
+          { method: "POST" },
+        );
+
+        expect(response.headers.get("x-should-retry")).toBe("false");
+      },
+    );
+
     it("respects OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS", async () => {
       process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = "10";
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -1110,6 +1171,27 @@ describe("buildGuardedModelFetch", () => {
 
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
+
+    it.each(["0x10", "1e3"])(
+      "ignores non-decimal OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS values: %s",
+      async (value) => {
+        process.env.OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS = value;
+        fetchWithSsrFGuardMock.mockResolvedValue({
+          response: new Response(null, {
+            status: 429,
+            headers: { "retry-after": "30" },
+          }),
+          finalUrl: "https://api.anthropic.com/v1/messages",
+          release: vi.fn(async () => undefined),
+        });
+        const response = await buildGuardedModelFetch(anthropicModel)(
+          "https://api.anthropic.com/v1/messages",
+          { method: "POST" },
+        );
+
+        expect(response.headers.get("x-should-retry")).toBeNull();
+      },
+    );
 
     it("injects x-should-retry:false for terminal 429 responses without retry-after", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({
@@ -1182,22 +1264,25 @@ describe("buildGuardedModelFetch", () => {
       expect(response.headers.get("x-should-retry")).toBeNull();
     });
 
-    it("treats malformed 429 retry-after values as terminal", async () => {
-      fetchWithSsrFGuardMock.mockResolvedValue({
-        response: new Response(null, {
-          status: 429,
-          headers: { "retry-after": "soon" },
-        }),
-        finalUrl: "https://api.anthropic.com/v1/messages",
-        release: vi.fn(async () => undefined),
-      });
-      const response = await buildGuardedModelFetch(anthropicModel)(
-        "https://api.anthropic.com/v1/messages",
-        { method: "POST" },
-      );
+    it.each(["soon", "1.5", "0x10"])(
+      "treats malformed 429 retry-after values as terminal: %s",
+      async (retryAfter) => {
+        fetchWithSsrFGuardMock.mockResolvedValue({
+          response: new Response(null, {
+            status: 429,
+            headers: { "retry-after": retryAfter },
+          }),
+          finalUrl: "https://api.anthropic.com/v1/messages",
+          release: vi.fn(async () => undefined),
+        });
+        const response = await buildGuardedModelFetch(anthropicModel)(
+          "https://api.anthropic.com/v1/messages",
+          { method: "POST" },
+        );
 
-      expect(response.headers.get("x-should-retry")).toBe("false");
-    });
+        expect(response.headers.get("x-should-retry")).toBe("false");
+      },
+    );
 
     it("ignores retry-after on non-retryable responses", async () => {
       fetchWithSsrFGuardMock.mockResolvedValue({

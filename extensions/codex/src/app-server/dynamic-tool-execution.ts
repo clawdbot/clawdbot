@@ -6,6 +6,7 @@ import {
   hasPendingInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   isJsonObject,
@@ -50,8 +51,8 @@ function readNumericTimeoutMs(value: unknown): number | undefined {
     return Math.max(0, Math.floor(value));
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
+    const parsed = parseStrictNonNegativeInteger(value);
+    if (parsed !== undefined) {
       return Math.max(0, Math.floor(parsed));
     }
   }

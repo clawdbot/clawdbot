@@ -46,6 +46,9 @@ function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
     ...(overrides.maxConsecutiveFailures !== undefined
       ? { maxConsecutiveFailures: overrides.maxConsecutiveFailures }
       : {}),
+    ...(overrides.keepaliveIntervalMs !== undefined
+      ? { keepaliveIntervalMs: overrides.keepaliveIntervalMs }
+      : {}),
     ...(overrides.maxDurationMs !== undefined ? { maxDurationMs: overrides.maxDurationMs } : {}),
   });
   return { start, stop, onStartError, onStopError, callbacks };
@@ -144,6 +147,42 @@ describe("createTypingCallbacks", () => {
 
       await vi.advanceTimersByTimeAsync(9_000);
       expect(start).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("uses default keepalive and breaker options for non-finite overrides", async () => {
+    await withFakeTimers(async () => {
+      const { start, onStartError, callbacks } = createTypingHarness({
+        start: vi.fn().mockRejectedValue(new Error("gone")),
+        keepaliveIntervalMs: Number.NaN,
+        maxConsecutiveFailures: Number.NaN,
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(start).toHaveBeenCalledTimes(2);
+      expect(onStartError).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  it("keeps zero keepalive interval disabled", async () => {
+    await withFakeTimers(async () => {
+      const { start, callbacks } = createTypingHarness({ keepaliveIntervalMs: 0 });
+
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(start).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -277,6 +316,20 @@ describe("createTypingCallbacks", () => {
         expect(stop).not.toHaveBeenCalled();
 
         // Should stop at 60s
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(stop).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("uses default 60s TTL for non-finite maxDurationMs", async () => {
+      await withFakeTimers(async () => {
+        const { stop, callbacks } = createTypingHarness({ maxDurationMs: Number.NaN });
+
+        await callbacks.onReplyStart();
+
+        await vi.advanceTimersByTimeAsync(59_000);
+        expect(stop).not.toHaveBeenCalled();
+
         await vi.advanceTimersByTimeAsync(1_000);
         expect(stop).toHaveBeenCalledTimes(1);
       });

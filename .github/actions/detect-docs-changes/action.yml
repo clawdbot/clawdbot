@@ -35,17 +35,29 @@ runs:
           exit 0
         fi
 
-        # Check if any changed file is a doc
-        DOCS=$(echo "$CHANGED" | grep -E '^docs/|\.md$|\.mdx$' || true)
-        if [ -n "$DOCS" ]; then
+        docs_changed=false
+        non_docs=false
+        while IFS= read -r changed_path; do
+          case "$changed_path" in
+            test/fixtures/*)
+              non_docs=true
+              ;;
+            docs/* | *.md | *.mdx)
+              docs_changed=true
+              ;;
+            *)
+              non_docs=true
+              ;;
+          esac
+        done <<< "$CHANGED"
+
+        if [ "$docs_changed" = "true" ]; then
           echo "docs_changed=true" >> "$GITHUB_OUTPUT"
         else
           echo "docs_changed=false" >> "$GITHUB_OUTPUT"
         fi
 
-        # Check if all changed files are docs or markdown
-        NON_DOCS=$(echo "$CHANGED" | grep -vE '^docs/|\.md$|\.mdx$' || true)
-        if [ -z "$NON_DOCS" ]; then
+        if [ "$non_docs" = "false" ]; then
           echo "docs_only=true" >> "$GITHUB_OUTPUT"
           echo "Docs-only change detected — skipping heavy jobs"
         else

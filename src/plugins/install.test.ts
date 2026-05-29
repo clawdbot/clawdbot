@@ -270,6 +270,21 @@ function setPluginMinHostVersion(pluginDir: string, minHostVersion: string) {
   fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
 }
 
+function setPluginPackageCompatibility(pluginDir: string, pluginApiRange: unknown) {
+  const packageJsonPath = path.join(pluginDir, "package.json");
+  const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+    openclaw?: { compat?: Record<string, unknown> };
+  };
+  manifest.openclaw = {
+    ...manifest.openclaw,
+    compat: {
+      ...manifest.openclaw?.compat,
+      pluginApi: pluginApiRange,
+    },
+  };
+  fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+}
+
 function expectFailedInstallResult<
   TResult extends { ok: boolean; code?: string } & Partial<{ error: string }>,
 >(params: { result: TResult; code?: string; messageIncludes: readonly string[] }) {
@@ -1019,12 +1034,12 @@ describe("installPluginFromArchive", () => {
   });
 
   it("rejects reserved archive package ids", async () => {
-    for (const params of [
-      { packageName: "@evil/..", outName: "traversal.tgz" },
-      { packageName: "@evil/.", outName: "reserved.tgz" },
-    ]) {
-      await expectArchiveInstallReservedSegmentRejection(params);
-    }
+    await Promise.all(
+      [
+        { packageName: "@evil/..", outName: "traversal.tgz" },
+        { packageName: "@evil/.", outName: "reserved.tgz" },
+      ].map((params) => expectArchiveInstallReservedSegmentRejection(params)),
+    );
   });
 
   it("rejects packages without openclaw.extensions", async () => {
@@ -3602,6 +3617,128 @@ describe("installPluginFromDir", () => {
       expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
     },
   );
+
+  it("rejects plugins whose package plugin API range is newer than the current host", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.10-beta.1");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    setPluginMinHostVersion(pluginDir, ">=2026.4.25");
+    setPluginPackageCompatibility(pluginDir, ">=2026.5.27");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: [
+        "requires plugin API >=2026.5.27",
+        "runtime exposes 2026.5.10-beta.1",
+        "install a compatible plugin version",
+      ],
+    });
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("rejects plugins whose package plugin API metadata is malformed", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    setPluginPackageCompatibility(pluginDir, 20260527);
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+      messageIncludes: ["openclaw.compat.pluginApi", "must be a string"],
+    });
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("checks package plugin API before current-host extension shape validation", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    const packageJsonPath = path.join(pluginDir, "package.json");
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
+      openclaw?: Record<string, unknown>;
+    };
+    manifest.openclaw = {
+      ...manifest.openclaw,
+      extensions: { runtime: "./src/index.ts" },
+      compat: { pluginApi: ">=2026.5.27-beta.2" },
+    };
+    fs.writeFileSync(packageJsonPath, JSON.stringify(manifest), "utf-8");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: [
+        "requires plugin API >=2026.5.27-beta.2",
+        "runtime exposes 2026.5.27-beta.1",
+      ],
+    });
+    if (!result.ok) {
+      expect(result.error).not.toContain("openclaw.extensions");
+    }
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("rejects bundle package installs whose package plugin API range is newer than the current host", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.10-beta.1");
+    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+      bundleFormat: "codex",
+      name: "Future Bundle",
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/future-bundle",
+        version: "2026.5.27",
+        openclaw: { compat: { pluginApi: ">=2026.5.27" } },
+      }),
+      "utf-8",
+    );
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expectFailedInstallResult({
+      result,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+      messageIncludes: ["requires plugin API >=2026.5.27", "runtime exposes 2026.5.10-beta.1"],
+    });
+    expect(fs.existsSync(path.join(extensionsDir, "future-bundle"))).toBe(false);
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
+  it("allows plugins when a beta host is on the package plugin API floor", async () => {
+    resolveCompatibilityHostVersionMock.mockReturnValueOnce("2026.5.27-beta.1");
+    const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
+    setPluginMinHostVersion(pluginDir, ">=2026.4.25");
+    setPluginPackageCompatibility(pluginDir, ">=2026.5.27");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.pluginId).toBe("@openclaw/test-plugin");
+  });
 
   it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
     const { pluginDir, extensionsDir } = setupManifestInstallFixture({

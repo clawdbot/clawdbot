@@ -769,6 +769,86 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(updatedEntry?.compactionCount).toBe(1);
   });
 
+  it("falls back to context-engine compaction when Codex native compaction returns a raw missing thread reason", async () => {
+    const sessionKey = "agent:main:codex-raw-stale-binding";
+    const sessionId = "session-codex-raw-stale-binding";
+    const sessionFile = path.join(tmpDir, "session-codex-raw-stale-binding.jsonl");
+    const storePath = path.join(tmpDir, "sessions-codex-raw-stale-binding.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+      agentHarnessId: "codex",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const compactAgentHarnessSession = vi.fn(async () => ({
+      ok: false,
+      compacted: false,
+      reason: "thread not found: thread-raw",
+    }));
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const recordCliCompactionInStore = vi.fn(async () => ({
+      ...sessionEntry,
+      compactionCount: 1,
+    }));
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
+      ensureSelectedAgentHarnessPlugin: vi.fn(async () => undefined),
+      maybeCompactAgentHarnessSession: compactAgentHarnessSession as never,
+      createPreparedEmbeddedAgentSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+      recordCliCompactionInStore,
+    });
+
+    const updatedEntry = await runCliTurnCompactionLifecycle({
+      cfg: {} as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "codex",
+      model: "gpt-5.5",
+    });
+
+    expect(compactAgentHarnessSession).toHaveBeenCalledTimes(1);
+    expect(compactCalls).toHaveLength(1);
+    expect(maintenance).toHaveBeenCalledTimes(1);
+    expect(recordCliCompactionInStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "codex",
+        sessionKey,
+        tokensAfter: undefined,
+      }),
+    );
+    expect(updatedEntry?.compactionCount).toBe(1);
+  });
+
   it("keeps successful context-engine fallback when post-compaction maintenance fails", async () => {
     const sessionKey = "agent:main:codex-stale-maintenance";
     const sessionId = "session-codex-stale-maintenance";

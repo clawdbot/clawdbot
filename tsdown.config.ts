@@ -5,7 +5,11 @@ import {
   collectBundledPluginBuildEntries,
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
-import { buildPluginSdkEntrySources } from "./scripts/lib/plugin-sdk-entries.mjs";
+import {
+  buildPluginSdkEntrySources,
+  pluginSdkEntrypoints,
+  publicPluginSdkEntrypoints,
+} from "./scripts/lib/plugin-sdk-entries.mjs";
 
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
@@ -138,8 +142,22 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   };
 }
 
+function nodeWorkspacePackageBuildConfig(config: UserConfig): UserConfig {
+  return {
+    ...config,
+    env,
+    format: "esm",
+    platform: "node",
+    sourcemap: OUTPUT_SOURCE_MAPS,
+    inputOptions: buildInputOptions,
+  };
+}
+
 const bundledPluginBuildEntries = collectBundledPluginBuildEntries();
 const shouldBuildPrivateQaEntries = process.env.OPENCLAW_BUILD_PRIVATE_QA === "1";
+const productionPluginSdkEntrypoints = shouldBuildPrivateQaEntries
+  ? pluginSdkEntrypoints
+  : publicPluginSdkEntrypoints;
 
 function buildBundledHookEntries(): Record<string, string> {
   const hooksRoot = path.join(process.cwd(), "src", "hooks", "bundled");
@@ -289,7 +307,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
-    "gateway/protocol/index": "src/gateway/protocol/index.ts",
+    "gateway/protocol/index": "packages/gateway-protocol/src/index.ts",
     "infra/errors": "src/infra/errors.ts",
     "infra/ws": "src/infra/ws.ts",
     "plugin-sdk/provider-onboard": "src/plugin-sdk/provider-onboard.ts",
@@ -330,6 +348,50 @@ function buildAgentCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildGatewayProtocolDistEntries(): Record<string, string> {
+  return {
+    // Package exports resolve from packages/gateway-protocol/dist, while the
+    // root build still emits dist/gateway/protocol/index for Docker harnesses.
+    index: "packages/gateway-protocol/src/index.ts",
+    "client-info": "packages/gateway-protocol/src/client-info.ts",
+    "connect-error-details": "packages/gateway-protocol/src/connect-error-details.ts",
+    schema: "packages/gateway-protocol/src/schema.ts",
+    "startup-unavailable": "packages/gateway-protocol/src/startup-unavailable.ts",
+    version: "packages/gateway-protocol/src/version.ts",
+  };
+}
+
+function buildGatewayClientDistEntries(): Record<string, string> {
+  return {
+    // Keep package entrypoints explicit so package.json exports and root build
+    // config cannot drift when client internals are split again.
+    index: "packages/gateway-client/src/index.ts",
+    readiness: "packages/gateway-client/src/readiness.ts",
+    timeouts: "packages/gateway-client/src/timeouts.ts",
+  };
+}
+
+function buildNetPolicyDistEntries(): Record<string, string> {
+  return {
+    // These subpaths are imported by root runtime code and exported by the
+    // package. Keep the build list adjacent to package.json exports.
+    index: "packages/net-policy/src/index.ts",
+    ip: "packages/net-policy/src/ip.ts",
+    ipv4: "packages/net-policy/src/ipv4.ts",
+    "redact-sensitive-url": "packages/net-policy/src/redact-sensitive-url.ts",
+    "url-userinfo": "packages/net-policy/src/url-userinfo.ts",
+  };
+}
+
+function buildSpeechCoreDistEntries(): Record<string, string> {
+  return {
+    api: "packages/speech-core/api.ts",
+    "runtime-api": "packages/speech-core/runtime-api.ts",
+    speaker: "packages/speech-core/speaker.ts",
+    "voice-models": "packages/speech-core/voice-models.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
     id === "ignore" ||
@@ -340,6 +402,27 @@ function shouldExternalizeAgentCoreDependency(id: string): boolean {
     id === "yaml" ||
     id.startsWith("yaml/")
   );
+}
+
+function shouldExternalizeGatewayProtocolDependency(id: string): boolean {
+  return id === "typebox" || id.startsWith("typebox/");
+}
+
+function shouldExternalizeGatewayClientDependency(id: string): boolean {
+  return (
+    id === "ws" ||
+    id.startsWith("ws/") ||
+    id === "@openclaw/gateway-protocol" ||
+    id.startsWith("@openclaw/gateway-protocol/")
+  );
+}
+
+function shouldExternalizeNetPolicyDependency(id: string): boolean {
+  return id === "ipaddr.js" || id.startsWith("ipaddr.js/");
+}
+
+function shouldExternalizeSpeechCoreDependency(id: string): boolean {
+  return id === "openclaw" || id.startsWith("openclaw/");
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -357,10 +440,9 @@ function buildUnifiedDistEntries(): Record<string, string> {
     // Private bundled Codex helper for app-server user MCP config projection.
     "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
     ...Object.fromEntries(
-      Object.entries(buildPluginSdkEntrySources()).map(([entry, source]) => [
-        `plugin-sdk/${entry}`,
-        source,
-      ]),
+      Object.entries(buildPluginSdkEntrySources(productionPluginSdkEntrypoints)).map(
+        ([entry, source]) => [`plugin-sdk/${entry}`, source],
+      ),
     ),
     ...(shouldBuildPrivateQaEntries
       ? {
@@ -383,6 +465,42 @@ export default defineConfig([
     outDir: "packages/agent-core/dist",
     deps: {
       neverBundle: shouldExternalizeAgentCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildGatewayProtocolDistEntries(),
+    outDir: "packages/gateway-protocol/dist",
+    deps: {
+      neverBundle: shouldExternalizeGatewayProtocolDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildGatewayClientDistEntries(),
+    outDir: "packages/gateway-client/dist",
+    deps: {
+      neverBundle: shouldExternalizeGatewayClientDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildNetPolicyDistEntries(),
+    outDir: "packages/net-policy/dist",
+    deps: {
+      neverBundle: shouldExternalizeNetPolicyDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildSpeechCoreDistEntries(),
+    outDir: "packages/speech-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeSpeechCoreDependency,
     },
   }),
   nodeBuildConfig({

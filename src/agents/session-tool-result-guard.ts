@@ -14,6 +14,7 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -46,7 +47,9 @@ function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
 }
 
 function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
-  return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+  return resolveIntegerOption(opts?.maxToolResultChars, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS, {
+    min: 1,
+  });
 }
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;

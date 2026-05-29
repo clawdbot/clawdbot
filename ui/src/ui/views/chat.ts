@@ -154,6 +154,7 @@ export type ChatProps = {
   onDismissError?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
+  onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onDismissSideResult?: () => void;
   onNewSession: () => void;
@@ -1493,6 +1494,7 @@ export function renderChat(props: ChatProps) {
       ${renderChatQueue({
         queue: props.queue,
         canAbort: showAbortableUi,
+        onQueueRetry: props.onQueueRetry,
         onQueueSteer: props.onQueueSteer,
         onQueueRemove: props.onQueueRemove,
       })}

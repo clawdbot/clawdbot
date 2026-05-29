@@ -1,3 +1,4 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
   type AuthHealthSummary,
@@ -29,7 +30,6 @@ import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.ty
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
 import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
@@ -114,12 +114,8 @@ function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps 
   return {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
-    chatDeltaSentAt: context.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: context.agentDeltaSentAt,
-    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
+    clearChatRunState: context.clearChatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,

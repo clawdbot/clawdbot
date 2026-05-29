@@ -40,6 +40,7 @@ const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
 let createWaSocket: typeof import("./session.js").createWaSocket;
 let formatError: typeof import("./session.js").formatError;
 let logWebSelfId: typeof import("./session.js").logWebSelfId;
+let renderQrTerminalMock: ReturnType<typeof vi.fn>;
 let waitForWaConnection: typeof import("./session.js").waitForWaConnection;
 let waitForCredsSaveQueue: typeof import("./session.js").waitForCredsSaveQueue;
 let writeCredsJsonAtomically: typeof import("./session.js").writeCredsJsonAtomically;
@@ -224,6 +225,7 @@ describe("web session", () => {
       waitForCredsSaveQueue,
       writeCredsJsonAtomically,
     } = await import("./session.js"));
+    renderQrTerminalMock = vi.mocked((await import("./qr-terminal.js")).renderQrTerminal);
     ({ DEFAULT_WHATSAPP_SOCKET_TIMING } = await import("./socket-timing.js"));
   });
 
@@ -269,6 +271,27 @@ describe("web session", () => {
     expect(write.options.mode).toBe(0o600);
     expect(write.options.flag).toBe("wx");
     openMock.restore();
+  });
+
+  it("prints compact terminal QR output when requested", async () => {
+    const authDir = createTempAuthDir("openclaw-wa-terminal-qr");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    try {
+      await createWaSocket(true, false, { authDir });
+      getLastSocket().ev.emit("connection.update", { qr: "qr-data" });
+      await flushCredsUpdate();
+
+      expect(logSpy).toHaveBeenCalledWith(
+        "Open the WhatsApp app, go to Linked Devices, then scan this QR:",
+      );
+      expect(renderQrTerminalMock).toHaveBeenCalledWith("qr-data", { small: true });
+      expect(stdoutSpy).toHaveBeenCalledWith("ASCII-QR\n");
+    } finally {
+      logSpy.mockRestore();
+      stdoutSpy.mockRestore();
+    }
   });
 
   it.runIf(process.platform !== "win32")(
@@ -391,7 +414,10 @@ describe("web session", () => {
     await createWaSocket(false, false);
 
     const passed = readLastSocketOptions();
-    const agent = requireValue(passed.agent, "WebSocket proxy agent");
+    const agent = requireValue(
+      passed.agent as { constructor: { name: string } } | undefined,
+      "WebSocket proxy agent",
+    );
     const fetchAgent = requireValue(passed.fetchAgent, "fetch proxy agent");
     expect(fetchAgent).not.toBe(agent);
     expect(typeof (fetchAgent as { dispatch?: unknown }).dispatch).toBe("function");
@@ -407,10 +433,10 @@ describe("web session", () => {
 
     const passed = readLastSocketOptions();
     const agent = requireValue(
-      passed.agent as { connectOpts?: { ca?: unknown } } | undefined,
+      passed.agent as { constructor: { name: string } } | undefined,
       "WebSocket proxy agent",
     );
-    expect(agent.connectOpts?.ca).toBe("whatsapp-managed-proxy-ca");
+    expect(agent.constructor.name).toBe("ProxylineNodeProxyAgent");
     expect(proxyAgentCtor).toHaveBeenCalledWith(
       expect.objectContaining({
         proxyTls: expect.objectContaining({ ca: "whatsapp-managed-proxy-ca" }),
@@ -443,10 +469,10 @@ describe("web session", () => {
     await createWaSocket(false, false);
 
     const agent = requireValue(
-      readLastSocketOptions().agent as { proxy?: URL } | undefined,
+      readLastSocketOptions().agent as { getProxyForUrl?: (url: string) => string } | undefined,
       "WebSocket proxy agent",
     );
-    expect(agent.proxy?.href).toContain("lower-proxy.test");
+    expect(agent.getProxyForUrl?.("https://mmg.whatsapp.net/")).toContain("lower-proxy.test");
   });
 
   it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {

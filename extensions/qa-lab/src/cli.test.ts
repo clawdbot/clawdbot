@@ -567,6 +567,33 @@ describe("qa cli registration", () => {
     });
   });
 
+  it.each([
+    [["qa", "suite", "--concurrency", "1.5"], "--concurrency must be a positive integer."],
+    [["qa", "suite", "--cpus", "0x4"], "--cpus must be a positive integer."],
+    [
+      ["qa", "manual", "--message", "hi", "--timeout-ms", "1e3"],
+      "--timeout-ms must be a positive integer.",
+    ],
+    [["qa", "credentials", "list", "--limit", "0x10"], "--limit must be a positive integer."],
+    [["qa", "ui", "--port", "1e4"], "--port must be a positive integer."],
+    [
+      ["qa", "docker-scaffold", "--output-dir", "/tmp/qa", "--gateway-port", "1.5"],
+      "--gateway-port must be a positive integer.",
+    ],
+    [["qa", "up", "--qa-lab-port", "0x43124"], "--qa-lab-port must be a positive integer."],
+    [["qa", "aimock", "--port", "1e4"], "--port must be a positive integer."],
+  ])("rejects non-decimal QA numeric option %j", async (args, message) => {
+    const invalidProgram = new Command();
+    invalidProgram.exitOverride();
+    invalidProgram.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerQaLabCli(invalidProgram);
+
+    await expect(invalidProgram.parseAsync(["node", "openclaw", ...args])).rejects.toThrow(message);
+  });
+
   it("shows an enable hint when a discovered runner plugin is installed but blocked", async () => {
     listQaRunnerCliContributions.mockReset().mockReturnValue([createBlockedQaRunnerContribution()]);
     const blockedProgram = new Command();

@@ -67,12 +67,12 @@ describe("buildQaSuiteSummaryJson", () => {
   it("records an Anthropic baseline lane cleanly for parity runs", () => {
     const json = buildQaSuiteSummaryJson({
       ...baseParams,
-      primaryModel: "anthropic/claude-opus-4-7",
+      primaryModel: "anthropic/claude-opus-4-8",
       alternateModel: "anthropic/claude-sonnet-4-6",
     });
-    expect(json.run.primaryModel).toBe("anthropic/claude-opus-4-7");
+    expect(json.run.primaryModel).toBe("anthropic/claude-opus-4-8");
     expect(json.run.primaryProvider).toBe("anthropic");
-    expect(json.run.primaryModelName).toBe("claude-opus-4-7");
+    expect(json.run.primaryModelName).toBe("claude-opus-4-8");
     expect(json.run.alternateModel).toBe("anthropic/claude-sonnet-4-6");
     expect(json.run.alternateProvider).toBe("anthropic");
     expect(json.run.alternateModelName).toBe("claude-sonnet-4-6");

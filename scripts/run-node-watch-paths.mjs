@@ -4,7 +4,20 @@ import {
   BUNDLED_PLUGIN_ROOT_DIR,
 } from "./lib/bundled-plugin-paths.mjs";
 
-export const runNodeSourceRoots = ["src", BUNDLED_PLUGIN_ROOT_DIR];
+const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
+  // Root runtime code imports these package sources through tsconfig aliases,
+  // while pnpm dev/watch still runs the root dist entrypoint. Treat them like
+  // src/ so edits restart the same process that consumes them.
+  "packages/gateway-client/src",
+  "packages/gateway-protocol/src",
+  "packages/net-policy/src",
+];
+
+export const runNodeSourceRoots = [
+  "src",
+  ...RUN_NODE_PACKAGE_SOURCE_ROOTS,
+  BUNDLED_PLUGIN_ROOT_DIR,
+];
 export const runNodeConfigFiles = ["tsconfig.json", "package.json", "tsdown.config.ts"];
 export const runNodeWatchedPaths = [...runNodeSourceRoots, ...runNodeConfigFiles];
 export const extensionRestartMetadataFiles = new Set(["openclaw.plugin.json", "package.json"]);
@@ -49,6 +62,11 @@ const isRelevantRunNodePath = (repoPath, isRelevantBundledPluginPath) => {
   }
   if (normalizedPath.startsWith("src/")) {
     return !isIgnoredSourcePath(normalizedPath.slice("src/".length));
+  }
+  for (const sourceRoot of RUN_NODE_PACKAGE_SOURCE_ROOTS) {
+    if (normalizedPath.startsWith(`${sourceRoot}/`)) {
+      return !isIgnoredSourcePath(normalizedPath.slice(sourceRoot.length + 1));
+    }
   }
   if (normalizedPath.startsWith(BUNDLED_PLUGIN_PATH_PREFIX)) {
     return isRelevantBundledPluginPath(normalizedPath.slice(BUNDLED_PLUGIN_PATH_PREFIX.length));

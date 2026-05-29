@@ -1,6 +1,8 @@
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { PLUGIN_MODEL_CATALOG_GENERATED_BY } from "./plugin-model-catalog.js";
 
 type AgentModelDiscoveryModule = typeof import("./agent-model-discovery.js");
 
@@ -93,6 +95,16 @@ function emptyPluginMetadataSnapshot() {
     index: {
       policyHash: "test-policy",
       plugins: [],
+    },
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
     },
     plugins: [],
   };
@@ -229,7 +241,13 @@ describe("loadModelCatalog", () => {
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
     vi.doMock("./agent-scope.js", () => ({
+      resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string) => {
+        const entry = cfg.agents?.list?.find((entry) => entry.id === agentId);
+        return entry?.workspace ?? cfg.agents?.defaults?.workspace ?? "/tmp/openclaw-workspace";
+      },
       resolveDefaultAgentDir: () => "/tmp/openclaw",
+      resolveDefaultAgentId: (cfg: OpenClawConfig) =>
+        cfg.agents?.list?.find((entry) => entry.default)?.id ?? cfg.agents?.list?.[0]?.id ?? "main",
     }));
     vi.doMock("../plugins/provider-runtime.runtime.js", () => ({
       augmentModelCatalogWithProviderPlugins: vi.fn().mockResolvedValue([]),
@@ -303,6 +321,40 @@ describe("loadModelCatalog", () => {
       setLoggerOverride(null);
       resetLogger();
     }
+  });
+
+  it("uses the resolved default agent workspace for registry discovery", async () => {
+    const discoverModels = vi.fn(() => ({
+      getAll() {
+        return [];
+      },
+    }));
+    setModelCatalogImportForTest(
+      async () =>
+        ({
+          discoverAuthStorage: () => ({}),
+          AuthStorage: function AuthStorage() {},
+          discoverModels,
+          ModelRegistry: class {
+            getAll() {
+              return [];
+            }
+          },
+        }) as unknown as AgentModelDiscoveryModule,
+    );
+    const config = {
+      agents: {
+        list: [{ id: "workspace-agent", default: true, workspace: "/tmp/workspace-agent" }],
+      },
+    } as OpenClawConfig;
+
+    await loadModelCatalog({ config });
+
+    expect(discoverModels).toHaveBeenCalledWith(
+      expect.anything(),
+      "/tmp/openclaw",
+      expect.objectContaining({ workspaceDir: "/tmp/workspace-agent" }),
+    );
   });
 
   it("reloads dynamic registry entries after clearing the cache", async () => {
@@ -488,6 +540,79 @@ describe("loadModelCatalog", () => {
     ]);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("loads generated plugin catalog rows in read-only mode", async () => {
+    const catalogPath = "/tmp/openclaw/plugins/read-only-shard/catalog.json";
+    mkdirSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true });
+    writeFileSync(catalogPath, "{}");
+    try {
+      readFileMock.mockImplementation(async (pathname: string) => {
+        if (pathname.endsWith("models.json")) {
+          return JSON.stringify({ providers: {} });
+        }
+        if (pathname === catalogPath) {
+          return JSON.stringify({
+            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+            providers: {
+              zai: {
+                models: [
+                  {
+                    id: "glm-5.1",
+                    name: "GLM 5.1",
+                    reasoning: true,
+                    contextWindow: 131072,
+                    input: ["text"],
+                  },
+                ],
+              },
+            },
+          });
+        }
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      loadPluginMetadataSnapshotMock.mockReturnValueOnce({
+        ...emptyPluginMetadataSnapshot(),
+        index: {
+          policyHash: "test-policy",
+          plugins: [{ pluginId: "read-only-shard", enabled: true }],
+        },
+        normalizePluginId: (id: string) => id,
+        owners: {
+          providers: new Map([["zai", ["read-only-shard"]]]),
+          modelCatalogProviders: new Map([["zai", ["read-only-shard"]]]),
+          setupProviders: new Map(),
+        },
+      });
+
+      const result = await loadModelCatalog({
+        config: {
+          agents: {
+            list: [{ id: "workspace-agent", default: true, workspace: "/tmp/read-only-workspace" }],
+          },
+        } as OpenClawConfig,
+        readOnly: true,
+      });
+
+      expect(requireCatalogEntry(result, "zai", "glm-5.1")).toMatchObject({
+        provider: "zai",
+        id: "glm-5.1",
+        name: "GLM 5.1",
+        reasoning: true,
+        contextWindow: 131072,
+      });
+      expect(
+        loadPluginMetadataSnapshotMock.mock.calls.some(([call]) => {
+          return (
+            typeof call === "object" &&
+            call !== null &&
+            (call as { workspaceDir?: string }).workspaceDir === "/tmp/read-only-workspace"
+          );
+        }),
+      ).toBe(true);
+    } finally {
+      rmSync("/tmp/openclaw/plugins/read-only-shard", { recursive: true, force: true });
+    }
   });
 
   it("falls back to manifest catalog rows when persisted read-only catalog has no model rows", async () => {

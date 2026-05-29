@@ -1,16 +1,18 @@
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import { isRecord } from "../utils.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
-import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
   resolveTaskFlowRegistrySqlitePath,
 } from "./task-flow-registry.paths.js";
 import type { TaskFlowRegistryStoreSnapshot } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord, TaskFlowSyncMode, JsonValue } from "./task-flow-registry.types.js";
+import {
+  ensureSqliteStorePermissions,
+  normalizeSqliteNumber,
+  parseDeliveryContextJson,
+  parseSqliteJsonValue,
+} from "./task-registry.sqlite.shared.js";
 
 type FlowRegistryRow = {
   flow_id: string;
@@ -51,7 +53,6 @@ type FlowRegistryDatabase = {
 let cachedDatabase: FlowRegistryDatabase | null = null;
 const FLOW_REGISTRY_DIR_MODE = 0o700;
 const FLOW_REGISTRY_FILE_MODE = 0o600;
-const FLOW_REGISTRY_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 const FLOW_RUNS_COLUMNS = `
   flow_id TEXT PRIMARY KEY,
   shape TEXT,
@@ -74,43 +75,8 @@ const FLOW_RUNS_COLUMNS = `
   ended_at INTEGER
 `;
 
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
 function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
-}
-
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Persisted JSON columns are typed by the receiving field.
-function parseJsonValue<T>(raw: string | null): T | undefined {
-  if (!raw?.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-function parseDeliveryContextJson(raw: string | null): DeliveryContext | undefined {
-  const parsed = parseJsonValue<unknown>(raw);
-  if (!isRecord(parsed)) {
-    return undefined;
-  }
-  return normalizeDeliveryContext({
-    channel: typeof parsed.channel === "string" ? parsed.channel : undefined,
-    to: typeof parsed.to === "string" ? parsed.to : undefined,
-    accountId: typeof parsed.accountId === "string" ? parsed.accountId : undefined,
-    threadId:
-      typeof parsed.threadId === "string" || typeof parsed.threadId === "number"
-        ? parsed.threadId
-        : undefined,
-  });
 }
 
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
@@ -121,18 +87,18 @@ function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
 }
 
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
-  const endedAt = normalizeNumber(row.ended_at);
-  const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const cancelRequestedAt = normalizeSqliteNumber(row.cancel_requested_at);
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
-  const stateJson = parseJsonValue<JsonValue>(row.state_json);
-  const waitJson = parseJsonValue<JsonValue>(row.wait_json);
+  const stateJson = parseSqliteJsonValue<JsonValue>(row.state_json);
+  const waitJson = parseSqliteJsonValue<JsonValue>(row.wait_json);
   return {
     flowId: row.flow_id,
     syncMode: rowToSyncMode(row),
     ownerKey: row.owner_key,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(row.controller_id ? { controllerId: row.controller_id } : {}),
-    revision: normalizeNumber(row.revision) ?? 0,
+    revision: normalizeSqliteNumber(row.revision) ?? 0,
     status: row.status,
     notifyPolicy: row.notify_policy,
     goal: row.goal,
@@ -142,8 +108,8 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     ...(stateJson !== undefined ? { stateJson } : {}),
     ...(waitJson !== undefined ? { waitJson } : {}),
     ...(cancelRequestedAt != null ? { cancelRequestedAt } : {}),
-    createdAt: normalizeNumber(row.created_at) ?? 0,
-    updatedAt: normalizeNumber(row.updated_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+    updatedAt: normalizeSqliteNumber(row.updated_at) ?? 0,
     ...(endedAt != null ? { endedAt } : {}),
   };
 }
@@ -429,16 +395,12 @@ function ensureSchema(db: DatabaseSync) {
 }
 
 function ensureFlowRegistryPermissions(pathname: string) {
-  const dir = resolveTaskFlowRegistryDir(process.env);
-  mkdirSync(dir, { recursive: true, mode: FLOW_REGISTRY_DIR_MODE });
-  chmodSync(dir, FLOW_REGISTRY_DIR_MODE);
-  for (const suffix of FLOW_REGISTRY_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
-    if (!existsSync(candidate)) {
-      continue;
-    }
-    chmodSync(candidate, FLOW_REGISTRY_FILE_MODE);
-  }
+  ensureSqliteStorePermissions({
+    dir: resolveTaskFlowRegistryDir(process.env),
+    pathname,
+    dirMode: FLOW_REGISTRY_DIR_MODE,
+    fileMode: FLOW_REGISTRY_FILE_MODE,
+  });
 }
 
 function openFlowRegistryDatabase(): FlowRegistryDatabase {

@@ -7,11 +7,12 @@ import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
+  MAX_SEARCH_COUNT,
   normalizeFreshness,
   parseIsoDateRange,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readNumberParam,
+  readPositiveIntegerParam,
   readProviderEnvValue,
   readStringParam,
   resolveCitationRedirectUrl,
@@ -318,7 +319,12 @@ export async function executeGeminiSearch(
 
   const query = readStringParam(args, "query", { required: true });
   const count =
-    readNumberParam(args, "count", { integer: true }) ?? searchConfig?.maxResults ?? undefined;
+    readPositiveIntegerParam(args, "count", {
+      max: MAX_SEARCH_COUNT,
+      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+    }) ??
+    searchConfig?.maxResults ??
+    undefined;
   const model = resolveGeminiModel(geminiConfig);
   const baseUrl = resolveGeminiBaseUrl(geminiConfig);
   const cacheKey = buildSearchCacheKey([

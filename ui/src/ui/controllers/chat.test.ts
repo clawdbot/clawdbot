@@ -1045,6 +1045,21 @@ describe("sendChatMessage", () => {
     expect(sendParams.message).toBe("continue");
   });
 
+  it("adopts the run id and terminal status from the chat.send ack", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "gateway-complete-run", status: "ok" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "already handled");
+
+    expect(result).toBe("gateway-complete-run");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+  });
+
   it("serializes non-image chat attachments as files", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({

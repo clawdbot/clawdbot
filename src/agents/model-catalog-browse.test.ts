@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadModelCatalogForBrowse } from "./model-catalog-browse.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -23,6 +23,10 @@ function config(params: { providerWildcard?: boolean } = {}): OpenClawConfig {
 }
 
 describe("loadModelCatalogForBrowse", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("uses the read-only catalog for default browse views", async () => {
     const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
       readOnly ? readOnlyCatalog : fullCatalog,
@@ -78,5 +82,28 @@ describe("loadModelCatalogForBrowse", () => {
     await expect(resultPromise).resolves.toEqual([]);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
     await new Promise((resolve) => setTimeout(resolve, 15));
+  });
+
+  it("uses the default timeout when timeoutMs is non-finite", async () => {
+    vi.useFakeTimers();
+    const onTimeout = vi.fn();
+    const loadCatalog = vi.fn(
+      () =>
+        new Promise<ModelCatalogEntry[]>((resolve) => {
+          setTimeout(() => resolve(readOnlyCatalog), 5);
+        }),
+    );
+
+    const resultPromise = loadModelCatalogForBrowse({
+      cfg: config(),
+      loadCatalog,
+      timeoutMs: Number.NaN,
+      onTimeout,
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+
+    await expect(resultPromise).resolves.toBe(readOnlyCatalog);
+    expect(onTimeout).not.toHaveBeenCalled();
   });
 });

@@ -1,12 +1,12 @@
-import { listChannelPlugins } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateWebLoginStartParams,
   validateWebLoginWaitParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { listChannelPlugins } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 

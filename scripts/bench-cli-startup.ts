@@ -429,6 +429,26 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number, label = 
   return parseStrictIntegerOption({ fallback, label, min: 0, raw });
 }
 
+function parseGatewayPortEnv(raw: string | undefined): number {
+  const value = raw?.trim();
+  if (!value) {
+    return 32123;
+  }
+  const bracketHostMatch = /^\[[^\]]+\]:(\d+)$/u.exec(value);
+  if (bracketHostMatch) {
+    return parsePositiveInt(bracketHostMatch[1], 32123, "OPENCLAW_GATEWAY_PORT");
+  }
+  if (value.startsWith("[") && value.endsWith("]")) {
+    return 32123;
+  }
+  const colonCount = value.split(":").length - 1;
+  if (colonCount > 1) {
+    return 32123;
+  }
+  const portRaw = colonCount === 1 ? value.split(":")[1] : value;
+  return parsePositiveInt(portRaw, 32123, "OPENCLAW_GATEWAY_PORT");
+}
+
 function parsePresets(raw: string | undefined): string[] {
   if (!raw) {
     return ["startup"];
@@ -531,6 +551,21 @@ function collectExitSummary(samples: Sample[]): string {
   return [...buckets.entries()].map(([key, count]) => `${key}x${count}`).join(", ");
 }
 
+function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  if (commandCase.id !== "configGetGatewayPort" && commandCase.id !== "gatewayHealthJson") {
+    return null;
+  }
+  const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
+  return {
+    gateway: {
+      auth: { mode: "none" },
+      bind: "loopback",
+      mode: "local",
+      port,
+    },
+  };
+}
+
 function buildRssHook(tmpDir: string): string {
   const rssHookPath = path.join(tmpDir, "measure-rss.mjs");
   writeFileSync(
@@ -583,6 +618,11 @@ async function runSample(params: {
   const runRoot = mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-bench-home-"));
   const stateDir = path.join(runRoot, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
+  const configFixture = buildConfigFixture(params.commandCase);
+  if (configFixture) {
+    mkdirSync(stateDir, { recursive: true });
+    writeFileSync(configPath, `${JSON.stringify(configFixture, null, 2)}\n`, "utf8");
+  }
   const nodeArgs = [
     "--import",
     params.rssHookPath,
@@ -981,7 +1021,9 @@ async function main(): Promise<void> {
 }
 
 export const testing = {
+  buildConfigFixture,
   collectFailedSamples,
+  parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,
 };

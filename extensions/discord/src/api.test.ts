@@ -100,6 +100,32 @@ describe("fetchDiscord", () => {
     expect(message).not.toContain("<html");
   });
 
+  it.each([
+    ["hex", "0x10"],
+    ["fractional", "1.5"],
+    ["overflow", `1${"0".repeat(309)}`],
+  ])("rejects invalid Retry-After header values: %s", async (_label, header) => {
+    const fetcher = withFetchPreconnect(
+      async () =>
+        new Response("<html><title>Error 1015</title><body>rate limited</body></html>", {
+          status: 429,
+          headers: { "content-type": "text/html", "retry-after": header },
+        }),
+    );
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/oauth2/applications/@me", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect((error as DiscordApiError).retryAfter).toBe(60);
+  });
+
   it("retries rate limits before succeeding", async () => {
     let calls = 0;
     const fetcher = withFetchPreconnect(async () => {

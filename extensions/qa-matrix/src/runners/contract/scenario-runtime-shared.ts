@@ -65,9 +65,10 @@ const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
-  const raw = process.env[NO_REPLY_WINDOW_ENV];
-  const parsed = raw === undefined ? NO_REPLY_WINDOW_MS : Number(raw);
-  const windowMs = Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : NO_REPLY_WINDOW_MS;
+  const raw = process.env[NO_REPLY_WINDOW_ENV]?.trim();
+  const parsed =
+    raw === undefined ? NO_REPLY_WINDOW_MS : /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  const windowMs = Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : NO_REPLY_WINDOW_MS;
   return Math.min(windowMs, timeoutMs);
 }
 

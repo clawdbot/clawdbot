@@ -660,6 +660,42 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
   });
 
+  it("keeps npm project package fingerprints stable across directory order changes", () => {
+    const stateDir = tempStateDir();
+    const projectsDir = path.join(stateDir, "npm", "projects");
+    writeJson(path.join(projectsDir, "zeta", "package.json"), { name: "zeta", version: "1.0.0" });
+    writeJson(path.join(projectsDir, "alpha", "package.json"), { name: "alpha", version: "1.0.0" });
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+    const originalReaddirSync = fs.readdirSync.bind(fs);
+    let reverseProjectEntries = false;
+    const readdirSpy = vi.spyOn(fs, "readdirSync").mockImplementation(((
+      directoryPath: fs.PathLike,
+      options?: Parameters<typeof fs.readdirSync>[1],
+    ): unknown => {
+      const entries = originalReaddirSync(directoryPath, options as never);
+      if (directoryPath === projectsDir && reverseProjectEntries && Array.isArray(entries)) {
+        return entries.toReversed();
+      }
+      return entries;
+    }) as unknown as typeof fs.readdirSync);
+
+    try {
+      loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+      reverseProjectEntries = true;
+      loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    } finally {
+      readdirSpy.mockRestore();
+    }
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
+  });
+
   it("requires reload before an in-root package manifest symlink target change is visible", () => {
     const stateDir = tempStateDir();
     const pluginDir = path.join(stateDir, "extensions", "demo");

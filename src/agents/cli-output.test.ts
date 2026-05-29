@@ -4,6 +4,7 @@ import {
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
@@ -536,5 +537,332 @@ describe("createCliJsonlStreamingParser", () => {
       cacheWrite: undefined,
       total: undefined,
     });
+  });
+
+  it("surfaces Claude tool_use start and result events", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
+      [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "ls -la" } },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "toolu_1",
+                content: "total 0\n",
+                is_error: false,
+              },
+            ],
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([{ toolCallId: "toolu_1", name: "Bash", args: { command: "ls -la" } }]);
+    expect(results).toEqual([
+      { toolCallId: "toolu_1", name: "Bash", isError: false, result: "total 0\n" },
+    ]);
+  });
+
+  it("reassembles streamed tool args from input_json_delta chunks", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_chunked", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"command":' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: ' "echo hi"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_chunked", name: "Bash", args: { command: "echo hi" } },
+    ]);
+  });
+
+  it("emits empty args when streamed tool args are malformed", () => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_bad", name: "Bash", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"command": "ls' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([{ toolCallId: "toolu_bad", name: "Bash", args: {} }]);
+  });
+
+  it.each(["server_tool_use", "mcp_tool_use"])("recognizes %s blocks", (type) => {
+    const starts: CliToolUseStartDelta[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type, id: "toolu_hosted", name: "web_search", input: {} },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"query":"openclaw"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: "toolu_hosted", name: "web_search", args: { query: "openclaw" } },
+    ]);
+  });
+
+  it.each([
+    {
+      useType: "server_tool_use",
+      resultType: "web_search_tool_result",
+      toolCallId: "srvtoolu_1",
+      name: "web_search",
+      input: { query: "openclaw" },
+      result: [{ type: "web_search_result", title: "OpenClaw", url: "https://example.com" }],
+      isError: false,
+    },
+    {
+      useType: "mcp_tool_use",
+      resultType: "mcp_tool_result",
+      toolCallId: "mcptoolu_1",
+      name: "echo",
+      input: { value: "hello" },
+      result: [{ type: "text", text: "hello" }],
+      isError: false,
+    },
+  ])("emits hosted result events for $useType", (fixture) => {
+    const starts: CliToolUseStartDelta[] = [];
+    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
+      [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: (delta) => starts.push(delta),
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: fixture.useType,
+                id: fixture.toolCallId,
+                name: fixture.name,
+                input: fixture.input,
+              },
+              {
+                type: fixture.resultType,
+                tool_use_id: fixture.toolCallId,
+                content: fixture.result,
+                is_error: fixture.isError,
+              },
+            ],
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(starts).toEqual([
+      { toolCallId: fixture.toolCallId, name: fixture.name, args: fixture.input },
+    ]);
+    expect(results).toEqual([
+      {
+        toolCallId: fixture.toolCallId,
+        name: fixture.name,
+        isError: fixture.isError,
+        result: fixture.result,
+      },
+    ]);
+  });
+
+  it("emits streamed server tool result blocks", () => {
+    const results: Array<{ toolCallId: string; name: string; isError: boolean; result?: unknown }> =
+      [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onToolUseStart: () => undefined,
+      onToolResult: (delta) => results.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "server_tool_use", id: "srvtoolu_stream", name: "web_search" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_stop",
+            index: 0,
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: {
+              type: "web_search_tool_result",
+              tool_use_id: "srvtoolu_stream",
+              content: { type: "web_search_tool_result_error", error_code: "unavailable" },
+            },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(results).toEqual([
+      {
+        toolCallId: "srvtoolu_stream",
+        name: "web_search",
+        isError: true,
+        result: { type: "web_search_tool_result_error", error_code: "unavailable" },
+      },
+    ]);
   });
 });

@@ -26,6 +26,7 @@ type DeepDreamingStatus = DreamingPhaseStatusBase & {
   minUniqueQueries: number;
   recencyHalfLifeDays: number;
   maxAgeDays?: number;
+  maxPromotedSnippetTokens?: number;
 };
 
 type RemDreamingStatus = DreamingPhaseStatusBase & {
@@ -721,6 +722,15 @@ function normalizeDreamingStatus(raw: unknown): DreamingStatus | null {
             recencyHalfLifeDays: normalizeFiniteInt(deepRecord.recencyHalfLifeDays, 0),
             ...(typeof deepRecord.maxAgeDays === "number" && Number.isFinite(deepRecord.maxAgeDays)
               ? { maxAgeDays: normalizeFiniteInt(deepRecord.maxAgeDays, 0) }
+              : {}),
+            ...(typeof deepRecord.maxPromotedSnippetTokens === "number" &&
+            Number.isFinite(deepRecord.maxPromotedSnippetTokens)
+              ? {
+                  maxPromotedSnippetTokens: normalizeFiniteInt(
+                    deepRecord.maxPromotedSnippetTokens,
+                    0,
+                  ),
+                }
               : {}),
           },
           rem: {

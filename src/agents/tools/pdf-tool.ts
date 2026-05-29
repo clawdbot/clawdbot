@@ -14,7 +14,8 @@ import {
 } from "../../shared/string-coerce.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
-import { ToolInputError } from "./common.js";
+import { optionalFiniteNumberSchema } from "../schema/typebox.js";
+import { readFiniteNumberParam, ToolInputError } from "./common.js";
 import { coerceImageModelConfig, type ImageModelConfig } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
@@ -71,8 +72,9 @@ export const PdfToolSchema = Type.Object({
       description: 'Pages, e.g. "1-5", "1,3,5-7"; default all.',
     }),
   ),
+  password: Type.Optional(Type.String({ description: "Password for encrypted PDFs." })),
   model: Type.Optional(Type.String()),
-  maxBytesMb: Type.Optional(Type.Number()),
+  maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
 
 // ---------------------------------------------------------------------------
@@ -144,6 +146,7 @@ async function runPdfPrompt(params: {
   modelOverride?: string;
   prompt: string;
   pdfBuffers: Array<{ base64: string; filename: string }>;
+  password?: string;
   pageNumbers?: number[];
   getExtractions: () => Promise<PdfExtractedContent[]>;
 }): Promise<{
@@ -158,7 +161,7 @@ async function runPdfPrompt(params: {
   const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
   await ensureOpenClawModelsJson(effectiveCfg, params.agentDir, modelsOptions);
   const authStorage = discoverAuthStorage(params.agentDir);
-  const modelRegistry = discoverModels(authStorage, params.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.agentDir, modelsOptions);
 
   let extractionCache: PdfExtractedContent[] | null = null;
   const getExtractions = async (): Promise<PdfExtractedContent[]> => {
@@ -181,6 +184,11 @@ async function runPdfPrompt(params: {
       });
 
       if (providerSupportsNativePdf(provider)) {
+        if (params.password) {
+          throw new Error(
+            `password is not supported with native PDF providers (${provider}/${modelId}). Remove password, or use a non-native model for encrypted PDFs.`,
+          );
+        }
         if (params.pageNumbers && params.pageNumbers.length > 0) {
           throw new Error(
             `pages is not supported with native PDF providers (${provider}/${modelId}). Remove pages, or use a non-native model for page filtering.`,
@@ -347,15 +355,17 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
-      const maxBytesMbRaw = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytesMb =
-        typeof maxBytesMbRaw === "number" && Number.isFinite(maxBytesMbRaw) && maxBytesMbRaw > 0
-          ? maxBytesMbRaw
-          : configuredMaxBytesMb;
+        readFiniteNumberParam(record, "maxBytesMb", {
+          min: 0,
+          minExclusive: true,
+          message: "maxBytesMb must be greater than 0",
+        }) ?? configuredMaxBytesMb;
       const maxBytes = Math.floor(maxBytesMb * 1024 * 1024);
 
       // Parse page range
       const pagesRaw = normalizeOptionalString(record.pages);
+      const password = typeof record.password === "string" ? record.password : undefined;
 
       const pdfModelConfig =
         registrationPdfModelConfig ??
@@ -486,6 +496,7 @@ export function createPdfTool(options?: {
             maxPages: configuredMaxPages,
             maxPixels: PDF_MAX_PIXELS,
             minTextChars: PDF_MIN_TEXT_CHARS,
+            ...(password ? { password } : {}),
             pageNumbers,
             config: options?.config,
           });
@@ -502,6 +513,7 @@ export function createPdfTool(options?: {
         modelOverride,
         prompt: promptRaw,
         pdfBuffers: loadedPdfs.map((p) => ({ base64: p.base64, filename: p.filename })),
+        ...(password ? { password } : {}),
         pageNumbers,
         getExtractions,
       });

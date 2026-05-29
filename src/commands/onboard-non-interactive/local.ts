@@ -1,11 +1,5 @@
 import { formatCliCommand } from "../../cli/command-format.js";
-import {
-  commitConfigWriteWithPendingPluginInstalls,
-  hasPendingPluginInstallRecords,
-  stripPendingPluginInstallRecords,
-  unchangedPendingPluginInstallRecordIds,
-} from "../../cli/plugins-install-record-commit.js";
-import { replaceConfigFile, resolveGatewayPort } from "../../config/config.js";
+import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
@@ -21,6 +15,7 @@ import {
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import type { OnboardOptions } from "../onboard-types.js";
+import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
 import {
   type GatewayHealthFailureDiagnostics,
@@ -210,40 +205,12 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  // Ordinary onboard reruns must preserve existing agents.list / bindings.
-  // Only explicit --reset is allowed to shrink the config — see openclaw#84692.
-  const allowConfigSizeDrop = opts.reset === true;
-  let writeBaseHash = baseHash;
-  if (!allowConfigSizeDrop && hasPendingPluginInstallRecords(baseConfig)) {
-    const migrated = await commitConfigWriteWithPendingPluginInstalls({
-      nextConfig: baseConfig,
-      writeOptions: { allowConfigSizeDrop: true },
-      commit: async (config, writeOptions) => {
-        return await replaceConfigFile({
-          nextConfig: config,
-          ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
-          ...(writeOptions ? { writeOptions } : {}),
-        });
-      },
-    });
-    writeBaseHash = migrated.persistedHash ?? undefined;
-    nextConfig = stripPendingPluginInstallRecords(
-      nextConfig,
-      unchangedPendingPluginInstallRecordIds(nextConfig, baseConfig),
-    );
-  }
-  const committed = await commitConfigWriteWithPendingPluginInstalls({
+  nextConfig = await commitNonInteractiveOnboardConfig({
     nextConfig,
-    writeOptions: { allowConfigSizeDrop },
-    commit: async (config, writeOptions) => {
-      return await replaceConfigFile({
-        nextConfig: config,
-        ...(writeBaseHash !== undefined ? { baseHash: writeBaseHash } : {}),
-        ...(writeOptions ? { writeOptions } : {}),
-      });
-    },
+    baseConfig,
+    baseHash,
+    reset: opts.reset,
   });
-  nextConfig = committed.config;
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {

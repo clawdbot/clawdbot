@@ -35,6 +35,54 @@ function slackApiError(code: string): Error {
 }
 
 describe("stopSlackStream finalize error handling", () => {
+  it("starts and appends supported structured stream chunks without buffering markdown text", async () => {
+    const append = vi.fn(async () => ({ ts: "1700000000.100205" }));
+    const client = {
+      chatStream: vi.fn(() => ({
+        append,
+        stop: vi.fn(async () => {}),
+      })),
+    };
+    const chunks = [{ type: "plan_update" as const, title: "Inspecting" }];
+
+    const session = await startSlackStream({
+      client: client as never,
+      channel: "C123",
+      threadTs: "1700000000.000100",
+      chunks,
+      taskDisplayMode: "plan",
+    });
+
+    expect(client.chatStream).toHaveBeenCalledWith({
+      channel: "C123",
+      thread_ts: "1700000000.000100",
+      task_display_mode: "plan",
+    });
+    expect(append).toHaveBeenCalledWith({ chunks });
+    expect(session.delivered).toBe(true);
+    expect(session.pendingText).toBe("");
+  });
+
+  it("appends supported task update chunks to an active stream", async () => {
+    const session = makeSession({
+      appendImpl: async () => ({ ts: "1700000000.100206" }),
+    });
+    const chunks = [
+      {
+        type: "task_update" as const,
+        id: "item_1",
+        title: "Run tests",
+        status: "in_progress" as const,
+      },
+    ];
+
+    await appendSlackStream({ session, chunks });
+
+    expect(session.streamer.append).toHaveBeenCalledWith({ chunks });
+    expect(session.delivered).toBe(true);
+    expect(session.pendingText).toBe("");
+  });
+
   it("swallows user_not_found after prior append flushed (delivered=true)", async () => {
     const session = makeSession({
       appendImpl: async () => ({ ts: "1700000000.100200" }), // non-null => flushed

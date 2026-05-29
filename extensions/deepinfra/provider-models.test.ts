@@ -436,6 +436,50 @@ describe("discoverDeepInfraSurfaces (per-surface bucketing)", () => {
     });
   });
 
+  it("drops malformed live numeric metadata", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          data: [
+            makeAgentModelEntry({
+              id: "bad/chat",
+              metadata: {
+                description: "bad chat",
+                context_length: -1,
+                max_tokens: 1.5,
+                pricing: { input_tokens: 3, output_tokens: 15 },
+                tags: ["chat"],
+              },
+            }),
+            makeAgentModelEntry({
+              id: "bad/image",
+              metadata: {
+                description: "bad image",
+                pricing: { per_image_unit: 0.003 },
+                tags: ["image-gen"],
+                default_width: Number.POSITIVE_INFINITY,
+                default_height: 1024.5,
+                default_iterations: 0,
+              },
+            }),
+          ],
+        }),
+    });
+
+    await withFetchPathTest(mockFetch, { DEEPINFRA_API_KEY: "sk-test" }, async () => {
+      const catalog = await discoverDeepInfraSurfaces();
+
+      expect(catalog.chat[0]).toMatchObject({ id: "bad/chat" });
+      expect(catalog.chat[0]?.contextWindow).toBeUndefined();
+      expect(catalog.chat[0]?.maxTokens).toBeUndefined();
+      expect(catalog.imageGen[0]).toMatchObject({ id: "bad/image" });
+      expect(catalog.imageGen[0]?.defaultWidth).toBeUndefined();
+      expect(catalog.imageGen[0]?.defaultHeight).toBeUndefined();
+      expect(catalog.imageGen[0]?.defaultIterations).toBeUndefined();
+    });
+  });
+
   it("returns the manifest static fallback (live=false) when no API key is configured", async () => {
     const mockFetch = vi.fn();
 

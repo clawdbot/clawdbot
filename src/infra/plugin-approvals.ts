@@ -1,5 +1,13 @@
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
+export type PluginApprovalActionView = {
+  kind?: "command" | "decision";
+  label: string;
+  command: string;
+  decision?: ExecApprovalDecision;
+  style?: "primary" | "secondary" | "success" | "danger";
+};
+
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
@@ -8,6 +16,7 @@ export type PluginApprovalRequestPayload = {
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
+  actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
   turnSourceChannel?: string | null;

@@ -137,6 +137,28 @@ describe("perplexity web search provider", () => {
     });
   });
 
+  it.each([
+    ["max_tokens", 0, "max_tokens must be a positive integer."],
+    ["max_tokens", 1.5, "max_tokens must be a positive integer."],
+    ["max_tokens", 1_000_001, "max_tokens must be a positive integer."],
+    ["max_tokens_per_page", 1.5, "max_tokens_per_page must be a positive integer."],
+  ])("rejects invalid native token budget %s=%s", async (key, value, message) => {
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(tool.execute({ query: "OpenClaw docs", [key]: value })).rejects.toThrow(
+          message,
+        );
+      },
+    );
+  });
+
   it("reports malformed Search API JSON with a stable provider error", async () => {
     await expect(
       testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity Search"),

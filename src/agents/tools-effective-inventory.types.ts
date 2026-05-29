@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 
-export type EffectiveToolSource = "core" | "plugin" | "channel";
+export type EffectiveToolSource = "core" | "plugin" | "channel" | "mcp";
 
 export type EffectiveToolInventoryEntry = {
   id: string;

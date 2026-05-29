@@ -281,8 +281,9 @@ fresh OpenClaw session.
 **A Computer Use tool says `Native hook relay unavailable`.** The Codex-native
 tool hook could not reach an active OpenClaw relay through the local bridge or
 Gateway fallback. Start a fresh OpenClaw session with `/new` or `/reset`. If it
-keeps happening, restart the gateway so old app-server threads and hook
-registrations are dropped, then retry.
+works once and then fails again on a later tool call, `/new` is only clearing the
+current attempt; restart the Codex app-server or OpenClaw Gateway so old threads
+and hook registrations are dropped, then retry in a fresh session.
 
 **Turn-start auto-install refuses a source.** This is intentional. Add the
 source with explicit `/codex computer-use install --source <marketplace-source>`

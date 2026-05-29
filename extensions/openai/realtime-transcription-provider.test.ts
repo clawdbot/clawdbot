@@ -179,6 +179,24 @@ describe("buildOpenAIRealtimeTranscriptionProvider", () => {
     expect(resolved?.vadThreshold).toBe(0);
   });
 
+  it("drops malformed VAD timing settings", () => {
+    const provider = buildOpenAIRealtimeTranscriptionProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      rawConfig: {
+        providers: {
+          openai: {
+            silenceDurationMs: -1,
+            vadThreshold: 1.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.silenceDurationMs).toBeUndefined();
+    expect(resolved?.vadThreshold).toBeUndefined();
+  });
+
   it("accepts the legacy openai-realtime alias", () => {
     const provider = buildOpenAIRealtimeTranscriptionProvider();
     expect(provider.aliases).toContain("openai-realtime");

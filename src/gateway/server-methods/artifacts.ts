@@ -1,4 +1,13 @@
 import { createHash } from "node:crypto";
+import {
+  ErrorCodes,
+  errorShape,
+  type ArtifactSummary,
+  type ArtifactsGetParams,
+  validateArtifactsDownloadParams,
+  validateArtifactsGetParams,
+  validateArtifactsListParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -10,15 +19,6 @@ import {
 import { asOptionalRecord } from "../../shared/record-coerce.js";
 import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
 import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
-import {
-  ErrorCodes,
-  errorShape,
-  type ArtifactSummary,
-  type ArtifactsGetParams,
-  validateArtifactsDownloadParams,
-  validateArtifactsGetParams,
-  validateArtifactsListParams,
-} from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   resolveSessionStoreAgentId,

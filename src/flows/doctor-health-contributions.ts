@@ -40,6 +40,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
@@ -170,7 +171,10 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
 
 async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { resolveSecretInputRef } = await import("../config/types.secrets.js");
+  const { buildGatewayTokenSecretRefFixHint, buildGatewayTokenSecretRefUnavailableMessage } =
+    await import("./doctor-core-checks.js");
   const { resolveGatewayAuth } = await import("../gateway/auth.js");
+  const { resolveGatewayAuthToken } = await import("../gateway/auth-token-resolution.js");
   const { note } = await import("../terminal/note.js");
   const { randomToken } = await import("../commands/onboard-helpers.js");
   if (resolveDoctorMode(ctx.cfg) !== "local" || !ctx.sourceConfigValid) {
@@ -188,20 +192,58 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   // This aligns with hasExplicitGatewayInstallAuthMode() in auth-install-policy.ts.
   // Previously, only "password" and "token" (with a token present) were excluded,
   // causing doctor --fix to overwrite trusted-proxy/none configs with token mode.
+  const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
   const needsToken =
     auth.mode !== "password" &&
     auth.mode !== "none" &&
     auth.mode !== "trusted-proxy" &&
-    (auth.mode !== "token" || !auth.token);
+    (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
   if (!needsToken) {
     return;
   }
+  let unresolvedRefReason: string | undefined;
+  if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
+    const { getSkippedExecRefStaticError } = await import("../secrets/exec-resolution-policy.js");
+    const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
+    if (staticError) {
+      unresolvedRefReason = undefined;
+    } else if (ctx.options.allowExec !== true) {
+      return;
+    } else {
+      const resolvedToken = await resolveGatewayAuthToken({
+        cfg: ctx.cfg,
+        env: ctx.env ?? process.env,
+        unresolvedReasonStyle: "detailed",
+        envFallback: "never",
+      });
+      if (resolvedToken.source === "secretRef") {
+        return;
+      }
+      unresolvedRefReason = resolvedToken.unresolvedRefReason;
+    }
+  } else {
+    const resolvedToken = await resolveGatewayAuthToken({
+      cfg: ctx.cfg,
+      env: ctx.env ?? process.env,
+      unresolvedReasonStyle: "detailed",
+      envFallback: gatewayTokenRef ? "never" : "always",
+    });
+    if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
+      return;
+    }
+    unresolvedRefReason = resolvedToken.unresolvedRefReason;
+  }
   if (gatewayTokenRef) {
+    const reason = buildGatewayTokenSecretRefUnavailableMessage({
+      cfg: ctx.cfg,
+      ref: gatewayTokenRef,
+      unresolvedRefReason,
+    });
     note(
       [
-        "Gateway token is managed via SecretRef and is currently unavailable.",
+        reason,
         "Doctor will not overwrite gateway.auth.token with a plaintext value.",
-        "Resolve/rotate the external secret source, then rerun doctor.",
+        buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
       ].join("\n"),
       "Gateway auth",
     );
@@ -457,6 +499,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     resolveDoctorMode(ctx.cfg),
     ctx.runtime,
     ctx.prompter,
+    { allowExecSecretRefs: ctx.options.allowExec === true },
   );
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
@@ -679,6 +722,39 @@ async function runShellCompletionHealth(ctx: DoctorHealthFlowContext): Promise<v
 }
 
 async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { resolveSecretInputRef } = await import("../config/types.secrets.js");
+  const { gatewaySecretInputPathCanWin } = await import("../gateway/credentials-secret-inputs.js");
+  const { readGatewaySecretInputValue } = await import("../gateway/secret-input-paths.js");
+  const { note } = await import("../terminal/note.js");
+  const credentialPaths = [
+    "gateway.auth.token",
+    "gateway.auth.password",
+    "gateway.remote.token",
+    "gateway.remote.password",
+  ] as const;
+  const activeSecretRefPaths = credentialPaths.filter((path) =>
+    gatewaySecretInputPathCanWin({
+      config: ctx.cfg,
+      env: process.env,
+      path,
+    }),
+  );
+  const hasActiveExecCredential = activeSecretRefPaths.some((path) => {
+    const ref = resolveSecretInputRef({
+      value: readGatewaySecretInputValue(ctx.cfg, path),
+      defaults: ctx.cfg.secrets?.defaults,
+    }).ref;
+    return ref?.source === "exec";
+  });
+  if (hasActiveExecCredential && ctx.options.allowExec !== true) {
+    note(
+      "Gateway health probes skipped because gateway credentials use an exec SecretRef. Run `openclaw doctor --allow-exec` to verify Gateway health with exec SecretRefs.",
+      "Gateway",
+    );
+    ctx.gatewayHealthSkipped = true;
+    ctx.gatewayMemoryProbe = { checked: false, ready: false, skipped: true };
+    return;
+  }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
   const { healthOk, status } = await checkGatewayHealth({
@@ -686,6 +762,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
+  ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
   ctx.gatewayStatus = status;
   ctx.gatewayMemoryProbe = healthOk
@@ -739,7 +816,10 @@ async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<voi
     prompter: ctx.prompter,
     options: ctx.options,
     gatewayDetailsMessage: ctx.gatewayDetails?.message ?? "",
+    // A skipped exec-backed token probe is unknown, not unhealthy. Do not let
+    // doctor --fix restart services only because probing would require exec.
     healthOk: ctx.healthOk ?? false,
+    healthSkipped: ctx.gatewayHealthSkipped === true,
   });
 }
 

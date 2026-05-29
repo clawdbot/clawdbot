@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -90,11 +93,20 @@ function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
 }
 
 describe("registerCoreHealthChecks", () => {
+  let tmp: string | undefined;
+
   beforeEach(() => {
     clearHealthChecksForTest();
     resetCoreHealthChecksForTest();
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
+    tmp = undefined;
+  });
+
+  afterEach(async () => {
+    if (tmp) {
+      await fs.rm(tmp, { force: true, recursive: true });
+    }
   });
 
   it("registers the built-in health checks once", () => {
@@ -299,6 +311,252 @@ describe("registerCoreHealthChecks", () => {
     });
 
     expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg, readOnly: true });
+  });
+
+  it("skips gateway auth warning when SecretRef-managed token resolves in lint checks", async () => {
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+    const previousToken = process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
+    process.env.OPENCLAW_TEST_GATEWAY_TOKEN = "resolved-test-token";
+    try {
+      const findings = await check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_GATEWAY_TOKEN",
+              },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        },
+        cwd: tmp,
+      });
+
+      expect(findings).toEqual([]);
+    } finally {
+      if (previousToken === undefined) {
+        delete process.env.OPENCLAW_TEST_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_TEST_GATEWAY_TOKEN = previousToken;
+      }
+    }
+  });
+
+  it("reports unresolved SecretRefs even when OPENCLAW_GATEWAY_TOKEN is set", async () => {
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+    const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    const previousRefToken = process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
+    delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
+    try {
+      const findings = await check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_MISSING_GATEWAY_REF_TOKEN",
+              },
+            },
+          },
+          secrets: {
+            providers: {
+              default: { source: "env" },
+            },
+          },
+        },
+        cwd: tmp,
+      });
+
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          checkId: "core/doctor/gateway-auth",
+          message: expect.stringContaining("Gateway token SecretRef could not be resolved:"),
+        }),
+      );
+    } finally {
+      if (previousFallbackToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousFallbackToken;
+      }
+      if (previousRefToken === undefined) {
+        delete process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN;
+      } else {
+        process.env.OPENCLAW_MISSING_GATEWAY_REF_TOKEN = previousRefToken;
+      }
+    }
+  });
+
+  it("does not execute or warn for valid exec SecretRefs during default gateway auth lint checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const markerPath = join(tmp, "exec-ran");
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+
+    const findings = await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "value",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: "/bin/sh",
+              args: ["-c", `cat >/dev/null; printf executed > ${JSON.stringify(markerPath)}`],
+              jsonOnly: false,
+              allowInsecurePath: true,
+            },
+          },
+        },
+      },
+      cwd: tmp,
+    });
+
+    expect(findings).toEqual([]);
+    await expect(fs.readFile(markerPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("executes exec SecretRefs when gateway auth lint explicitly allows exec checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const markerPath = join(tmp, "exec-ran");
+    const resolverPath = join(tmp, "resolve-token.cjs");
+    await fs.writeFile(
+      resolverPath,
+      [
+        "const fs = require('node:fs');",
+        "process.stdin.resume();",
+        "process.stdin.on('end', () => {",
+        "  fs.writeFileSync(process.argv[2], 'executed');",
+        "  process.stdout.write('resolved-token');",
+        "});",
+      ].join("\n"),
+      "utf8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+
+    const findings = await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        gateway: {
+          mode: "local",
+          auth: {
+            mode: "token",
+            token: {
+              source: "exec",
+              provider: "default",
+              id: "value",
+            },
+          },
+        },
+        secrets: {
+          providers: {
+            default: {
+              source: "exec",
+              command: process.execPath,
+              args: [resolverPath, markerPath],
+              jsonOnly: false,
+              allowInsecurePath: true,
+              allowSymlinkCommand: true,
+            },
+          },
+        },
+      },
+      cwd: tmp,
+      allowExecSecretRefs: true,
+    });
+
+    expect(findings).toEqual([]);
+    await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("executed");
+  });
+
+  it("reports exec SecretRef failures when gateway auth lint explicitly allows exec checks", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-exec-ref-"));
+    const resolverPath = join(tmp, "fail-token.cjs");
+    await fs.writeFile(
+      resolverPath,
+      ["process.stdin.resume();", "process.stdin.on('end', () => process.exit(12));"].join("\n"),
+      "utf8",
+    );
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/gateway-auth");
+    const previousFallbackToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "fallback-token";
+
+    let findings: readonly HealthFinding[] | undefined;
+    try {
+      findings = await check?.detect({
+        mode: "lint",
+        runtime: { log() {}, error() {}, exit() {} },
+        cfg: {
+          gateway: {
+            mode: "local",
+            auth: {
+              mode: "token",
+              token: {
+                source: "exec",
+                provider: "default",
+                id: "value",
+              },
+            },
+          },
+          secrets: {
+            providers: {
+              default: {
+                source: "exec",
+                command: process.execPath,
+                args: [resolverPath],
+                jsonOnly: false,
+                allowInsecurePath: true,
+                allowSymlinkCommand: true,
+              },
+            },
+          },
+        },
+        allowExecSecretRefs: true,
+      });
+    } finally {
+      if (previousFallbackToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = previousFallbackToken;
+      }
+    }
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-auth",
+        severity: "warning",
+        message: expect.stringContaining("Gateway token SecretRef could not be resolved:"),
+        fixHint:
+          "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.",
+      }),
+    );
   });
 
   it("converts workspace suggestions into info findings", async () => {

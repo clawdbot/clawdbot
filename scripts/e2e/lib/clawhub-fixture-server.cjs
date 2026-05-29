@@ -127,6 +127,28 @@ export default definePluginEntry({
       docsPath: "/providers/kitchen-sink",
       auth: [],
     });
+    api.registerContextEngine("${pluginId}", () => ({
+      info: {
+        id: "${pluginId}",
+        name: "Kitchen Sink Context Engine",
+      },
+      async ingest() {
+        return { ingested: false };
+      },
+      async assemble(params) {
+        return {
+          messages: params.messages,
+          estimatedTokens: 0,
+        };
+      },
+      async compact() {
+        return {
+          ok: true,
+          compacted: false,
+          reason: "kitchen-sink fixture does not compact",
+        };
+      },
+    }));
     api.registerChannel({
       plugin: {
         id: "kitchen-sink-channel",
@@ -151,6 +173,7 @@ export default definePluginEntry({
     manifest: {
       id: pluginId,
       name: "OpenClaw Kitchen Sink",
+      kind: "context-engine",
       channels: ["kitchen-sink-channel"],
       channelConfigs: {
         "kitchen-sink-channel": {

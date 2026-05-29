@@ -1,3 +1,4 @@
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
@@ -458,7 +459,7 @@ export async function snapshotAria(opts: {
   limit?: number;
   timeoutMs?: number;
 }): Promise<{ nodes: AriaSnapshotNode[] }> {
-  const limit = Math.max(1, Math.min(2000, Math.floor(opts.limit ?? 500)));
+  const limit = resolveIntegerOption(opts.limit, 500, { min: 1, max: 2000 });
   return await withCdpSocket(
     opts.wsUrl,
     async (send) => {
@@ -964,8 +965,8 @@ export async function snapshotDom(opts: {
 }): Promise<{
   nodes: DomSnapshotNode[];
 }> {
-  const limit = Math.max(1, Math.min(5000, Math.floor(opts.limit ?? 800)));
-  const maxTextChars = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 220)));
+  const limit = resolveIntegerOption(opts.limit, 800, { min: 1, max: 5000 });
+  const maxTextChars = resolveIntegerOption(opts.maxTextChars, 220, { min: 0, max: 5000 });
 
   const expression = `(() => {
     const maxNodes = ${JSON.stringify(limit)};
@@ -1048,7 +1049,7 @@ export async function getDomText(opts: {
   maxChars?: number;
   selector?: string;
 }): Promise<{ text: string }> {
-  const maxChars = Math.max(0, Math.min(5_000_000, Math.floor(opts.maxChars ?? 200_000)));
+  const maxChars = resolveIntegerOption(opts.maxChars, 200_000, { min: 0, max: 5_000_000 });
   const selectorExpr = opts.selector ? JSON.stringify(opts.selector) : "null";
   const expression = `(() => {
     const fmt = ${JSON.stringify(opts.format)};
@@ -1092,9 +1093,9 @@ export async function querySelector(opts: {
 }): Promise<{
   matches: QueryMatch[];
 }> {
-  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 20)));
-  const maxText = Math.max(0, Math.min(5000, Math.floor(opts.maxTextChars ?? 500)));
-  const maxHtml = Math.max(0, Math.min(20000, Math.floor(opts.maxHtmlChars ?? 1500)));
+  const limit = resolveIntegerOption(opts.limit, 20, { min: 1, max: 200 });
+  const maxText = resolveIntegerOption(opts.maxTextChars, 500, { min: 0, max: 5000 });
+  const maxHtml = resolveIntegerOption(opts.maxHtmlChars, 1500, { min: 0, max: 20_000 });
 
   const expression = `(() => {
     const sel = ${JSON.stringify(opts.selector)};

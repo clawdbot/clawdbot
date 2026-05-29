@@ -1,3 +1,4 @@
+import { resolveNonNegativeIntegerOption } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -220,7 +221,7 @@ export function findRecentStartedMediaGenerationTaskForSession(params: {
     return undefined;
   }
   const nowMs = params.nowMs ?? Date.now();
-  const maxAgeMs = Math.max(0, Math.floor(params.maxAgeMs));
+  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
   const taskLabel = normalizeOptionalString(params.taskLabel);
   pruneRecentMediaGenerationTaskStarts({ maxAgeMs, nowMs, preserveKey: key });
   const entries = recentMediaGenerationTaskStarts.get(key);

@@ -25,6 +25,11 @@ import {
   type RealtimeVoiceToolResultOptions,
 } from "../talk/provider-types.js";
 import {
+  isLikelyRealtimeVoiceAssistantEchoTranscript,
+  recordRealtimeVoiceTranscript,
+  type RealtimeVoiceTranscriptEntry,
+} from "../talk/session-log-runtime.js";
+import {
   createRealtimeVoiceBridgeSession,
   type RealtimeVoiceBridgeSession,
 } from "../talk/session-runtime.js";
@@ -43,6 +48,7 @@ const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_RELAY_SESSIONS_PER_CONN = 2;
 const MAX_RELAY_SESSIONS_GLOBAL = 64;
 const RELAY_EVENT = "talk.event";
+const RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS = 12_000;
 const FORCED_CONSULT_FALLBACK_DELAY_MS = 200;
 const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
 
@@ -88,6 +94,7 @@ type RelaySession = {
   activeAgentToolCalls: Map<string, string>;
   completedAgentToolCalls: Set<string>;
   forcedConsults: RealtimeVoiceForcedConsultCoordinator;
+  transcript: RealtimeVoiceTranscriptEntry[];
 };
 
 type CreateTalkRealtimeRelaySessionParams = {
@@ -129,6 +136,16 @@ function isWorkingToolResult(result: unknown): boolean {
   );
 }
 
+function isRelayAssistantEchoTranscript(session: RelaySession | undefined, text: string): boolean {
+  if (!session) {
+    return false;
+  }
+  return isLikelyRealtimeVoiceAssistantEchoTranscript({
+    transcript: session.transcript,
+    text,
+    lookbackMs: RELAY_TRANSCRIPT_ECHO_LOOKBACK_MS,
+  });
+}
 function buildForcedConsultCheckingPrompt(): string {
   return [
     "Briefly tell the person that you are checking with OpenClaw.",
@@ -282,6 +299,7 @@ export function createTalkRealtimeRelaySession(
   params: CreateTalkRealtimeRelaySessionParams,
 ): TalkRealtimeRelaySessionResult {
   enforceRelaySessionLimits(params.connId);
+  const forceAgentConsultOnFinalTranscript = params.forceAgentConsultOnFinalTranscript === true;
   const relaySessionId = randomUUID();
   const expiresAtMs = Date.now() + RELAY_SESSION_TTL_MS;
   const talk = createTalkSessionController(
@@ -306,8 +324,8 @@ export function createTalkRealtimeRelaySession(
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
-    autoRespondToAudio: false,
-    interruptResponseOnInputAudio: false,
+    autoRespondToAudio: !forceAgentConsultOnFinalTranscript,
+    interruptResponseOnInputAudio: !forceAgentConsultOnFinalTranscript,
     tools: params.tools,
     markStrategy: "ack-immediately",
     audioSink: {
@@ -354,6 +372,9 @@ export function createTalkRealtimeRelaySession(
     },
     onTranscript: (role, text, final) => {
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
+      if (final && relay) {
+        recordRealtimeVoiceTranscript(relay.transcript, role, text);
+      }
       const eventType =
         role === "assistant"
           ? final
@@ -374,6 +395,9 @@ export function createTalkRealtimeRelaySession(
       );
       if (role === "user" && final && text.trim()) {
         const question = text.trim();
+        if (isRelayAssistantEchoTranscript(relay, question)) {
+          return;
+        }
         if (
           relay &&
           pruneInactiveRelayAgentRuns(relay) > 0 &&
@@ -401,10 +425,8 @@ export function createTalkRealtimeRelaySession(
             });
           return;
         }
-        if (params.forceAgentConsultOnFinalTranscript) {
+        if (forceAgentConsultOnFinalTranscript) {
           scheduleForcedAgentConsult(relay, question);
-        } else {
-          bridge.sendUserMessage(question);
         }
       }
     },
@@ -484,6 +506,7 @@ export function createTalkRealtimeRelaySession(
     activeAgentToolCalls: new Map(),
     completedAgentToolCalls: new Set(),
     forcedConsults: createRealtimeVoiceForcedConsultCoordinator(),
+    transcript: [],
   };
   relay.cleanupTimer.unref?.();
   relaySessions.set(relaySessionId, relay);

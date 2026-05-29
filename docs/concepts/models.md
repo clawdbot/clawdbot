@@ -23,7 +23,7 @@ sidebarTitle: "Models CLI"
   </Card>
 </CardGroup>
 
-Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes).
+Model refs choose a provider and model. They do not usually choose the low-level agent runtime. OpenAI agent refs are the main exception: `openai/gpt-5.5` runs through the Codex app-server runtime by default on the official OpenAI provider. Subscription Copilot refs (`github-copilot/*`) can additionally be opted into the bundled GitHub Copilot agent runtime — that path stays explicit (no `auto` fallback). Explicit runtime overrides belong on provider/model policy, not on the whole agent or session. In Codex runtime mode, the `openai/gpt-*` ref does not imply API-key billing; auth can come from a Codex account or `openai-codex` auth profile. See [Agent runtimes](/concepts/agent-runtimes) and [GitHub Copilot agent runtime](/plugins/copilot).
 
 ## How model selection works
 
@@ -340,7 +340,7 @@ When live probes run in a TTY, you can select fallbacks interactively. In non-in
 
 ## Models registry (`models.json`)
 
-Custom providers in `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). This file is merged by default unless `models.mode` is set to `replace`.
+Custom providers in `models.providers` are written into `models.json` under the agent directory (default `~/.openclaw/agents/<agentId>/agent/models.json`). Provider-plugin catalogs are stored as generated plugin-owned catalog shards under the agent's plugin state and loaded automatically. This file is merged by default unless `models.mode` is set to `replace`.
 
 <AccordionGroup>
   <Accordion title="Merge mode precedence">

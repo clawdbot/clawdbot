@@ -1319,6 +1319,22 @@ describe("launchd install", () => {
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19001);
   });
 
+  it("ignores invalid configured gateway ports for stale cleanup", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "65536",
+    };
+    state.files.clear();
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+  });
+
   it("uses the stored LaunchAgent environment port for restart stale cleanup", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
@@ -1336,6 +1352,25 @@ describe("launchd install", () => {
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19007);
     expect(inspectPortUsage).toHaveBeenCalledWith(19007);
+  });
+
+  it("ignores invalid stored LaunchAgent environment ports for stale cleanup", async () => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "65536" },
+    });
+    state.launchctlCalls.length = 0;
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(cleanStaleGatewayProcessesSync).not.toHaveBeenCalled();
+    expect(inspectPortUsage).not.toHaveBeenCalled();
   });
 
   it("fails restart before kickstart when the configured gateway port remains busy", async () => {

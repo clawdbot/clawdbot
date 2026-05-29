@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
+  readBoundedJsonResponse,
 } from "../../scripts/lib/release-beta-verifier.ts";
 
 describe("parseReleaseVerifyBetaArgs", () => {
@@ -103,5 +104,29 @@ describe("parseNpmViewFields", () => {
       distTagVersion: "2026.5.10-beta.3",
       integrity: "sha512-test",
     });
+  });
+});
+
+describe("readBoundedJsonResponse", () => {
+  it("parses JSON bodies within the release verifier limit", async () => {
+    await expect(
+      readBoundedJsonResponse(new Response('{"ok":true}'), "ClawHub package", 64),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it("rejects oversized JSON bodies by content length", async () => {
+    await expect(
+      readBoundedJsonResponse(
+        new Response("{}", { headers: { "content-length": "65" } }),
+        "ClawHub package",
+        64,
+      ),
+    ).rejects.toThrow("ClawHub package response body exceeded 64 bytes.");
+  });
+
+  it("rejects oversized streamed JSON bodies", async () => {
+    await expect(
+      readBoundedJsonResponse(new Response('{"padding":"too-large"}'), "ClawHub package", 8),
+    ).rejects.toThrow("ClawHub package response body exceeded 8 bytes.");
   });
 });

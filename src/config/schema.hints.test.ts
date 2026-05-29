@@ -1,7 +1,7 @@
+import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { isSensitiveUrlConfigPath } from "../shared/net/redact-sensitive-url.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { testApi, isPluginOwnedChannelHintPath, isSensitiveConfigPath } from "./schema.hints.js";
 import { FIELD_LABELS } from "./schema.labels.js";

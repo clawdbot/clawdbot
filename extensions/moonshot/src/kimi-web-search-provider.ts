@@ -19,7 +19,7 @@ const KimiSearchSchema = {
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-10).",
       minimum: 1,
       maximum: 10,

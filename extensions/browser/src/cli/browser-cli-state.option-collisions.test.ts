@@ -156,12 +156,53 @@ describe("browser state option collisions", () => {
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 
+  it("rejects non-decimal viewport dimensions before resize dispatch", async () => {
+    await runBrowserCommand(["set", "viewport", "1e3", "768"]);
+
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid width: must be a positive integer");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects excessive viewport dimensions before resize dispatch", async () => {
+    await runBrowserCommand(["set", "viewport", "8193", "768"]);
+
+    expect(mocks.runBrowserResizeWithOutput).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid width: maximum is 8192");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
   it("errors when set media receives an invalid value", async () => {
     await runBrowserCommand(["set", "media", "sepia"]);
 
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
     expectErrorMessage("Expected dark|light|none");
     expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects invalid geolocation numbers before dispatch", async () => {
+    await runBrowserCommand(["set", "geo", "48.208", "16.373", "--accuracy", "fast"]);
+
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+    expectErrorMessage("Invalid --accuracy: must be a finite number");
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+  });
+
+  it("passes valid decimal geolocation numbers", async () => {
+    const request = await runBrowserCommandAndGetRequest([
+      "set",
+      "geo",
+      "48.2082",
+      "16.3738",
+      "--accuracy",
+      "12.5",
+    ]);
+
+    expect(request.body).toMatchObject({
+      latitude: 48.2082,
+      longitude: 16.3738,
+      accuracy: 12.5,
+    });
   });
 
   it("errors when headers JSON is missing", async () => {

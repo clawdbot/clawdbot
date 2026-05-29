@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import {
+  appendQaChildOutput,
+  appendQaChildOutputTail,
+  createQaChildOutputCapture,
+  createQaChildOutputTail,
+  formatQaChildOutputTail,
+  QA_CHILD_STDOUT_MAX_BYTES,
+  readQaChildOutput,
+} from "./child-output.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
@@ -75,8 +84,8 @@ async function runQaCli(
   args: string[],
   opts?: { timeoutMs?: number; json?: boolean; env?: NodeJS.ProcessEnv },
 ) {
-  const stdout: Buffer[] = [];
-  const stderr: Buffer[] = [];
+  const stdout = createQaChildOutputCapture();
+  const stderr = createQaChildOutputTail();
   const distEntryPath = path.join(env.repoRoot, "dist", "index.js");
   const nodeExecPath = await resolveQaNodeExecPath();
   await new Promise<void>((resolve, reject) => {
@@ -92,8 +101,8 @@ async function runQaCli(
       child.kill("SIGKILL");
       reject(new Error(`qa cli timed out: openclaw ${args.join(" ")}`));
     }, opts?.timeoutMs ?? 60_000);
-    child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
-    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.stdout.on("data", (chunk) => appendQaChildOutput(stdout, chunk));
+    child.stderr.on("data", (chunk) => appendQaChildOutputTail(stderr, chunk));
     child.once("error", (error) => {
       clearTimeout(timeout);
       reject(error);
@@ -101,17 +110,22 @@ async function runQaCli(
     child.once("exit", (code) => {
       clearTimeout(timeout);
       if (code === 0) {
+        if (stdout.exceeded) {
+          reject(
+            new Error(
+              `qa cli stdout exceeded ${QA_CHILD_STDOUT_MAX_BYTES} bytes; refusing to parse truncated output`,
+            ),
+          );
+          return;
+        }
         resolve();
         return;
       }
-      reject(
-        new Error(
-          `qa cli failed (${code ?? "unknown"}): ${Buffer.concat(stderr).toString("utf8").trim()}`,
-        ),
-      );
+      const stderrText = formatQaChildOutputTail(stderr, "qa cli stderr");
+      reject(new Error(`qa cli failed (${code ?? "unknown"}): ${stderrText}`));
     });
   });
-  const text = Buffer.concat(stdout).toString("utf8").trim();
+  const text = readQaChildOutput(stdout).trim();
   if (!opts?.json) {
     return text;
   }

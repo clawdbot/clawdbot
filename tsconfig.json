@@ -29,6 +29,35 @@
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
+      "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
+      "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
+      "@openclaw/gateway-protocol": ["./packages/gateway-protocol/src/index.ts"],
+      "@openclaw/gateway-protocol/client-info": [
+        "./packages/gateway-protocol/src/client-info.ts"
+      ],
+      "@openclaw/gateway-protocol/connect-error-details": [
+        "./packages/gateway-protocol/src/connect-error-details.ts"
+      ],
+      "@openclaw/gateway-protocol/schema": ["./packages/gateway-protocol/src/schema.ts"],
+      "@openclaw/gateway-protocol/startup-unavailable": [
+        "./packages/gateway-protocol/src/startup-unavailable.ts"
+      ],
+      "@openclaw/gateway-protocol/version": ["./packages/gateway-protocol/src/version.ts"],
+      "@openclaw/gateway-protocol/*": ["./packages/gateway-protocol/src/*"],
+      "@openclaw/net-policy": ["./packages/net-policy/src/index.ts"],
+      "@openclaw/net-policy/ip": ["./packages/net-policy/src/ip.ts"],
+      "@openclaw/net-policy/ipv4": ["./packages/net-policy/src/ipv4.ts"],
+      "@openclaw/net-policy/redact-sensitive-url": [
+        "./packages/net-policy/src/redact-sensitive-url.ts"
+      ],
+      "@openclaw/net-policy/url-userinfo": ["./packages/net-policy/src/url-userinfo.ts"],
+      "@openclaw/net-policy/*": ["./packages/net-policy/src/*"],
+      "@openclaw/speech-core": ["./packages/speech-core/runtime-api.ts"],
+      "@openclaw/speech-core/api": ["./packages/speech-core/api.ts"],
+      "@openclaw/speech-core/runtime-api": ["./packages/speech-core/runtime-api.ts"],
+      "@openclaw/speech-core/speaker": ["./packages/speech-core/speaker.ts"],
+      "@openclaw/speech-core/voice-models": ["./packages/speech-core/voice-models.ts"],
+      "@openclaw/speech-core/*": ["./packages/speech-core/*"],
       "@openclaw/sdk": ["./packages/sdk/src/index.ts"],
       "@openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
       "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],

@@ -136,6 +136,50 @@ describe("startGatewayDiscovery", () => {
     expect(stopped).toEqual(["peer", "bonjour"]);
   });
 
+  it("omits invalid SSH discovery ports", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    process.env.OPENCLAW_SSH_PORT = "2222abc";
+
+    const service = makeDiscoveryService({ id: "bonjour" });
+
+    await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "serve",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: makeLogs(),
+    });
+
+    expect(service.service.advertise).toHaveBeenCalledWith(
+      expect.objectContaining({ sshPort: undefined }),
+    );
+  });
+
+  it("omits out-of-range SSH discovery ports", async () => {
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    process.env.OPENCLAW_SSH_PORT = "65536";
+
+    const service = makeDiscoveryService({ id: "bonjour" });
+
+    await startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "serve",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: makeLogs(),
+    });
+
+    expect(service.service.advertise).toHaveBeenCalledWith(
+      expect.objectContaining({ sshPort: undefined }),
+    );
+  });
+
   it("continues startup when a local discovery service never settles", async () => {
     vi.useFakeTimers();
     process.env.NODE_ENV = "development";
@@ -169,6 +213,42 @@ describe("startGatewayDiscovery", () => {
       ],
     ]);
 
+    vi.useRealTimers();
+  });
+
+  it("uses the default discovery timeout for partial timeout env values", async () => {
+    vi.useFakeTimers();
+    process.env.NODE_ENV = "development";
+    delete process.env.VITEST;
+    process.env.OPENCLAW_GATEWAY_DISCOVERY_ADVERTISE_TIMEOUT_MS = "10abc";
+
+    const service = makeDiscoveryService({
+      id: "stuck-discovery",
+      advertise: vi.fn(() => new Promise<void>(() => {})),
+    });
+    const logs = makeLogs();
+
+    const resultPromise = startGatewayDiscovery({
+      machineDisplayName: "Lab Mac",
+      port: 18789,
+      wideAreaDiscoveryEnabled: false,
+      tailscaleMode: "off",
+      mdnsMode: "full",
+      gatewayDiscoveryServices: [service],
+      logDiscovery: logs,
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(logs.warn).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_990);
+    const result = await resultPromise;
+
+    expect(logs.warn.mock.calls).toEqual([
+      [
+        "gateway discovery service timed out after 5000ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
+      ],
+    ]);
+    await result.bonjourStop?.();
     vi.useRealTimers();
   });
 

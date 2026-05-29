@@ -42,6 +42,21 @@ describe("fixed-window rate limiter", () => {
     expectConsumeResult(limiter.consume(), { allowed: true, remaining: 0, retryAfterMs: 0 });
   });
 
+  it("falls back to minimums for non-finite required values", () => {
+    let nowMs = 100;
+    const limiter = createFixedWindowRateLimiter({
+      maxRequests: Number.NaN,
+      windowMs: Number.POSITIVE_INFINITY,
+      now: () => nowMs,
+    });
+
+    expectConsumeResult(limiter.consume(), { allowed: true, remaining: 0, retryAfterMs: 0 });
+    expectConsumeResult(limiter.consume(), { allowed: false, remaining: 0, retryAfterMs: 1 });
+
+    nowMs += 1;
+    expectConsumeResult(limiter.consume(), { allowed: true, remaining: 0, retryAfterMs: 0 });
+  });
+
   it("reports the remaining retry window after later blocked attempts", () => {
     let nowMs = 1_000;
     const limiter = createFixedWindowRateLimiter({

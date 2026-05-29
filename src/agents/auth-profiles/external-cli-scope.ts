@@ -99,6 +99,7 @@ export function resolveExternalCliAuthScopeFromConfig(
   addProviderScopeFromModelConfig(providerIds, defaults?.imageGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.videoGenerationModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.musicGenerationModel);
+  addProviderScopeFromModelConfig(providerIds, defaults?.voiceModel);
   addProviderScopeFromModelConfig(providerIds, defaults?.pdfModel);
   addExternalCliRuntimeScopeFromModelMap(providerIds, defaults?.models);
   for (const provider of Object.values(cfg.models?.providers ?? {})) {

@@ -32,6 +32,7 @@ import {
   type InputImageSource,
 } from "../media/input-files.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import { resolveAssistantStreamDeltaText } from "./agent-event-assistant-text.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -220,6 +221,7 @@ export const testing = {
   getResponseSessionIds() {
     return [...responseSessionMap.keys()];
   },
+  resolveResponsesLimits,
 };
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
@@ -242,10 +244,7 @@ function resolveResponsesLimits(
   const fileLimits = resolveInputFileLimits(files);
   return {
     maxBodyBytes: config?.maxBodyBytes ?? DEFAULT_BODY_BYTES,
-    maxUrlParts:
-      typeof config?.maxUrlParts === "number"
-        ? Math.max(0, Math.floor(config.maxUrlParts))
-        : DEFAULT_MAX_URL_PARTS,
+    maxUrlParts: resolveIntegerOption(config?.maxUrlParts, DEFAULT_MAX_URL_PARTS, { min: 0 }),
     files: {
       ...fileLimits,
       urlAllowlist: normalizeInputHostnameAllowlist(files?.urlAllowlist),

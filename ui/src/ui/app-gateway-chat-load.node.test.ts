@@ -62,6 +62,9 @@ vi.mock("./app-chat.ts", () => ({
   createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
   clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
+  hasReconnectableQueuedChatSends: vi.fn(() => false),
+  markQueuedChatSendsWaitingForReconnect: vi.fn(),
+  retryReconnectableQueuedChatSends: vi.fn(async () => undefined),
   refreshChatAvatar: refreshChatAvatarMock,
 }));
 

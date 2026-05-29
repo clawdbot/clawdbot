@@ -68,6 +68,7 @@ describe("legacy migrate provider-shaped config", () => {
         transport: "gateway-relay",
         brain: "agent-consult",
         model: "gpt-realtime",
+        speakerVoice: "alloy",
         voice: "alloy",
       },
     });
@@ -115,13 +116,14 @@ describe("legacy migrate provider-shaped config", () => {
 
     expect(res.changes).toStrictEqual([
       "Moved messages.tts.elevenlabs → messages.tts.providers.elevenlabs.",
+      "Moved messages.tts.providers.elevenlabs.voiceId → messages.tts.providers.elevenlabs.speakerVoiceId.",
     ]);
     expect(res.config?.messages?.tts).toEqual({
       provider: "elevenlabs",
       providers: {
         elevenlabs: {
           apiKey: "test-key",
-          voiceId: "voice-1",
+          speakerVoiceId: "voice-1",
         },
       },
     });
@@ -149,6 +151,7 @@ describe("legacy migrate provider-shaped config", () => {
     expect(res.changes).toStrictEqual([
       'Moved messages.tts.provider "edge" → "microsoft".',
       "Moved messages.tts.providers.edge → messages.tts.providers.microsoft.",
+      "Moved messages.tts.providers.microsoft.voice → messages.tts.providers.microsoft.speakerVoice.",
     ]);
     expect(res.config?.messages?.tts).toEqual({
       provider: "microsoft",
@@ -156,7 +159,197 @@ describe("legacy migrate provider-shaped config", () => {
         microsoft: {
           lang: "en-US",
           rate: "+4%",
-          voice: "en-US-AvaNeural",
+          speakerVoice: "en-US-AvaNeural",
+        },
+      },
+    });
+  });
+
+  it("moves legacy TTS speaker selection fields to speakerVoice and speakerVoiceId", () => {
+    const res = migrateLegacyConfig({
+      messages: {
+        tts: {
+          provider: "openai",
+          openai: {
+            voice: "alloy",
+          },
+          providers: {
+            elevenlabs: {
+              voiceId: "voice-1",
+            },
+          },
+          personas: {
+            narrator: {
+              providers: {
+                google: {
+                  voiceName: "Kore",
+                },
+              },
+            },
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          tts: {
+            providers: {
+              openai: {
+                voice: "cedar",
+                speakerVoice: "marin",
+              },
+            },
+          },
+        },
+      },
+      channels: {
+        discord: {
+          tts: {
+            providers: {
+              microsoft: {
+                voice: "en-US-AvaNeural",
+              },
+            },
+          },
+          voice: {
+            tts: {
+              providers: {
+                openai: {
+                  voice: "verse",
+                },
+              },
+            },
+          },
+          accounts: {
+            primary: {
+              tts: {
+                providers: {
+                  gradium: {
+                    voiceId: "voice-2",
+                    speakerVoiceId: "voice-current",
+                  },
+                },
+              },
+              voice: {
+                tts: {
+                  providers: {
+                    openai: {
+                      voiceId: "nested-voice",
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              tts: {
+                providers: {
+                  xai: {
+                    voiceId: "eve",
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.changes).toStrictEqual([
+      "Moved messages.tts.openai → messages.tts.providers.openai.",
+      "Moved messages.tts.providers.elevenlabs.voiceId → messages.tts.providers.elevenlabs.speakerVoiceId.",
+      "Moved messages.tts.providers.openai.voice → messages.tts.providers.openai.speakerVoice.",
+      "Moved messages.tts.personas.narrator.providers.google.voiceName → messages.tts.personas.narrator.providers.google.speakerVoice.",
+      "Removed agents.defaults.tts.providers.openai.voice because agents.defaults.tts.providers.openai.speakerVoice is already set.",
+      "Moved channels.discord.tts.providers.microsoft.voice → channels.discord.tts.providers.microsoft.speakerVoice.",
+      "Moved channels.discord.voice.tts.providers.openai.voice → channels.discord.voice.tts.providers.openai.speakerVoice.",
+      "Removed channels.discord.accounts.primary.tts.providers.gradium.voiceId because channels.discord.accounts.primary.tts.providers.gradium.speakerVoiceId is already set.",
+      "Moved channels.discord.accounts.primary.voice.tts.providers.openai.voiceId → channels.discord.accounts.primary.voice.tts.providers.openai.speakerVoiceId.",
+      "Moved plugins.entries.voice-call.config.tts.providers.xai.voiceId → plugins.entries.voice-call.config.tts.providers.xai.speakerVoiceId.",
+    ]);
+    expect(res.config?.messages?.tts).toEqual({
+      provider: "openai",
+      providers: {
+        elevenlabs: {
+          speakerVoiceId: "voice-1",
+        },
+        openai: {
+          speakerVoice: "alloy",
+        },
+      },
+      personas: {
+        narrator: {
+          providers: {
+            google: {
+              speakerVoice: "Kore",
+            },
+          },
+        },
+      },
+    });
+    const migratedConfig = res.config as
+      | {
+          agents?: { defaults?: { tts?: Record<string, unknown> } };
+          channels?: {
+            discord?: {
+              tts?: Record<string, unknown>;
+              voice?: { tts?: Record<string, unknown> };
+              accounts?: {
+                primary?: {
+                  tts?: Record<string, unknown>;
+                  voice?: { tts?: Record<string, unknown> };
+                };
+              };
+            };
+          };
+          plugins?: {
+            entries?: Record<string, { config?: { tts?: Record<string, unknown> } }>;
+          };
+        }
+      | undefined;
+    expect(migratedConfig?.agents?.defaults?.tts).toEqual({
+      providers: {
+        openai: {
+          speakerVoice: "marin",
+        },
+      },
+    });
+    expect(migratedConfig?.channels?.discord?.tts).toEqual({
+      providers: {
+        microsoft: {
+          speakerVoice: "en-US-AvaNeural",
+        },
+      },
+    });
+    expect(migratedConfig?.channels?.discord?.voice?.tts).toEqual({
+      providers: {
+        openai: {
+          speakerVoice: "verse",
+        },
+      },
+    });
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts).toEqual({
+      providers: {
+        gradium: {
+          speakerVoiceId: "voice-current",
+        },
+      },
+    });
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.voice?.tts).toEqual({
+      providers: {
+        openai: {
+          speakerVoiceId: "nested-voice",
+        },
+      },
+    });
+    expect(migratedConfig?.plugins?.entries?.["voice-call"]?.config?.tts).toEqual({
+      providers: {
+        xai: {
+          speakerVoiceId: "eve",
         },
       },
     });
@@ -270,6 +463,7 @@ describe("legacy migrate provider-shaped config", () => {
 
     expect(res.changes).toStrictEqual([
       "Moved plugins.entries.voice-call.config.tts.openai → plugins.entries.voice-call.config.tts.providers.openai.",
+      "Moved plugins.entries.voice-call.config.tts.providers.openai.voice → plugins.entries.voice-call.config.tts.providers.openai.speakerVoice.",
     ]);
     const voiceCallTts = (
       res.config?.plugins?.entries as
@@ -281,7 +475,7 @@ describe("legacy migrate provider-shaped config", () => {
       providers: {
         openai: {
           model: "gpt-4o-mini-tts",
-          voice: "alloy",
+          speakerVoice: "alloy",
         },
       },
     });
@@ -310,6 +504,7 @@ describe("legacy migrate provider-shaped config", () => {
     expect(res.changes).toStrictEqual([
       'Moved plugins.entries.voice-call.config.tts.provider "edge" → "microsoft".',
       "Moved plugins.entries.voice-call.config.tts.providers.edge → plugins.entries.voice-call.config.tts.providers.microsoft.",
+      "Moved plugins.entries.voice-call.config.tts.providers.microsoft.voice → plugins.entries.voice-call.config.tts.providers.microsoft.speakerVoice.",
     ]);
     const voiceCallTts = (
       res.config?.plugins?.entries as
@@ -320,7 +515,7 @@ describe("legacy migrate provider-shaped config", () => {
       provider: "microsoft",
       providers: {
         microsoft: {
-          voice: "en-US-AvaNeural",
+          speakerVoice: "en-US-AvaNeural",
         },
       },
     });

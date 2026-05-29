@@ -3,6 +3,7 @@ import {
   BROWSER_REQUEST_GATEWAY_METHOD,
   BROWSER_REQUEST_GATEWAY_SCOPES,
 } from "../browser-gateway-contract.js";
+import { normalizeBrowserTimerDelayMs } from "../browser/timer-delay.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./core-api.js";
 
 export type BrowserParentOpts = GatewayRpcOpts & {
@@ -50,9 +51,9 @@ export async function callBrowserRequest<T>(
 ): Promise<T> {
   const resolvedTimeoutMs =
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
-      ? Math.max(1, Math.floor(extra.timeoutMs))
+      ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
       : typeof opts.timeout === "string"
-        ? parsePositiveInteger(opts.timeout, "--timeout")
+        ? normalizeBrowserTimerDelayMs(parsePositiveInteger(opts.timeout, "--timeout"))
         : undefined;
   const resolvedTimeout =
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)

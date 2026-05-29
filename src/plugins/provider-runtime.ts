@@ -499,11 +499,15 @@ export function normalizeProviderToolSchemasWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   runtimeHandle?: ProviderRuntimePluginHandle;
+  allowRuntimePluginLoad?: boolean;
   context: ProviderNormalizeToolSchemasContext;
 }) {
+  const plugin =
+    params.allowRuntimePluginLoad === false
+      ? (params.runtimeHandle?.plugin ?? resolveLoadedProviderRuntimePlugin(params))
+      : ensureProviderRuntimePluginHandle(params).plugin;
   return (
-    ensureProviderRuntimePluginHandle(params).plugin?.normalizeToolSchemas?.(params.context) ??
-    undefined
+    plugin?.normalizeToolSchemas?.(params.context) ?? undefined
   );
 }
 
@@ -513,11 +517,15 @@ export function inspectProviderToolSchemasWithPlugin(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   runtimeHandle?: ProviderRuntimePluginHandle;
+  allowRuntimePluginLoad?: boolean;
   context: ProviderNormalizeToolSchemasContext;
 }) {
+  const plugin =
+    params.allowRuntimePluginLoad === false
+      ? (params.runtimeHandle?.plugin ?? resolveLoadedProviderRuntimePlugin(params))
+      : ensureProviderRuntimePluginHandle(params).plugin;
   return (
-    ensureProviderRuntimePluginHandle(params).plugin?.inspectToolSchemas?.(params.context) ??
-    undefined
+    plugin?.inspectToolSchemas?.(params.context) ?? undefined
   );
 }
 

@@ -490,6 +490,24 @@ describe("config io write prepare", () => {
     ]);
   });
 
+  it("treats invalid array-index unset paths as no-ops", () => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      tools: { alsoAllow: ["exec", "fetch"] },
+    } satisfies OpenClawConfig;
+
+    for (const path of [
+      ["tools", "alsoAllow", "1abc"],
+      ["tools", "alsoAllow", "+0"],
+      ["tools", "alsoAllow", "9007199254740993"],
+      ["tools", "alsoAllow", "4294967294"],
+    ]) {
+      const next = unsetPathForWrite(input, path);
+      expect(next.changed).toBe(false);
+      expect(next.next).toBe(input);
+    }
+  });
+
   it("treats missing unset paths as no-op without mutating caller config", () => {
     const input: OpenClawConfig = {
       gateway: { mode: "local" },
@@ -989,6 +1007,42 @@ describe("config io write prepare", () => {
       id: "gpt-5.5",
       contextWindow: 128000,
     });
+  });
+
+  it("ignores unsafe array-index explicit set paths", () => {
+    const runtimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextWindow: 128000 }],
+          },
+        },
+      },
+    };
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [
+        ["models", "providers", "openai", "models", "0abc", "contextWindow"],
+        ["models", "providers", "openai", "models", "+0", "contextWindow"],
+        ["models", "providers", "openai", "models", "9007199254740993", "contextWindow"],
+        ["models", "providers", "openai", "models", "4294967294", "contextWindow"],
+      ],
+    }) as { models?: { providers?: { openai?: { models?: Array<Record<string, unknown>> } } } };
+
+    expect(persisted.models?.providers?.openai?.models).toEqual([{ id: "gpt-5.5" }]);
   });
 
   it("rejects default-valued explicit writes under include-owned paths", () => {

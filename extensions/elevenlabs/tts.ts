@@ -36,6 +36,17 @@ function resolveElevenLabsAcceptHeader(outputFormat: string): string | undefined
   return undefined;
 }
 
+function normalizeElevenLabsLatencyTier(latencyTier: number | undefined): number | undefined {
+  if (latencyTier === undefined || !Number.isFinite(latencyTier)) {
+    return undefined;
+  }
+  if (!Number.isSafeInteger(latencyTier)) {
+    throw new Error("latencyTier must be an integer");
+  }
+  requireInRange(latencyTier, 0, 4, "latencyTier");
+  return latencyTier;
+}
+
 type ElevenLabsTtsRequestParams = {
   text: string;
   apiKey: string;
@@ -83,13 +94,7 @@ function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stre
   const normalizedNormalization = normalizeApplyTextNormalization(applyTextNormalization);
   const normalizedSeed = normalizeSeed(seed);
   const normalizedBaseUrl = normalizeElevenLabsBaseUrl(baseUrl);
-  const normalizedLatencyTier =
-    typeof latencyTier === "number" && Number.isFinite(latencyTier)
-      ? Math.trunc(latencyTier)
-      : undefined;
-  if (normalizedLatencyTier !== undefined) {
-    requireInRange(normalizedLatencyTier, 0, 4, "latencyTier");
-  }
+  const normalizedLatencyTier = normalizeElevenLabsLatencyTier(latencyTier);
   const url = new URL(
     `${normalizedBaseUrl}/v1/text-to-speech/${voiceId}${params.stream ? "/stream" : ""}`,
   );

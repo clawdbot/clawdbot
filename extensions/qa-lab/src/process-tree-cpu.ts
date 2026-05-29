@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { parseStrictFiniteNumber, parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 
 type ProcessTreeSnapshot = {
   childrenByParent: Map<number, number[]>;
@@ -11,47 +12,59 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function parsePositiveInteger(value: unknown): number | null {
-  const raw = typeof value === "string" ? value.trim() : value;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
+  const parsed = parseStrictInteger(value);
+  if (parsed === undefined || parsed <= 0) {
     return null;
   }
   return parsed;
 }
 
 function parseNonNegativeInteger(value: unknown): number | null {
-  const raw = typeof value === "string" ? value.trim() : value;
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const parsed = parseStrictInteger(value);
+  if (parsed === undefined || parsed < 0) {
     return null;
   }
   return parsed;
 }
 
 function parseNonNegativeNumber(value: unknown): number | null {
-  const raw = typeof value === "string" ? value.trim() : value;
-  if (raw === "") {
-    return null;
-  }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
+  const parsed = parseStrictFiniteNumber(value);
+  if (parsed === undefined || parsed < 0) {
     return null;
   }
   return parsed;
 }
 
 export function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
+  const match = raw.trim().match(/^(?:(\d+)-)?(\d+):(\d{2}(?:\.\d+)?)(?::(\d{2}(?:\.\d+)?))?$/u);
+  if (!match) {
     return null;
   }
-  if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
+  const [, daysRaw, firstRaw, secondRaw, thirdRaw] = match;
+  if (daysRaw !== undefined && thirdRaw === undefined) {
+    return null;
   }
-  if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
+  const days = daysRaw === undefined ? 0 : Number(daysRaw);
+  const first = Number(firstRaw);
+  const second = Number(secondRaw);
+  const third = thirdRaw === undefined ? 0 : Number(thirdRaw);
+  const values = [days, first, second, third];
+  if (values.some((part) => !Number.isFinite(part) || part < 0)) {
+    return null;
   }
-  return null;
+  if (thirdRaw !== undefined && !Number.isInteger(second)) {
+    return null;
+  }
+  if (second >= 60 || (thirdRaw !== undefined && third >= 60)) {
+    return null;
+  }
+  if (daysRaw !== undefined && thirdRaw !== undefined) {
+    return Math.round((days * 24 * 60 * 60 + first * 60 * 60 + second * 60 + third) * 1000);
+  }
+  if (thirdRaw !== undefined) {
+    return Math.round((first * 60 * 60 + second * 60 + third) * 1000);
+  }
+  return Math.round((first * 60 + second) * 1000);
 }
 
 export function parsePsRssBytes(raw: string): number | null {
@@ -59,8 +72,8 @@ export function parsePsRssBytes(raw: string): number | null {
   if (!trimmed) {
     return null;
   }
-  const rssKiB = Number(trimmed);
-  if (!Number.isFinite(rssKiB) || rssKiB < 0) {
+  const rssKiB = parseStrictFiniteNumber(trimmed);
+  if (rssKiB === undefined || rssKiB < 0) {
     return null;
   }
   return Math.round(rssKiB * 1024);

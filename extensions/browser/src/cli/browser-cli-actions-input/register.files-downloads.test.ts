@@ -71,6 +71,24 @@ describe("browser action input file/download commands", () => {
     expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25000);
   });
 
+  it("rejects non-decimal file and download timeouts before dispatch", async () => {
+    const downloadProgram = createActionInputProgram();
+    await expect(
+      downloadProgram.parseAsync(
+        ["browser", "download", "ref-1", "file.txt", "--timeout-ms", "1e3"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+
+    const waitProgram = createActionInputProgram();
+    await expect(
+      waitProgram.parseAsync(["browser", "waitfordownload", "--timeout-ms", "0x1000"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
   it("rejects conflicting dialog actions without arming the hook", async () => {
     const program = createActionInputProgram();
 

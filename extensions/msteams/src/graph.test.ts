@@ -300,6 +300,17 @@ describe("msteams graph helpers", () => {
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
   });
 
+  it("fails closed for China cloud Graph token resolution", async () => {
+    mockGraphTokenResolution();
+
+    await expectRejectsToThrow(
+      resolveGraphToken({ channels: { msteams: { cloud: "China" } } }),
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China",
+    );
+
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
+  });
+
   it("fails when credentials or access tokens are unavailable", async () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(undefined);
     await expectRejectsToThrow(resolveGraphToken({ channels: {} }), "MS Teams credentials missing");

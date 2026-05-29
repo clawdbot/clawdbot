@@ -244,6 +244,10 @@ describe("parseAt", () => {
     expect(parseAt("+30m")).toBe("2026-05-25T00:30:00.000Z");
     expect(parseAt("30m")).toBe("2026-05-25T00:30:00.000Z");
   });
+
+  it("rejects out-of-range epoch milliseconds", () => {
+    expect(parseAt(String(Number.MAX_SAFE_INTEGER))).toBeNull();
+  });
 });
 
 describe("getCronChannelOptions", () => {

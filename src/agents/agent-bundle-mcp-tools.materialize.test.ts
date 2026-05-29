@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -6,6 +7,7 @@ import {
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
+import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
 function expectTextContentBlock(block: unknown, text: string) {
@@ -18,7 +20,9 @@ function makeToolRuntime(
   params: {
     tools?: McpCatalogTool[];
     serverName?: string;
+    result?: CallToolResult;
     resultText?: string;
+    diagnostics?: readonly McpToolCatalogDiagnostic[];
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
@@ -50,11 +54,26 @@ function makeToolRuntime(
         },
       },
       tools,
+      ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
     }),
-    callTool: async () => ({
-      content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
-      isError: false,
+    peekCatalog: () => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: {
+          serverName,
+          launchSummary: serverName,
+          toolCount: tools.length,
+        },
+      },
+      tools,
+      ...(params.diagnostics ? { diagnostics: params.diagnostics } : {}),
     }),
+    callTool: async () =>
+      params.result ?? {
+        content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
+        isError: false,
+      },
     dispose: async () => {},
   };
 }
@@ -75,6 +94,44 @@ describe("createBundleMcpToolRuntime", () => {
     });
   });
 
+  it("keeps structuredContent visible when MCP tools also return text content", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        result: {
+          content: [{ type: "text", text: "pong" }],
+          structuredContent: {
+            threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
+            content: "pong",
+          },
+          isError: false,
+        },
+      }),
+    });
+
+    const result = await runtime.tools[0].execute("call-bundle-probe", {}, undefined, undefined);
+
+    expectTextContentBlock(
+      result.content[0],
+      `structuredContent:\n${JSON.stringify(
+        {
+          threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
+          content: "pong",
+        },
+        null,
+        2,
+      )}`,
+    );
+    expect(result.content).toHaveLength(1);
+    expect(result.details).toEqual({
+      mcpServer: "bundleProbe",
+      mcpTool: "bundle_probe",
+      structuredContent: {
+        threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
+        content: "pong",
+      },
+    });
+  });
+
   it("disambiguates bundle MCP tools that collide with existing tool names", async () => {
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: makeToolRuntime(),
@@ -82,6 +139,24 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["bundleProbe__bundle_probe-2"]);
+  });
+
+  it("preserves catalog diagnostics when MCP servers fail tool listing", async () => {
+    const diagnostics = [
+      {
+        serverName: "dofbot",
+        safeServerName: "dofbot",
+        launchSummary: "node dofbot-mcp.mjs",
+        message: 'tools[0].inputSchema.type expected "object"',
+      },
+    ];
+
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({ tools: [], diagnostics }),
+    });
+
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.diagnostics).toEqual(diagnostics);
   });
 
   it("materializes configured MCP tools through the session runtime boundary", async () => {

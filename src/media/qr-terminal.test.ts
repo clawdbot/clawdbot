@@ -1,11 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { toString } = vi.hoisted(() => ({
+const { create, toString } = vi.hoisted(() => ({
+  create: vi.fn(() => ({
+    modules: {
+      data: [1, 0, 0, 1],
+      size: 2,
+    },
+  })),
   toString: vi.fn(async () => "ASCII-QR"),
 }));
 
 vi.mock("qrcode", () => ({
   default: {
+    create,
     toString,
   },
 }));
@@ -14,6 +21,7 @@ import { renderQrTerminal } from "./qr-terminal.ts";
 
 describe("renderQrTerminal", () => {
   beforeEach(() => {
+    create.mockClear();
     toString.mockClear();
   });
 
@@ -23,6 +31,13 @@ describe("renderQrTerminal", () => {
       small: false,
       type: "terminal",
     });
+  });
+
+  it("renders compact QR output without qrcode terminal small mode", async () => {
+    const rendered = await renderQrTerminal("openclaw", { small: true });
+    expect(rendered).toContain("▄");
+    expect(create).toHaveBeenCalledWith("openclaw");
+    expect(toString).not.toHaveBeenCalled();
   });
 
   it("rejects empty QR text", async () => {

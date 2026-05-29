@@ -6,6 +6,7 @@ const storeRoleRefsForTarget = vi.fn();
 const withPageScopedCdpClient = vi.fn();
 const markBackendDomRefsOnPage = vi.fn();
 const formatAriaSnapshot = vi.fn();
+const gotoPageWithNavigationGuard = vi.fn();
 
 vi.mock("./pw-session.js", () => ({
   assertPageNavigationCompletedSafely: vi.fn(),
@@ -13,7 +14,7 @@ vi.mock("./pw-session.js", () => ({
   ensurePageState,
   forceDisconnectPlaywrightForTarget: vi.fn(),
   getPageForTargetId,
-  gotoPageWithNavigationGuard: vi.fn(),
+  gotoPageWithNavigationGuard,
   isPolicyDenyNavigationError: vi.fn(() => false),
   storeRoleRefsForTarget,
 }));
@@ -115,6 +116,26 @@ describe("pw-tools-core aria snapshot storage", () => {
     }
   });
 
+  it("uses the default aria node limit for non-finite limits", async () => {
+    const page = { id: "page-1" };
+    const rawNodes = [{ nodeId: "1" }];
+    const formattedNodes = [{ ref: "ax1", role: "document", name: "", depth: 0 }];
+
+    getPageForTargetId.mockResolvedValue(page);
+    withPageScopedCdpClient.mockResolvedValue({ nodes: rawNodes });
+    formatAriaSnapshot.mockReturnValue(formattedNodes);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotAriaViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      limit: Number.NaN,
+    });
+
+    expect(result).toEqual({ nodes: formattedNodes });
+    expect(formatAriaSnapshot).toHaveBeenCalledWith(rawNodes, 500);
+  });
+
   it("forwards an explicit timeoutMs into the role-aria Playwright ariaSnapshot call", async () => {
     const ariaSnapshotMock = vi.fn().mockResolvedValue("");
     const page = { ariaSnapshot: ariaSnapshotMock };
@@ -129,6 +150,89 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
 
     expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 8888 });
+  });
+
+  it("uses the default snapshot timeout for non-finite role-aria timeouts", async () => {
+    const ariaSnapshotMock = vi.fn().mockResolvedValue("");
+    const page = { ariaSnapshot: ariaSnapshotMock };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refsMode: "aria",
+      timeoutMs: Number.NaN,
+    });
+
+    expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 5000 });
+  });
+
+  it("uses the default snapshot timeout for non-finite ai snapshot timeouts", async () => {
+    const ariaSnapshotMock = vi.fn().mockResolvedValue("");
+    const page = { ariaSnapshot: ariaSnapshotMock };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      timeoutMs: Number.NaN,
+    });
+
+    expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 5000 });
+  });
+
+  it("uses the default navigation timeout for non-finite timeouts", async () => {
+    const page = { url: vi.fn(() => "http://127.0.0.1:31337/after") };
+    getPageForTargetId.mockResolvedValue(page);
+    gotoPageWithNavigationGuard.mockResolvedValue(null);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.navigateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      url: "http://127.0.0.1:31337/",
+      timeoutMs: Number.NaN,
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result).toEqual({ url: "http://127.0.0.1:31337/after" });
+    expect(gotoPageWithNavigationGuard).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 20_000 }),
+    );
+  });
+
+  it("clamps non-finite viewport dimensions to the minimum size", async () => {
+    const page = { setViewportSize: vi.fn(async () => {}) };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await mod.resizeViewportViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      width: Number.NaN,
+      height: Number.POSITIVE_INFINITY,
+    });
+
+    expect(page.setViewportSize).toHaveBeenCalledWith({ width: 1, height: 1 });
+  });
+
+  it("rejects excessive viewport dimensions before calling Playwright", async () => {
+    const page = { setViewportSize: vi.fn(async () => {}) };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    await expect(
+      mod.resizeViewportViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        width: Number.MAX_SAFE_INTEGER,
+        height: 768,
+      }),
+    ).rejects.toThrow("viewport width exceeds maximum of 8192");
+
+    expect(page.setViewportSize).not.toHaveBeenCalled();
   });
 
   it("stores role fallback metadata when backend markers are unavailable", async () => {

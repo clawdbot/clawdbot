@@ -5,11 +5,15 @@ import { describe, expect, it } from "vitest";
 type SlashCommandsModule = typeof import("./slash-commands.js");
 const browserImportPath: string = "./slash-commands.ts?browser-import";
 
-function importLines(source: string): string[] {
-  return source
-    .split(/\r?\n/u)
-    .filter((line) => line.startsWith("import "))
-    .map((line) => line.trim());
+function importDeclarations(source: string): string[] {
+  return (source.match(/^import[\s\S]*?;$/gmu) ?? []).map((declaration) =>
+    declaration
+      .replace(/\s+/gu, " ")
+      .replace(/\{\s+/gu, "{ ")
+      .replace(/,\s*\}/gu, " }")
+      .replace(/\s+\}/gu, " }")
+      .trim(),
+  );
 }
 
 describe("slash command browser import", () => {
@@ -55,24 +59,24 @@ describe("slash command browser import", () => {
       argOptions: undefined,
       tier: "essential",
     });
-    expect(importLines(slashCommands)).toEqual([
+    expect(importDeclarations(slashCommands)).toEqual([
+      'import type { CommandEntry, CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";',
       'import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";',
-      'import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/protocol/index.js";',
       'import type { GatewayBrowserClient } from "../gateway.ts";',
       'import type { IconName } from "../icons.ts";',
       'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
     ]);
-    expect(importLines(sharedRegistry)).toEqual([
+    expect(importDeclarations(sharedRegistry)).toEqual([
       'import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";',
       'import { normalizeStringEntries } from "../shared/string-normalization.js";',
       'import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";',
-      "import type {",
+      'import type { ChatCommandDefinition, CommandArgChoiceContext, CommandCategory, CommandScope, CommandTier } from "./commands-registry.types.js";',
       'import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";',
     ]);
-    expect(importLines(serverRegistry)).toEqual([
+    expect(importDeclarations(serverRegistry)).toEqual([
       'import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";',
       'import { getActivePluginChannelRegistryVersionFromState } from "../plugins/runtime-channel-state.js";',
-      "import {",
+      'import { assertCommandRegistry, buildBuiltinChatCommands, defineChatCommand } from "./commands-registry.shared.js";',
       'import type { ChatCommandDefinition } from "./commands-registry.types.js";',
       'import { listThinkingLevels } from "./thinking.js";',
     ]);

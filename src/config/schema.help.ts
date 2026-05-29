@@ -162,8 +162,12 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.realtime.providers.*.apiKey": "Provider API key for realtime Talk.", // pragma: allowlist secret
   "talk.realtime.model":
     "Realtime provider model id override for browser or Gateway-owned Talk sessions.",
+  "talk.realtime.speakerVoice":
+    "Realtime provider speaker voice name override for browser or Gateway-owned Talk sessions.",
+  "talk.realtime.speakerVoiceId":
+    "Realtime provider speaker voice id override for browser or Gateway-owned Talk sessions.",
   "talk.realtime.voice":
-    "Realtime provider voice id override for browser or Gateway-owned Talk sessions.",
+    "Deprecated realtime provider voice override. Use talk.realtime.speakerVoice.",
   "talk.realtime.instructions":
     "Additional system instructions appended to OpenClaw's built-in realtime Talk prompt. Use this for voice style, tone, and other provider-facing realtime behavior while keeping agent-consult guidance intact.",
   "talk.realtime.mode": "Talk execution mode: realtime, stt-tts, or transcription.",
@@ -1420,6 +1424,11 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional music-generation model (provider/model) used by the shared music generation capability.",
   "agents.defaults.musicGenerationModel.fallbacks":
     "Ordered fallback music-generation models (provider/model).",
+  "agents.defaults.voiceModel.primary":
+    "Optional voice model (provider/model) used by speech, transcription, and realtime voice capabilities.",
+  "agents.defaults.voiceModel.fallbacks": "Ordered fallback voice models (provider/model).",
+  "agents.defaults.voiceModel.timeoutMs":
+    "Default provider request timeout in milliseconds for voice model operations when the caller supports timeouts.",
   "agents.defaults.mediaGenerationAutoProviderFallback":
     "When true (default), shared image, music, and video generation automatically appends other auth-backed provider defaults after explicit primary/fallback refs. Set false to disable implicit cross-provider fallback while keeping explicit fallbacks.",
   "agents.defaults.pdfModel.primary":

@@ -123,6 +123,62 @@ describe("deepinfra video generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("does not forward malformed video seed values", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: "/generated/video.mp4",
+          request_id: "req_seed",
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A bicycle weaving through a rainy neon street",
+      cfg: {},
+      providerOptions: {
+        seed: 1.5,
+      },
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledOnce();
+    const postRequest = requireFirstPostJsonRequest();
+    expect(Reflect.get(Reflect.get(postRequest ?? {}, "body") ?? {}, "seed")).toBeUndefined();
+  });
+
+  it("drops malformed response seed metadata", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: "/generated/video.mp4",
+          request_id: "req_bad_seed",
+          seed: 1.5,
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "deepinfra",
+      model: "deepinfra/Pixverse/Pixverse-T2V",
+      prompt: "A bicycle weaving through a rainy neon street",
+      cfg: {},
+    });
+
+    expect(result.metadata).toEqual({
+      requestId: "req_bad_seed",
+      seed: undefined,
+      status: "succeeded",
+    });
+  });
+
   it("reports malformed native video JSON as a provider error", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({

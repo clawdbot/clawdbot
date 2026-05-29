@@ -13,6 +13,7 @@ import {
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
@@ -34,15 +35,6 @@ export function createSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
 }): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox);
-}
-
-function parseStatMtimeMs(value: string | undefined): number {
-  const raw = value ?? "0";
-  if (/^\d+(?:\.\d+)?$/.test(raw)) {
-    return Number(raw) * 1000;
-  }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
@@ -216,11 +208,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     }
     const text = result.stdout.toString("utf8").trim();
     const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
-    const size = Number.parseInt(sizeRaw ?? "0", 10);
     return {
       type: coerceStatType(typeRaw),
-      size: Number.isFinite(size) ? size : 0,
-      mtimeMs: parseStatMtimeMs(mtimeRaw),
+      size: parseSandboxStatSize(sizeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 

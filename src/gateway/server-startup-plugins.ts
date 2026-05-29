@@ -43,6 +43,7 @@ export async function prepareGatewayPluginBootstrap(params: {
   minimalTestGateway: boolean;
   log: GatewayPluginBootstrapLog;
   loadRuntimePlugins?: boolean;
+  loadSetupRuntimePlugins?: boolean;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
   const startupMaintenanceConfig = resolveGatewayStartupMaintenanceConfig({
@@ -114,8 +115,25 @@ export async function prepareGatewayPluginBootstrap(params: {
   let pluginRegistry = emptyPluginRegistry;
   let baseGatewayMethods = baseMethods;
   const shouldLoadRuntimePlugins = params.loadRuntimePlugins !== false;
+  const shouldLoadSetupRuntimePlugins =
+    params.loadSetupRuntimePlugins === true && deferredConfiguredChannelPluginIds.length > 0;
 
-  if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
+  if (!params.minimalTestGateway && shouldLoadSetupRuntimePlugins) {
+    ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
+      {
+        cfg: gatewayPluginConfig,
+        activationSourceConfig,
+        workspaceDir: defaultWorkspaceDir,
+        log: params.log,
+        baseMethods,
+        coreGatewayMethodNames,
+        startupPluginIds: deferredConfiguredChannelPluginIds,
+        pluginLookUpTable,
+        preferSetupRuntimeForChannelPlugins: true,
+        suppressPluginInfoLogs: true,
+      },
+    ));
+  } else if (!params.minimalTestGateway && shouldLoadRuntimePlugins) {
     ({ pluginRegistry, gatewayMethods: baseGatewayMethods } = await loadGatewayStartupPluginRuntime(
       {
         cfg: gatewayPluginConfig,
@@ -126,8 +144,8 @@ export async function prepareGatewayPluginBootstrap(params: {
         coreGatewayMethodNames,
         startupPluginIds,
         pluginLookUpTable,
-        preferSetupRuntimeForChannelPlugins: deferredConfiguredChannelPluginIds.length > 0,
-        suppressPluginInfoLogs: deferredConfiguredChannelPluginIds.length > 0,
+        preferSetupRuntimeForChannelPlugins: false,
+        suppressPluginInfoLogs: false,
       },
     ));
   } else {
@@ -146,7 +164,8 @@ export async function prepareGatewayPluginBootstrap(params: {
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
-    runtimePluginsLoaded: !params.minimalTestGateway && shouldLoadRuntimePlugins,
+    runtimePluginsLoaded:
+      !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins,
   };
 }
 

@@ -30,6 +30,13 @@ function createAnthropicAuthConfig(params: {
 describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
       resolveRuntimeCliBackends: () => [
         {
           id: "claude-cli",

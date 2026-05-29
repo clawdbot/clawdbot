@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
   resolveNpmPackArchiveMetadata,
@@ -49,6 +50,7 @@ import {
   matchesExpectedPluginId,
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
+  resolvePluginNpmProjectDir,
   safePluginInstallFileName,
   validatePluginId,
 } from "./install-paths.js";
@@ -56,8 +58,10 @@ import type { InstallSecurityScanResult } from "./install-security-scan.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import {
   resolvePackageExtensionEntries,
+  type OpenClawPackageManifest,
   type PackageManifest as PluginPackageManifest,
 } from "./manifest.js";
+import { resolvePackagePluginApiRange } from "./package-compat.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
   linkOpenClawPeerDependencies,
@@ -82,6 +86,7 @@ type PackageManifest = PluginPackageManifest & {
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
+type PluginInstallRuntime = Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
 
 function formatUnresolvedOpenClawPeerLinkError(packageName: string): string {
   return `Installed plugin ${packageName} declares openclaw as a peer dependency, but OpenClaw could not create a plugin-local node_modules/openclaw link. Run from a packaged OpenClaw install or reinstall OpenClaw, then retry.`;
@@ -107,6 +112,8 @@ export const PLUGIN_INSTALL_ERROR_CODE = {
   INVALID_MIN_HOST_VERSION: "invalid_min_host_version",
   UNKNOWN_HOST_VERSION: "unknown_host_version",
   INCOMPATIBLE_HOST_VERSION: "incompatible_host_version",
+  INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
+  INVALID_PLUGIN_API: "invalid_plugin_api",
   MISSING_OPENCLAW_EXTENSIONS: "missing_openclaw_extensions",
   MISSING_PLUGIN_MANIFEST: "missing_plugin_manifest",
   EMPTY_OPENCLAW_EXTENSIONS: "empty_openclaw_extensions",
@@ -132,6 +139,91 @@ export type InstallPluginResult =
       integrityDrift?: NpmIntegrityDrift;
     }
   | { ok: false; error: string; code?: PluginInstallErrorCode };
+
+type PluginInstallFailureResult = Extract<InstallPluginResult, { ok: false }>;
+
+function validateOpenClawPackageCompatibility(params: {
+  pluginId: string;
+  currentHostVersion: string;
+  packageMetadata?: OpenClawPackageManifest;
+}): PluginInstallFailureResult | null {
+  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
+  if (!pluginApiRangeCheck.ok) {
+    return {
+      ok: false,
+      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+    };
+  }
+  const pluginApiRange = pluginApiRangeCheck.range;
+  if (pluginApiRange && !satisfiesPluginApiRange(params.currentHostVersion, pluginApiRange)) {
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${params.currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+    };
+  }
+
+  return null;
+}
+
+function validateOpenClawPackageInstallCompatibility(params: {
+  runtime: PluginInstallRuntime;
+  pluginId: string;
+  packageMetadata?: OpenClawPackageManifest;
+}): PluginInstallFailureResult | null {
+  const currentHostVersion = params.runtime.resolveCompatibilityHostVersion();
+  const minHostVersionCheck = params.runtime.checkMinHostVersion({
+    currentVersion: currentHostVersion,
+    minHostVersion: params.packageMetadata?.install?.minHostVersion,
+  });
+  if (!minHostVersionCheck.ok) {
+    if (minHostVersionCheck.kind === "invalid") {
+      return {
+        ok: false,
+        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
+        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
+      };
+    }
+    if (minHostVersionCheck.kind === "unknown_host_version") {
+      return {
+        ok: false,
+        error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
+        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
+      };
+    }
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
+    };
+  }
+
+  return validateOpenClawPackageCompatibility({
+    pluginId: params.pluginId,
+    currentHostVersion,
+    packageMetadata: params.packageMetadata,
+  });
+}
+
+async function readOptionalPackageManifest(params: {
+  runtime: PluginInstallRuntime;
+  packageDir: string;
+}): Promise<{ ok: true; manifest?: PackageManifest } | PluginInstallFailureResult> {
+  const manifestPath = path.join(params.packageDir, "package.json");
+  if (!(await params.runtime.fileExists(manifestPath))) {
+    return { ok: true };
+  }
+
+  try {
+    return {
+      ok: true,
+      manifest: await params.runtime.readJsonFile<PackageManifest>(manifestPath),
+    };
+  } catch (err) {
+    return { ok: false, error: `invalid package.json: ${String(err)}` };
+  }
+}
 
 export type PluginNpmIntegrityDriftParams = {
   spec: string;
@@ -206,17 +298,12 @@ type TrustedOfficialPrereleaseResolution =
   | { kind: "prerelease-only"; resolution: NpmSpecResolution }
   | { kind: "allow-prerelease-only" };
 
-async function resolveTrustedOfficialPrereleaseResolution(params: {
-  spec: ParsedRegistryNpmSpec;
-  resolvedPrereleaseVersion: string;
+async function loadNpmPackageVersions(params: {
+  packageName: string;
   timeoutMs: number;
-  logger: PluginInstallLogger;
-}): Promise<TrustedOfficialPrereleaseResolution | null> {
-  if (!params.spec.name.startsWith("@openclaw/")) {
-    return null;
-  }
+}): Promise<string[] | null> {
   const versions = await runCommandWithTimeout(
-    ["npm", "view", params.spec.name, "versions", "--json"],
+    ["npm", "view", params.packageName, "versions", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 60_000),
       env: createNpmMetadataEnv(),
@@ -232,9 +319,27 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
   } catch {
     return null;
   }
-  const semverVersions = (Array.isArray(parsed) ? parsed : [parsed]).filter(
+  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (value): value is string => typeof value === "string" && isExactSemverVersion(value),
   );
+}
+
+async function resolveTrustedOfficialPrereleaseResolution(params: {
+  spec: ParsedRegistryNpmSpec;
+  resolvedPrereleaseVersion: string;
+  timeoutMs: number;
+  logger: PluginInstallLogger;
+}): Promise<TrustedOfficialPrereleaseResolution | null> {
+  if (!params.spec.name.startsWith("@openclaw/")) {
+    return null;
+  }
+  const semverVersions = await loadNpmPackageVersions({
+    packageName: params.spec.name,
+    timeoutMs: params.timeoutMs,
+  });
+  if (!semverVersions) {
+    return null;
+  }
   const stableVersion = semverVersions
     .filter((value) => !isPrereleaseSemverVersion(value))
     .toSorted(compareNpmSemver)
@@ -279,6 +384,91 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
     `Resolved ${params.spec.raw} to prerelease version ${params.resolvedPrereleaseVersion}; falling back to stable ${stableSpec} for this trusted official OpenClaw install.`,
   );
   return { kind: "stable", resolution: metadataResult.metadata };
+}
+
+function shouldResolveLatestCompatibleNpmVersion(spec: ParsedRegistryNpmSpec): boolean {
+  return (
+    spec.selectorKind === "none" ||
+    (spec.selectorKind === "tag" && (spec.selector ?? "").toLowerCase() === "latest")
+  );
+}
+
+function canResolveAroundCompatibilityError(error: PluginInstallFailureResult): boolean {
+  return (
+    error.code === PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION ||
+    error.code === PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API
+  );
+}
+
+function validateNpmResolutionCompatibility(params: {
+  runtime: PluginInstallRuntime;
+  parsedSpec: ParsedRegistryNpmSpec;
+  expectedPluginId?: string;
+  resolution: NpmSpecResolution;
+}): PluginInstallFailureResult | null {
+  return validateOpenClawPackageInstallCompatibility({
+    runtime: params.runtime,
+    pluginId: params.expectedPluginId ?? params.resolution.name ?? params.parsedSpec.name,
+    packageMetadata: params.resolution.packageOpenClaw as OpenClawPackageManifest | undefined,
+  });
+}
+
+async function resolveLatestCompatibleNpmResolution(params: {
+  runtime: PluginInstallRuntime;
+  parsedSpec: ParsedRegistryNpmSpec;
+  expectedPluginId?: string;
+  currentResolution: NpmSpecResolution;
+  timeoutMs: number;
+  logger: PluginInstallLogger;
+}): Promise<NpmSpecResolution | null> {
+  if (
+    !shouldResolveLatestCompatibleNpmVersion(params.parsedSpec) ||
+    !params.currentResolution.version
+  ) {
+    return null;
+  }
+
+  const versions = await loadNpmPackageVersions({
+    packageName: params.parsedSpec.name,
+    timeoutMs: params.timeoutMs,
+  });
+  if (!versions) {
+    return null;
+  }
+
+  const currentVersion = params.currentResolution.version;
+  const candidates = versions
+    .filter((version) => !isPrereleaseSemverVersion(version))
+    .filter((version) => compareNpmSemver(version, currentVersion) < 0)
+    .toSorted(compareNpmSemver)
+    .toReversed();
+  for (const version of candidates) {
+    const spec = `${params.parsedSpec.name}@${version}`;
+    const metadataResult = await resolveNpmSpecMetadata({
+      spec,
+      timeoutMs: params.timeoutMs,
+    });
+    if (!metadataResult.ok) {
+      params.logger.warn?.(
+        `Could not inspect ${spec} while looking for a compatible plugin version: ${metadataResult.error}`,
+      );
+      continue;
+    }
+    const compatibilityError = validateNpmResolutionCompatibility({
+      runtime: params.runtime,
+      parsedSpec: params.parsedSpec,
+      expectedPluginId: params.expectedPluginId,
+      resolution: metadataResult.metadata,
+    });
+    if (!compatibilityError) {
+      params.logger.warn?.(
+        `Resolved ${params.parsedSpec.raw} to ${params.currentResolution.resolvedSpec ?? currentVersion}, but that version is incompatible with this OpenClaw runtime; using newest compatible ${metadataResult.metadata.resolvedSpec ?? spec}.`,
+      );
+      return metadataResult.metadata;
+    }
+  }
+
+  return null;
 }
 
 function buildFileInstallResult(pluginId: string, targetFile: string): InstallPluginResult {
@@ -600,8 +790,12 @@ async function installPluginFromManagedNpmRoot(
     defaultLogger,
   );
   const expectedPluginId = params.expectedPluginId;
-  const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const installRoot = path.join(npmRoot, "node_modules", params.packageName);
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName: params.packageName,
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
   const effectiveMode = await resolveEffectiveInstallMode({
     runtime,
     requestedMode: mode,
@@ -1215,6 +1409,24 @@ async function installBundleFromSourceDir(
       code: PLUGIN_INSTALL_ERROR_CODE.PLUGIN_ID_MISMATCH,
     };
   }
+  const packageManifestResult = await readOptionalPackageManifest({
+    runtime,
+    packageDir: params.sourceDir,
+  });
+  if (!packageManifestResult.ok) {
+    return packageManifestResult;
+  }
+  const packageMetadata = packageManifestResult.manifest
+    ? runtime.getPackageManifestMetadata(packageManifestResult.manifest)
+    : undefined;
+  const compatibilityError = validateOpenClawPackageInstallCompatibility({
+    runtime,
+    pluginId,
+    packageMetadata,
+  });
+  if (compatibilityError) {
+    return compatibilityError;
+  }
 
   const targetResult = await resolvePreparedDirectoryInstallTarget({
     runtime,
@@ -1329,7 +1541,7 @@ async function validatePackagePluginInstallSource(params: {
       ok: true;
       plugin: ValidatedPackagePlugin;
     }
-  | Extract<InstallPluginResult, { ok: false }>
+  | PluginInstallFailureResult
 > {
   const manifestPath = path.join(params.packageDir, "package.json");
   if (!(await params.runtime.fileExists(manifestPath))) {
@@ -1342,18 +1554,6 @@ async function validatePackagePluginInstallSource(params: {
   } catch (err) {
     return { ok: false, error: `invalid package.json: ${String(err)}` };
   }
-
-  const extensionsResult = ensureOpenClawExtensions({
-    manifest,
-  });
-  if (!extensionsResult.ok) {
-    return {
-      ok: false,
-      error: extensionsResult.error,
-      code: extensionsResult.code,
-    };
-  }
-  const extensions = extensionsResult.entries;
 
   const pkgName = normalizeOptionalString(manifest.name) ?? "";
   const npmPluginId = pkgName || "plugin";
@@ -1397,31 +1597,26 @@ async function validatePackagePluginInstallSource(params: {
   }
 
   const packageMetadata = params.runtime.getPackageManifestMetadata(manifest);
-  const minHostVersionCheck = params.runtime.checkMinHostVersion({
-    currentVersion: params.runtime.resolveCompatibilityHostVersion(),
-    minHostVersion: packageMetadata?.install?.minHostVersion,
+  const compatibilityError = validateOpenClawPackageInstallCompatibility({
+    runtime: params.runtime,
+    pluginId,
+    packageMetadata,
   });
-  if (!minHostVersionCheck.ok) {
-    if (minHostVersionCheck.kind === "invalid") {
-      return {
-        ok: false,
-        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
-        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
-      };
-    }
-    if (minHostVersionCheck.kind === "unknown_host_version") {
-      return {
-        ok: false,
-        error: `plugin "${pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
-        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
-      };
-    }
+  if (compatibilityError) {
+    return compatibilityError;
+  }
+
+  const extensionsResult = ensureOpenClawExtensions({
+    manifest,
+  });
+  if (!extensionsResult.ok) {
     return {
       ok: false,
-      error: `plugin "${pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
-      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
+      error: extensionsResult.error,
+      code: extensionsResult.code,
     };
   }
+  const extensions = extensionsResult.entries;
 
   const extensionValidation = await validatePackageExtensionEntriesForInstall({
     packageDir: params.packageDir,
@@ -1898,6 +2093,36 @@ export async function installPluginFromNpmSpec(
       };
     }
   }
+  let compatibilityError = validateNpmResolutionCompatibility({
+    runtime,
+    parsedSpec,
+    expectedPluginId,
+    resolution: npmResolution,
+  });
+  if (compatibilityError && canResolveAroundCompatibilityError(compatibilityError)) {
+    const compatibleResolution = await resolveLatestCompatibleNpmResolution({
+      runtime,
+      parsedSpec,
+      expectedPluginId,
+      currentResolution: npmResolution,
+      timeoutMs,
+      logger,
+    });
+    if (compatibleResolution) {
+      Object.assign(npmResolution, compatibleResolution, {
+        resolvedAt: npmResolution.resolvedAt,
+      });
+      compatibilityError = validateNpmResolutionCompatibility({
+        runtime,
+        parsedSpec,
+        expectedPluginId,
+        resolution: npmResolution,
+      });
+    }
+  }
+  if (compatibilityError) {
+    return compatibilityError;
+  }
   const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
     spec,
     expectedIntegrity: params.expectedIntegrity,
@@ -1979,7 +2204,11 @@ export async function installPluginFromNpmPackArchive(
     return packageNameResult;
   }
   const packageName = packageNameResult.packageName;
-  const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName,
+  });
   let dependencySpec = "";
   if (!dryRun) {
     try {
@@ -2013,7 +2242,7 @@ export async function installPluginFromNpmPackArchive(
       requestedSpecifier: `npm-pack:${metadataResult.archivePath}`,
     },
     extensionsDir: params.extensionsDir,
-    npmDir: npmRoot,
+    npmDir: npmBaseDir,
     timeoutMs,
     logger,
     mode,

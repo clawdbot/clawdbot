@@ -10,19 +10,105 @@ describe("ci workflow guards", () => {
   it("kills timed manual checkout fetches after the grace period", () => {
     const workflowPaths = [
       ".github/workflows/ci.yml",
+      ".github/workflows/workflow-sanity.yml",
       ".github/workflows/ci-check-testbox.yml",
       ".github/workflows/ci-build-artifacts-testbox.yml",
+      ".github/workflows/crabbox-hydrate.yml",
     ];
 
     for (const workflowPath of workflowPaths) {
       const workflow = readFileSync(workflowPath, "utf8");
-      const fetchTimeouts = workflow.match(/timeout --signal=TERM[^\n]* 30s git -C "\$workdir"/g);
+      const fetchTimeouts = workflow.match(
+        /timeout --signal=TERM[^\n]* 30s git(?: -C "(?:\$workdir|\$GITHUB_WORKSPACE|clawhub-source)")?/g,
+      );
 
       expect(fetchTimeouts?.length, workflowPath).toBeGreaterThan(0);
-      expect(fetchTimeouts, workflowPath).toEqual(
-        fetchTimeouts?.map(() => 'timeout --signal=TERM --kill-after=10s 30s git -C "$workdir"'),
+      expect(
+        fetchTimeouts?.every((line) =>
+          line.startsWith("timeout --signal=TERM --kill-after=10s 30s git"),
+        ),
+        workflowPath,
+      ).toBe(true);
+    }
+  });
+
+  it("bounds shared base commit fetches", () => {
+    const action = readFileSync(".github/actions/ensure-base-commit/action.yml", "utf8");
+
+    expect(action).toContain("fetch_base_ref()");
+    expect(action).toContain("timeout --signal=TERM --kill-after=10s 30s git");
+    expect(action).toContain("-c protocol.version=2");
+    expect(action).not.toContain("if ! git fetch --no-tags");
+  });
+
+  it("bounds early unauthenticated checkout fetches", () => {
+    const workflow = readCiWorkflow();
+
+    for (const jobName of ["preflight", "security-fast", "skills-python"]) {
+      const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
+
+      expect(checkoutStep.run, jobName).toContain(
+        'timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE"',
+      );
+      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
+      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
+      expect(checkoutStep.run, jobName).not.toContain("if timeout --signal=TERM");
+      expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
+      expect(checkoutStep.run, jobName).toContain(
+        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+      if (jobName !== "skills-python") {
+        expect(checkoutStep.run, jobName).toContain('if [ "$fetch_status" = "124" ]');
+        expect(checkoutStep.run, jobName).toContain("timed out");
+      }
+      expect(checkoutStep.run, jobName).not.toContain(
+        'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
     }
+  });
+
+  it("bounds platform checkout fetches without GNU timeout", () => {
+    const workflow = readCiWorkflow();
+
+    for (const jobName of ["checks-windows", "macos-node", "macos-swift"]) {
+      const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
+
+      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
+      expect(checkoutStep.run, jobName).toContain(
+        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
+      );
+      expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
+      expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
+      expect(checkoutStep.run, jobName).not.toContain(
+        'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
+      );
+    }
+  });
+
+  it("bounds the Windows Crabbox hydrate main fetch", () => {
+    const workflow = readFileSync(".github/workflows/crabbox-hydrate.yml", "utf8");
+
+    expect(workflow).toContain("$fetchInfo = New-Object System.Diagnostics.ProcessStartInfo");
+    expect(workflow).toContain('$fetchInfo.FileName = "git"');
+    expect(workflow).toContain("$fetchInfo.WorkingDirectory = $repo");
+    expect(workflow).toContain("$fetchInfo.UseShellExecute = $false");
+    expect(workflow).not.toContain("$fetchInfo.RedirectStandardOutput = $true");
+    expect(workflow).not.toContain("$fetchInfo.RedirectStandardError = $true");
+    expect(workflow).toContain(
+      '--no-tags --no-progress --prune --no-recurse-submodules --depth=50',
+    );
+    expect(workflow).toContain("$fetch = New-Object System.Diagnostics.Process");
+    expect(workflow).toContain("$fetch.StartInfo = $fetchInfo");
+    expect(workflow).toContain("$fetch.WaitForExit(30000)");
+    expect(workflow).toContain("$fetch.Kill()");
+    expect(workflow).not.toContain("StandardOutput.ReadToEnd()");
+    expect(workflow).not.toContain("StandardError.ReadToEnd()");
+    expect(workflow).toContain('throw "git fetch failed with exit code $($fetch.ExitCode)"');
+    expect(workflow).toContain('throw "git fetch timed out after 30 seconds"');
+    expect(workflow).not.toContain(
+      'git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"',
+    );
   });
 
   it("runs dependency policy guards in PR CI preflight", () => {
@@ -45,6 +131,58 @@ describe("ci workflow guards", () => {
     expect(buildDistStep.run).toBe("pnpm build:ci-artifacts");
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Build Control UI");
     expect(buildArtifactSteps.some((step) => step.run === "pnpm ui:build")).toBe(false);
+  });
+
+  it("uploads a CI timing summary after the run lanes finish", () => {
+    const workflow = readCiWorkflow();
+    const timingJob = workflow.jobs["ci-timings-summary"];
+
+    expect(timingJob.permissions).toMatchObject({ actions: "read", contents: "read" });
+    expect(timingJob.needs).toEqual([
+      "preflight",
+      "security-fast",
+      "pnpm-store-warmup",
+      "build-artifacts",
+      "checks-fast-core",
+      "checks-fast-plugin-contracts-shard",
+      "checks-fast-channel-contracts-shard",
+      "checks-node-compat",
+      "checks-node-core-test-nondist-shard",
+      "check-shard",
+      "check-additional-shard",
+      "check-docs",
+      "skills-python",
+      "checks-windows",
+      "macos-node",
+      "macos-swift",
+      "android",
+    ]);
+    expect(timingJob.if).toContain("always()");
+    expect(timingJob.if).toContain("!cancelled()");
+
+    const checkoutStep = timingJob.steps.find(
+      (step) => step.name === "Checkout timing summary helper",
+    );
+    expect(checkoutStep.uses).toBe("actions/checkout@v6");
+    expect(checkoutStep.with.ref).toBe(
+      "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}",
+    );
+    expect(checkoutStep.with["persist-credentials"]).toBe(false);
+
+    const writeStep = timingJob.steps.find((step) => step.name === "Write CI timing summary");
+    expect(writeStep.env).toMatchObject({ GH_TOKEN: "${{ github.token }}" });
+    expect(writeStep.run).toContain(
+      'node scripts/ci-run-timings.mjs "$GITHUB_RUN_ID" --limit 25 > ci-timings-summary.txt',
+    );
+    expect(writeStep.run).toContain('cat ci-timings-summary.txt >> "$GITHUB_STEP_SUMMARY"');
+
+    const uploadStep = timingJob.steps.find((step) => step.name === "Upload CI timing summary");
+    expect(uploadStep.uses).toBe("actions/upload-artifact@v7");
+    expect(uploadStep.with).toMatchObject({
+      name: "ci-timings-summary",
+      path: "ci-timings-summary.txt",
+      "retention-days": 14,
+    });
   });
 
   it("keeps push docs validation ClawHub-backed", () => {

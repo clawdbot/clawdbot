@@ -1,8 +1,51 @@
+import { spawnSync } from "node:child_process";
 import { gzipSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { testing } from "../../scripts/qa-otel-smoke.ts";
 
 describe("qa-otel-smoke receiver bounds", () => {
+  it("parses body-size limit env values as strict positive integers", () => {
+    expect(testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, {})).toBe(64);
+    expect(
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: " 128 " }),
+    ).toBe(128);
+
+    expect(() =>
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1e3" }),
+    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
+    expect(() =>
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "1024bytes" }),
+    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
+    expect(() =>
+      testing.readPositiveIntegerEnv("OTEL_TEST_LIMIT", 64, { OTEL_TEST_LIMIT: "0" }),
+    ).toThrow("OTEL_TEST_LIMIT must be a positive integer");
+  });
+
+  it("loads with configured body-size limit env values", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "--input-type=module",
+        "--eval",
+        'await import("./scripts/qa-otel-smoke.ts");',
+      ],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_QA_OTEL_MAX_CAPTURED_BODY_TEXT_BYTES: "1024",
+          OPENCLAW_QA_OTEL_MAX_COMPRESSED_BODY_BYTES: "2048",
+          OPENCLAW_QA_OTEL_MAX_DECODED_BODY_BYTES: "4096",
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("ReferenceError");
+  });
+
   it("rejects identity OTLP bodies above the decoded byte ceiling", () => {
     expect(() => testing.decodeRequestBody(Buffer.alloc(65), undefined, 64)).toThrow(
       "OTLP request body exceeded 64 bytes: 65 bytes",

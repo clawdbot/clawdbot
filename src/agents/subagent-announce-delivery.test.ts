@@ -2890,6 +2890,109 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  it("directly delivers generated media after active wake failure when requester handoff locks", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error(
+        "SessionWriteLockTimeoutError: session file locked (timeout 60000ms): pid=43",
+      );
+    }) as unknown as typeof runtimeCallGateway;
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-channel",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-handoff-locked",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-locked",
+          childSessionId: "task-locked",
+          announceType: "image generation task",
+          taskLabel: "locked handoff image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-locked.png",
+          mediaUrls: ["/tmp/generated-locked.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        accountId: "acct-1",
+        to: "channel:C123",
+        content: "The generated image is ready.",
+        mediaUrls: ["/tmp/generated-locked.png"],
+        idempotencyKey: "announce-channel-media-handoff-locked:generated-media-direct",
+      }),
+    );
+  });
+
+  it("keeps generic requester handoff errors visible after active wake failure", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error("requester handoff exploded after dispatch");
+    }) as unknown as typeof runtimeCallGateway;
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedAgentMessageWithOutcome,
+      sessionId: "requester-session-channel",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-handoff-error",
+      sourceTool: "image_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-error",
+          childSessionId: "task-error",
+          announceType: "image generation task",
+          taskLabel: "errored handoff image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 image.\nMEDIA:/tmp/generated-error.png",
+          mediaUrls: ["/tmp/generated-error.png"],
+          replyInstruction:
+            "Tell the user the image is ready and send it through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "requester handoff exploded after dispatch",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("directly delivers stale isolated cron run media completions", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();

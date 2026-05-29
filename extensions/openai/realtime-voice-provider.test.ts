@@ -717,6 +717,28 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     });
   });
 
+  it("drops malformed realtime voice numeric settings", () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const resolved = provider.resolveConfig?.({
+      cfg: {} as never,
+      rawConfig: {
+        providers: {
+          openai: {
+            vadThreshold: 1.5,
+            silenceDurationMs: -1,
+            prefixPaddingMs: 10.5,
+            minBargeInAudioEndMs: 25.5,
+          },
+        },
+      },
+    });
+
+    expect(resolved?.vadThreshold).toBeUndefined();
+    expect(resolved?.silenceDurationMs).toBeUndefined();
+    expect(resolved?.prefixPaddingMs).toBeUndefined();
+    expect(resolved?.minBargeInAudioEndMs).toBeUndefined();
+  });
+
   it("waits for session.updated before draining audio and firing onReady", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onReady = vi.fn();

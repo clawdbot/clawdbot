@@ -93,8 +93,8 @@ jobs:
             echo "It does not sign, notarize, or upload macOS assets."
             echo
             echo "Next step:"
-            echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml\` with tag \`${RELEASE_TAG}\` and wait for the private mac validation lane to pass."
-            echo "- Run \`openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\` and \`preflight_only=true\` for the full private mac preflight."
-            echo "- For the real publish path, run the same private mac publish workflow from \`main\` with the successful private preflight \`preflight_run_id\` so it promotes the prepared artifacts instead of rebuilding them."
-            echo "- For stable releases, the private publish workflow also publishes the signed \`appcast.xml\` to public \`main\`, or opens an appcast PR if direct push is blocked."
+            echo "- Run \`openclaw/releases/.github/workflows/openclaw-macos-validate.yml\` with tag \`${RELEASE_TAG}\` and wait for the macOS validation lane to pass."
+            echo "- Run \`openclaw/releases/.github/workflows/openclaw-macos-publish.yml\` with tag \`${RELEASE_TAG}\` and \`preflight_only=true\` for the full macOS preflight."
+            echo "- For the real publish path, run the same macOS publish workflow from \`main\` with the successful preflight \`preflight_run_id\` so it promotes the prepared artifacts instead of rebuilding them."
+            echo "- For stable releases, the publish workflow also publishes the signed \`appcast.xml\` to public \`main\`, or opens an appcast PR if direct push is blocked."
           } >> "$GITHUB_STEP_SUMMARY"

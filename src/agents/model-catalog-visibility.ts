@@ -48,6 +48,7 @@ export async function resolveVisibleModelCatalog(params: {
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
   defaultModel?: string;
+  agentDir?: string;
   agentId?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -68,6 +69,7 @@ export async function resolveVisibleModelCatalog(params: {
       createProviderAuthChecker({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
         agentId: params.agentId,
         env: params.env,
         allowPluginSyntheticAuth: params.runtimeAuthDiscovery,

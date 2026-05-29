@@ -133,4 +133,41 @@ describe("feishu bitable create app cleanup", () => {
       },
     });
   });
+
+  it("advertises and validates list_records page_size as a positive integer", async () => {
+    const { client } = createBitableClient([{ record_id: "rec_1", fields: { Name: "A" } }]);
+    createFeishuClientMock.mockReturnValue(client);
+
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_list_records");
+    const parameters = tool as unknown as {
+      parameters?: { properties?: { page_size?: Record<string, unknown> } };
+    };
+    expect(parameters.parameters?.properties?.page_size).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 500,
+    });
+
+    await tool.execute("call_list_records", {
+      app_token: "app_token",
+      table_id: "tbl_main",
+      page_size: "25",
+    });
+    expect(client.bitable.appTableRecord.list).toHaveBeenLastCalledWith({
+      path: { app_token: "app_token", table_id: "tbl_main" },
+      params: { page_size: 25 },
+    });
+
+    const invalid = await tool.execute("call_invalid_page_size", {
+      app_token: "app_token",
+      table_id: "tbl_main",
+      page_size: 0,
+    });
+    expect(invalid.details.error).toContain(
+      "page_size must be a positive integer between 1 and 500",
+    );
+    expect(client.bitable.appTableRecord.list).toHaveBeenCalledTimes(1);
+  });
 });

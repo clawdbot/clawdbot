@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 
 export type MemoryConfig = {
   embedding: {
@@ -87,12 +88,49 @@ function resolveEnvVars(value: string): string {
   });
 }
 
-function resolveEmbeddingModel(embedding: Record<string, unknown>): string {
+function resolveEmbeddingModel(
+  embedding: Record<string, unknown>,
+  dimensions: number | undefined,
+): string {
   const model = typeof embedding.model === "string" ? embedding.model : DEFAULT_MODEL;
-  if (typeof embedding.dimensions !== "number") {
+  if (dimensions === undefined) {
     vectorDimsForModel(model);
   }
   return model;
+}
+
+function resolveFiniteIntegerConfig(value: unknown): number | undefined {
+  if (typeof value !== "number") {
+    return undefined;
+  }
+  const parsed = parseFiniteNumber(value);
+  return parsed === undefined ? undefined : Math.floor(parsed);
+}
+
+function resolveBoundedIntegerConfig(params: {
+  value: unknown;
+  fallback: number;
+  min: number;
+  max: number;
+  label: string;
+}): number {
+  const resolved = resolveFiniteIntegerConfig(params.value) ?? params.fallback;
+  if (resolved < params.min || resolved > params.max) {
+    throw new Error(`${params.label} must be between ${params.min} and ${params.max}`);
+  }
+  return resolved;
+}
+
+function resolveEmbeddingDimensions(embedding: Record<string, unknown>): number | undefined {
+  if (embedding.dimensions === undefined) {
+    return undefined;
+  }
+  const dimensions =
+    typeof embedding.dimensions === "number" ? parseFiniteNumber(embedding.dimensions) : undefined;
+  if (dimensions === undefined || !Number.isInteger(dimensions) || dimensions < 1) {
+    throw new Error("embedding.dimensions must be a positive integer");
+  }
+  return dimensions;
 }
 
 export const memoryConfigSchema = {
@@ -126,25 +164,27 @@ export const memoryConfigSchema = {
       throw new Error("embedding config must include at least one setting");
     }
 
-    const model = resolveEmbeddingModel(embedding);
+    const dimensions = resolveEmbeddingDimensions(embedding);
+    const model = resolveEmbeddingModel(embedding, dimensions);
     const provider = typeof embedding.provider === "string" ? embedding.provider.trim() : "openai";
     if (!provider) {
       throw new Error("embedding.provider must not be empty");
     }
 
-    const captureMaxChars =
-      typeof cfg.captureMaxChars === "number" ? Math.floor(cfg.captureMaxChars) : undefined;
-    const recallMaxChars =
-      typeof cfg.recallMaxChars === "number" ? Math.floor(cfg.recallMaxChars) : undefined;
-    if (
-      typeof captureMaxChars === "number" &&
-      (captureMaxChars < 100 || captureMaxChars > 10_000)
-    ) {
-      throw new Error("captureMaxChars must be between 100 and 10000");
-    }
-    if (typeof recallMaxChars === "number" && (recallMaxChars < 100 || recallMaxChars > 10_000)) {
-      throw new Error("recallMaxChars must be between 100 and 10000");
-    }
+    const captureMaxChars = resolveBoundedIntegerConfig({
+      value: cfg.captureMaxChars,
+      fallback: DEFAULT_CAPTURE_MAX_CHARS,
+      min: 100,
+      max: 10_000,
+      label: "captureMaxChars",
+    });
+    const recallMaxChars = resolveBoundedIntegerConfig({
+      value: cfg.recallMaxChars,
+      fallback: DEFAULT_RECALL_MAX_CHARS,
+      min: 100,
+      max: 10_000,
+      label: "recallMaxChars",
+    });
     let customTriggers: string[] | undefined;
     if (cfg.customTriggers !== undefined) {
       if (!Array.isArray(cfg.customTriggers)) {
@@ -201,15 +241,15 @@ export const memoryConfigSchema = {
         apiKey: typeof embedding.apiKey === "string" ? resolveEnvVars(embedding.apiKey) : undefined,
         baseUrl:
           typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
-        dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : undefined,
+        dimensions,
       },
       dreaming,
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
       autoRecall: cfg.autoRecall !== false,
-      captureMaxChars: captureMaxChars ?? DEFAULT_CAPTURE_MAX_CHARS,
+      captureMaxChars,
       ...(customTriggers ? { customTriggers } : {}),
-      recallMaxChars: recallMaxChars ?? DEFAULT_RECALL_MAX_CHARS,
+      recallMaxChars,
       ...(storageOptions ? { storageOptions } : {}),
     };
   },

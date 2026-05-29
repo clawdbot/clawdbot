@@ -25,6 +25,7 @@
  */
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
+import { readMSTeamsHttpErrorDetail } from "./http-error.js";
 import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
 import { buildUserAgent } from "./user-agent.js";
 
@@ -47,19 +48,7 @@ type BotFrameworkUserTokenResponse = {
   expiration?: string;
 };
 
-export type MSTeamsSsoFetch = (
-  input: string,
-  init?: {
-    method?: string;
-    headers?: Record<string, string>;
-    body?: string;
-  },
-) => Promise<{
-  ok: boolean;
-  status: number;
-  json(): Promise<unknown>;
-  text(): Promise<string>;
-}>;
+export type MSTeamsSsoFetch = (input: string, init?: RequestInit) => Promise<Response>;
 
 export type MSTeamsSsoDeps = {
   tokenProvider: MSTeamsAccessTokenProvider;
@@ -162,8 +151,8 @@ async function callUserTokenService(
     body: params.body === undefined ? undefined : JSON.stringify(params.body),
   });
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    return { error: text || `HTTP ${response.status}`, status: response.status };
+    const error = await readMSTeamsHttpErrorDetail(response, `HTTP ${response.status}`);
+    return { error, status: response.status };
   }
   let parsed: unknown;
   try {

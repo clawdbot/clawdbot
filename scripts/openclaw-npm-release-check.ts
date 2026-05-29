@@ -147,7 +147,14 @@ const PACKED_TEST_CARGO_DIRECTORY_SEGMENTS = new Set([
 ]);
 const PACKED_TEST_CARGO_FILE_RE = /(?:^|\/)[^/]+\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/u;
 const NPM_PACK_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const skipPackValidationEnv = "OPENCLAW_NPM_RELEASE_SKIP_PACK_CHECK";
+
+type ReleaseCheckCommandInvocation = {
+  command: string;
+  args: string[];
+  windowsVerbatimArguments?: boolean;
+};
 
 function normalizePackedPath(packedPath: string): string {
   return packedPath.replace(/\\/g, "/");
@@ -294,6 +301,53 @@ export function utcCalendarDayDistance(left: Date, right: Date): number {
   return Math.round(Math.abs(startOfUtcDay(left) - startOfUtcDay(right)) / 86_400_000);
 }
 
+function positiveEnvInt(name: string, env: NodeJS.ProcessEnv, fallback: number): number {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw === "" || !/^[0-9]+$/u.test(raw)) {
+    return fallback;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+export function resolveNpmReleaseCheckCommandTimeoutMs(
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  return positiveEnvInt(
+    "OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS",
+    env,
+    DEFAULT_RELEASE_CHECK_COMMAND_TIMEOUT_MS,
+  );
+}
+
+export function runNpmReleaseCheckCommand(
+  invocation: ReleaseCheckCommandInvocation,
+  options: {
+    cwd?: string;
+    encoding?: BufferEncoding;
+    env?: NodeJS.ProcessEnv;
+    maxBuffer?: number;
+    stdio: "ignore" | ["ignore", "pipe", "pipe"];
+    timeoutMs?: number;
+  },
+): string {
+  const env = options.env ?? process.env;
+  const output = execFileSync(invocation.command, invocation.args, {
+    cwd: options.cwd,
+    encoding: options.encoding,
+    env,
+    killSignal: "SIGKILL",
+    maxBuffer: options.maxBuffer ?? NPM_PACK_MAX_BUFFER_BYTES,
+    stdio: options.stdio,
+    timeout: options.timeoutMs ?? resolveNpmReleaseCheckCommandTimeoutMs(env),
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+  }) as Buffer | string | null;
+  if (output == null) {
+    return "";
+  }
+  return typeof output === "string" ? output : output.toString("utf8");
+}
+
 export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] {
   const actualRepositoryUrl = normalizeRepoUrl(
     typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url,
@@ -416,9 +470,11 @@ export function collectReleaseTagErrors(params: {
 
   if (params.releaseSha?.trim() && params.releaseMainRef?.trim()) {
     try {
-      execFileSync(
-        "git",
-        ["merge-base", "--is-ancestor", params.releaseSha, params.releaseMainRef],
+      runNpmReleaseCheckCommand(
+        {
+          command: "git",
+          args: ["merge-base", "--is-ancestor", params.releaseSha, params.releaseMainRef],
+        },
         { stdio: "ignore" },
       );
     } catch {
@@ -494,11 +550,10 @@ export function resolveNpmCommandInvocation(
 
 function runNpmCommand(args: string[]): string {
   const invocation = resolveNpmCommandInvocation({ npmArgs: args });
-  return execFileSync(invocation.command, invocation.args, {
+  return runNpmReleaseCheckCommand(invocation, {
     encoding: "utf8",
     maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "pipe"],
-    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
 }
 
@@ -633,11 +688,14 @@ function collectPackedTarballErrors(): string[] {
 
 function collectNpmShrinkwrapErrors(): string[] {
   try {
-    execFileSync(process.execPath, ["scripts/generate-npm-shrinkwrap.mjs", "--check"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    runNpmReleaseCheckCommand(
+      { command: process.execPath, args: ["scripts/generate-npm-shrinkwrap.mjs", "--check"] },
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
     return [];
   } catch (error) {
     return [`npm-shrinkwrap.json must match package dependencies: ${describeExecFailure(error)}`];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CronJobStateSchema } from "../gateway/protocol/schema.js";
+import { CronJobStateSchema } from "../../packages/gateway-protocol/src/schema.js";
 
 type SchemaLike = {
   properties?: Record<string, unknown>;

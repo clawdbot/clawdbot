@@ -1,6 +1,9 @@
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { callGateway } from "../../gateway/call.js";
 import type { OperatorScope } from "../../gateway/method-scopes.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { withProgress } from "../progress.js";
 import type { NodesRpcOpts } from "./types.js";

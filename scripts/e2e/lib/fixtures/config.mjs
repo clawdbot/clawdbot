@@ -1,9 +1,21 @@
 import path from "node:path";
 import { requireArg, writeJson } from "./common.mjs";
 
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
 function writeConfig(kind) {
   const configPath = requireArg(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
-  const port = Number(process.env.PORT ?? 18789);
+  const port = readPositiveIntEnv("PORT", 18789);
   const config =
     kind === "config-reload"
       ? {
@@ -34,7 +46,7 @@ function writeConfig(kind) {
               ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
               profiles: {
                 "docker-cdp": {
-                  cdpUrl: `http://127.0.0.1:${Number(process.env.CDP_PORT ?? 19222)}`,
+                  cdpUrl: `http://127.0.0.1:${readPositiveIntEnv("CDP_PORT", 19222)}`,
                   color: "#FF4500",
                 },
               },
@@ -99,7 +111,7 @@ function writeOpenWebUiConfig([openaiApiKey]) {
     { path: "models.providers.openai.models", value: [] },
     {
       path: "models.providers.openai.timeoutSeconds",
-      value: Number.parseInt(process.env.OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS ?? "900", 10),
+      value: readPositiveIntEnv("OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS", 900),
     },
     { path: "models.providers.openai.agentRuntime", value: { id: "openclaw" } },
     { path: "gateway.controlUi.enabled", value: false },

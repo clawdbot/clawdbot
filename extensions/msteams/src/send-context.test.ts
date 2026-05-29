@@ -14,6 +14,8 @@ const sendContextMockState = vi.hoisted(() => {
   };
   return {
     store,
+    loadMSTeamsSdkWithAuth: vi.fn(async () => ({ app: { id: "mock-app" } })),
+    createMSTeamsTokenProvider: vi.fn(() => ({ getAccessToken: vi.fn() })),
     logWarn: vi.fn(),
   };
 });
@@ -28,6 +30,11 @@ vi.mock("./runtime.js", () => ({
       getChildLogger: () => ({ warn: sendContextMockState.logWarn }),
     },
   }),
+}));
+
+vi.mock("./sdk.js", () => ({
+  loadMSTeamsSdkWithAuth: sendContextMockState.loadMSTeamsSdkWithAuth,
+  createMSTeamsTokenProvider: sendContextMockState.createMSTeamsTokenProvider,
 }));
 
 function channelRef(params?: Partial<StoredConversationReference>): StoredConversationReference {
@@ -48,10 +55,43 @@ beforeEach(() => {
   sendContextMockState.store.remove.mockReset();
   sendContextMockState.store.findPreferredDmByUserId.mockReset();
   sendContextMockState.store.findByUserId.mockReset();
+  sendContextMockState.loadMSTeamsSdkWithAuth.mockClear();
+  sendContextMockState.createMSTeamsTokenProvider.mockClear();
   sendContextMockState.logWarn.mockReset();
+  vi.unstubAllEnvs();
 });
 
 describe("resolveMSTeamsSendContext", () => {
+  it("ignores ambient SERVICE_URL for default public-cloud proactive sends", async () => {
+    vi.stubEnv("SERVICE_URL", "https://bot.example.com/api/messages");
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "app-id",
+          appPassword: "app-password",
+          tenantId: "tenant-id",
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).resolves.toMatchObject({
+      conversationId: "19:channel@thread.tacv2",
+      sdkCloudOptions: { cloud: "Public" },
+    });
+  });
+
   it("removes stored conversation references with blocked serviceUrl hosts", async () => {
     sendContextMockState.store.get.mockResolvedValue(
       channelRef({

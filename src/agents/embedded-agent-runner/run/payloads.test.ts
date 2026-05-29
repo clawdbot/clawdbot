@@ -198,7 +198,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("does not replay raw-looking accumulated tool output when final answer text is available", () => {
     const payloads = buildPayloads({
       assistantTexts: [
-        "/root/openclaw/src/gateway/protocol/schema/protocol-schemas.ts:181:  PluginControlUiDescriptorSchema,",
+        "/root/openclaw/packages/gateway-protocol/src/schema/protocol-schemas.ts:181:  PluginControlUiDescriptorSchema,",
         "The schema export is fixed.",
       ],
       lastAssistant: {

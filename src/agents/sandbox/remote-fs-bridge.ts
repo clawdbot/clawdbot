@@ -7,6 +7,7 @@ import type {
 } from "./backend-handle.types.js";
 import { SANDBOX_PINNED_MUTATION_PYTHON } from "./fs-bridge-mutation-helper.js";
 import { createWritableRenameTargetResolver } from "./fs-bridge-rename-targets.js";
+import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   isPathInsideContainerRoot,
@@ -14,15 +15,6 @@ import {
   relativePathEscapesContainerRoot,
 } from "./path-utils.js";
 import { isExistingWorkspaceSkillMountSource } from "./workspace-mounts.js";
-
-function parseStatMtimeMs(value: string | undefined): number {
-  const raw = value ?? "0";
-  if (/^\d+(?:\.\d+)?$/.test(raw)) {
-    return Number(raw) * 1000;
-  }
-  const parsed = Date.parse(raw);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
 
 type RemoteMountSource = "workspace" | "agent" | "protectedSkill";
 
@@ -252,8 +244,8 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
     const [kindRaw = "", sizeRaw = "0", mtimeRaw = "0"] = output.split("|");
     return {
       type: kindRaw === "directory" ? "directory" : kindRaw === "regular file" ? "file" : "other",
-      size: Number(sizeRaw),
-      mtimeMs: parseStatMtimeMs(mtimeRaw),
+      size: parseSandboxStatSize(sizeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 

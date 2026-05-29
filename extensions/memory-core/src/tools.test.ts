@@ -58,6 +58,48 @@ describe("memory_search unavailable payloads", () => {
     resetMemoryToolMockState({ searchImpl: async () => [] });
   });
 
+  it("rejects fractional maxResults before searching", async () => {
+    const tool = createMemorySearchToolOrThrow();
+
+    await expect(
+      tool.execute("fractional-max-results", {
+        query: "hello",
+        maxResults: 1.5,
+      }),
+    ).rejects.toThrow("maxResults must be a positive integer");
+
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("rejects malformed minScore before searching", async () => {
+    const tool = createMemorySearchToolOrThrow();
+
+    await expect(
+      tool.execute("malformed-min-score", {
+        query: "hello",
+        minScore: "0.8junk",
+      }),
+    ).rejects.toThrow("minScore must be a finite number");
+
+    expect(getMemorySearchManagerMockCalls()).toBe(0);
+  });
+
+  it("passes string minScore through to memory search", async () => {
+    let seenMinScore: number | undefined;
+    setMemorySearchImpl(async (opts) => {
+      seenMinScore = opts?.minScore;
+      return [];
+    });
+    const tool = createMemorySearchToolOrThrow();
+
+    await tool.execute("string-min-score", {
+      query: "hello",
+      minScore: "0.8",
+    });
+
+    expect(seenMinScore).toBe(0.8);
+  });
+
   it("returns explicit unavailable metadata for quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");

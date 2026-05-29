@@ -1,10 +1,13 @@
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 function isLoopbackGatewayUrl(rawUrl: string): boolean {
   try {

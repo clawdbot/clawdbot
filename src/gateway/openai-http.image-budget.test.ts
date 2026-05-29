@@ -40,6 +40,16 @@ describe("openai image budget accounting", () => {
     ).rejects.toThrow(/Total image payload too large/);
   });
 
+  it("uses default image limits for non-finite configured caps", () => {
+    const limits = testOnlyOpenAiHttp.resolveOpenAiChatCompletionsLimits({
+      maxImageParts: Number.NaN,
+      maxTotalImageBytes: Number.POSITIVE_INFINITY,
+    });
+
+    expect(limits.maxImageParts).toBe(8);
+    expect(limits.maxTotalImageBytes).toBe(20 * 1024 * 1024);
+  });
+
   it("does not double-count unchanged base64 image payloads", async () => {
     extractImageContentFromSourceMock.mockResolvedValueOnce({
       type: "image",

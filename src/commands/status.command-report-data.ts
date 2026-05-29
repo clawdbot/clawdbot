@@ -1,4 +1,4 @@
-import type { ConnectPairingRequiredReason } from "../gateway/protocol/connect-error-details.js";
+import type { ConnectPairingRequiredReason } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";

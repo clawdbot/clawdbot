@@ -64,24 +64,31 @@ function withBuildCacheFixture(
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = getBuildAllStep("plugins:assets:build");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
 
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: {},
-    });
-
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "plugins:assets:build"],
-      options: {
-        stdio: "inherit",
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
         env: {},
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "plugins:assets:build"],
+        options: {
+          stdio: "inherit",
+          env: {},
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps node steps on the current node binary", () => {
@@ -122,27 +129,34 @@ describe("resolveBuildAllStep", () => {
 
   it("adds heap headroom for plugin-sdk dts on Windows", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
 
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: { FOO: "bar" },
-    });
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
+        env: { FOO: "bar" },
+      });
 
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "build:plugin-sdk:dts"],
-      options: {
-        stdio: "inherit",
-        env: {
-          FOO: "bar",
-          NODE_OPTIONS: "--max-old-space-size=4096",
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "build:plugin-sdk:dts"],
+        options: {
+          stdio: "inherit",
+          env: {
+            FOO: "bar",
+            NODE_OPTIONS: "--max-old-space-size=8192",
+          },
+          shell: false,
+          windowsVerbatimArguments: undefined,
         },
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
@@ -172,6 +186,7 @@ describe("resolveBuildAllSteps", () => {
       "check-plugin-sdk-exports",
       "plugins:assets:copy",
       "copy-hook-metadata",
+      "copy-copilot-sdk-manifest",
       "copy-export-html-templates",
       "ui:build",
       "write-build-info",

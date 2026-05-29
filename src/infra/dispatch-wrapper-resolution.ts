@@ -6,6 +6,7 @@ import {
   unwrapEnvInvocation,
 } from "./command-carriers.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
+import { parseInlineOptionToken } from "./inline-option-token.js";
 
 export { unwrapEnvInvocation } from "./command-carriers.js";
 
@@ -149,7 +150,7 @@ function unwrapDashOptionInvocation(
       if (!token.startsWith("-") || token === "-") {
         return "stop";
       }
-      const [flag] = lower.split("=", 2);
+      const { name: flag } = parseInlineOptionToken(lower);
       return params.onFlag(flag, lower);
     },
     adjustCommandIndex: params.adjustCommandIndex,
@@ -253,7 +254,7 @@ function timeInvocationWritesOutputFile(argv: string[]): boolean {
       return false;
     }
     const lower = normalizeLowercaseStringOrEmpty(token);
-    const [flag] = lower.split("=", 2);
+    const { name: flag } = parseInlineOptionToken(lower);
     if (flag === "-o" || flag === "--output") {
       return true;
     }
@@ -281,7 +282,7 @@ function unwrapScriptInvocation(
       if (!lower.startsWith("-") || lower === "-") {
         return "stop";
       }
-      const [flag] = token.split("=", 2);
+      const { name: flag } = parseInlineOptionToken(token);
       if (BSD_SCRIPT_OPTIONS_WITH_VALUE.has(flag)) {
         return token.includes("=") ? "continue" : "consume-next";
       }

@@ -1139,6 +1139,43 @@ describe("createVideoGenerateTool", () => {
     });
   });
 
+  it("rejects fractional duration before calling the provider", async () => {
+    const generateVideo = vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      videos: [
+        {
+          buffer: Buffer.from("video-bytes"),
+          mimeType: "video/mp4",
+          fileName: "lobster.mp4",
+        },
+      ],
+    });
+
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "google/veo-3.1-fast-generate-preview" },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await expect(
+      tool.execute("call-1", {
+        prompt: "friendly lobster surfing",
+        durationSeconds: 5.5,
+      }),
+    ).rejects.toThrow("durationSeconds must be a positive integer");
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
   it("surfaces normalized video geometry from runtime metadata", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "runway",

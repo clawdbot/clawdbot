@@ -206,6 +206,8 @@ describeUnix("inspectPortUsage", () => {
             "p111\ncnode\nnTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
             "p222\ncnode\nnTCP 127.0.0.1:18789->127.0.0.1:50123 (ESTABLISHED)\n" +
             "p444\ncnode\nnTCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)\n" +
+            "p555\ncnode\nnTCP 127.0.0.1:50126->127.0.0.1:18789abc (ESTABLISHED)\n" +
+            "p666\ncnode\nnTCP 127.0.0.1:50127->127.0.0.1:99999 (ESTABLISHED)\n" +
             "p333\ncBrowser\nnTCP 127.0.0.1:50124->198.51.100.7:18789 (ESTABLISHED)\n",
           stderr: "",
           code: 0,

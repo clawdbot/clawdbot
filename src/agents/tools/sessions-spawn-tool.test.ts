@@ -355,7 +355,7 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-task-name", {
       task: "review subagent handling",
-      taskName: "review_subagents",
+      taskName: "review-subagents",
     });
 
     expectDetailFields(result.details, {
@@ -364,23 +364,44 @@ describe("sessions_spawn tool", () => {
     });
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
     expect(spawnArgs.task).toBe("review subagent handling");
-    expect(spawnArgs.taskName).toBe("review_subagents");
+    expect(spawnArgs.taskName).toBe("review-subagents");
   });
 
-  it("rejects invalid taskName before spawning", async () => {
+  it("accepts underscore taskName aliases", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
-    const result = await tool.execute("call-bad-task-name", {
+    const result = await tool.execute("call-underscore-task-name", {
       task: "review subagent handling",
-      taskName: "Bad-Name",
+      taskName: "review_subagents",
     });
 
-    expectDetailFields(result.details, { status: "error" });
-    expect(JSON.stringify(result.details)).toContain("Invalid taskName");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expectDetailFields(result.details, {
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+    });
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.taskName).toBe("review_subagents");
   });
+
+  it.each(["Bad-Name", "code review", "-bad"])(
+    "rejects invalid taskName %s before spawning",
+    async (taskName) => {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+      });
+
+      const result = await tool.execute("call-bad-task-name", {
+        task: "review subagent handling",
+        taskName,
+      });
+
+      expectDetailFields(result.details, { status: "error" });
+      expect(JSON.stringify(result.details)).toContain("Invalid taskName");
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["last", "all"])("rejects reserved taskName %s before spawning", async (taskName) => {
     const tool = createSessionsSpawnTool({
@@ -444,6 +465,24 @@ describe("sessions_spawn tool", () => {
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
     expect(spawnArgs.task).toBe("do thing");
     expect(spawnArgs.runTimeoutSeconds).toBe(2);
+  });
+
+  it.each([
+    [{ runTimeoutSeconds: 1.5 }, "runTimeoutSeconds must be a non-negative integer"],
+    [{ runTimeoutSeconds: -1 }, "runTimeoutSeconds must be a non-negative integer"],
+    [{ timeoutSeconds: "1sec" }, "timeoutSeconds must be a non-negative integer"],
+  ])("rejects invalid timeout override %o", async (params, message) => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await expect(
+      tool.execute("call-invalid-timeout", {
+        task: "do thing",
+        ...params,
+      }),
+    ).rejects.toThrow(message);
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {

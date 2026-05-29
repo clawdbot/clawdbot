@@ -23,6 +23,7 @@ import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/m
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
+import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 import {
   formatBtwTextForExternalDelivery,
   shouldSuppressReasoningPayload,
@@ -71,11 +72,19 @@ export type RouteReplyParams = {
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
   groupId?: string;
+  /** Reply lane for reply_payload_sending hooks. */
+  replyKind: ReplyDispatchKind;
+  /** Agent run id for hook context. */
+  runId?: string;
 };
 
 export type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
+  /** True when a hook intentionally suppressed provider delivery. */
+  suppressed?: boolean;
+  /** Suppression reason when delivery was intentionally skipped. */
+  reason?: "cancelled_by_reply_payload_sending_hook" | "empty_after_reply_payload_sending_hook";
   /** Optional message ID from the provider. */
   messageId?: string;
   /** Error message if the send failed. */
@@ -133,7 +142,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (!normalized) {
     return { ok: true };
   }
-  const externalPayload: ReplyPayload = {
+  let externalPayload: ReplyPayload = {
     ...normalized,
     text: formatBtwTextForExternalDelivery(normalized),
   };
@@ -148,8 +157,8 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
   if (mediaUrls.length === 0 && externalPayload.mediaUrl) {
     mediaUrls = [externalPayload.mediaUrl];
   }
-  const replyToId = externalPayload.replyToId;
-  const hasChannelData = messaging?.hasStructuredReplyPayload?.({
+  let replyToId = externalPayload.replyToId;
+  let hasChannelData = messaging?.hasStructuredReplyPayload?.({
     payload: externalPayload,
   });
 
@@ -219,6 +228,20 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       to,
       accountId: accountId ?? undefined,
       payloads: [externalPayload],
+      replyPayloadSendingHook: {
+        kind: params.replyKind,
+        channel: channelId,
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        ...(params.runId ? { runId: params.runId } : {}),
+        context: {
+          channelId,
+          ...(accountId ? { accountId } : {}),
+          conversationId: to,
+          ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+          ...(params.requesterSenderId ? { senderId: params.requesterSenderId } : {}),
+          ...(params.runId ? { runId: params.runId } : {}),
+        },
+      },
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
       session: outboundSession,
@@ -237,6 +260,17 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
+    }
+    if (
+      send.status === "suppressed" &&
+      (send.reason === "cancelled_by_reply_payload_sending_hook" ||
+        send.reason === "empty_after_reply_payload_sending_hook")
+    ) {
+      return {
+        ok: true,
+        suppressed: true,
+        reason: send.reason,
+      };
     }
     const results = send.status === "sent" ? send.results : [];
 

@@ -255,7 +255,8 @@ function primeHookPackNpmFallback() {
     ...createHookPackInstallResult("/tmp/hooks/demo-hooks"),
     npmResolution: {
       name: "@acme/demo-hooks",
-      spec: "@acme/demo-hooks@1.2.3",
+      version: "1.2.3",
+      resolvedSpec: "@acme/demo-hooks@1.2.3",
       integrity: "sha256-demo",
     },
   });
@@ -930,6 +931,36 @@ describe("plugins cli install", () => {
     expect(record.installPath).toBe(cliInstallPath("demo"));
     expect(record.version).toBe("1.2.3");
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
+  it("stores npm resolution metadata without changing the active plugin install selector", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: cliInstallPath("demo"),
+      version: "1.2.3",
+      npmResolution: {
+        name: "demo",
+        version: "1.2.3",
+        resolvedSpec: "demo@1.2.3",
+        integrity: "sha512-demo",
+      },
+    });
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "demo"]);
+
+    const record = persistedInstallRecord("demo");
+    expect(record.spec).toBe("demo");
+    expect(record.resolvedSpec).toBe("demo@1.2.3");
+    expect(record.integrity).toBe("sha512-demo");
   });
 
   it("passes bare npm selectors through npm without ClawHub lookup", async () => {
@@ -1826,7 +1857,8 @@ describe("plugins cli install", () => {
       version: "1.2.3",
       npmResolution: {
         name: "@acme/demo-hooks",
-        spec: "@acme/demo-hooks@1.2.3",
+        version: "1.2.3",
+        resolvedSpec: "@acme/demo-hooks@1.2.3",
         integrity: "sha256-demo",
       },
     });
@@ -1865,8 +1897,13 @@ describe("plugins cli install", () => {
     await runPluginsCommand(["plugins", "install", "@acme/demo-hooks"]);
 
     expect(hookNpmInstallCall().spec).toBe("@acme/demo-hooks");
-    expect(recordHookInstallCall().hookId).toBe("demo-hooks");
-    expect(recordHookInstallCall().hooks).toEqual(["command-audit"]);
+    const record = recordHookInstallCall();
+    expect(record.hookId).toBe("demo-hooks");
+    expect(record.spec).toBe("@acme/demo-hooks");
+    expect(record.resolvedVersion).toBe("1.2.3");
+    expect(record.resolvedSpec).toBe("@acme/demo-hooks@1.2.3");
+    expect(record.integrity).toBe("sha256-demo");
+    expect(record.hooks).toEqual(["command-audit"]);
     expect(writeConfigFile).toHaveBeenCalledWith(installedCfg);
     expect(runtimeLogsContain("Installed hook pack: demo-hooks")).toBe(true);
   });

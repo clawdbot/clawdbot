@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -97,7 +97,7 @@ export class OpenClawChannelBridge {
       import("../gateway/client.js"),
       import("../gateway/client-start-readiness.js"),
       import("../gateway/method-scopes.js"),
-      import("../gateway/protocol/client-info.js"),
+      import("../../packages/gateway-protocol/src/client-info.js"),
     ]);
     const bootstrap = await resolveGatewayClientBootstrap({
       config: this.cfg,

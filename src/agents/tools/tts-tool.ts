@@ -4,13 +4,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { textToSpeech } from "../../tts/tts.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import type { AnyAgentTool } from "./common.js";
-import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
+import { readPositiveIntegerParam, readStringParam } from "./common.js";
 
 const TtsToolSchema = Type.Object({
   text: Type.String({ description: "Text to speak." }),
   channel: Type.Optional(Type.String({ description: "Channel id; output-format hint." })),
   timeoutMs: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Provider timeout ms.",
       minimum: 1,
     }),
@@ -18,17 +18,9 @@ const TtsToolSchema = Type.Object({
 });
 
 function readTtsTimeoutMs(args: Record<string, unknown>): number | undefined {
-  const timeoutMs = readNumberParam(args, "timeoutMs", {
-    integer: true,
-    strict: true,
+  return readPositiveIntegerParam(args, "timeoutMs", {
+    message: "timeoutMs must be a positive integer in milliseconds.",
   });
-  if (timeoutMs === undefined) {
-    return undefined;
-  }
-  if (timeoutMs <= 0) {
-    throw new ToolInputError("timeoutMs must be a positive integer in milliseconds.");
-  }
-  return timeoutMs;
 }
 
 /**

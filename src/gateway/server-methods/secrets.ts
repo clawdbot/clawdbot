@@ -1,11 +1,11 @@
-import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import {
   ErrorCodes,
   errorShape,
   type ValidationError,
   validateSecretsResolveParams,
   validateSecretsResolveResult,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function errorMessage(error: unknown): string {

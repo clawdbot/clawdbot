@@ -15,9 +15,8 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 <Steps>
   <Step title="Add a one-shot reminder">
     ```bash
-    openclaw cron add \
+    openclaw cron create "2026-02-01T16:00:00Z" \
       --name "Reminder" \
-      --at "2026-02-01T16:00:00Z" \
       --session main \
       --system-event "Reminder: check the cron docs draft" \
       --wake now \
@@ -146,6 +145,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 Cron jobs can also carry payload-level `fallbacks`. When present, that list replaces the configured fallback chain for the job. Use `fallbacks: []` in the job payload/API when you want a strict cron run that tries only the selected model. If a job has `--model` but neither payload nor configured fallbacks, OpenClaw passes an explicit empty fallback override so the agent primary is not appended as a hidden extra retry target.
 
+Local-provider preflight checks walk configured fallbacks before marking a cron run `skipped`; `fallbacks: []` keeps that preflight path strict.
+
 Model-selection precedence for isolated jobs is:
 
 1. Gmail hook model override (when the run came from Gmail and that override is allowed)
@@ -215,12 +216,11 @@ Failure notifications follow a separate destination path:
   </Tab>
   <Tab title="Recurring isolated job">
     ```bash
-    openclaw cron add \
+    openclaw cron create "0 7 * * *" \
+      "Summarize overnight updates." \
       --name "Morning brief" \
-      --cron "0 7 * * *" \
       --tz "America/Los_Angeles" \
       --session isolated \
-      --message "Summarize overnight updates." \
       --announce \
       --channel slack \
       --to "channel:C1234567890"
@@ -237,6 +237,14 @@ Failure notifications follow a separate destination path:
       --model "opus" \
       --thinking high \
       --announce
+    ```
+  </Tab>
+  <Tab title="Webhook output">
+    ```bash
+    openclaw cron create "0 18 * * 1-5" \
+      "Summarize today's deploys as JSON." \
+      --name "Deploy digest" \
+      --webhook "https://example.invalid/openclaw/cron"
     ```
   </Tab>
 </Tabs>
@@ -411,11 +419,13 @@ openclaw cron runs --id <jobId> --run-id <runId>
 openclaw cron remove <jobId>
 
 # Agent selection (multi-agent setups)
-openclaw cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
+openclaw cron create "0 6 * * *" "Check ops queue" --name "Ops sweep" --session isolated --agent ops
 openclaw cron edit <jobId> --clear-agent
 ```
 
 `openclaw cron run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes. Wait mode polls the exact returned `runId`; it exits `0` for status `ok` and non-zero for `error`, `skipped`, or a wait timeout.
+
+`openclaw cron create` is an alias for `openclaw cron add`, and new jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `cron add|create` or `cron edit` to POST the finished run payload to an HTTP endpoint. Webhook delivery cannot be combined with chat delivery flags such as `--announce`, `--channel`, `--to`, `--thread-id`, or `--account`.
 
 <Note>
 Model override note:

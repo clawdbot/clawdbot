@@ -20,8 +20,7 @@ import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
-  canPersistInternalExecDirective,
-  canPersistInternalVerboseDirective,
+  canPersistSessionDirectiveDefaults,
   formatDirectiveAck,
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
@@ -82,15 +81,19 @@ export async function handleDirectiveOnly(
     }),
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
-  const allowInternalExecPersistence = canPersistInternalExecDirective({
+  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
 
   const modelInfo = await maybeHandleModelDirectiveInfo({
@@ -577,7 +580,7 @@ export async function handleDirectiveOnly(
       directives.reasoningLevel === "off"
         ? formatDirectiveAck("Reasoning visibility disabled.")
         : directives.reasoningLevel === "stream"
-          ? formatDirectiveAck("Reasoning stream enabled (Telegram only).")
+          ? formatDirectiveAck("Reasoning stream enabled.")
           : formatDirectiveAck("Reasoning visibility enabled."),
     );
   }

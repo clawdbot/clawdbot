@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const nodeBin = process.execPath;
-const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
+const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 8192;
 const BUILD_CACHE_VERSION = 2;
 const PNPM_STEP_NODE_FALLBACKS = new Map([
   ["plugins:assets:build", ["scripts/bundled-plugin-assets.mjs", "--phase", "build"]],
@@ -74,6 +74,19 @@ export const BUILD_ALL_STEPS = [
     args: ["--experimental-strip-types", "scripts/copy-hook-metadata.ts"],
   },
   {
+    label: "copy-copilot-sdk-manifest",
+    kind: "node",
+    args: ["--experimental-strip-types", "scripts/copy-copilot-sdk-manifest.ts"],
+    cache: {
+      inputs: [
+        "scripts/copy-copilot-sdk-manifest.ts",
+        "scripts/lib/copy-assets.ts",
+        "src/commands/copilot-sdk-install-manifest",
+      ],
+      outputs: ["dist/commands/copilot-sdk-install-manifest"],
+    },
+  },
+  {
     label: "copy-export-html-templates",
     kind: "node",
     args: ["--experimental-strip-types", "scripts/copy-export-html-templates.ts"],
@@ -127,6 +140,7 @@ export const BUILD_ALL_PROFILES = {
     "check-plugin-sdk-exports",
     "plugins:assets:copy",
     "copy-hook-metadata",
+    "copy-copilot-sdk-manifest",
     "copy-export-html-templates",
     "ui:build",
     "write-build-info",

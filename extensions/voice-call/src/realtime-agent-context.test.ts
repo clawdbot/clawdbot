@@ -57,17 +57,13 @@ function createAgentRuntime(workspaceDir: string): CoreAgentDeps {
 }
 
 describe("buildRealtimeVoiceInstructions", () => {
-  it("injects bounded identity, system prompt, and workspace context", async () => {
+  it("injects bounded identity and workspace context", async () => {
     const workspaceDir = await createWorkspace();
     await writeFile(path.join(workspaceDir, "SOUL.md"), "Stay quick, direct, and warm.\n");
     await writeFile(path.join(workspaceDir, "IDENTITY.md"), "Name: Claw Voice\nVibe: snappy\n");
     await writeFile(path.join(workspaceDir, "SECRET.md"), "do not include\n");
 
-    const coreConfig = {
-      agents: {
-        list: [{ id: "voice", systemPromptOverride: "Keep spoken answers short." }],
-      },
-    } as CoreConfig;
+    const coreConfig = { agents: { list: [{ id: "voice" }] } } as CoreConfig;
 
     const instructions = await buildRealtimeVoiceInstructions({
       baseInstructions: "Base voice instructions.",
@@ -77,7 +73,6 @@ describe("buildRealtimeVoiceInstructions", () => {
           enabled: true,
           maxChars: 2000,
           includeIdentity: true,
-          includeSystemPrompt: true,
           includeWorkspaceFiles: true,
           files: ["SOUL.md", "IDENTITY.md", "../SECRET.md"],
         },
@@ -92,7 +87,6 @@ describe("buildRealtimeVoiceInstructions", () => {
     expect(instructions).toContain("- Agent id: voice");
     expect(instructions).toContain("- Name: Claw Voice");
     expect(instructions).toContain("- Vibe: snappy");
-    expect(instructions).toContain("Keep spoken answers short.");
     expect(instructions).toContain("### SOUL.md");
     expect(instructions).toContain("Stay quick, direct, and warm.");
     expect(instructions).toContain("### IDENTITY.md");

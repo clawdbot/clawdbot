@@ -209,9 +209,12 @@ function runVitestJsonReport(params) {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...params.env,
       NODE_OPTIONS: [
-        process.env.NODE_OPTIONS?.trim(),
-        ...resolveVitestNodeArgs(process.env).filter((arg) => arg !== "--no-maglev"),
+        (params.env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS)?.trim(),
+        ...resolveVitestNodeArgs({ ...process.env, ...params.env }).filter(
+          (arg) => arg !== "--no-maglev",
+        ),
       ]
         .filter(Boolean)
         .join(" "),
@@ -311,6 +314,20 @@ export function resolveRunPlans(args) {
   }));
 }
 
+export function resolveFullSuiteVitestEnv(args, env = process.env, label = "") {
+  if (
+    !args.fullSuite ||
+    env.OPENCLAW_VITEST_MAX_WORKERS?.trim() ||
+    env.OPENCLAW_TEST_WORKERS?.trim()
+  ) {
+    return {};
+  }
+
+  return {
+    OPENCLAW_VITEST_MAX_WORKERS: label === "commands" ? "1" : "2",
+  };
+}
+
 function printRunLine(run) {
   console.log(
     `[test-group-report] ${run.label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
@@ -365,6 +382,7 @@ async function main() {
     const run = runVitestJsonReport({
       config: plan.config,
       forwardedArgs: plan.forwardedArgs,
+      env: resolveFullSuiteVitestEnv(args, process.env, plan.label),
       label: plan.label,
       logPath: path.join(logDir, `${slug}.log`),
       reportPath: path.join(reportDir, `${slug}.json`),

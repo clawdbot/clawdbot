@@ -151,6 +151,9 @@ _clawdock_ensure_dir() {
 _clawdock_compose() {
   _clawdock_ensure_dir || return 1
   local compose_args=(-f "${CLAWDOCK_DIR}/docker-compose.yml")
+  if [[ -f "${CLAWDOCK_DIR}/docker-compose.override.yml" ]]; then
+    compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.override.yml")
+  fi
   if [[ -f "${CLAWDOCK_DIR}/docker-compose.extra.yml" ]]; then
     compose_args+=(-f "${CLAWDOCK_DIR}/docker-compose.extra.yml")
   fi

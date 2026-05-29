@@ -10,6 +10,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   SynologyChatChannelConfig,
@@ -65,15 +66,23 @@ function parseAllowedUserIds(raw: string | string[] | undefined): string[] {
   return normalizeStringEntries(raw.split(","));
 }
 
-function parseRateLimitPerMinute(raw: string | undefined): number {
-  if (raw == null) {
-    return 30;
+function normalizeRateLimitPerMinuteValue(raw: unknown): number | undefined {
+  if (typeof raw === "number") {
+    return Number.isSafeInteger(raw) && raw >= 0 ? raw : undefined;
+  }
+  if (typeof raw !== "string") {
+    return undefined;
   }
   const trimmed = raw.trim();
-  if (!/^-?\d+$/.test(trimmed)) {
-    return 30;
+  if (!/^\d+$/.test(trimmed)) {
+    return undefined;
   }
-  return Number.parseInt(trimmed, 10);
+  const parsed = parseStrictInteger(trimmed);
+  return parsed != null && parsed >= 0 ? parsed : undefined;
+}
+
+function parseRateLimitPerMinute(raw: string | undefined): number {
+  return normalizeRateLimitPerMinuteValue(raw) ?? 30;
 }
 
 /**
@@ -142,7 +151,8 @@ export function resolveAccount(
     dangerouslyAllowInheritedWebhookPath,
     dmPolicy: merged.dmPolicy ?? "allowlist",
     allowedUserIds: parseAllowedUserIds(merged.allowedUserIds ?? envAllowedUserIds),
-    rateLimitPerMinute: merged.rateLimitPerMinute ?? envRateLimitValue,
+    rateLimitPerMinute:
+      normalizeRateLimitPerMinuteValue(merged.rateLimitPerMinute) ?? envRateLimitValue,
     botName: merged.botName ?? envBotName,
     allowInsecureSsl: merged.allowInsecureSsl ?? false,
   };

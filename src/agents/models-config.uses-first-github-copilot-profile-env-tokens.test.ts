@@ -133,6 +133,7 @@ describe("models-config", () => {
     expect(resolveImplicitProviders).toHaveBeenCalledOnce();
     expect(plan).toEqual({
       action: "write",
+      pluginCatalogWrites: {},
       contents: `${JSON.stringify(
         {
           providers: {
@@ -195,7 +196,7 @@ describe("models-config", () => {
       },
     );
 
-    expect(plan).toEqual({ action: "noop" });
+    expect(plan).toEqual({ action: "noop", pluginCatalogWrites: {} });
   });
 
   it("uses tokenRef env var when github-copilot profile omits plaintext token", () => {

@@ -1,3 +1,4 @@
+import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type, type Static } from "typebox";
 
 const CHAT_ACTION_VALUES = ["members", "info", "member_info"] as const;
@@ -11,7 +12,10 @@ export const FeishuChatSchema = Type.Object({
   }),
   chat_id: Type.Optional(Type.String({ description: "Chat ID (from URL or event payload)" })),
   member_id: Type.Optional(Type.String({ description: "Member ID for member_info lookups" })),
-  page_size: Type.Optional(Type.Number({ description: "Page size (1-100, default 50)" })),
+  page_size: optionalPositiveIntegerSchema({
+    maximum: 100,
+    description: "Page size (1-100, default 50)",
+  }),
   page_token: Type.Optional(Type.String({ description: "Pagination token" })),
   member_id_type: Type.Optional(
     Type.Unsafe<(typeof MEMBER_ID_TYPE_VALUES)[number]>({

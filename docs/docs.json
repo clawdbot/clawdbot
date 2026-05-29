@@ -1554,6 +1554,7 @@
                       "gateway/security/index",
                       "gateway/security/exposure-runbook",
                       "gateway/security/secure-file-operations",
+                      "gateway/security/shrinkwrap",
                       "gateway/security/audit-checks",
                       "gateway/operator-scopes",
                       "gateway/sandboxing",
@@ -1815,6 +1816,7 @@
                 "pages": [
                   "reference/RELEASING",
                   "reference/full-release-validation",
+                  "reference/release-performance-sweep",
                   "reference/test",
                   "ci",
                   "help/scripts"

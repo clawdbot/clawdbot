@@ -663,6 +663,9 @@ function createSetupEntryChannelPluginFixture(params: {
   bundledSetupEntryId?: string;
   splitBundledSetupSecrets?: boolean;
   bundledSetupRuntimeMarker?: string;
+  bundledSetupRuntimeRoutePath?: string;
+  bundledSetupRuntimeRegisterError?: string;
+  bundledSetupRuntimeLateRoutePath?: string;
   bundledSetupRuntimeError?: string;
   bundledFullRuntimeMarker?: string;
   requireBundledFullRuntimeBeforeLoad?: boolean;
@@ -825,7 +828,34 @@ module.exports = {
   },`
         : ""
   }
-};`
+	  ${
+      params.bundledSetupRuntimeRoutePath
+        ? `registerSetupRuntime: (api) => {
+	    api.registerHttpRoute({
+	      path: ${JSON.stringify(params.bundledSetupRuntimeRoutePath)},
+	      auth: "plugin",
+	      handler: async () => true,
+	    });
+	    ${
+        params.bundledSetupRuntimeRegisterError
+          ? `throw new Error(${JSON.stringify(params.bundledSetupRuntimeRegisterError)});`
+          : ""
+      }
+	    ${
+        params.bundledSetupRuntimeLateRoutePath
+          ? `queueMicrotask(() => {
+	      api.registerHttpRoute({
+	        path: ${JSON.stringify(params.bundledSetupRuntimeLateRoutePath)},
+	        auth: "plugin",
+	        handler: async () => true,
+	      });
+	    });`
+          : ""
+      }
+	  },`
+        : ""
+    }
+	};`
       : `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
   plugin: {
@@ -5481,6 +5511,41 @@ module.exports = {
       expectSetupRuntimeLoaded: true,
     },
     {
+      name: "runs bundled setupEntry setup-runtime registrations before deferred full loads",
+      fixture: {
+        id: "setup-runtime-bundled-route-test",
+        label: "Setup Runtime Bundled Route Test",
+        packageName: "@openclaw/setup-runtime-bundled-route-test",
+        fullBlurb: "full entry should defer while configured",
+        setupBlurb: "setup runtime route",
+        configured: true,
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        useBundledSetupEntryContract: true,
+        bundledSetupRuntimeRoutePath: "/setup-runtime-route",
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferSetupRuntimeForChannelPlugins: true,
+          config: {
+            channels: {
+              "setup-runtime-bundled-route-test": {
+                enabled: true,
+                token: "configured",
+              },
+            },
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-bundled-route-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+      expectedSetupRuntimeRoutePath: "/setup-runtime-route",
+    },
+    {
       name: "merges bundled runtime plugin into setup-runtime channel loads",
       fixture: {
         id: "setup-runtime-bundled-runtime-merge-test",
@@ -5584,6 +5649,7 @@ module.exports = {
       expectedSetupSecretId,
       expectSetupRuntimeLoaded,
       expectBundledFullRuntimeLoaded,
+      expectedSetupRuntimeRoutePath,
     }) => {
       const built = createSetupEntryChannelPluginFixture(fixture);
       const registry = load({ pluginDir: built.pluginDir });
@@ -5611,6 +5677,14 @@ module.exports = {
         expect(
           registry.channels[0]?.plugin.secrets?.secretTargetRegistryEntries?.some(
             (entry) => entry.id === expectedSetupSecretId,
+          ),
+        ).toBe(true);
+      }
+      if (expectedSetupRuntimeRoutePath) {
+        expect(
+          registry.httpRoutes.some(
+            (route) =>
+              route.pluginId === fixture.id && route.path === expectedSetupRuntimeRoutePath,
           ),
         ).toBe(true);
       }
@@ -5683,6 +5757,97 @@ module.exports = {
     ).toContain("broken setup runtime setter");
     expect(registry.plugins.find((entry) => entry.id === "setup-runtime-helper-test")?.status).toBe(
       "loaded",
+    );
+  });
+
+  it("rolls back setup-runtime registrations when setup side effects fail", () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-runtime-route-error-test",
+      label: "Setup Runtime Route Error Test",
+      packageName: "@openclaw/setup-runtime-route-error-test",
+      fullBlurb: "full runtime plugin",
+      setupBlurb: "setup runtime route",
+      configured: true,
+      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      useBundledSetupEntryContract: true,
+      bundledSetupRuntimeRoutePath: "/setup-runtime-route-error",
+      bundledSetupRuntimeRegisterError: "broken setup-runtime registrar",
+    });
+    const helperPlugin = writePlugin({
+      id: "setup-runtime-route-helper-test",
+      filename: "setup-runtime-route-helper-test.cjs",
+      body: `module.exports = { id: "setup-runtime-route-helper-test", register() {} };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-route-error-test": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [built.pluginDir, helperPlugin.file] },
+          allow: ["setup-runtime-route-error-test", "setup-runtime-route-helper-test"],
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.status,
+    ).toBe("error");
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-error-test")?.error,
+    ).toContain("broken setup-runtime registrar");
+    expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-route-error")).toBe(
+      false,
+    );
+    expect(
+      registry.plugins.find((entry) => entry.id === "setup-runtime-route-helper-test")?.status,
+    ).toBe("loaded");
+  });
+
+  it("closes setup-runtime registration APIs after synchronous registration", async () => {
+    const built = createSetupEntryChannelPluginFixture({
+      id: "setup-runtime-late-route-test",
+      label: "Setup Runtime Late Route Test",
+      packageName: "@openclaw/setup-runtime-late-route-test",
+      fullBlurb: "full runtime plugin",
+      setupBlurb: "setup runtime route",
+      configured: true,
+      startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+      useBundledSetupEntryContract: true,
+      bundledSetupRuntimeRoutePath: "/setup-runtime-sync-route",
+      bundledSetupRuntimeLateRoutePath: "/setup-runtime-late-route",
+    });
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferSetupRuntimeForChannelPlugins: true,
+      config: {
+        channels: {
+          "setup-runtime-late-route-test": {
+            enabled: true,
+            token: "configured",
+          },
+        },
+        plugins: {
+          load: { paths: [built.pluginDir] },
+          allow: ["setup-runtime-late-route-test"],
+        },
+      },
+    });
+
+    await Promise.resolve();
+
+    expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-sync-route")).toBe(
+      true,
+    );
+    expect(registry.httpRoutes.some((route) => route.path === "/setup-runtime-late-route")).toBe(
+      false,
     );
   });
 
@@ -5999,6 +6164,262 @@ module.exports = {
     expect(registry.plugins.find((entry) => entry.id === "startup-artifact-test")?.status).toBe(
       "loaded",
     );
+  });
+
+  it("prefers package-local dist artifacts over workspace source TS when requested", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const distDir = path.join(pluginDir, "dist");
+    mkdirSafe(distDir);
+    mkdirSafe(path.join(pluginDir, "src"));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./src/index.mts"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-artifact-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "src", "index.mts"),
+      'throw new Error("workspace source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(distDir, "index.mjs"),
+      'export default { id: "workspace-artifact-test", register() {} };\n',
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-artifact-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-artifact-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "workspace-artifact-test")?.status).toBe(
+      "loaded",
+    );
+  });
+
+  it("probes supported package-local dist artifact extensions before source TS", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const distDir = path.join(pluginDir, "dist");
+    mkdirSafe(distDir);
+    mkdirSafe(path.join(pluginDir, "src"));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./src/index.ts"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-artifact-extension-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "src", "index.ts"),
+      'throw new Error("workspace source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(distDir, "index.mjs"),
+      'export default { id: "workspace-artifact-extension-test", register() {} };\n',
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-artifact-extension-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-artifact-extension-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "workspace-artifact-extension-test")?.status,
+    ).toBe("loaded");
+  });
+
+  it("does not replace explicit JavaScript entries with package-local dist artifacts", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const distDir = path.join(pluginDir, "dist");
+    mkdirSafe(distDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./index.js"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-explicit-js-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      'export default { id: "workspace-explicit-js-test", register() {} };\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(distDir, "index.js"),
+      'throw new Error("explicit JS entry should not be replaced by dist");\n',
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-explicit-js-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-explicit-js-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "workspace-explicit-js-test")?.status,
+    ).toBe("loaded");
+  });
+
+  it("keeps package-local dist artifacts inside the plugin root boundary", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const outsideDistDir = makeTempDir();
+    mkdirSafe(path.join(pluginDir, "src"));
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify(
+        {
+          openclaw: {
+            extensions: ["./src/index.mts"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "workspace-artifact-symlink-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "src", "index.mts"),
+      'throw new Error("workspace source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(outsideDistDir, "index.mjs"),
+      'export default { id: "workspace-artifact-symlink-test", register() {} };\n',
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(outsideDistDir, path.join(pluginDir, "dist"), "dir");
+    } catch {
+      return;
+    }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      preferBuiltPluginArtifacts: true,
+      config: {
+        plugins: {
+          allow: ["workspace-artifact-symlink-test"],
+          load: { paths: [pluginDir] },
+          entries: {
+            "workspace-artifact-symlink-test": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(
+      registry.plugins.find((entry) => entry.id === "workspace-artifact-symlink-test")?.status,
+    ).not.toBe("loaded");
+    expectDiagnosticContaining({ registry, message: "escapes" });
   });
 
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {

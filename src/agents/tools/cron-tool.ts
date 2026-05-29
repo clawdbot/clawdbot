@@ -9,9 +9,21 @@ import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { isRecord, truncateUtf16Safe } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
+import {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
-import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
+import {
+  type AnyAgentTool,
+  jsonResult,
+  readNonNegativeIntegerParam,
+  readStringParam,
+} from "./common.js";
+import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
@@ -143,7 +155,7 @@ function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
       message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
       model: Type.Optional(Type.String({ description: "Model override" })),
       thinking: Type.Optional(Type.String({ description: "Thinking override" })),
-      timeoutSeconds: Type.Optional(Type.Number()),
+      timeoutSeconds: optionalFiniteNumberSchema({ minimum: 0 }),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
       fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
@@ -158,8 +170,10 @@ const CronScheduleSchema = Type.Optional(
     {
       kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule kind" }),
       at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
-      everyMs: Type.Optional(Type.Number({ description: "Interval ms (kind=every)" })),
-      anchorMs: Type.Optional(Type.Number({ description: "Start anchor ms (kind=every)" })),
+      everyMs: optionalPositiveIntegerSchema({ description: "Interval ms (kind=every)" }),
+      anchorMs: optionalNonNegativeIntegerSchema({
+        description: "Start anchor ms (kind=every)",
+      }),
       expr: Type.Optional(
         Type.String({
           description:
@@ -172,7 +186,7 @@ const CronScheduleSchema = Type.Optional(
             'IANA timezone for cron wall-clock fields, e.g. "Asia/Shanghai"; omitted => Gateway host local timezone.',
         }),
       ),
-      staggerMs: Type.Optional(Type.Number({ description: "Jitter ms (kind=cron)" })),
+      staggerMs: optionalNonNegativeIntegerSchema({ description: "Jitter ms (kind=cron)" }),
     },
     { additionalProperties: true },
   ),
@@ -222,10 +236,10 @@ const CronFailureAlertSchema = Type.Optional(
   Type.Unsafe<Record<string, unknown> | false>({
     type: "object",
     properties: {
-      after: Type.Optional(Type.Number({ description: "Failures before alert" })),
+      after: optionalPositiveIntegerSchema({ description: "Failures before alert" }),
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
       to: Type.Optional(Type.String({ description: "Alert target" })),
-      cooldownMs: Type.Optional(Type.Number({ description: "Alert cooldown ms" })),
+      cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
       includeSkipped: Type.Optional(
         Type.Boolean({ description: "Skipped runs count toward alert" }),
       ),
@@ -289,9 +303,7 @@ const CronPatchObjectSchema = Type.Optional(
 export const CronToolSchema = Type.Object(
   {
     action: stringEnum(CRON_ACTIONS),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
+    ...gatewayCallOptionSchemaProperties(),
     includeDisabled: Type.Optional(Type.Boolean()),
     job: CronJobObjectSchema,
     jobId: Type.Optional(Type.String()),
@@ -301,7 +313,7 @@ export const CronToolSchema = Type.Object(
     mode: optionalStringEnum(CRON_WAKE_MODES),
     runMode: optionalStringEnum(CRON_RUN_MODES),
     contextMessages: Type.Optional(
-      Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
+      Type.Integer({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
     agentId: Type.Optional(Type.String({ description: "List filter: agent id" })),
   },
@@ -574,12 +586,10 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       assertCronSelfRemoveScope(opts, action, params);
+      const parsedGatewayOpts = readGatewayCallOptions(params);
       const gatewayOpts: GatewayCallOptions = {
-        ...readGatewayCallOptions(params),
-        timeoutMs:
-          typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
-            ? params.timeoutMs
-            : 60_000,
+        ...parsedGatewayOpts,
+        timeoutMs: parsedGatewayOpts.timeoutMs ?? 60_000,
       };
 
       switch (action) {
@@ -723,10 +733,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
             }
           }
 
-          const contextMessages =
-            typeof params.contextMessages === "number" && Number.isFinite(params.contextMessages)
-              ? params.contextMessages
-              : 0;
+          const contextMessages = readNonNegativeIntegerParam(params, "contextMessages") ?? 0;
           if (
             job &&
             typeof job === "object" &&

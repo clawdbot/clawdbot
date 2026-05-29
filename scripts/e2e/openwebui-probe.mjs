@@ -13,6 +13,7 @@ const controlTimeoutMs = readPositiveInt(
   Math.min(fetchTimeoutMs, 30000),
 );
 const chatTimeoutMs = readPositiveInt("OPENWEBUI_CHAT_TIMEOUT_MS", fetchTimeoutMs);
+const responseBodyMaxBytes = readPositiveInt("OPENWEBUI_RESPONSE_BODY_MAX_BYTES", 1024 * 1024);
 const smokeMode =
   process.env.OPENWEBUI_SMOKE_MODE ?? process.env.OPENCLAW_OPENWEBUI_SMOKE_MODE ?? "chat";
 
@@ -68,6 +69,12 @@ function createTimeoutError(label, timeoutMs) {
   return error;
 }
 
+function createBodyTooLargeError(label, byteLimit) {
+  const error = new Error(`${label} response body exceeded ${byteLimit} bytes`);
+  error.code = "ETOOBIG";
+  return error;
+}
+
 async function withRequestTimeout(label, timeoutMs, run) {
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, timeoutMs);
@@ -84,6 +91,51 @@ async function withRequestTimeout(label, timeoutMs, run) {
     throw error;
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function readBoundedResponseText(response, label, byteLimit = responseBodyMaxBytes) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw createBodyTooLargeError(label, byteLimit);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw createBodyTooLargeError(label, byteLimit);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function readBoundedResponseJson(response, label) {
+  const body = await readBoundedResponseText(response, label);
+  try {
+    return JSON.parse(body);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label} returned invalid JSON: ${message}`, { cause: error });
   }
 }
 
@@ -125,12 +177,12 @@ async function fetchSignin() {
       signal,
     });
     if (!response.ok) {
-      const body = await response.text();
+      const body = await readBoundedResponseText(response, "Open WebUI signin");
       throw new Error(`signin failed: HTTP ${response.status} ${body}`);
     }
     return {
       cookie: getCookieHeader(response),
-      json: await response.json(),
+      json: await readBoundedResponseJson(response, "Open WebUI signin"),
     };
   });
 }
@@ -145,11 +197,11 @@ async function fetchModels(authHeaders, attempt) {
         return {
           ok: false,
           status: response.status,
-          text: await response.text(),
+          text: await readBoundedResponseText(response, `Open WebUI models attempt ${attempt}`),
         };
       }
       return {
-        json: await response.json(),
+        json: await readBoundedResponseJson(response, `Open WebUI models attempt ${attempt}`),
         ok: true,
       };
     },
@@ -171,11 +223,10 @@ async function fetchChatCompletion(authHeaders, targetModel) {
       signal,
     });
     if (!response.ok) {
-      throw new Error(
-        `/api/chat/completions failed: HTTP ${response.status} ${await response.text()}`,
-      );
+      const body = await readBoundedResponseText(response, "Open WebUI chat completion");
+      throw new Error(`/api/chat/completions failed: HTTP ${response.status} ${body}`);
     }
-    return await response.json();
+    return await readBoundedResponseJson(response, "Open WebUI chat completion");
   });
 }
 

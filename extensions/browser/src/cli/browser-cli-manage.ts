@@ -112,6 +112,11 @@ function runBrowserCommand(action: () => Promise<void>) {
   });
 }
 
+function parseTabIndex(value: string): number {
+  const trimmed = value.trim();
+  return /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+}
+
 function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {
   if (json) {
     defaultRuntime.writeJson({ tabs });
@@ -490,41 +495,40 @@ export function registerBrowserManageCommands(
   tab
     .command("select")
     .description("Focus tab by index (1-based)")
-    .argument("<index>", "Tab index (1-based)", (v: string) => Number(v))
+    .argument("<index>", "Tab index (1-based)", parseTabIndex)
     .action(async (index: number, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      if (!Number.isFinite(index) || index < 1) {
-        defaultRuntime.error(danger("index must be a positive number"));
+      if (!Number.isSafeInteger(index) || index < 1) {
+        defaultRuntime.error(danger("index must be a positive integer"));
         defaultRuntime.exit(1);
         return;
       }
       await runBrowserCommand(async () => {
         const result = await callTabAction(parent, profile, {
           action: "select",
-          index: Math.floor(index) - 1,
+          index: index - 1,
         });
         if (printJsonResult(parent, result)) {
           return;
         }
-        defaultRuntime.log(`selected tab ${Math.floor(index)}`);
+        defaultRuntime.log(`selected tab ${index}`);
       });
     });
 
   tab
     .command("close")
     .description("Close tab by index (1-based); default: first tab")
-    .argument("[index]", "Tab index (1-based)", (v: string) => Number(v))
+    .argument("[index]", "Tab index (1-based)", parseTabIndex)
     .action(async (index: number | undefined, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
-      const idx =
-        typeof index === "number" && Number.isFinite(index) ? Math.floor(index) - 1 : undefined;
-      if (typeof idx === "number" && idx < 0) {
-        defaultRuntime.error(danger("index must be >= 1"));
+      if (typeof index === "number" && (!Number.isSafeInteger(index) || index < 1)) {
+        defaultRuntime.error(danger("index must be a positive integer"));
         defaultRuntime.exit(1);
         return;
       }
+      const idx = typeof index === "number" ? index - 1 : undefined;
       await runBrowserCommand(async () => {
         const result = await callTabAction(parent, profile, { action: "close", index: idx });
         if (printJsonResult(parent, result)) {

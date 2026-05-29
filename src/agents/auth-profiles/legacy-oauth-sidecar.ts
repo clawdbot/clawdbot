@@ -1,5 +1,5 @@
 import * as childProcess from "node:child_process";
-import { createCipheriv, createDecipheriv, createHash } from "node:crypto";
+import { createCipheriv, createDecipheriv, hash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -118,8 +118,7 @@ function buildLegacyOAuthSecretAad(params: {
 function buildLegacyOAuthSecretKey(seed: string): Buffer {
   // Legacy #79006 compatibility: existing sidecars were encrypted with this
   // SHA-256 key derivation, so changing it would strand affected users.
-  // codeql[js/insufficient-password-hash]
-  return createHash("sha256").update(`openclaw:auth-profile-oauth:${seed}`).digest();
+  return hash("sha256", `openclaw:auth-profile-oauth:${seed}`, "buffer");
 }
 
 function encryptLegacyOAuthMaterialForTest(params: {

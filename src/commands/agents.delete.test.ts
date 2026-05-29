@@ -21,6 +21,7 @@ const fsSafeMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
+  isGatewayCredentialsRequiredError: vi.fn(),
   isGatewayTransportError: vi.fn(),
 }));
 
@@ -32,6 +33,7 @@ vi.mock("../config/config.js", async () => ({
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: gatewayMocks.callGateway,
+  isGatewayCredentialsRequiredError: gatewayMocks.isGatewayCredentialsRequiredError,
   isGatewayTransportError: gatewayMocks.isGatewayTransportError,
 }));
 
@@ -98,6 +100,11 @@ describe("agents delete command", () => {
     gatewayMocks.callGateway.mockRejectedValue(
       Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
     );
+    gatewayMocks.isGatewayCredentialsRequiredError.mockReset();
+    gatewayMocks.isGatewayCredentialsRequiredError.mockImplementation(
+      (error: unknown) =>
+        error instanceof Error && error.name === "GatewayCredentialsRequiredError",
+    );
     gatewayMocks.isGatewayTransportError.mockReset();
     gatewayMocks.isGatewayTransportError.mockImplementation(
       (error: unknown) => error instanceof Error && error.name === "GatewayTransportError",
@@ -147,6 +154,50 @@ describe("agents delete command", () => {
       expect(output?.agentId).toBe("ops");
       expect(output?.removedBindings).toBe(0);
       expect(output?.transport).toBe("gateway");
+    });
+  });
+
+  it("falls back to local deletion when the optional Gateway probe needs credentials", async () => {
+    await withStateDirEnv("openclaw-agents-delete-gateway-auth-", async ({ stateDir }) => {
+      const now = Date.now();
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "main", workspace: path.join(stateDir, "workspace-shared") },
+            { id: "ops", workspace: path.join(stateDir, "workspace-shared") },
+          ],
+        },
+      } satisfies OpenClawConfig;
+      await arrangeAgentsDeleteTest({
+        stateDir,
+        cfg,
+        deletedAgentId: "ops",
+        sessions: {
+          "agent:ops:main": { sessionId: "sess-ops-main", updatedAt: now + 1 },
+          "agent:main:main": { sessionId: "sess-main", updatedAt: now + 2 },
+        },
+      });
+      gatewayMocks.callGateway.mockRejectedValue(
+        Object.assign(
+          new Error("gateway agents.delete requires credentials before opening a websocket"),
+          {
+            name: "GatewayCredentialsRequiredError",
+            method: "agents.delete",
+            configPath: path.join(stateDir, "openclaw.json"),
+          },
+        ),
+      );
+
+      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
+
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(gatewayMocks.callGateway).toHaveBeenCalledOnce();
+      expect(configMocks.replaceConfigFile).toHaveBeenCalledOnce();
+      const output = readJsonLogs()[0];
+      expect(output?.agentId).toBe("ops");
+      expect(output?.workspaceRetained).toBe(true);
+      expect(output?.workspaceRetainedReason).toBe("shared");
+      expect(output?.transport).toBeUndefined();
     });
   });
 

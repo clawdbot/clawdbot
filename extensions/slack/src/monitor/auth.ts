@@ -145,8 +145,8 @@ function readSlackCacheTtlMs(envName: string, fallback: number): number {
   if (!raw) {
     return fallback;
   }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : fallback;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function getChannelMembersCache(

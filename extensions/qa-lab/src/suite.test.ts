@@ -108,6 +108,13 @@ describe("qa suite", () => {
         OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
       }),
     ).toBe(120_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: value,
+        }),
+      ).toBe(120_000);
+    }
     expect(qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(90_000, {})).toBe(90_000);
   });
 

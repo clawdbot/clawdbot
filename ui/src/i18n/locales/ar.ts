@@ -1110,6 +1110,11 @@ export const ar: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "إعادة المحاولة",
+      retrySend: "إعادة الإرسال",
+      retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { intFlag, parseFlagArgs } from "../../scripts/lib/arg-utils.mjs";
+import { floatFlag, intFlag, parseFlagArgs, stringFlag } from "../../scripts/lib/arg-utils.mjs";
 
 describe("scripts/lib/arg-utils parseFlagArgs", () => {
   it("ignores the conventional option separator by default", () => {
@@ -10,6 +10,53 @@ describe("scripts/lib/arg-utils parseFlagArgs", () => {
     );
 
     expect(parsed.limit).toBe(30);
+  });
+
+  it("parses inline flag assignments", () => {
+    const parsed = parseFlagArgs(
+      ["--label=changed-tests", "--limit=30", "--factor=1.5"],
+      { factor: 1, label: "", limit: 10 },
+      [
+        stringFlag("--label", "label"),
+        intFlag("--limit", "limit", { min: 1 }),
+        floatFlag("--factor", "factor", { min: 0, includeMin: false }),
+      ],
+    );
+
+    expect(parsed).toEqual({
+      factor: 1.5,
+      label: "changed-tests",
+      limit: 30,
+    });
+  });
+
+  it("rejects missing string flag values before consuming the next option", () => {
+    expect(() =>
+      parseFlagArgs(
+        ["--base", "--head", "HEAD"],
+        { base: "origin/main", head: "HEAD" },
+        [stringFlag("--base", "base"), stringFlag("--head", "head")],
+      ),
+    ).toThrow("--base requires a value");
+  });
+
+  it("rejects missing and malformed numeric flag values", () => {
+    expect(() =>
+      parseFlagArgs(["--limit"], { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]),
+    ).toThrow("--limit requires a value");
+    expect(() =>
+      parseFlagArgs(["--limit", "20files"], { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]),
+    ).toThrow("--limit must be an integer");
+    expect(() =>
+      parseFlagArgs(["--limit", "0"], { limit: 10 }, [intFlag("--limit", "limit", { min: 1 })]),
+    ).toThrow("--limit must be at least 1");
+    expect(() =>
+      parseFlagArgs(
+        ["--factor", "1e3"],
+        { factor: 1 },
+        [floatFlag("--factor", "factor", { min: 0, includeMin: false })],
+      ),
+    ).toThrow("--factor must be a number");
   });
 
   it("can preserve the option separator for callers that need to handle it", () => {

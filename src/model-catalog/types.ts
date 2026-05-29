@@ -12,6 +12,7 @@ export type ModelCatalogSource =
 
 export type UnifiedModelCatalogKind =
   | "text"
+  | "voice"
   | "image_generation"
   | "video_generation"
   | "music_generation";

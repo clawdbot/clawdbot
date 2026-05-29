@@ -199,7 +199,8 @@ describe("discord config schema", () => {
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
+          speakerVoiceId: "voice-123",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
           requireWakeName: true,
@@ -223,7 +224,8 @@ describe("discord config schema", () => {
     expect(cfg.voice?.followUsers).toEqual(["58398277829140480"]);
     expect(cfg.voice?.realtime?.provider).toBe("openai");
     expect(cfg.voice?.realtime?.model).toBe("gpt-realtime-2");
-    expect(cfg.voice?.realtime?.voice).toBe("cedar");
+    expect(cfg.voice?.realtime?.speakerVoice).toBe("cedar");
+    expect(cfg.voice?.realtime?.speakerVoiceId).toBe("voice-123");
     expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
     expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
     expect(cfg.voice?.realtime?.requireWakeName).toBe(true);

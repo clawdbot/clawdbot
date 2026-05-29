@@ -283,4 +283,25 @@ describe("runCliCommand", () => {
       }),
     ).rejects.toThrow(/produced too much output/);
   });
+
+  it("counts surrogate pairs as one character when capping failed command output", async () => {
+    const child = createMockChild();
+    spawnMock.mockImplementationOnce(() => {
+      queueMicrotask(() => {
+        child.stderr.emit("data", "a🙂");
+        child.closeWith(1);
+      });
+      return child;
+    });
+
+    await expect(
+      runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 2,
+      }),
+    ).rejects.toThrow(/🙂/);
+  });
 });

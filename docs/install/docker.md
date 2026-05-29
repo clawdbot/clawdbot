@@ -109,7 +109,9 @@ docker compose up -d openclaw-gateway
 <Note>
 Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS`
 or `OPENCLAW_HOME_VOLUME`, the setup script writes `docker-compose.extra.yml`;
-include it with `-f docker-compose.yml -f docker-compose.extra.yml`.
+include it after any standard override file, for example
+`-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.extra.yml`
+when both override files exist.
 </Note>
 
 <Note>

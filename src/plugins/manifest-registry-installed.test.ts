@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   readPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
@@ -10,11 +10,13 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
+import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  clearPluginMetadataLifecycleCaches();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -106,6 +108,46 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
     deepFreeze(child, seen);
   }
   return Object.freeze(value);
+}
+
+function writePackageManifest(rootDir: string, channelLabel: string) {
+  const packageJsonPath = path.join(rootDir, "package.json");
+  fs.writeFileSync(
+    packageJsonPath,
+    JSON.stringify({
+      name: "@openclaw/installed",
+      version: "1.0.0",
+      dependencies: {
+        "runtime-dep": "1.0.0",
+      },
+      openclaw: {
+        channel: {
+          id: "installed",
+          label: channelLabel,
+        },
+      },
+    }),
+    "utf8",
+  );
+  return packageJsonPath;
+}
+
+function createIndexWithPackageJson(rootDir: string): InstalledPluginIndex {
+  const index = createIndexWithFileSignatures(rootDir);
+  const packageJsonPath = writePackageManifest(rootDir, "Installed");
+  const record = index.plugins[0];
+  if (!record) {
+    throw new Error("expected index record");
+  }
+  record.packageJson = {
+    path: "package.json",
+    hash: "package-json-hash",
+    fileSignature: fileSignature(packageJsonPath),
+  };
+  return {
+    ...index,
+    plugins: [record],
+  };
 }
 
 describe("loadPluginManifestRegistryForInstalledIndex", () => {
@@ -206,6 +248,74 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second.plugins[0]?.modelSupport).toEqual({
       modelPrefixes: ["updated-installed-"],
     });
+  });
+
+  it("reuses installed package metadata until plugin metadata caches are cleared", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    const first = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    writePackageManifest(rootDir, "Updated");
+    const second = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    clearPluginMetadataLifecycleCaches();
+    const third = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+
+    expect(first.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(second.plugins[0]?.packageChannel?.label).toBe("Installed");
+    expect(third.plugins[0]?.packageChannel?.label).toBe("Updated");
+    expect(third.plugins[0]?.packageDependencies).toEqual({
+      "runtime-dep": "1.0.0",
+    });
+  });
+
+  it("reuses installed package json path validation across registry loads", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+    const index = createIndexWithPackageJson(rootDir);
+    const env = {
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+
+    loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env,
+      includeDisabled: true,
+    });
+    const realpathSpy = vi.spyOn(fs, "realpathSync");
+    let packagePathCalls: unknown[][] = [];
+    try {
+      loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env,
+        includeDisabled: true,
+      });
+      const packageJsonPath = path.join(rootDir, "package.json");
+      packagePathCalls = realpathSpy.mock.calls.filter(
+        ([filePath]) => filePath === packageJsonPath,
+      );
+    } finally {
+      realpathSpy.mockRestore();
+    }
+
+    expect(packagePathCalls).toStrictEqual([]);
   });
 
   it("loads manifest metadata only for plugins present in the installed index", () => {

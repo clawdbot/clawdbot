@@ -49,6 +49,7 @@ export interface HealthCheckContext {
   readonly cfg: OpenClawConfig;
   readonly cwd?: string;
   readonly configPath?: string;
+  readonly allowExecSecretRefs?: boolean;
 }
 
 export interface HealthRepairContext extends Omit<HealthCheckContext, "mode"> {

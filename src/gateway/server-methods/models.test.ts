@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { ErrorCodes } from "../protocol/index.js";
 import { modelsHandlers } from "./models.js";
 
 type Deferred<T> = {

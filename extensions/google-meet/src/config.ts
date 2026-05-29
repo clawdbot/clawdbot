@@ -94,6 +94,7 @@ export type GoogleMeetConfig = {
 const SOX_DEFAULT_BUFFER_BYTES = 8192;
 const SOX_MIN_BUFFER_BYTES = 17;
 export const DEFAULT_GOOGLE_MEET_AUDIO_BUFFER_BYTES = SOX_DEFAULT_BUFFER_BYTES / 2;
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 function withSoxBuffer(command: readonly string[], bufferBytes: number): string[] {
   return [command[0] ?? "sox", "-q", "--buffer", String(bufferBytes), ...command.slice(2)];
@@ -275,7 +276,8 @@ function resolveOptionalNumber(value: unknown): number | undefined {
     return value;
   }
   if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
+    const trimmed = value.trim();
+    const parsed = PLAIN_DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;

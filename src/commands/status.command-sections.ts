@@ -1,9 +1,9 @@
-import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import {
   buildPairingConnectRecoveryTitle,
   describePairingConnectRequirement,
   type ConnectPairingRequiredReason,
-} from "../gateway/protocol/connect-error-details.js";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { Tone } from "../memory-host-sdk/status.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";

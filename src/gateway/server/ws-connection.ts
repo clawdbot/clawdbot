@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
+import {
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+} from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { upsertPresence } from "../../infra/system-presence.js";
@@ -16,10 +20,6 @@ import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
-import {
-  GATEWAY_STARTUP_CLOSE_CODE,
-  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
-} from "../protocol/startup-unavailable.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
@@ -28,6 +28,11 @@ import { logWs } from "../ws-log.js";
 import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
 import type { PreauthConnectionBudget } from "./preauth-connection-budget.js";
 import { broadcastPresenceSnapshot } from "./presence-events.js";
+import {
+  buildHandshakeAuthLogKey,
+  HandshakeAuthLogLimiter,
+  shouldLimitMissingCredentialAuthLog,
+} from "./ws-connection/handshake-auth-log-limiter.js";
 import type {
   GatewayWsMessageHandlerParams,
   WsOriginCheckMetrics,
@@ -40,6 +45,7 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const LOG_HEADER_MAX_LEN = 300;
 const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
 const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
+const unauthorizedCloseBeforeConnectLogLimiter = new HandshakeAuthLogLimiter();
 
 function replaceControlChars(value: string): string {
   let cleaned = "";
@@ -55,6 +61,11 @@ function replaceControlChars(value: string): string {
     cleaned += char;
   }
   return cleaned;
+}
+
+function stringMetaValue(meta: Record<string, unknown>, key: string): string | undefined {
+  const value = meta[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 const sanitizeLogValue = (value: string | undefined): string | undefined => {
   if (!value) {
@@ -387,10 +398,38 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) || isExpectedStartupRetryClose
             ? logWsControl.debug
             : logWsControl.warn;
-        logFn(
-          `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
-          closeContext,
-        );
+        const authReason = stringMetaValue(closeMeta, "authReason");
+        // This pre-connect close path has no client object yet; treat only
+        // missing shared credentials as suppressible startup retry noise.
+        const shouldLimitMissingAuthClose =
+          closeCause === "unauthorized" &&
+          shouldLimitMissingCredentialAuthLog({
+            reason: authReason,
+            authProvided: "none",
+          });
+        const closeLogDecision = shouldLimitMissingAuthClose
+          ? unauthorizedCloseBeforeConnectLogLimiter.register(
+              buildHandshakeAuthLogKey({
+                reason: authReason,
+                remoteAddr,
+                client:
+                  stringMetaValue(closeMeta, "clientDisplayName") ??
+                  stringMetaValue(closeMeta, "client"),
+                mode: stringMetaValue(closeMeta, "mode"),
+                authProvided: "none",
+              }),
+            )
+          : { shouldLog: true, suppressedSinceLastLog: 0 };
+        if (closeLogDecision.shouldLog) {
+          const suppressedText =
+            closeLogDecision.suppressedSinceLastLog > 0
+              ? ` suppressed=${closeLogDecision.suppressedSinceLastLog}`
+              : "";
+          logFn(
+            `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}${suppressedText}`,
+            closeContext,
+          );
+        }
       }
       if (client && isWebchatClient(client.connect.client)) {
         logWsControl.info(

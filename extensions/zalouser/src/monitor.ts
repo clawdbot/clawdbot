@@ -661,6 +661,9 @@ async function processMessage(
       GroupMembers: isGroup ? groupMembers : undefined,
       WasMentioned: isGroup ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
+      ReplyToId: message.quotedGlobalMsgId || undefined,
+      ReplyToBody: message.quotedBody || undefined,
+      ReplyToIsQuote: message.quotedGlobalMsgId ? true : undefined,
     },
   });
 

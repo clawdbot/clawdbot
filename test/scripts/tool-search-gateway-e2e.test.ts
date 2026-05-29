@@ -24,11 +24,9 @@ describe("tool search gateway e2e fetch helper", () => {
       fetchJson("https://qa.example.invalid/v1/responses", undefined, {
         timeoutMs: 25,
         fetchImpl: async () =>
-          ({
-            ok: true,
+          new Response(new ReadableStream<Uint8Array>({ start() {} }), {
             status: 200,
-            text: () => new Promise<string>(() => {}),
-          }) as Response,
+          }),
       }),
     ).rejects.toMatchObject({
       code: "ETIMEDOUT",
@@ -40,13 +38,24 @@ describe("tool search gateway e2e fetch helper", () => {
     await expect(
       fetchJson("https://qa.example.invalid/debug/requests", undefined, {
         timeoutMs: 25,
-        fetchImpl: async () =>
-          ({
-            ok: true,
-            status: 200,
-            text: async () => '{"ok":true}',
-          }) as Response,
+        fetchImpl: async () => new Response('{"ok":true}', { status: 200 }),
       }),
     ).resolves.toEqual({ ok: true });
+  });
+
+  it("bounds oversized response bodies", async () => {
+    await expect(
+      fetchJson("https://qa.example.invalid/debug/requests", undefined, {
+        maxBodyBytes: 16,
+        timeoutMs: 1000,
+        fetchImpl: async () =>
+          new Response(JSON.stringify({ ok: true, padding: "x".repeat(128) }), {
+            status: 200,
+          }),
+      }),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "HTTP response from https://qa.example.invalid/debug/requests exceeded 16 bytes",
+    });
   });
 });

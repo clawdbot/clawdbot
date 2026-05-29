@@ -1,3 +1,5 @@
+import { resolveModelCandidateChain } from "../../agents/model-fallback.js";
+import type { ModelCandidate } from "../../agents/model-fallback.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -32,5 +34,27 @@ export function resolveCronFallbacksOverride(params: {
     agentId: params.agentId,
     hasSessionModelOverride: hasCronPayloadModelOverride,
     modelOverrideSource: hasCronPayloadModelOverride ? "auto" : undefined,
+  });
+}
+
+export function resolveCronPreflightCandidates(params: {
+  cfg: OpenClawConfig;
+  job: CronJob;
+  agentId: string;
+  provider: string;
+  model: string;
+  useSubagentFallbacks?: boolean;
+}): ModelCandidate[] {
+  const fallbacksOverride = resolveCronFallbacksOverride({
+    cfg: params.cfg,
+    job: params.job,
+    agentId: params.agentId,
+    useSubagentFallbacks: params.useSubagentFallbacks,
+  });
+  return resolveModelCandidateChain({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    fallbacksOverride,
   });
 }

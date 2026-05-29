@@ -536,6 +536,20 @@ describe("/session idle and /session max-age", () => {
     );
   });
 
+  it("rejects unsafe bare-hour lifecycle durations", async () => {
+    hoisted.sessionBindingResolveByConversationMock.mockReturnValue(createThreadBinding());
+
+    const result = await handleSessionCommand(
+      createThreadCommandParams("/session idle 9999999999999"),
+      true,
+    );
+
+    expect(hoisted.setThreadBindingIdleTimeoutBySessionKeyMock).not.toHaveBeenCalled();
+    expect(result?.reply?.text).toBe(
+      "Usage: /session idle <duration|off> | /session max-age <duration|off> (example: /session idle 24h)",
+    );
+  });
+
   it("shows active idle timeout when no value is provided", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-20T00:00:00.000Z"));

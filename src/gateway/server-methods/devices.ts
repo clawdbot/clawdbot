@@ -1,4 +1,15 @@
 import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateDevicePairApproveParams,
+  validateDevicePairListParams,
+  validateDevicePairRemoveParams,
+  validateDevicePairRejectParams,
+  validateDeviceTokenRevokeParams,
+  validateDeviceTokenRotateParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   approveDevicePairing,
   formatDevicePairingForbiddenMessage,
   getPairedDevice,
@@ -13,17 +24,6 @@ import {
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateDevicePairApproveParams,
-  validateDevicePairListParams,
-  validateDevicePairRemoveParams,
-  validateDevicePairRejectParams,
-  validateDeviceTokenRevokeParams,
-  validateDeviceTokenRotateParams,
-} from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 const DEVICE_TOKEN_ROTATION_DENIED_MESSAGE = "device token rotation denied";

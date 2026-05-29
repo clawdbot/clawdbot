@@ -1,11 +1,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../protocol/client-info.js";
-import { PROTOCOL_VERSION } from "../protocol/index.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import { resolvePluginRouteRuntimeOperatorScopes } from "./plugin-route-runtime-scopes.js";
 import {

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
+import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
 import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import {
@@ -49,16 +50,20 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: PostCoreConvergenceWarning[] }> {
   try {
-    const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({
-      npmRoot: resolveDefaultPluginNpmDir(params.env),
-      logger: {},
-    });
+    const npmRoots = await listManagedPluginNpmRoots(resolveDefaultPluginNpmDir(params.env));
+    const results = await Promise.all(
+      npmRoots.map((npmRoot) =>
+        relinkOpenClawPeerDependenciesInManagedNpmRoot({
+          npmRoot,
+          logger: {},
+        }),
+      ),
+    );
+    const repaired = results.reduce((total, result) => total + result.repaired, 0);
     return {
       changes:
-        result.repaired > 0
-          ? [
-              `Repaired OpenClaw host peer link(s) for ${result.repaired} managed npm plugin package(s).`,
-            ]
+        repaired > 0
+          ? [`Repaired OpenClaw host peer link(s) for ${repaired} managed npm plugin package(s).`]
           : [],
       warnings: [],
     };

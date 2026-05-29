@@ -11,7 +11,6 @@
     "@slack/bolt": "4.7.2",
     "@slack/types": "2.21.1",
     "@slack/web-api": "7.16.0",
-    "https-proxy-agent": "9.0.0",
     "typebox": "1.1.38",
     "zod": "4.4.3"
   },
@@ -61,11 +60,14 @@
     "install": {
       "npmSpec": "@openclaw/slack",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.12-beta.1",
+      "minHostVersion": ">=2026.5.28",
       "allowInvalidConfigRecovery": true
     },
     "compat": {
       "pluginApi": ">=2026.5.28"
+    },
+    "startup": {
+      "deferConfiguredChannelFullLoadUntilAfterListen": true
     },
     "build": {
       "openclawVersion": "2026.5.28",

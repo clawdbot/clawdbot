@@ -1,5 +1,6 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 
@@ -15,31 +16,35 @@ export const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
 
 export const formatInternalExecPersistenceDeniedText = () =>
-  "Exec defaults require operator.admin for internal gateway callers; skipped persistence.";
+  "Exec defaults require operator.admin for gateway callers; skipped persistence.";
 
 export const formatInternalVerbosePersistenceDeniedText = () =>
-  "Verbose defaults require operator.admin for internal gateway callers; skipped persistence.";
+  "Verbose defaults require operator.admin for gateway callers; skipped persistence.";
 
 export const formatInternalVerboseCurrentReplyOnlyText = () =>
   "Verbose logging set for the current reply only.";
 
-function canPersistInternalDirective(params: {
+export function canPersistSessionDirectiveDefaults(params: {
   messageProvider?: string;
   surface?: string;
   gatewayClientScopes?: string[];
+  commandAuthorized?: boolean;
+  senderIsOwner?: boolean;
 }): boolean {
-  const authoritativeChannel = isInternalMessageChannel(params.messageProvider)
-    ? params.messageProvider
-    : params.surface;
-  if (!isInternalMessageChannel(authoritativeChannel)) {
+  const messageProvider = normalizeOptionalString(params.messageProvider);
+  const surface = normalizeOptionalString(params.surface);
+  const authoritativeChannel = messageProvider ?? surface;
+
+  if (!authoritativeChannel) {
     return true;
   }
-  const scopes = params.gatewayClientScopes ?? [];
-  return scopes.includes("operator.admin");
-}
 
-export const canPersistInternalExecDirective = canPersistInternalDirective;
-export const canPersistInternalVerboseDirective = canPersistInternalDirective;
+  if (isInternalMessageChannel(authoritativeChannel)) {
+    return params.gatewayClientScopes?.includes("operator.admin") === true;
+  }
+
+  return params.commandAuthorized === true || params.senderIsOwner === true;
+}
 
 const formatElevatedEvent = (level: ElevatedLevel) => {
   if (level === "full") {

@@ -32,6 +32,14 @@ describe("normalizeStaticProviderModelId", () => {
       }),
     ).toBe("grok-4.20-beta-latest-reasoning");
   });
+
+  it("normalizes the shipped retired Together default without manifest lookup", () => {
+    expect(
+      normalizeStaticProviderModelId("together", "moonshotai/Kimi-K2.5", {
+        allowManifestNormalization: false,
+      }),
+    ).toBe("moonshotai/Kimi-K2.6");
+  });
 });
 
 describe("normalizeConfiguredProviderCatalogModelId", () => {

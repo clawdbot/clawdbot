@@ -955,7 +955,9 @@ export async function processDiscordMessage(
         onReasoningStream: async (payload) => {
           await statusReactions.setThinking();
           const formattedText = payload?.text ? formatReasoningMessage(payload.text) : undefined;
-          await draftPreview.pushReasoningProgress(formattedText);
+          await draftPreview.pushReasoningProgress(formattedText, {
+            snapshot: payload?.isReasoningSnapshot === true,
+          });
         },
         onToolStart: async (payload) => {
           if (isProcessAborted(abortSignal)) {
@@ -978,6 +980,14 @@ export async function processDiscordMessage(
           );
         },
         onItemEvent: async (payload) => {
+          if (payload.kind === "preamble") {
+            if (draftPreview.commentaryProgressEnabled && payload.progressText) {
+              await draftPreview.pushCommentaryProgress(payload.progressText, {
+                itemId: payload.itemId,
+              });
+            }
+            return;
+          }
           await draftPreview.pushToolProgress(
             buildChannelProgressDraftLineForEntry(discordConfig, {
               event: "item",

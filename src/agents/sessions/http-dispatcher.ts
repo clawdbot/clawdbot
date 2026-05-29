@@ -1,4 +1,5 @@
 import * as undici from "undici";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 
 export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
 
@@ -19,7 +20,7 @@ export function parseHttpIdleTimeoutMs(value: unknown): number | undefined {
     if (trimmed.length === 0) {
       return undefined;
     }
-    return parseHttpIdleTimeoutMs(Number(trimmed));
+    return parseStrictNonNegativeInteger(trimmed);
   }
 
   if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {

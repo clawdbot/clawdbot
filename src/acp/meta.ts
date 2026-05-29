@@ -47,3 +47,19 @@ export function readNumber(
   }
   return undefined;
 }
+
+export function readNonNegativeInteger(
+  meta: Record<string, unknown> | null | undefined,
+  keys: string[],
+): number | undefined {
+  if (!meta) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = meta[key];
+    if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+      return value;
+    }
+  }
+  return undefined;
+}

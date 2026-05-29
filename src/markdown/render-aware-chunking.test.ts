@@ -70,4 +70,17 @@ describe("renderMarkdownIRChunksWithinLimit", () => {
 
     expect(chunks.map((chunk) => chunk.source.text)).toEqual(["README.md", "<"]);
   });
+
+  it("normalizes non-finite limits before chunking", () => {
+    const ir = markdownToIR("abc");
+    const chunks = renderMarkdownIRChunksWithinLimit({
+      ir,
+      limit: Number.NaN,
+      renderChunk: renderEscapedHtml,
+      measureRendered: (rendered) => rendered.length,
+    });
+
+    expect(chunks.map((chunk) => chunk.source.text)).toEqual(["a", "b", "c"]);
+    expect(chunks.every((chunk) => chunk.rendered.length <= 1)).toBe(true);
+  });
 });

@@ -1,9 +1,10 @@
+import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import { DiscordConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -225,14 +226,33 @@ describe("config schema", () => {
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps).toHaveProperty("accessToken");
+    const progressPropsFor = (channelId: string) => {
+      const channel = channelsProps?.[channelId] as Record<string, unknown> | undefined;
+      const properties = channel?.properties as Record<string, unknown> | undefined;
+      const streaming = properties?.streaming as Record<string, unknown> | undefined;
+      const streamingProperties = streaming?.properties as Record<string, unknown> | undefined;
+      const progress = streamingProperties?.progress as Record<string, unknown> | undefined;
+      return progress?.properties as Record<string, unknown> | undefined;
+    };
+    expect(progressPropsFor("slack")).toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).toHaveProperty("commentary");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
       "Matrix Progress Label",
     );
+    expect(res.uiHints["channels.slack.streaming.progress.nativeTaskCards"]?.label).toBe(
+      "Slack Native Progress Task Cards",
+    );
+    expect(res.uiHints["channels.discord.streaming.progress.nativeTaskCards"]).toBeUndefined();
+    expect(res.uiHints["channels.telegram.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
       "Discord Progress Tool Lines",
     );
+    expect(res.uiHints["channels.telegram.streaming.progress.commentary"]).toBeUndefined();
     expect(res.uiHints["channels.mattermost.streaming.progress.label"]?.label).toBe(
       "Mattermost Progress Label",
     );
@@ -386,6 +406,26 @@ describe("config schema", () => {
     expect(
       ToolsSchema.safeParse({
         subagents: { model: { primary: "openai/gpt-5.5" } },
+      }).success,
+    ).toBe(false);
+  });
+
+  it("accepts progress commentary only for Discord streaming config", () => {
+    expect(
+      DiscordConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      TelegramConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
       }).success,
     ).toBe(false);
   });
@@ -810,6 +850,25 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("pair.1");
     expect(lookup?.schema?.type).toBe("number");
     expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
+  });
+
+  it("rejects impractical numeric tuple lookup indexes", () => {
+    const tupleSchema = {
+      schema: {
+        type: "object",
+        properties: {
+          pair: {
+            type: "array",
+            items: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    expect(lookupConfigSchema(tupleSchema, "pair.4294967294")).toBeNull();
   });
 
   it("rejects prototype-chain lookup segments", () => {

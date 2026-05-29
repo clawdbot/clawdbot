@@ -7,13 +7,22 @@ export type FixedWindowRateLimiter = {
   reset: () => void;
 };
 
+export function resolveFixedWindowRateLimitInteger(
+  value: number | undefined,
+  fallback: number,
+  params: { min: number },
+): number {
+  const candidate = typeof value === "number" && Number.isFinite(value) ? value : fallback;
+  return Math.max(params.min, Math.floor(candidate));
+}
+
 export function createFixedWindowRateLimiter(params: {
   maxRequests: number;
   windowMs: number;
   now?: () => number;
 }): FixedWindowRateLimiter {
-  const maxRequests = Math.max(1, Math.floor(params.maxRequests));
-  const windowMs = Math.max(1, Math.floor(params.windowMs));
+  const maxRequests = resolveFixedWindowRateLimitInteger(params.maxRequests, 1, { min: 1 });
+  const windowMs = resolveFixedWindowRateLimitInteger(params.windowMs, 1, { min: 1 });
   const now = params.now ?? Date.now;
 
   let count = 0;

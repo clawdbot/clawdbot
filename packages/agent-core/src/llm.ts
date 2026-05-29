@@ -3,7 +3,7 @@ import type { TSchema } from "typebox";
 export type Api = string;
 export type CacheRetention = "none" | "short" | "long";
 export type Transport = "sse" | "websocket" | "websocket-cached" | "auto";
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ModelThinkingLevel = "off" | ThinkingLevel;
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -17,6 +17,7 @@ export interface ThinkingBudgets {
   low?: number;
   medium?: number;
   high?: number;
+  max?: number;
 }
 
 export interface DiagnosticErrorInfo {

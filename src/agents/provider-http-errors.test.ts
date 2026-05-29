@@ -39,6 +39,47 @@ describe("provider error utils", () => {
     expect(extractProviderRequestId(response)).toBe("fallback_req");
   });
 
+  it("preserves OAuth error descriptions as actionable details", async () => {
+    const response = new Response(
+      JSON.stringify({
+        error: "invalid_request",
+        error_description: "AADSTS7000215: Invalid client secret provided.",
+      }),
+      { status: 400 },
+    );
+
+    await expect(
+      assertOkOrThrowProviderError(response, "OAuth token exchange failed"),
+    ).rejects.toThrow(
+      "OAuth token exchange failed (400): AADSTS7000215: Invalid client secret provided. [code=invalid_request]",
+    );
+  });
+
+  it("keeps HTTP status metadata when error body reads fail", async () => {
+    const response = {
+      ok: false,
+      status: 503,
+      headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: async () => {
+            throw new Error("broken response stream");
+          },
+          cancel: async () => undefined,
+        }),
+      },
+    } as unknown as Response;
+
+    await expect(
+      assertOkOrThrowProviderError(response, "Provider API error"),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 503,
+      statusCode: 503,
+      message: "Provider API error (503)",
+    } satisfies Partial<ProviderHttpError>);
+  });
+
   it("attaches structured provider error metadata", async () => {
     const response = new Response(
       JSON.stringify({

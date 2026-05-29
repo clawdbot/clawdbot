@@ -1,4 +1,5 @@
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 
 export const QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX = "/qa-credentials/v1";
 const QA_CREDENTIALS_ALLOW_INSECURE_HTTP_ENV_KEY = "OPENCLAW_QA_ALLOW_INSECURE_HTTP";
@@ -19,8 +20,8 @@ export function parseQaCredentialPositiveIntegerEnv(params: {
   if (!raw) {
     return params.fallback;
   }
-  const value = Number(raw);
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+  const value = parseStrictPositiveInteger(raw);
+  if (value === undefined) {
     throw (params.toError ?? makeError)(`${params.key} must be a positive integer.`);
   }
   return value;

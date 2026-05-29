@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import Module from "node:module";
 import path from "node:path";
@@ -71,6 +72,58 @@ export function tryNativeRequireJavaScriptModule(
     }
     throw error;
   }
+}
+
+export function clearNativeRequireJavaScriptModuleCache(
+  modulePath: string,
+  options: { dependencyRoot?: string } = {},
+): void {
+  if (!isJavaScriptModulePath(modulePath)) {
+    return;
+  }
+  try {
+    const resolved = nodeRequire.resolve(modulePath);
+    clearRequireCacheSubtree(
+      resolved,
+      resolveRequireCachePath(options.dependencyRoot ?? path.dirname(resolved)),
+      new Set(),
+    );
+  } catch {
+    // Best-effort lifecycle cleanup: unresolved paths were not native-loaded.
+  }
+}
+
+function resolveRequireCachePath(targetPath: string): string {
+  try {
+    return fs.realpathSync.native(targetPath);
+  } catch {
+    return path.resolve(targetPath);
+  }
+}
+
+function clearRequireCacheSubtree(
+  resolvedPath: string,
+  dependencyRoot: string,
+  seen: Set<string>,
+): void {
+  if (seen.has(resolvedPath)) {
+    return;
+  }
+  seen.add(resolvedPath);
+  const cached = nodeRequire.cache[resolvedPath];
+  if (cached) {
+    for (const child of cached.children) {
+      if (isPathInsideOrSame(dependencyRoot, child.id)) {
+        clearRequireCacheSubtree(child.id, dependencyRoot, seen);
+      }
+    }
+  }
+  delete nodeRequire.cache[resolvedPath];
+}
+
+function isPathInsideOrSame(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function requireWithOptionalAliases(

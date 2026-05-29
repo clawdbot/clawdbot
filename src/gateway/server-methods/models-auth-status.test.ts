@@ -128,6 +128,7 @@ function createLogoutOptions(
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map(),
+    clearChatRunState: vi.fn(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),

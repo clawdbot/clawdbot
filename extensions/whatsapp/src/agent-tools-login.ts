@@ -1,3 +1,7 @@
+import {
+  optionalPositiveIntegerSchema,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import type { ChannelAgentTool } from "openclaw/plugin-sdk/channel-contract";
 import { Type } from "typebox";
 import { startWebLoginWithQr, waitForWebLogin } from "../login-qr-api.js";
@@ -20,7 +24,7 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
         type: "string",
         enum: ["start", "wait"],
       }),
-      timeoutMs: Type.Optional(Type.Number()),
+      timeoutMs: optionalPositiveIntegerSchema(),
       force: Type.Optional(Type.Boolean()),
       accountId: Type.Optional(Type.String()),
       currentQrDataUrl: Type.Optional(
@@ -54,13 +58,11 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
 
       const action = (args as { action?: string })?.action ?? "start";
       const accountId = readOptionalString((args as { accountId?: unknown }).accountId);
+      const timeoutMs = readPositiveIntegerParam(args as Record<string, unknown>, "timeoutMs");
       if (action === "wait") {
         const result = await waitForWebLogin({
           accountId,
-          timeoutMs:
-            typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-              ? (args as { timeoutMs?: number }).timeoutMs
-              : undefined,
+          timeoutMs,
           currentQrDataUrl: readOptionalString(
             (args as { currentQrDataUrl?: unknown }).currentQrDataUrl,
           ),
@@ -80,10 +82,7 @@ export function createWhatsAppLoginTool(): ChannelAgentTool {
 
       const result = await startWebLoginWithQr({
         accountId,
-        timeoutMs:
-          typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
-            ? (args as { timeoutMs?: number }).timeoutMs
-            : undefined,
+        timeoutMs,
         force:
           typeof (args as { force?: unknown }).force === "boolean"
             ? (args as { force?: boolean }).force

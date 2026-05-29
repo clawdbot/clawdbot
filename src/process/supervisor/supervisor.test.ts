@@ -290,4 +290,42 @@ describe("process supervisor", () => {
     expect(streamed).toBe("streamed");
     expect(exit.stdout).toBe("");
   });
+
+  it("bounds retained stdout and stderr while streaming full chunks", async () => {
+    const adapter = createStubChildAdapter();
+    createChildAdapterMock.mockResolvedValue(adapter);
+
+    const supervisor = createProcessSupervisor();
+    let streamedStdout = "";
+    let streamedStderr = "";
+    const stdoutChunk = `${"a".repeat(300)}stdout-tail`;
+    const stderrChunk = `${"b".repeat(300)}stderr-tail`;
+    const run = await spawnChild(supervisor, {
+      sessionId: "s-capture-cap",
+      argv: createWriteStdoutArgv(stdoutChunk),
+      timeoutMs: 1_000,
+      stdinMode: "pipe-closed",
+      maxCapturedOutputChars: 256,
+      onStdout: (chunk) => {
+        streamedStdout += chunk;
+      },
+      onStderr: (chunk) => {
+        streamedStderr += chunk;
+      },
+    });
+
+    adapter.emitStdout(stdoutChunk);
+    adapter.emitStderr(stderrChunk);
+    adapter.settle(0);
+
+    const exit = await run.wait();
+    expect(streamedStdout).toBe(stdoutChunk);
+    expect(streamedStderr).toBe(stderrChunk);
+    expect(exit.stdout.length).toBeLessThanOrEqual(256);
+    expect(exit.stderr.length).toBeLessThanOrEqual(256);
+    expect(exit.stdout).toContain("captured stdout truncated");
+    expect(exit.stderr).toContain("captured stderr truncated");
+    expect(exit.stdout.endsWith("stdout-tail")).toBe(true);
+    expect(exit.stderr.endsWith("stderr-tail")).toBe(true);
+  });
 });

@@ -5,10 +5,7 @@ import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/ap
 import type { WebClient } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  appendQaLiveLaneIssue as appendLiveLaneIssue,
-  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
-} from "../shared/live-artifacts.js";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { startQaGatewayChild } from "../../gateway-child.js";
@@ -23,6 +20,10 @@ import {
   startQaCredentialLeaseHeartbeat,
   type QaCredentialRole,
 } from "../shared/credential-lease.runtime.js";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+} from "../shared/live-artifacts.js";
 import { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
 import {
   collectLiveTransportStandardScenarioCoverage,
@@ -97,6 +98,7 @@ type SlackQaBeforeRunResult =
     };
 
 type SlackQaConfigOverrides = {
+  allowFrom?: string[];
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -334,7 +336,10 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
     standardId: "allowlist-block",
     title: "Slack non-allowlisted sender does not trigger",
     timeoutMs: 8_000,
-    configOverrides: { users: ["U_OPENCLAW_QA_NEVER_ALLOWED"] },
+    configOverrides: {
+      allowFrom: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+      users: ["U_OPENCLAW_QA_NEVER_ALLOWED"],
+    },
     buildRun: (sutUserId) => {
       const token = `SLACK_QA_BLOCK_${randomUUID().slice(0, 8).toUpperCase()}`;
       return {
@@ -656,7 +661,7 @@ function buildSlackQaConfig(
             mode: "socket",
             botToken: params.sutBotToken,
             appToken: params.sutAppToken,
-            allowFrom: [params.driverBotUserId],
+            allowFrom: params.overrides?.allowFrom ?? [params.driverBotUserId],
             groupPolicy: "allowlist",
             allowBots: true,
             replyToMode: params.overrides?.replyToMode ?? "off",
@@ -1196,9 +1201,9 @@ function resolveSlackApprovalCheckpointConfig(env: NodeJS.ProcessEnv = process.e
   }
   const rawTimeout = env[SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV]?.trim();
   const timeoutMs = rawTimeout
-    ? Number.parseInt(rawTimeout, 10)
+    ? parseStrictPositiveInteger(rawTimeout)
     : SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS;
-  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+  if (timeoutMs === undefined) {
     throw new Error(`${SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV} must be a positive integer.`);
   }
   return {

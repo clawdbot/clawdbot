@@ -20,6 +20,36 @@ import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridg
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 import { testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
+import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
+
+const publicSurfaceLoaderMocks = vi.hoisted(() => ({
+  loadBundledPluginPublicArtifactModuleSync: vi.fn(
+    ({ artifactBasename, dirName }: { artifactBasename: string; dirName: string }) => {
+      if (dirName === "imessage" && artifactBasename === "media-contract-api.js") {
+        return {
+          resolveInboundAttachmentRoots: ({
+            accountId,
+            cfg,
+          }: {
+            accountId?: string | null;
+            cfg: OpenClawConfig;
+          }) => [
+            ...((accountId
+              ? cfg.channels?.imessage?.accounts?.[accountId]?.attachmentRoots
+              : undefined) ?? []),
+            ...(cfg.channels?.imessage?.attachmentRoots ?? []),
+            "/Users/*/Library/Messages/Attachments",
+          ],
+        };
+      }
+      throw new Error(
+        `Unable to resolve bundled plugin public surface ${dirName}/${artifactBasename}`,
+      );
+    },
+  ),
+}));
+
+vi.mock("../../plugins/public-surface-loader.js", () => publicSurfaceLoaderMocks);
 
 type CreateOpenClawCodingToolsArgs = Parameters<typeof createOpenClawCodingTools>[0];
 type MockOpenClawToolsOptions = {
@@ -565,6 +595,12 @@ const moonshotProvider = {
 function installImageUnderstandingProviderDeps(
   providers: MediaUnderstandingProvider[],
   options?: {
+    describeImageWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImageWithModel"];
+    describeImagesWithModel?: NonNullable<
+      Parameters<typeof testing.setProviderDepsForTest>[0]
+    >["describeImagesWithModel"];
     loadImageWebMediaRuntime?: NonNullable<
       Parameters<typeof testing.setProviderDepsForTest>[0]
     >["loadImageWebMediaRuntime"];
@@ -595,8 +631,8 @@ function installImageUnderstandingProviderDeps(
       id: string,
       registry: Map<string, MediaUnderstandingProvider>,
     ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
-    describeImageWithModel: describeGenericImageWithModel,
-    describeImagesWithModel: describeGenericImagesWithModel,
+    describeImageWithModel: options?.describeImageWithModel ?? describeGenericImageWithModel,
+    describeImagesWithModel: options?.describeImagesWithModel ?? describeGenericImagesWithModel,
     resolveAutoMediaKeyProviders: ({ capability }) =>
       capability === "image" ? ["openai", "anthropic"] : [],
     resolveDefaultMediaModel: ({ providerId, capability }) =>
@@ -617,6 +653,12 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
 
 function installFastLocalImageProviderStubs(...providers: MediaUnderstandingProvider[]) {
   installImageUnderstandingProviderDeps(providers, {
+    describeImageWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
+    describeImagesWithModel: async () => {
+      throw new Error("Expected fast local image tests to use a registered image provider");
+    },
     resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
     resolveModelAsync: async (provider, model) => ({
       model: {
@@ -1654,8 +1696,8 @@ describe("image tool implicit imageModel config", () => {
             items: { type: "string" },
           },
           model: { type: "string" },
-          maxBytesMb: { type: "number" },
-          maxImages: { type: "number" },
+          maxBytesMb: { type: "number", exclusiveMinimum: 0 },
+          maxImages: { type: "integer", minimum: 1 },
         },
       });
     });
@@ -1776,6 +1818,15 @@ describe("image tool implicit imageModel config", () => {
             },
           },
         };
+
+        expect(resolveMediaToolInboundRoots({ cfg })).toEqual([]);
+        const roots = resolveMediaToolInboundRoots({
+          cfg,
+          channelId: "imessage",
+          accountId: "work",
+        });
+        expect(roots).toContain(attachmentRoot);
+        expect(isInboundPathAllowed({ filePath: imagePath, roots })).toBe(true);
 
         const withoutChannel = createRequiredImageTool({ config: cfg, agentDir });
         await expect(
@@ -2290,6 +2341,40 @@ describe("image tool MiniMax VLM routing", () => {
     expect(tooManyDetails?.error).toBe("too_many_images");
     expect(tooManyDetails?.count).toBe(2);
     expect(tooManyDetails?.max).toBe(1);
+  });
+
+  it("rejects invalid image cap values before loading images", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await expect(
+      tool.execute("t1", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxImages: 1.5,
+      }),
+    ).rejects.toThrow("maxImages must be a positive integer");
+
+    await expect(
+      tool.execute("t2", {
+        prompt: "Compare these images.",
+        image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+        maxBytesMb: 0,
+      }),
+    ).rejects.toThrow("maxBytesMb must be greater than 0");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts string image caps through shared numeric readers", async () => {
+    const { fetch, tool } = await createMinimaxVlmFixture({ status_code: 0, status_msg: "" });
+
+    await tool.execute("t1", {
+      prompt: "Describe this image.",
+      image: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+      maxImages: "1",
+      maxBytesMb: "1",
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {

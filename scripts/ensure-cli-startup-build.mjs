@@ -7,11 +7,27 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const entryCandidates = ["dist/entry.js", "dist/entry.mjs"];
+const startupMetadataPath = "dist/cli-startup-metadata.json";
+const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
+
+function positiveEnvInt(name, env, fallback) {
+  const raw = env[name]?.trim();
+  if (raw === undefined || raw === "" || !/^[0-9]+$/.test(raw)) {
+    return fallback;
+  }
+  const value = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(value) && value > 0 ? value : fallback;
+}
+
+export function resolveCliStartupBuildTimeoutMs(env = process.env) {
+  return positiveEnvInt("OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS", env, DEFAULT_BUILD_TIMEOUT_MS);
+}
 
 export function hasCliStartupBuild(params = {}) {
   const rootDir = params.rootDir ?? repoRoot;
   const exists = params.existsSync ?? existsSync;
-  return entryCandidates.some((relativePath) => exists(path.join(rootDir, relativePath)));
+  const hasEntry = entryCandidates.some((relativePath) => exists(path.join(rootDir, relativePath)));
+  return hasEntry && exists(path.join(rootDir, startupMetadataPath));
 }
 
 export function ensureCliStartupBuild(params = {}) {
@@ -24,11 +40,15 @@ export function ensureCliStartupBuild(params = {}) {
   const spawn = params.spawnSync ?? spawnSync;
   const buildScript = path.join(rootDir, "scripts", "build-all.mjs");
 
-  console.error("[cli-startup-build] dist/entry missing; running cliStartup build profile");
+  console.error(
+    "[cli-startup-build] dist startup entry or metadata missing; running cliStartup build profile",
+  );
   const result = spawn(nodeExecPath, [buildScript, "cliStartup"], {
     cwd: rootDir,
     env: params.env ?? process.env,
+    killSignal: params.killSignal ?? "SIGKILL",
     stdio: params.stdio ?? "inherit",
+    timeout: params.timeoutMs ?? resolveCliStartupBuildTimeoutMs(params.env ?? process.env),
   });
   if (result.error) {
     throw result.error;

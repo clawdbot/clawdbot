@@ -10,6 +10,24 @@ import {
   type SnapshotResult,
 } from "./core-api.js";
 
+function parseOptionalIntegerOption(
+  value: string | undefined,
+  label: string,
+  opts: { min: number },
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const raw = value.trim();
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < opts.min) {
+    defaultRuntime.error(danger(`Invalid ${label}: must be an integer >= ${opts.min}`));
+    defaultRuntime.exit(1);
+    return undefined;
+  }
+  return parsed;
+}
+
 export function registerBrowserInspectCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -60,12 +78,12 @@ export function registerBrowserInspectCommands(
     .description("Capture a snapshot (default: ai; aria is the accessibility tree)")
     .option("--format <aria|ai>", "Snapshot format (default: ai)", "ai")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .option("--limit <n>", "Max nodes (default: 500/800)", (v: string) => Number(v))
+    .option("--limit <n>", "Max nodes (default: 500/800)")
     .option("--mode <efficient>", "Snapshot preset (efficient)")
     .option("--efficient", "Use the efficient snapshot preset", false)
     .option("--interactive", "Role snapshot: interactive elements only", false)
     .option("--compact", "Role snapshot: compact output", false)
-    .option("--depth <n>", "Role snapshot: max depth", (v: string) => Number(v))
+    .option("--depth <n>", "Role snapshot: max depth")
     .option("--selector <sel>", "Role snapshot: scope to CSS selector")
     .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
     .option("--labels", "Include viewport label overlay screenshot", false)
@@ -85,14 +103,22 @@ export function registerBrowserInspectCommands(
           ? "efficient"
           : undefined;
       const mode = opts.efficient === true || opts.mode === "efficient" ? "efficient" : configMode;
+      const limit = parseOptionalIntegerOption(opts.limit, "--limit", { min: 1 });
+      const depth = parseOptionalIntegerOption(opts.depth, "--depth", { min: 0 });
+      if (
+        (opts.limit !== undefined && limit === undefined) ||
+        (opts.depth !== undefined && depth === undefined)
+      ) {
+        return;
+      }
       try {
         const query: Record<string, string | number | boolean | undefined> = {
           format,
           targetId: normalizeOptionalString(opts.targetId),
-          limit: Number.isFinite(opts.limit) ? opts.limit : undefined,
+          limit,
           interactive: opts.interactive ? true : undefined,
           compact: opts.compact ? true : undefined,
-          depth: Number.isFinite(opts.depth) ? opts.depth : undefined,
+          depth,
           selector: normalizeOptionalString(opts.selector),
           frame: normalizeOptionalString(opts.frame),
           labels: opts.labels ? true : undefined,

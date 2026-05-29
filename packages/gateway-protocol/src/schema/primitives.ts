@@ -1,0 +1,96 @@
+import { Type } from "typebox";
+import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
+import {
+  EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN,
+  FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN,
+  FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN,
+  SECRET_PROVIDER_ALIAS_PATTERN,
+  SINGLE_VALUE_FILE_REF_ID,
+} from "../secret-ref-contract.js";
+
+const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+const INPUT_PROVENANCE_KIND_VALUES = ["external_user", "inter_session", "internal_system"] as const;
+const SESSION_LABEL_MAX_LENGTH = 512;
+
+export const NonEmptyString = Type.String({ minLength: 1 });
+export const CHAT_SEND_SESSION_KEY_MAX_LENGTH = 512;
+export const ChatSendSessionKeyString = Type.String({
+  minLength: 1,
+  maxLength: CHAT_SEND_SESSION_KEY_MAX_LENGTH,
+});
+export const SessionLabelString = Type.String({
+  minLength: 1,
+  maxLength: SESSION_LABEL_MAX_LENGTH,
+});
+export const InputProvenanceSchema = Type.Object(
+  {
+    kind: Type.String({ enum: [...INPUT_PROVENANCE_KIND_VALUES] }),
+    originSessionId: Type.Optional(Type.String()),
+    sourceSessionKey: Type.Optional(Type.String()),
+    sourceChannel: Type.Optional(Type.String()),
+    sourceTool: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const GatewayClientIdSchema = Type.Enum(GATEWAY_CLIENT_IDS);
+
+export const GatewayClientModeSchema = Type.Enum(GATEWAY_CLIENT_MODES);
+
+export const SecretRefSourceSchema = Type.Union([
+  Type.Literal("env"),
+  Type.Literal("file"),
+  Type.Literal("exec"),
+]);
+
+const SecretProviderAliasString = Type.String({
+  pattern: SECRET_PROVIDER_ALIAS_PATTERN.source,
+});
+
+const EnvSecretRefSchema = Type.Object(
+  {
+    source: Type.Literal("env"),
+    provider: SecretProviderAliasString,
+    id: Type.String({ pattern: ENV_SECRET_REF_ID_RE.source }),
+  },
+  { additionalProperties: false },
+);
+
+const FileSecretRefIdSchema = Type.Unsafe<string>({
+  type: "string",
+  anyOf: [
+    { const: SINGLE_VALUE_FILE_REF_ID },
+    {
+      allOf: [
+        { pattern: FILE_SECRET_REF_ID_ABSOLUTE_JSON_SCHEMA_PATTERN },
+        { not: { pattern: FILE_SECRET_REF_ID_INVALID_ESCAPE_JSON_SCHEMA_PATTERN } },
+      ],
+    },
+  ],
+});
+
+const FileSecretRefSchema = Type.Object(
+  {
+    source: Type.Literal("file"),
+    provider: SecretProviderAliasString,
+    id: FileSecretRefIdSchema,
+  },
+  { additionalProperties: false },
+);
+
+const ExecSecretRefSchema = Type.Object(
+  {
+    source: Type.Literal("exec"),
+    provider: SecretProviderAliasString,
+    id: Type.String({ pattern: EXEC_SECRET_REF_ID_JSON_SCHEMA_PATTERN }),
+  },
+  { additionalProperties: false },
+);
+
+export const SecretRefSchema = Type.Union([
+  EnvSecretRefSchema,
+  FileSecretRefSchema,
+  ExecSecretRefSchema,
+]);
+
+export const SecretInputSchema = Type.Union([Type.String(), SecretRefSchema]);

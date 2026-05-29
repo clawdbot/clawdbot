@@ -1,5 +1,12 @@
-import { optionalStringEnum, stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
+import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 
 const BROWSER_ACT_KINDS = [
   "click",
@@ -56,15 +63,15 @@ const BrowserActSchema = Type.Object({
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
-  x: Type.Optional(Type.Number()),
-  y: Type.Optional(Type.Number()),
+  x: optionalFiniteNumberSchema(),
+  y: optionalFiniteNumberSchema(),
   // type
   text: Type.Optional(Type.String()),
   submit: Type.Optional(Type.Boolean()),
   slowly: Type.Optional(Type.Boolean()),
   // press
   key: Type.Optional(Type.String()),
-  delayMs: Type.Optional(Type.Number()),
+  delayMs: optionalNonNegativeIntegerSchema(),
   // drag
   startRef: Type.Optional(Type.String()),
   endRef: Type.Optional(Type.String()),
@@ -73,15 +80,15 @@ const BrowserActSchema = Type.Object({
   // fill - use permissive array of objects
   fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
   // resize
-  width: Type.Optional(Type.Number()),
-  height: Type.Optional(Type.Number()),
+  width: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+  height: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
   // wait
-  timeMs: Type.Optional(Type.Number()),
+  timeMs: optionalNonNegativeIntegerSchema(),
   selector: Type.Optional(Type.String()),
   url: Type.Optional(Type.String()),
   loadState: Type.Optional(Type.String()),
   textGone: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: optionalPositiveIntegerSchema(),
   // evaluate
   fn: Type.Optional(Type.String()),
 });
@@ -98,14 +105,14 @@ export const BrowserToolSchema = Type.Object({
   url: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
   label: Type.Optional(Type.String()),
-  limit: Type.Optional(Type.Number()),
-  maxChars: Type.Optional(Type.Number()),
+  limit: optionalPositiveIntegerSchema(),
+  maxChars: optionalNonNegativeIntegerSchema(),
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
   snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
   refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
   interactive: Type.Optional(Type.Boolean()),
   compact: Type.Optional(Type.Boolean()),
-  depth: Type.Optional(Type.Number()),
+  depth: optionalNonNegativeIntegerSchema(),
   selector: Type.Optional(Type.String()),
   frame: Type.Optional(Type.String()),
   labels: Type.Optional(Type.Boolean()),
@@ -117,7 +124,7 @@ export const BrowserToolSchema = Type.Object({
   level: Type.Optional(Type.String()),
   paths: Type.Optional(Type.Array(Type.String())),
   inputRef: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: optionalPositiveIntegerSchema(),
   dialogId: Type.Optional(Type.String()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
@@ -126,20 +133,20 @@ export const BrowserToolSchema = Type.Object({
   doubleClick: Type.Optional(Type.Boolean()),
   button: Type.Optional(Type.String()),
   modifiers: Type.Optional(Type.Array(Type.String())),
-  x: Type.Optional(Type.Number()),
-  y: Type.Optional(Type.Number()),
+  x: optionalFiniteNumberSchema(),
+  y: optionalFiniteNumberSchema(),
   text: Type.Optional(Type.String()),
   submit: Type.Optional(Type.Boolean()),
   slowly: Type.Optional(Type.Boolean()),
   key: Type.Optional(Type.String()),
-  delayMs: Type.Optional(Type.Number()),
+  delayMs: optionalNonNegativeIntegerSchema(),
   startRef: Type.Optional(Type.String()),
   endRef: Type.Optional(Type.String()),
   values: Type.Optional(Type.Array(Type.String())),
   fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
-  width: Type.Optional(Type.Number()),
-  height: Type.Optional(Type.Number()),
-  timeMs: Type.Optional(Type.Number()),
+  width: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+  height: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
+  timeMs: optionalNonNegativeIntegerSchema(),
   textGone: Type.Optional(Type.String()),
   loadState: Type.Optional(Type.String()),
   fn: Type.Optional(Type.String()),

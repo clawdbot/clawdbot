@@ -42,7 +42,11 @@ const READY_OFFSET_LOG_NEEDLES = [
 const FORBIDDEN_POST_READY_DEPS_WORK = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
 
 function readPositiveInt(raw, fallback) {
-  const parsed = Number.parseInt(String(raw || ""), 10);
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    return fallback;
+  }
+  const parsed = Number(text);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -398,16 +402,20 @@ function startGateway(params) {
   return child;
 }
 
-async function stopGateway(child) {
-  if (!child || child.exitCode !== null) {
+export function hasChildExited(child) {
+  return child.exitCode !== null || (child.signalCode ?? null) !== null;
+}
+
+export async function stopGateway(child) {
+  if (!child || hasChildExited(child)) {
     return;
   }
   child.kill("SIGTERM");
   const started = Date.now();
-  while (child.exitCode === null && Date.now() - started < 10000) {
+  while (!hasChildExited(child) && Date.now() - started < 10000) {
     await delay(100);
   }
-  if (child.exitCode === null) {
+  if (!hasChildExited(child)) {
     child.kill("SIGKILL");
   }
 }
@@ -417,7 +425,7 @@ async function waitForReady(params) {
   let lastError = "";
   const readyLogSeen = createReadyLogScanner(params.logPath);
   while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (params.child.exitCode !== null) {
+    if (hasChildExited(params.child)) {
       throw new Error(`gateway exited before ready\n${tailFile(params.logPath)}`);
     }
     try {
@@ -773,7 +781,7 @@ function assertSpeechProviderVisible(payload, provider, label) {
 async function runWatchdog(options) {
   const readyOffset = findReadyLogOffset(options.logPath);
   await delay(WATCHDOG_MS);
-  if (options.child.exitCode !== null) {
+  if (hasChildExited(options.child)) {
     throw new Error(
       `gateway exited after ready for ${options.pluginId}\n${tailFile(options.logPath)}`,
     );

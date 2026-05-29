@@ -167,6 +167,60 @@ describe("registerFeishuChatTools", () => {
     });
   });
 
+  it("advertises and validates member page_size as a positive integer", async () => {
+    const registerTool = vi.fn();
+    registerFeishuChatTools(
+      createChatToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { chat: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const tool = registerTool.mock.calls[0]?.[0];
+    expect(tool?.parameters.properties.page_size).toMatchObject({
+      type: "integer",
+      minimum: 1,
+      maximum: 100,
+    });
+
+    chatMembersGetMock.mockResolvedValueOnce({
+      code: 0,
+      data: { has_more: false, items: [] },
+    });
+    await tool.execute("tc_page_size_string", {
+      action: "members",
+      chat_id: "oc_1",
+      page_size: "25",
+    });
+    expect(chatMembersGetMock).toHaveBeenLastCalledWith({
+      path: { chat_id: "oc_1" },
+      params: {
+        page_size: 25,
+        page_token: undefined,
+        member_id_type: "open_id",
+      },
+    });
+
+    const invalidResult = await tool.execute("tc_page_size_invalid", {
+      action: "members",
+      chat_id: "oc_1",
+      page_size: 0,
+    });
+    expect(invalidResult.details.error).toContain(
+      "page_size must be a positive integer between 1 and 100",
+    );
+    expect(chatMembersGetMock).toHaveBeenCalledTimes(1);
+  });
+
   it("skips registration when chat tool is disabled", () => {
     const registerTool = vi.fn();
     registerFeishuChatTools(

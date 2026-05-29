@@ -14,9 +14,11 @@ import {
 } from "../commands/doctor-completion.js";
 import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
+import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
+import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
 
@@ -147,6 +149,31 @@ function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
+export function buildGatewayTokenSecretRefUnavailableMessage(params: {
+  cfg: OpenClawConfig;
+  ref: SecretRef;
+  unresolvedRefReason?: string;
+}): string {
+  if (params.unresolvedRefReason) {
+    return `Gateway token SecretRef could not be resolved: ${params.unresolvedRefReason}`;
+  }
+  if (params.ref.source === "exec") {
+    const staticError = getSkippedExecRefStaticError({ ref: params.ref, config: params.cfg });
+    if (staticError) {
+      return `Gateway token SecretRef could not be verified: ${staticError}`;
+    }
+    return "Gateway token SecretRef uses an exec provider and did not resolve.";
+  }
+  return "Gateway token is managed via SecretRef and is currently unavailable.";
+}
+
+export function buildGatewayTokenSecretRefFixHint(ref: SecretRef): string {
+  if (ref.source === "exec") {
+    return "Run `openclaw doctor --allow-exec` to verify exec SecretRefs during doctor, or `openclaw secrets audit --allow-exec` to audit all exec SecretRefs.";
+  }
+  return "Resolve or rotate the external secret source, then rerun doctor.";
+}
+
 const gatewayAuthCheck: HealthCheck = {
   id: "core/doctor/gateway-auth",
   kind: "core",
@@ -164,22 +191,58 @@ const gatewayAuthCheck: HealthCheck = {
       authConfig: ctx.cfg.gateway?.auth,
       tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
     });
+    const hasInlineToken = typeof auth.token === "string" && auth.token.trim() !== "";
     const needsToken =
       auth.mode !== "password" &&
       auth.mode !== "none" &&
       auth.mode !== "trusted-proxy" &&
-      (auth.mode !== "token" || !auth.token);
+      (auth.mode !== "token" || !hasInlineToken || Boolean(gatewayTokenRef));
     if (!needsToken) {
       return [];
+    }
+    let unresolvedRefReason: string | undefined;
+    if (gatewayTokenRef && gatewayTokenRef.source === "exec") {
+      const staticError = getSkippedExecRefStaticError({ ref: gatewayTokenRef, config: ctx.cfg });
+      if (staticError) {
+        unresolvedRefReason = undefined;
+      } else if (ctx.allowExecSecretRefs !== true) {
+        return [];
+      } else {
+        const resolvedToken = await resolveGatewayAuthToken({
+          cfg: ctx.cfg,
+          env: process.env,
+          unresolvedReasonStyle: "detailed",
+          envFallback: "never",
+        });
+        if (resolvedToken.source === "secretRef") {
+          return [];
+        }
+        unresolvedRefReason = resolvedToken.unresolvedRefReason;
+      }
+    } else {
+      const resolvedToken = await resolveGatewayAuthToken({
+        cfg: ctx.cfg,
+        env: process.env,
+        unresolvedReasonStyle: "detailed",
+        envFallback: gatewayTokenRef ? "never" : "always",
+      });
+      if (gatewayTokenRef ? resolvedToken.source === "secretRef" : resolvedToken.token) {
+        return [];
+      }
+      unresolvedRefReason = resolvedToken.unresolvedRefReason;
     }
     if (gatewayTokenRef) {
       return [
         {
           checkId: "core/doctor/gateway-auth",
           severity: "warning",
-          message: "Gateway token is managed via SecretRef and is currently unavailable.",
+          message: buildGatewayTokenSecretRefUnavailableMessage({
+            cfg: ctx.cfg,
+            ref: gatewayTokenRef,
+            unresolvedRefReason,
+          }),
           path: "gateway.auth.token",
-          fixHint: "Resolve or rotate the external secret source, then rerun doctor.",
+          fixHint: buildGatewayTokenSecretRefFixHint(gatewayTokenRef),
         },
       ];
     }

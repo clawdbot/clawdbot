@@ -244,4 +244,110 @@ describe("release user journey assertions", () => {
       rmSync(root, { force: true, recursive: true });
     }
   });
+
+  it("rejects loose HTTP timeout env values instead of parsing prefixes", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const portPath = path.join(root, "port.txt");
+    const server = startTcpFixture(
+      portPath,
+      '(socket) => socket.write("HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\n\\r\\n")',
+    );
+
+    try {
+      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
+      const result = runAssertion(
+        home,
+        ["wait-clickclack-socket", `http://127.0.0.1:${port}`, "1"],
+        {
+          env: { OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "100ms" },
+          timeoutMs: 500,
+        },
+      );
+
+      expect(result.error).toMatchObject({ code: "ETIMEDOUT" });
+      expect(result.signal).toBe("SIGKILL");
+    } finally {
+      await stopChild(server);
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("bounds ClickClack fixture error response bodies", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const portPath = path.join(root, "port.txt");
+    const server = startTcpFixture(
+      portPath,
+      [
+        "(socket) => {",
+        '  const body = "x".repeat(128);',
+        "  socket.end(`HTTP/1.1 500 Internal Server Error\\r\\nContent-Type: text/plain\\r\\nContent-Length: ${Buffer.byteLength(body)}\\r\\n\\r\\n${body}`);",
+        "}",
+      ].join("\n"),
+    );
+
+    try {
+      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
+      const result = runAssertion(
+        home,
+        ["post-clickclack-inbound", `http://127.0.0.1:${port}`, "hello"],
+        {
+          env: {
+            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16",
+            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000",
+          },
+          timeoutMs: 2500,
+        },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.signal).not.toBe("SIGKILL");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("ClickClack inbound response body exceeded 16 bytes");
+      expect(result.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    } finally {
+      await stopChild(server);
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("rejects loose body byte env values instead of parsing prefixes", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-user-assertions-"));
+    const home = path.join(root, "home");
+    const portPath = path.join(root, "port.txt");
+    const server = startTcpFixture(
+      portPath,
+      [
+        "(socket) => {",
+        '  const body = "x".repeat(128);',
+        "  socket.end(`HTTP/1.1 500 Internal Server Error\\r\\nContent-Type: text/plain\\r\\nContent-Length: ${Buffer.byteLength(body)}\\r\\n\\r\\n${body}`);",
+        "}",
+      ].join("\n"),
+    );
+
+    try {
+      const port = Number.parseInt((await waitForFile(portPath)).trim(), 10);
+      const result = runAssertion(
+        home,
+        ["post-clickclack-inbound", `http://127.0.0.1:${port}`, "hello"],
+        {
+          env: {
+            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES: "16bytes",
+            OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS: "1000",
+          },
+          timeoutMs: 2500,
+        },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.signal).not.toBe("SIGKILL");
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("fixture inbound failed: 500");
+      expect(result.stderr).not.toContain("response body exceeded 16 bytes");
+    } finally {
+      await stopChild(server);
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });

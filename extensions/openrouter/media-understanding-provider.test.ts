@@ -153,6 +153,34 @@ describe("openrouter media understanding provider", () => {
     });
   });
 
+  it("drops malformed temperature query options", async () => {
+    for (const temperature of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const release = vi.fn(async () => {});
+      postJsonRequestMock.mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
+        release,
+      });
+
+      await transcribeOpenRouterAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "voice.webm",
+        apiKey: "sk-openrouter",
+        timeoutMs: 5_000,
+        query: { temperature },
+        fetchFn: fetch,
+      });
+
+      expect(firstPostJsonRequest().body).toEqual({
+        model: "openai/whisper-large-v3-turbo",
+        input_audio: {
+          data: Buffer.from("audio").toString("base64"),
+          format: "webm",
+        },
+      });
+      postJsonRequestMock.mockClear();
+    }
+  });
+
   it("falls back to filename extension when mime is missing", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({

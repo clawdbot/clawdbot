@@ -1,3 +1,9 @@
+import {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  stringEnum,
+} from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 
 export const CANVAS_ACTIONS = [
@@ -12,30 +18,23 @@ export const CANVAS_ACTIONS = [
 
 export const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
 
-function stringEnum<T extends readonly string[]>(values: T) {
-  return Type.Unsafe<T[number]>({
-    type: "string",
-    enum: [...values],
-  });
-}
-
 export const CanvasToolSchema = Type.Object({
   action: stringEnum(CANVAS_ACTIONS),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
+  timeoutMs: optionalPositiveIntegerSchema(),
   node: Type.Optional(Type.String()),
   target: Type.Optional(Type.String()),
-  x: Type.Optional(Type.Number()),
-  y: Type.Optional(Type.Number()),
-  width: Type.Optional(Type.Number()),
-  height: Type.Optional(Type.Number()),
+  x: optionalFiniteNumberSchema(),
+  y: optionalFiniteNumberSchema(),
+  width: optionalFiniteNumberSchema(),
+  height: optionalFiniteNumberSchema(),
   url: Type.Optional(Type.String()),
   javaScript: Type.Optional(Type.String()),
   outputFormat: Type.Optional(stringEnum(CANVAS_SNAPSHOT_FORMATS)),
-  maxWidth: Type.Optional(Type.Number()),
-  quality: Type.Optional(Type.Number()),
-  delayMs: Type.Optional(Type.Number()),
+  maxWidth: optionalPositiveIntegerSchema(),
+  quality: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
+  delayMs: optionalNonNegativeIntegerSchema(),
   jsonl: Type.Optional(Type.String()),
   jsonlPath: Type.Optional(Type.String()),
 });

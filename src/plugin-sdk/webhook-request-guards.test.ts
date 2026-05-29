@@ -214,6 +214,45 @@ describe("readWebhookBodyOrReject", () => {
 });
 
 describe("beginWebhookRequestPipelineOrReject", () => {
+  it("falls back for non-finite in-flight limiter options", () => {
+    const limiter = createWebhookInFlightLimiter({
+      maxInFlightPerKey: Number.NaN,
+      maxTrackedKeys: Number.NaN,
+    });
+    const releases: Array<() => void> = [];
+    try {
+      for (let index = 0; index < 8; index += 1) {
+        const result = beginWebhookRequestPipelineOrReject({
+          req: createMockRequest({ method: "POST" }),
+          res: createMockServerResponse(),
+          allowMethods: ["POST"],
+          inFlightLimiter: limiter,
+          inFlightKey: "ip:127.0.0.1",
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          releases.push(result.release);
+        }
+      }
+
+      const overflowRes = createMockServerResponse();
+      const overflow = beginWebhookRequestPipelineOrReject({
+        req: createMockRequest({ method: "POST" }),
+        res: overflowRes,
+        allowMethods: ["POST"],
+        inFlightLimiter: limiter,
+        inFlightKey: "ip:127.0.0.1",
+      });
+
+      expect(overflow.ok).toBe(false);
+      expect(overflowRes.statusCode).toBe(429);
+    } finally {
+      for (const release of releases) {
+        release();
+      }
+    }
+  });
+
   it("enforces in-flight request limits and releases slots", () => {
     const limiter = createWebhookInFlightLimiter({
       maxInFlightPerKey: 1,

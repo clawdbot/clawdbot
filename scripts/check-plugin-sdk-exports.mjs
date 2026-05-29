@@ -11,7 +11,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { pluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
+import { publicPluginSdkSubpaths } from "./lib/plugin-sdk-entries.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const distFile = resolve(scriptDir, "..", "dist", "plugin-sdk", "index.js");
@@ -70,7 +70,7 @@ for (const name of requiredExports) {
   }
 }
 
-for (const entry of pluginSdkSubpaths) {
+for (const entry of publicPluginSdkSubpaths) {
   const jsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.js`);
   const dtsPath = resolve(scriptDir, "..", "dist", "plugin-sdk", `${entry}.d.ts`);
   if (!existsSync(jsPath)) {

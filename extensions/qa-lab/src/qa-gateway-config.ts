@@ -35,6 +35,11 @@ function normalizeQaGatewayModelRef(input: string | undefined, fallback: string)
   return model && model.length > 0 ? model : fallback;
 }
 
+function buildQaModelSelection(primaryModel: string, alternateModel: string) {
+  const fallbacks = alternateModel !== primaryModel ? [alternateModel] : undefined;
+  return fallbacks ? { primary: primaryModel, fallbacks } : { primary: primaryModel };
+}
+
 export function buildQaGatewayConfig(params: {
   bind: "loopback" | "lan";
   gatewayPort: number;
@@ -144,9 +149,7 @@ export function buildQaGatewayConfig(params: {
     agents: {
       defaults: {
         workspace: params.workspaceDir,
-        model: {
-          primary: primaryModel,
-        },
+        model: buildQaModelSelection(primaryModel, alternateModel),
         ...(imageGenerationModelRef
           ? {
               imageGenerationModel: {
@@ -180,9 +183,7 @@ export function buildQaGatewayConfig(params: {
         {
           id: "qa",
           default: true,
-          model: {
-            primary: primaryModel,
-          },
+          model: buildQaModelSelection(primaryModel, alternateModel),
           identity: {
             name: "C-3PO QA",
             theme: "Flustered Protocol Droid",

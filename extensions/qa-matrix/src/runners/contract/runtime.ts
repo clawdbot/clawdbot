@@ -195,11 +195,12 @@ function parsePositiveMatrixQaEnvMs(name: string, fallback: number) {
   if (raw === undefined) {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const trimmed = raw.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
     return fallback;
   }
-  return Math.floor(parsed);
+  return parsed;
 }
 
 function createMatrixQaRunDeadline() {

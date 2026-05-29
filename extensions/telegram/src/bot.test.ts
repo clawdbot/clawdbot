@@ -1136,6 +1136,38 @@ describe("createTelegramBot", () => {
     expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores unsafe command pagination pages", async () => {
+    onSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
+    editMessageTextSpy.mockClear();
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    if (!callbackHandler) {
+      throw new Error("Expected Telegram callback_query handler");
+    }
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-unsafe-page",
+        data: "commands_page_9007199254740993:main",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 16,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(listSkillCommandsForAgents).not.toHaveBeenCalled();
+    expect(editMessageTextSpy).not.toHaveBeenCalled();
+  });
+
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
     onSpy.mockClear();
     editMessageTextSpy.mockClear();

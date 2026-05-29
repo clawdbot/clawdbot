@@ -136,7 +136,7 @@ Current source-of-truth:
   </Accordion>
   <Accordion title="Model and run controls">
     - `/think <level|default>` sets the thinking level or clears the session override. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
-    - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
+    - `/verbose on|off|full` toggles verbose output. Authorized external channel senders may persist the session override; internal gateway/webchat clients need `operator.admin`. Alias: `/v`.
     - `/trace on|off` toggles plugin trace output for the current session.
     - `/fast [status|on|off|default]` shows, sets, or clears fast mode.
     - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.

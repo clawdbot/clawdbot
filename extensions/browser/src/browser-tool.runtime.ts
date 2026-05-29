@@ -13,6 +13,7 @@ export {
   imageResultFromFile,
   jsonResult,
   listNodes,
+  readPositiveIntegerParam,
   readStringParam,
   resolveNodeIdFromList,
   selectDefaultNodeFromList,

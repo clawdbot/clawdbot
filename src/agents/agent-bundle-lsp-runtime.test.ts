@@ -46,7 +46,7 @@ class MockChildProcess extends EventEmitter {
   readonly stderr = new PassThrough();
   readonly stdin: Writable;
 
-  constructor() {
+  constructor(private readonly initializeResponsePrefix = "") {
     super();
     this.stdin = new Writable({
       write: (chunk, _encoding, callback) => {
@@ -71,7 +71,9 @@ class MockChildProcess extends EventEmitter {
     }
     const result = body.method === "initialize" ? { capabilities: { hoverProvider: true } } : null;
     queueMicrotask(() => {
-      this.stdout.write(encodeLspMessage({ jsonrpc: "2.0", id: body.id, result }));
+      this.stdout.write(
+        `${this.initializeResponsePrefix}${encodeLspMessage({ jsonrpc: "2.0", id: body.id, result })}`,
+      );
     });
   }
 }
@@ -117,6 +119,23 @@ describe("bundle LSP runtime", () => {
     await runtime.dispose();
 
     expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+  });
+
+  it("keeps LSP framing aligned after multibyte messages in the same chunk", async () => {
+    configureSingleLspServer();
+    const prefix = encodeLspMessage({
+      jsonrpc: "2.0",
+      method: "window/logMessage",
+      params: { message: "ready té" },
+    });
+    const child = new MockChildProcess(prefix);
+    spawnMock.mockReturnValue(child);
+    const { createBundleLspToolRuntime } = await import("./agent-bundle-lsp-runtime.js");
+
+    const runtime = await createBundleLspToolRuntime({ workspaceDir: "/tmp/workspace" });
+
+    expect(runtime.tools.map((tool) => tool.name)).toContain("lsp_hover_typescript");
+    await runtime.dispose();
   });
 
   it("disposes active LSP sessions from the global shutdown sweep", async () => {

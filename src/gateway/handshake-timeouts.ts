@@ -1,3 +1,6 @@
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+
 export const DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS = 15_000;
 export const MIN_CONNECT_CHALLENGE_TIMEOUT_MS = 250;
 export const MAX_CONNECT_CHALLENGE_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
@@ -17,9 +20,9 @@ export function getConnectChallengeTimeoutMsFromEnv(
 ): number | undefined {
   const raw = env.OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS;
   if (raw) {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
+    const parsed = parseStrictPositiveInteger(raw);
+    if (parsed !== undefined) {
+      return resolveSafeTimeoutDelayMs(parsed);
     }
   }
   return undefined;
@@ -27,7 +30,7 @@ export function getConnectChallengeTimeoutMsFromEnv(
 
 function normalizePositiveTimeoutMs(timeoutMs: unknown): number | undefined {
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
-    ? timeoutMs
+    ? resolveSafeTimeoutDelayMs(timeoutMs)
     : undefined;
 }
 
@@ -57,9 +60,9 @@ export function getPreauthHandshakeTimeoutMsFromEnv(env: NodeJS.ProcessEnv = pro
   const configuredTimeout =
     env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
   if (configuredTimeout) {
-    const parsed = Number(configuredTimeout);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
+    const parsed = parseStrictPositiveInteger(configuredTimeout);
+    if (parsed !== undefined) {
+      return resolveSafeTimeoutDelayMs(parsed);
     }
   }
   return DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
@@ -73,9 +76,9 @@ export function resolvePreauthHandshakeTimeoutMs(params?: {
   const configuredTimeout =
     env.OPENCLAW_HANDSHAKE_TIMEOUT_MS || (env.VITEST && env.OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS);
   if (configuredTimeout) {
-    const parsed = Number(configuredTimeout);
-    if (Number.isFinite(parsed) && parsed > 0) {
-      return parsed;
+    const parsed = parseStrictPositiveInteger(configuredTimeout);
+    if (parsed !== undefined) {
+      return resolveSafeTimeoutDelayMs(parsed);
     }
   }
   const configured = normalizePositiveTimeoutMs(params?.configuredTimeoutMs);

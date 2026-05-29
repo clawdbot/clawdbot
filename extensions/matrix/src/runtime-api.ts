@@ -7,6 +7,7 @@ export {
   createActionGate,
   jsonResult,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
   readStringParam,

@@ -141,12 +141,12 @@ describe("Crestodian assistant", () => {
     }
     expect(result.command).toBe("status");
     expect(result.reply).toBe("Checking the shell.");
-    expect(result.modelLabel).toBe("claude-cli/claude-opus-4-7");
+    expect(result.modelLabel).toBe("claude-cli/claude-opus-4-8");
 
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     const firstCliCall = firstMockArg(runCliAgent);
     expect(firstCliCall.provider).toBe("claude-cli");
-    expect(firstCliCall.model).toBe("claude-opus-4-7");
+    expect(firstCliCall.model).toBe("claude-opus-4-8");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
     const firstCliConfig = requireRecord(firstCliCall.config);
     const firstCliAgents = requireRecord(firstCliConfig.agents);

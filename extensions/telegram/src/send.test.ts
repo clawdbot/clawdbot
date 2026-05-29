@@ -2620,6 +2620,20 @@ describe("deleteMessageTelegram", () => {
       }),
     ).rejects.toThrow(/Internal Server Error/);
   });
+
+  it("rejects partial message id strings", async () => {
+    const deleteMessage = vi.fn();
+    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+
+    await expect(
+      deleteMessageTelegram("123", "456abc", {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/Message id is required/);
+    expect(deleteMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe("sendStickerTelegram", () => {

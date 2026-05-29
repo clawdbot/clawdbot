@@ -112,7 +112,7 @@ function parseQmdQueryResultArray(raw: string): QmdQueryResult[] | null {
 }
 
 function parseQmdLineNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
 function extractFirstJsonArray(raw: string): string | null {

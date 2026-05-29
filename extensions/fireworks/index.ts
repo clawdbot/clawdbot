@@ -19,11 +19,23 @@ import { wrapFireworksProviderStream } from "./stream.js";
 import { resolveFireworksThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "fireworks";
+function isFireworksGlmModelId(modelId: string): boolean {
+  const normalized = modelId.trim().toLowerCase();
+  const lastSegment = normalized.split("/").pop() ?? normalized;
+  return /^glm[-_.]/.test(lastSegment);
+}
+
+function resolveFireworksDynamicInput(modelId: string): Array<"text" | "image"> {
+  return isFireworksGlmModelId(modelId) ? ["text"] : ["text", "image"];
+}
+
 function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   const modelId = ctx.modelId.trim();
   if (!modelId) {
     return undefined;
   }
+  const isKimiModel = isFireworksKimiModelId(modelId);
+  const input = resolveFireworksDynamicInput(modelId);
 
   return (
     cloneFirstTemplateModel({
@@ -33,7 +45,8 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
       ctx,
       patch: {
         provider: PROVIDER_ID,
-        reasoning: !isFireworksKimiModelId(modelId),
+        reasoning: !isKimiModel,
+        input,
       },
     }) ??
     normalizeModelCompat({
@@ -42,8 +55,8 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
       provider: PROVIDER_ID,
       api: "openai-completions",
       baseUrl: FIREWORKS_BASE_URL,
-      reasoning: !isFireworksKimiModelId(modelId),
-      input: ["text", "image"],
+      reasoning: !isKimiModel,
+      input,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: FIREWORKS_DEFAULT_CONTEXT_WINDOW,
       maxTokens: FIREWORKS_DEFAULT_MAX_TOKENS || DEFAULT_CONTEXT_TOKENS,

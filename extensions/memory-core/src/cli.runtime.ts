@@ -205,7 +205,7 @@ function formatDreamingSummary(cfg: OpenClawConfig): string {
     return "off";
   }
   const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"}`;
+  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${dreaming.maxPromotedSnippetTokens}`;
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
@@ -234,9 +234,14 @@ function formatAuditCounts(audit: ShortTermAuditSummary): string {
 function formatRepairSummary(repair: RepairShortTermPromotionArtifactsResult): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
-    actions.push(
-      `rewrote store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid)` : ""}`,
-    );
+    const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+    const details = [
+      repair.removedInvalidEntries > 0 ? `-${repair.removedInvalidEntries} invalid` : null,
+      removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow` : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    actions.push(`rewrote store${details ? ` (${details})` : ""}`);
   }
   if (repair.removedStaleLock) {
     actions.push("removed stale lock");
@@ -1324,6 +1329,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
             minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
             minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
             maxAgeDays: dreaming.maxAgeDays,
+            maxPromotedSnippetTokens: dreaming.maxPromotedSnippetTokens,
             timezone: dreaming.timezone,
           });
         } catch (err) {
@@ -1656,6 +1662,7 @@ export async function runMemoryRemHarness(opts: MemoryRemHarnessOptions) {
               minUniqueQueries: preview.deepConfig.minUniqueQueries,
               recencyHalfLifeDays: preview.deepConfig.recencyHalfLifeDays,
               maxAgeDays: preview.deepConfig.maxAgeDays ?? null,
+              maxPromotedSnippetTokens: preview.deepConfig.maxPromotedSnippetTokens,
             },
             rem: { skipped: preview.remSkipped, ...remPreview },
             grounded: groundedPreview,

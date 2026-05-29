@@ -95,6 +95,73 @@ export type SessionsCleanupRunResult = {
   appliedSummaries: SessionCleanupSummary[];
 };
 
+const EMPTY_TRANSCRIPT_MAX_BYTES = 4096;
+
+function isTranscriptMessageRole(role: unknown): boolean {
+  return (
+    role === "user" ||
+    role === "assistant" ||
+    role === "tool" ||
+    role === "toolResult" ||
+    role === "system"
+  );
+}
+
+function isTranscriptMessageRecord(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { message?: unknown; role?: unknown; type?: unknown };
+  if (record.type === "message") {
+    return true;
+  }
+  if (
+    record.type === undefined &&
+    record.message &&
+    typeof record.message === "object" &&
+    isTranscriptMessageRole((record.message as { role?: unknown }).role)
+  ) {
+    return true;
+  }
+  return record.type === undefined && isTranscriptMessageRole(record.role);
+}
+
+function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(transcriptPath);
+  } catch {
+    return false;
+  }
+  if (!stat.isFile() || stat.size > EMPTY_TRANSCRIPT_MAX_BYTES) {
+    return false;
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(transcriptPath, "utf-8");
+  } catch {
+    return false;
+  }
+
+  const lines = raw.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  if (lines.length === 0) {
+    return true;
+  }
+  for (const line of lines) {
+    let entry: unknown;
+    try {
+      entry = JSON.parse(line) as unknown;
+    } catch {
+      return false;
+    }
+    if (isTranscriptMessageRecord(entry)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
@@ -220,7 +287,11 @@ function pruneMissingTranscriptEntries(params: {
     } catch {
       // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
     }
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
+    if (
+      !transcriptPath ||
+      !fs.existsSync(transcriptPath) ||
+      transcriptHasNoMessageRecords(transcriptPath)
+    ) {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key);

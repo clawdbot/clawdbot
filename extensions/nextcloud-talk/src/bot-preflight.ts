@@ -47,12 +47,12 @@ function normalizeUrlForMatch(value: string | undefined): string {
 }
 
 function coerceFeatureMask(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
     return value;
   }
   if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
     const parsed = Number(value.trim());
-    return Number.isSafeInteger(parsed) ? parsed : undefined;
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
   }
   return undefined;
 }

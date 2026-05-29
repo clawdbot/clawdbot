@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import net from "node:net";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { ensurePortAvailable } from "./ports.js";
 
 export type SshParsedTarget = {
@@ -38,8 +39,8 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   if (colonIdx > 0 && colonIdx < hostPart.length - 1) {
     const host = hostPart.slice(0, colonIdx).trim();
     const portRaw = hostPart.slice(colonIdx + 1).trim();
-    const port = Number.parseInt(portRaw, 10);
-    if (!host || !Number.isFinite(port) || port <= 0) {
+    const port = parseStrictPositiveInteger(portRaw);
+    if (!host || port === undefined || port > 65535) {
       return null;
     }
     // Security: Reject hostnames starting with '-' to prevent argument injection

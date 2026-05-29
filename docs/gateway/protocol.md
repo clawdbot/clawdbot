@@ -104,7 +104,7 @@ within their overall connection budget instead of surfacing it as a terminal
 handshake failure.
 
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
-(`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
+(`packages/gateway-protocol/src/schema/frames.ts`). `auth` is also required and reports
 the negotiated role/scopes. `pluginSurfaceUrls` is optional and maps plugin
 surface names, such as `canvas`, to scoped hosted URLs.
 
@@ -347,9 +347,11 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `models.list` returns the runtime-allowed model catalog. Pass `{ "view": "configured" }` for picker-sized configured models (`agents.defaults.models` first, then `models.providers.*.models`), or `{ "view": "all" }` for the full catalog.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
+      Pass `agentId` for one agent, or `agentScope: "all"` to aggregate configured agents.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
     - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
-    - `sessions.usage` returns per-session usage summaries.
+    - `sessions.usage` returns per-session usage summaries. Pass `agentId` for one
+      agent, or `agentScope: "all"` to list configured agents together.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
     - `sessions.usage.logs` returns usage log entries for one session.
 
@@ -562,8 +564,14 @@ terminal summary, and sanitized error text.
   - `sessionKey` is required.
   - The gateway derives trusted runtime context from the session server-side instead of accepting
     caller-supplied auth or delivery context.
-  - The response is session-scoped and reflects what the active conversation can use right now,
-    including core, plugin, and channel tools.
+  - The response is a session-scoped server-derived projection of the active inventory,
+    including core, plugin, channel, and already-discovered MCP server tools.
+  - `tools.effective` is read-only for MCP: it may project a warm session MCP catalog through the
+    final tool policy, but it does not create MCP runtimes, connect transports, or issue
+    `tools/list`. If no matching warm catalog exists, the response may include a notice such as
+    `mcp-not-yet-connected`, `mcp-not-yet-listed`, or `mcp-stale-catalog`.
+  - Effective tool entries use `source="core"`, `source="plugin"`, `source="channel"`, or
+    `source="mcp"`.
 - Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
   same gateway policy path as `/tools/invoke`.
   - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
@@ -640,7 +648,7 @@ terminal summary, and sanitized error text.
 
 ## Versioning
 
-- `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
+- `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts`.
 - Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
   do not include its current protocol. Current clients and servers require
   protocol v4.
@@ -656,8 +664,8 @@ stable across protocol v4 and are the expected baseline for third-party clients.
 
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
-| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `PROTOCOL_VERSION`                        | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                 |
+| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `packages/gateway-protocol/src/version.ts`                                                 |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
@@ -810,7 +818,7 @@ Migration target:
 
 This protocol exposes the **full gateway API** (status, channels, models, chat,
 agent, sessions, nodes, approvals, etc.). The exact surface is defined by the
-TypeBox schemas in `src/gateway/protocol/schema.ts`.
+TypeBox schemas in `packages/gateway-protocol/src/schema.ts`.
 
 ## Related
 

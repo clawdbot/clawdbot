@@ -21,6 +21,16 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     mkdir -p ~/.openclaw/workspace/skills/hello-world
     ```
 
+    You can group skills in subfolders when your library grows:
+
+    ```bash
+    mkdir -p ~/.openclaw/workspace/skills/personal/hello-world
+    ```
+
+    Group folders are only organizational. The skill is still named by
+    `SKILL.md` frontmatter, so `name: hello-world` is invoked as
+    `/hello-world`.
+
   </Step>
 
   <Step title="Write SKILL.md">
@@ -40,7 +50,7 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     ```
 
     Use hyphen-case with lowercase letters, digits, and hyphens for the skill
-    `name`. Keep the folder name and frontmatter `name` aligned.
+    `name`. Keep the leaf folder name and frontmatter `name` aligned.
 
   </Step>
 
@@ -52,7 +62,15 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
   </Step>
 
   <Step title="Load the skill">
-    Start a new session so OpenClaw picks up the skill:
+    Verify the skill loaded:
+
+    ```bash
+    openclaw skills list
+    ```
+
+    OpenClaw watches nested `SKILL.md` files under skills roots. If the watcher
+    is disabled or you are continuing an existing session, start a new session
+    so the model receives the refreshed skills list:
 
     ```bash
     # From chat
@@ -60,12 +78,6 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
     # Or restart the gateway
     openclaw gateway restart
-    ```
-
-    Verify the skill loaded:
-
-    ```bash
-    openclaw skills list
     ```
 
   </Step>
@@ -133,6 +145,10 @@ Once a basic skill works, these fields help make it reliable and portable:
 | `~/.openclaw/skills/`           | Medium     | Shared (all agents)   |
 | Bundled (shipped with OpenClaw) | Low        | Global                |
 | `skills.load.extraDirs`         | Lowest     | Custom shared folders |
+
+Each skills root can contain direct skill folders such as
+`skills/hello-world/SKILL.md` or grouped folders such as
+`skills/personal/hello-world/SKILL.md`.
 
 ## Related
 

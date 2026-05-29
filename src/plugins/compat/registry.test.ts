@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
+import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 import {
   getPluginCompatRecord,
   isPluginCompatCode,
@@ -25,23 +26,6 @@ const deprecatedTargetParserCompatFiles = new Set([
   "src/infra/outbound/outbound-session.test-helpers.ts",
   "src/plugins/compat/registry.test.ts",
 ]);
-
-function listTsFiles(root: string): string[] {
-  const results: string[] = [];
-  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-    const childPath = `${root}/${entry.name}`;
-    if (entry.isDirectory()) {
-      if (entry.name !== "node_modules") {
-        results.push(...listTsFiles(childPath));
-      }
-      continue;
-    }
-    if (/\.(?:ts|tsx)$/u.test(entry.name)) {
-      results.push(childPath);
-    }
-  }
-  return results;
-}
 
 const knownDeprecatedSurfaceMarkers = [
   {
@@ -243,18 +227,10 @@ function expectNonEmptyStringList(values: readonly string[], label: string) {
   }
 }
 
-function listSourceFiles(dir: string): string[] {
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-  return entries.flatMap((entry) => {
-    const path = `${dir}/${entry.name}`;
-    if (entry.isDirectory()) {
-      if (entry.name === "dist" || entry.name === "node_modules") {
-        return [];
-      }
-      return listSourceFiles(path);
-    }
-    return /\.(?:ts|tsx|mts|cts)$/u.test(entry.name) ? [path] : [];
-  });
+function listTrackedSourceFiles(): string[] {
+  return (listGitTrackedFiles({ pathspecs: sourceRootsForDeprecatedCallGuard }) ?? []).filter(
+    (file) => /\.(?:ts|tsx|mts|cts)$/u.test(file),
+  );
 }
 
 describe("plugin compatibility registry", () => {
@@ -305,8 +281,7 @@ describe("plugin compatibility registry", () => {
   });
 
   it("keeps deprecated explicit target parser calls inside compatibility shims", () => {
-    const offenders = sourceRootsForDeprecatedCallGuard
-      .flatMap((root) => listSourceFiles(root))
+    const offenders = listTrackedSourceFiles()
       .filter((file) => !deprecatedTargetParserCompatFiles.has(file))
       .filter((file) => deprecatedTargetParserCallPattern.test(fs.readFileSync(file, "utf8")));
 

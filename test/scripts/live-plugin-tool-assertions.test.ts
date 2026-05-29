@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -12,15 +12,24 @@ function writeJson(filePath: string, value: unknown) {
 }
 
 function runAssertion(root: string, env: Record<string, string> = {}) {
-  return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "assert-agent-turn"], {
+  return runAssertionCommand("assert-agent-turn", root, env);
+}
+
+function runAssertionCommand(command: string, root: string, env: Record<string, string> = {}) {
+  return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, command], {
     encoding: "utf8",
     env: {
       ...process.env,
       EXPECTED_SLUG: "live-plugin-slug",
       HOME: root,
+      MODEL_REF: "openai/gpt-5.5",
       OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_ERROR_PATH: path.join(root, "agent.err"),
       OPENCLAW_LIVE_PLUGIN_TOOL_AGENT_OUTPUT_PATH: path.join(root, "agent.json"),
       OPENCLAW_STATE_DIR: path.join(root, "state"),
+      PLUGIN_ID: "e2e-live-plugin-tool",
+      PLUGIN_NAME: "@openclaw/e2e-live-plugin-tool",
+      PLUGIN_VERSION: "1.0.0",
+      SEED: "live plugin slug",
       TOOL_NAME: "e2e_slug_probe",
       ...env,
     },
@@ -28,6 +37,36 @@ function runAssertion(root: string, env: Record<string, string> = {}) {
 }
 
 describe("live plugin tool assertions", () => {
+  it("rejects loose timeout env values instead of parsing numeric prefixes", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    try {
+      const result = runAssertionCommand("configure", root, {
+        OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS: "1e3",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("invalid OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS: 1e3");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("writes strict positive timeout values into generated config", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
+    try {
+      const result = runAssertionCommand("configure", root, {
+        OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS: "240",
+      });
+
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(path.join(root, "state", "openclaw.json"), "utf8"));
+      expect(config.models.providers.openai.timeoutSeconds).toBe(240);
+      expect(config.agents.defaults.timeoutSeconds).toBe(240);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("streams session transcripts across chunk boundaries", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-plugin-tool-"));
     const sessionsDir = path.join(root, "state", "agents", "main", "sessions");

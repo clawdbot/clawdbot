@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -77,39 +79,41 @@ describe("scripts/ui windows spawn behavior", () => {
   });
 
   it("routes Windows Corepack pnpm entrypoints through node", () => {
-    expect(
-      resolvePnpmSpawnCall(
-        ["run", "build"],
-        {
-          npm_execpath:
-            "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        },
-        {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.mjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
+    try {
+      expect(
+        resolvePnpmSpawnCall(
+          ["run", "build"],
+          {
+            npm_execpath: npmExecPath,
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          {
+            cwd: "C:\\repo\\ui",
+            nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+            platform: "win32",
+          },
+        ),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "run", "build"],
+        options: {
           cwd: "C:\\repo\\ui",
-          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-          platform: "win32",
+          stdio: "inherit",
+          env: {
+            npm_execpath: npmExecPath,
+            ComSpec: "C:\\Windows\\System32\\cmd.exe",
+          },
+          shell: false,
+          windowsVerbatimArguments: undefined,
         },
-      ),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [
-        "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
-        "run",
-        "build",
-      ],
-      options: {
-        cwd: "C:\\repo\\ui",
-        stdio: "inherit",
-        env: {
-          npm_execpath:
-            "C:\\Users\\runner\\AppData\\Local\\node\\corepack\\v1\\pnpm\\11.2.2\\bin\\pnpm.mjs",
-          ComSpec: "C:\\Windows\\System32\\cmd.exe",
-        },
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps non-Windows launches direct even with shell metacharacters", () => {

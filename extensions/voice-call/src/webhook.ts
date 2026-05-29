@@ -173,6 +173,31 @@ function buildRealtimeRejectedTwiML(): WebhookResponsePayload {
   };
 }
 
+function buildTwilioReplayTwiML(): WebhookResponsePayload {
+  return {
+    statusCode: 200,
+    headers: { "Content-Type": "text/xml" },
+    body: '<?xml version="1.0" encoding="UTF-8"?><Response></Response>',
+  };
+}
+
+const WEBHOOK_REPLAY_RESPONSE_TTL_MS = 10 * 60 * 1000;
+const WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES = 10_000;
+const WEBHOOK_REPLAY_RESPONSE_PRUNE_INTERVAL = 64;
+
+type CachedWebhookResponse = {
+  expiresAt: number;
+  response: Promise<WebhookResponsePayload>;
+};
+
+function cloneWebhookResponsePayload(payload: WebhookResponsePayload): WebhookResponsePayload {
+  return {
+    statusCode: payload.statusCode,
+    headers: payload.headers ? { ...payload.headers } : undefined,
+    body: payload.body,
+  };
+}
+
 /**
  * HTTP server for receiving voice call webhooks from providers.
  * Supports WebSocket upgrades for media streams when streaming is enabled.
@@ -197,6 +222,8 @@ export class VoiceCallWebhookServer {
   private pendingDisconnectHangups = new Map<string, ReturnType<typeof setTimeout>>();
   /** Realtime voice handler for duplex provider bridges. */
   private realtimeHandler: RealtimeCallHandler | null = null;
+  private replayResponses = new Map<string, CachedWebhookResponse>();
+  private replayResponseCacheCalls = 0;
 
   constructor(
     config: VoiceCallConfig,
@@ -716,47 +743,125 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
-      const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
-      if (initialTwiML !== undefined && initialTwiML !== null) {
-        const params = new URLSearchParams(ctx.rawBody);
-        console.log(
-          `[voice-call] Serving provider initial TwiML before realtime handling (callSid=${params.get("CallSid") ?? "unknown"}, direction=${params.get("Direction") ?? "unknown"})`,
-        );
-        return {
-          statusCode: 200,
-          headers: { "Content-Type": "application/xml" },
-          body: initialTwiML,
-        };
-      }
-
-      const realtimeParams = this.getRealtimeTwimlParams(ctx);
-      if (realtimeParams) {
-        const direction = realtimeParams.get("Direction");
-        const isInboundRealtimeRequest = !direction || direction === "inbound";
-        if (isInboundRealtimeRequest && !this.shouldAcceptRealtimeInboundRequest(realtimeParams)) {
-          console.log("[voice-call] Realtime inbound call rejected before stream setup");
-          return buildRealtimeRejectedTwiML();
-        }
-        console.log(
-          `[voice-call] Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
-        );
-        return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
-      }
-
-      const parsed = this.provider.parseWebhookEvent(ctx, {
-        verifiedRequestKey: verification.verifiedRequestKey,
-      });
-
-      if (verification.isReplay) {
+      const isReplay = Boolean(verification.isReplay);
+      if (isReplay) {
         console.warn("[voice-call] Replay detected; skipping event side effects");
-      } else {
-        this.processParsedEvents(parsed.events);
+        if (this.provider.name === "twilio") {
+          return buildTwilioReplayTwiML();
+        }
+        const cachedResponse = await this.getCachedReplayResponse(verification.verifiedRequestKey);
+        if (cachedResponse) {
+          return cachedResponse;
+        }
       }
 
-      return normalizeWebhookResponse(parsed);
+      const buildResponse = async (): Promise<WebhookResponsePayload> => {
+        const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
+        if (initialTwiML !== undefined && initialTwiML !== null) {
+          const params = new URLSearchParams(ctx.rawBody);
+          console.log(
+            `[voice-call] Serving provider initial TwiML before realtime handling (callSid=${params.get("CallSid") ?? "unknown"}, direction=${params.get("Direction") ?? "unknown"})`,
+          );
+          return {
+            statusCode: 200,
+            headers: { "Content-Type": "application/xml" },
+            body: initialTwiML,
+          };
+        }
+
+        const realtimeParams = this.getRealtimeTwimlParams(ctx);
+        if (realtimeParams) {
+          const direction = realtimeParams.get("Direction");
+          const isInboundRealtimeRequest = !direction || direction === "inbound";
+          if (
+            isInboundRealtimeRequest &&
+            !this.shouldAcceptRealtimeInboundRequest(realtimeParams)
+          ) {
+            console.log("[voice-call] Realtime inbound call rejected before stream setup");
+            return buildRealtimeRejectedTwiML();
+          }
+          console.log(
+            `[voice-call] Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
+          );
+          return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
+        }
+
+        const parsed = this.provider.parseWebhookEvent(ctx, {
+          verifiedRequestKey: verification.verifiedRequestKey,
+        });
+        if (!isReplay) {
+          this.processParsedEvents(parsed.events);
+        }
+
+        return normalizeWebhookResponse(parsed);
+      };
+
+      if (isReplay) {
+        return await buildResponse();
+      }
+
+      if (this.provider.name === "twilio") {
+        return await buildResponse();
+      }
+
+      return await this.cacheReplayResponse(verification.verifiedRequestKey, buildResponse);
     } finally {
       this.webhookInFlightLimiter.release(inFlightKey);
     }
+  }
+
+  private pruneReplayResponses(now: number): void {
+    for (const [key, entry] of this.replayResponses) {
+      if (entry.expiresAt <= now) {
+        this.replayResponses.delete(key);
+      }
+    }
+    while (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
+      const oldest = this.replayResponses.keys().next().value;
+      if (!oldest) {
+        break;
+      }
+      this.replayResponses.delete(oldest);
+    }
+  }
+
+  private async getCachedReplayResponse(key: string): Promise<WebhookResponsePayload | null> {
+    const now = Date.now();
+    const entry = this.replayResponses.get(key);
+    if (!entry) {
+      return null;
+    }
+    if (entry.expiresAt <= now) {
+      this.replayResponses.delete(key);
+      return null;
+    }
+    return cloneWebhookResponsePayload(await entry.response);
+  }
+
+  private async cacheReplayResponse(
+    key: string,
+    buildResponse: () => Promise<WebhookResponsePayload>,
+  ): Promise<WebhookResponsePayload> {
+    const now = Date.now();
+    this.replayResponseCacheCalls += 1;
+    if (this.replayResponseCacheCalls % WEBHOOK_REPLAY_RESPONSE_PRUNE_INTERVAL === 0) {
+      this.pruneReplayResponses(now);
+    }
+
+    const response = buildResponse()
+      .then(cloneWebhookResponsePayload)
+      .catch((err) => {
+        this.replayResponses.delete(key);
+        throw err;
+      });
+    this.replayResponses.set(key, {
+      expiresAt: now + WEBHOOK_REPLAY_RESPONSE_TTL_MS,
+      response,
+    });
+    if (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
+      this.pruneReplayResponses(now);
+    }
+    return cloneWebhookResponsePayload(await response);
   }
 
   private verifyPreAuthWebhookHeaders(headers: http.IncomingHttpHeaders): WebhookHeaderGateResult {
@@ -826,8 +931,8 @@ export class VoiceCallWebhookServer {
       return null;
     }
 
-    // Replays must return the same TwiML body so Twilio retries reconnect cleanly.
-    // The one-time token still changes, but the behavior stays identical.
+    // Initial TwiML fetches without gathered input may enter realtime handling.
+    // Replay checks run before this helper so retries cannot mint new stream tokens.
     return !params.get("SpeechResult") && !params.get("Digits") ? params : null;
   }
 

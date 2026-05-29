@@ -8,6 +8,7 @@ import { keyHint } from "../../modes/interactive/components/keybinding-hints.js"
 import type { AgentTool } from "../../runtime/index.js";
 import { ensureTool } from "../../utils/tools-manager.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { appendBoundedTextTail, normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { GrepToolDetails } from "./tool-contracts.js";
@@ -205,7 +206,7 @@ export function createGrepToolDefinition(
             }
 
             const contextValue = context && context > 0 ? context : 0;
-            const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
+            const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
             const formatPath = (filePath: string): string => {
               if (isDirectory) {
                 const relative = path.relative(searchPath, filePath);
@@ -269,7 +270,7 @@ export function createGrepToolDefinition(
             };
             signal?.addEventListener("abort", onAbort, { once: true });
             child.stderr?.on("data", (chunk) => {
-              stderr += chunk.toString();
+              stderr = appendBoundedTextTail(stderr, chunk);
             });
 
             const formatBlock = async (filePath: string, lineNumber: number): Promise<string[]> => {

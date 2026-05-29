@@ -207,7 +207,9 @@ describe("web media loading", () => {
       ok: true,
       body: true,
       arrayBuffer: async () => Buffer.alloc(2048).buffer,
-      headers: { get: () => "image/png" },
+      headers: {
+        get: (name: string) => (name === "content-type" ? "image/png" : null),
+      },
       status: 200,
     } as unknown as Response);
 
@@ -270,7 +272,9 @@ describe("web media loading", () => {
       body: true,
       arrayBuffer: async () =>
         gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
-      headers: { get: () => "image/gif" },
+      headers: {
+        get: (name: string) => (name === "content-type" ? "image/gif" : null),
+      },
       status: 200,
     } as unknown as Response);
 
@@ -358,13 +362,15 @@ describe("local media root guard", () => {
   });
 
   it("rejects Windows network paths before filesystem checks", async () => {
+    const realTmpRoot = resolvePreferredOpenClawTmpDir();
+
     await withMockedWindowsPlatform(async () => {
       const realpathSpy = vi.spyOn(fs, "realpath");
 
       await withRestoredMocks([realpathSpy], async () => {
         await expectLocalMediaAccessCode(
           loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
-            localRoots: [resolvePreferredOpenClawTmpDir()],
+            localRoots: [realTmpRoot],
           }),
           "network-path-not-allowed",
         );

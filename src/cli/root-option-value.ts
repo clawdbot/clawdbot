@@ -1,4 +1,5 @@
 import { isValueToken } from "../infra/cli-root-options.js";
+import { parseInlineOptionToken } from "../infra/inline-option-token.js";
 
 export function takeCliRootOptionValue(
   raw: string,
@@ -7,9 +8,9 @@ export function takeCliRootOptionValue(
   value: string | null;
   consumedNext: boolean;
 } {
-  if (raw.includes("=")) {
-    const value = raw.slice(raw.indexOf("=") + 1);
-    const trimmed = (value ?? "").trim();
+  const parsed = parseInlineOptionToken(raw);
+  if (parsed.hasInlineValue) {
+    const trimmed = (parsed.inlineValue ?? "").trim();
     return { value: trimmed || null, consumedNext: false };
   }
   const consumedNext = isValueToken(next);

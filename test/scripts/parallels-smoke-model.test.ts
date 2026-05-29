@@ -1,10 +1,12 @@
 import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   modelProviderConfigBatchJson,
+  readPositiveIntEnv,
   resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth as resolveProviderAuthDirect,
   resolveSnapshot,
@@ -14,6 +16,7 @@ import {
   shellQuote,
 } from "../../scripts/e2e/parallels/common.ts";
 import { resolveHostCommandInvocation } from "../../scripts/e2e/parallels/host-command.ts";
+import { testing as hostServerTesting } from "../../scripts/e2e/parallels/host-server.ts";
 import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 
 const WRAPPERS = {
@@ -95,6 +98,19 @@ function withEnv<T>(env: Record<string, string>, callback: () => T): T {
   }
 }
 
+async function unusedLoopbackPort(): Promise<number> {
+  const server = createServer();
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  );
+  if (!address || typeof address === "string") {
+    throw new Error("Expected TCP server address.");
+  }
+  return address.port;
+}
+
 describe("Parallels smoke model selection", () => {
   it("keeps the public shell entrypoints as thin TypeScript launchers", () => {
     for (const [platform, wrapperPath] of Object.entries(WRAPPERS)) {
@@ -173,6 +189,57 @@ describe("Parallels smoke model selection", () => {
       expect(script, scriptPath).not.toContain("def aliases(name: str)");
     }
   });
+
+  it("bounds host artifact server startup stderr", () => {
+    const retained = hostServerTesting.appendBoundedOutput(
+      "a".repeat(10),
+      Buffer.from("b".repeat(10)),
+      12,
+    );
+    expect(retained).toBe(`${"a".repeat(2)}${"b".repeat(10)}`);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "reports only the bounded host artifact server stderr tail",
+    async () => {
+      const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-host-server-"));
+      const fakePython = join(tempDir, "python3");
+      writeFileSync(
+        fakePython,
+        `#!/usr/bin/env bash
+set -euo pipefail
+printf 'BEGIN_MARKER\\n' >&2
+head -c 200000 </dev/zero | tr '\\0' x >&2
+printf '\\nTAIL_MARKER\\n' >&2
+exit 42
+`,
+      );
+      chmodSync(fakePython, 0o755);
+
+      try {
+        const port = await unusedLoopbackPort();
+        const result = spawnNodeEvalSync(
+          `import { startHostServer } from "./${TS_PATHS.hostServer}"; await startHostServer({ dir: ".", hostIp: "127.0.0.1", port: ${port}, artifactPath: "artifact.tgz", label: "artifact" });`,
+          {
+            env: {
+              ...process.env,
+              PATH: `${tempDir}${delimiter}${process.env.PATH ?? ""}`,
+            },
+            imports: ["tsx"],
+            maxBuffer: 1024 * 1024,
+          },
+        );
+
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain("host artifact server exited early");
+        expect(result.stderr).toContain("TAIL_MARKER");
+        expect(result.stderr).not.toContain("BEGIN_MARKER");
+        expect(Buffer.byteLength(result.stderr, "utf8")).toBeLessThan(90 * 1024);
+      } finally {
+        rmSync(tempDir, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("quotes shell args and resolves fuzzy snapshot hints through the shared TypeScript helper", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-helper-"));
@@ -709,13 +776,50 @@ if (isPrlctl) {
       windows: 1800,
     });
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
-      "OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700",
+      'this.agentTimeoutSeconds = readPositiveIntEnv("OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S", 2700)',
     );
-    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
-      '--timeout ${resolveParallelsModelTimeoutSeconds("macos")}',
-    );
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("--timeout ${this.modelTimeoutSeconds}");
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain(
       '--timeout ${resolveParallelsModelTimeoutSeconds("linux")}',
+    );
+  });
+
+  it("rejects loose Parallels numeric limits before starting smoke lanes", () => {
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_MODEL_TIMEOUT_S: "1200" }, () =>
+        resolveParallelsModelTimeoutSeconds("linux"),
+      ),
+    ).toBe(1200);
+    expect(
+      withEnv({ OPENCLAW_PARALLELS_NUMERIC_TEST: " 42 " }, () =>
+        readPositiveIntEnv("OPENCLAW_PARALLELS_NUMERIC_TEST", 7),
+      ),
+    ).toBe(42);
+
+    const invalidModelTimeout = spawnNodeEvalSync(
+      `process.env.OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S = "1800s"; const { resolveParallelsModelTimeoutSeconds } = await import("./${TS_PATHS.common}"); resolveParallelsModelTimeoutSeconds("macos");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    expect(invalidModelTimeout.status).toBe(1);
+    expect(invalidModelTimeout.stderr).toContain(
+      "invalid OPENCLAW_PARALLELS_MACOS_MODEL_TIMEOUT_S: 1800s",
+    );
+
+    const invalidHostPort = spawnNodeEvalSync(
+      `process.argv = ["node", "${TS_PATHS.macos}", "--host-port", "18425x"]; await import("./${TS_PATHS.macos}");`,
+      { env: process.env, imports: ["tsx"] },
+    );
+    expect(invalidHostPort.status).toBe(1);
+    expect(invalidHostPort.stderr).toContain("invalid --host-port: 18425x");
+
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
+      'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',
+    );
+    expect(readFileSync(TS_PATHS.packageArtifact, "utf8")).toContain(
+      'readPositiveIntEnv("OPENCLAW_PARALLELS_PACKAGE_LOCK_TIMEOUT_MS", 30 * 60_000)',
+    );
+    expect(readFileSync(TS_PATHS.npmUpdate, "utf8")).toContain(
+      'readPositiveIntEnv("OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S", 1200)',
     );
   });
 

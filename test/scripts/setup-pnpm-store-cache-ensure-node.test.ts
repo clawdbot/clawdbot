@@ -242,4 +242,36 @@ exit 1
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("handles missing toolcache roots under nounset", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `source "${ensureNodeScript}"`,
+            `openclaw_find_toolcache_node "99.99.99"`,
+          ].join("; "),
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: process.env.PATH ?? "",
+            RUNNER_TOOL_CACHE: join(root, "missing-toolcache"),
+            AGENT_TOOLSDIRECTORY: join(root, "missing-agent-tools"),
+            ACTIONS_RUNNER_TOOL_CACHE: join(root, "missing-actions-cache"),
+            OPENCLAW_CONTAINER_TOOL_CACHE: join(root, "missing-container-cache"),
+          },
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).not.toContain("unbound variable");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

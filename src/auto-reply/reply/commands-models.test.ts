@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -30,6 +31,34 @@ const normalizeProviderModelIdWithRuntimeMock = vi.hoisted(() => vi.fn());
 
 const MODELS_ADD_DEPRECATED_TEXT =
   "⚠️ /models add is deprecated. Use /models to browse providers and /model to switch models.";
+
+function setFastModelsCliBackendDeps(): void {
+  cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        pluginId: "claude-cli",
+        modelProvider: "anthropic",
+        config: { command: "claude" },
+        bundleMcp: false,
+      },
+      {
+        id: "google-gemini-cli",
+        pluginId: "google-gemini-cli",
+        modelProvider: "google",
+        config: { command: "gemini" },
+        bundleMcp: false,
+      },
+    ],
+  });
+}
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: modelCatalogMocks.loadModelCatalog,
@@ -108,6 +137,7 @@ const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id)
 }));
 
 beforeAll(async () => {
+  setFastModelsCliBackendDeps();
   modelCatalogMocks.loadModelCatalog.mockResolvedValue([
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
   ]);
@@ -117,6 +147,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  setFastModelsCliBackendDeps();
   modelCatalogMocks.loadModelCatalog.mockReset();
   modelCatalogMocks.loadModelCatalog.mockResolvedValue([
     { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
@@ -164,6 +195,10 @@ beforeEach(() => {
     },
   ];
   setActivePluginRegistry(registry);
+});
+
+afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
 });
 
 function buildParams(

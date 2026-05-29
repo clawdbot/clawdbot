@@ -7,6 +7,7 @@ const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
 const TYPE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".d.ts", ".js", ".mjs", ".json"]);
 const VALID_MODES = new Set(["all", "package-boundary"]);
+const ROOT_SHIMS_TIMEOUT_MS = resolveBoundaryRootShimsTimeoutMs(process.env);
 const ROOT_SHIMS_NODE_OPTIONS =
   `${process.env.NODE_OPTIONS ?? ""} --max-old-space-size=4096`.trim();
 
@@ -90,6 +91,15 @@ export function parseMode(argv = process.argv.slice(2)) {
     throw new Error(`Unknown mode: ${mode}`);
   }
   return mode;
+}
+
+export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
+  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === "") {
+    return 300_000;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isInteger(parsed) && parsed > 0 && String(parsed) === raw.trim() ? parsed : 300_000;
 }
 
 function collectNewestMtime(paths, params = {}) {
@@ -195,10 +205,11 @@ function abortSiblingSteps(abortController) {
   }
 }
 
-function runNodeStep(label, args, timeoutMs, params = {}) {
+export function runNodeStep(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
+  const spawnImpl = params.spawnImpl ?? spawn;
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawnImpl(process.execPath, args, {
       cwd: repoRoot,
       env: params.env ? { ...process.env, ...params.env } : process.env,
       signal: abortController?.signal,
@@ -212,8 +223,8 @@ function runNodeStep(label, args, timeoutMs, params = {}) {
       if (settled) {
         return;
       }
-      child.kill("SIGTERM");
       settled = true;
+      child.kill("SIGKILL");
       stdoutWriter.flush();
       stderrWriter.flush();
       abortSiblingSteps(abortController);
@@ -507,7 +518,7 @@ async function main(argv = process.argv.slice(2)) {
       await runNodeStep(
         "plugin-sdk boundary root shims",
         ["--import", "tsx", resolve(repoRoot, "scripts/write-plugin-sdk-entry-dts.ts")],
-        120_000,
+        ROOT_SHIMS_TIMEOUT_MS,
         { env: { NODE_OPTIONS: ROOT_SHIMS_NODE_OPTIONS } },
       );
     } else if (mode === "all") {

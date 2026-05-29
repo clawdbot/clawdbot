@@ -22,6 +22,15 @@ function expectGraphUploadFetch(fetchFn: ReturnType<typeof vi.fn>, expectedUrl: 
   expect(init?.headers?.["User-Agent"]).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
 }
 
+function bodyOnlyErrorResponse(body: string, status = 500): Response {
+  return {
+    ok: false,
+    status,
+    headers: new Headers(),
+    body: new Response(body).body,
+  } as unknown as Response;
+}
+
 describe("graph upload helpers", () => {
   const tokenProvider = {
     getAccessToken: vi.fn(async () => "graph-token"),
@@ -106,6 +115,31 @@ describe("graph upload helpers", () => {
         fetchFn: withFetchPreconnect(fetchFn),
       }),
     ).rejects.toThrow("SharePoint upload response missing required fields");
+  });
+
+  it("bounds upload error bodies without requiring response.text()", async () => {
+    const fetchFn = vi.fn(async () =>
+      bodyOnlyErrorResponse(`${"upload-denied ".repeat(4096)}tail-marker`, 413),
+    );
+
+    let error: unknown;
+    try {
+      await uploadToSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "large.txt",
+        siteId: "site-123",
+        tokenProvider,
+        fetchFn: fetchFn as unknown as typeof fetch,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain("SharePoint upload failed (413): upload-denied");
+    expect(message).not.toContain("tail-marker");
+    expect(message.length).toBeLessThan(700);
   });
 });
 

@@ -333,6 +333,27 @@ describe("amazon-bedrock provider plugin", () => {
     }
   });
 
+  it("leaves Claude Opus 4.8 Bedrock model refs off by default", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+
+    for (const modelId of [
+      "us.anthropic.claude-opus-4-8",
+      "us.anthropic.claude-opus-4.8-v1:0",
+      "arn:aws:bedrock:us-west-2:123456789012:inference-profile/us.anthropic.claude-opus-4-8",
+    ]) {
+      expectThinkingProfile(
+        provider.resolveThinkingProfile?.({
+          provider: "amazon-bedrock",
+          modelId,
+        } as never),
+        {
+          levelIds: ["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"],
+          defaultLevel: "off",
+        },
+      );
+    }
+  });
+
   it("owns Anthropic-style replay policy for Claude Bedrock models", async () => {
     const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
 
@@ -423,6 +444,28 @@ describe("amazon-bedrock provider plugin", () => {
         api: "bedrock-converse-stream",
         provider: "amazon-bedrock",
         id: "us.anthropic.claude-opus-4-7",
+      } as never,
+      { messages: [] } as never,
+      { temperature: 0.2, maxTokens: 10 },
+    ) as Record<string, unknown> | undefined;
+
+    expectWrappedResultFields(result, { maxTokens: 10 });
+    expect(result).not.toHaveProperty("temperature");
+  });
+
+  it("omits temperature for Bedrock Opus 4.8 model ids", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-8",
+      streamFn: spyStreamFn,
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-opus-4-8",
       } as never,
       { messages: [] } as never,
       { temperature: 0.2, maxTokens: 10 },
@@ -588,6 +631,44 @@ describe("amazon-bedrock provider plugin", () => {
     await (result?.onPayload as ((p: Record<string, unknown>) => unknown) | undefined)?.(payload);
 
     expect(payload.additionalModelRequestFields.output_config).toEqual({ effort: "xhigh" });
+  });
+
+  it("uses adaptive max thinking for Bedrock Opus 4.8", async () => {
+    const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-8",
+      streamFn: spyStreamFn,
+      thinkingLevel: "max",
+    } as never);
+
+    const result = wrapped?.(
+      {
+        api: "bedrock-converse-stream",
+        provider: "amazon-bedrock",
+        id: "us.anthropic.claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        reasoning: true,
+      } as never,
+      { messages: [] } as never,
+      { reasoning: "max" } as never,
+    ) as Record<string, unknown> | undefined;
+
+    const payload = {
+      inferenceConfig: { temperature: 0.2 },
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive" },
+        output_config: { effort: "xhigh" },
+      },
+    };
+
+    await (result?.onPayload as ((p: Record<string, unknown>) => unknown) | undefined)?.(payload);
+
+    expect(payload.additionalModelRequestFields).toEqual({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
+    });
+    expect(payload.inferenceConfig).toEqual({});
   });
 
   it("classifies nested Bedrock deprecated-temperature validation as format failover", async () => {

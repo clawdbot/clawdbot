@@ -45,11 +45,11 @@ describe("Telegram Bot API helper", () => {
 
   it("bounds stalled Bot API response bodies", async () => {
     vi.useFakeTimers();
-    const fetchImpl = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => new Promise(() => undefined),
-    });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 200,
+      }),
+    );
 
     const result = telegramBotApi(
       "test-token",
@@ -69,5 +69,29 @@ describe("Telegram Bot API helper", () => {
     await vi.advanceTimersByTimeAsync(100);
     await rejection;
     expect(fetchImpl.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
+  });
+
+  it("bounds oversized Bot API response bodies", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: {}, padding: "x".repeat(128) }), {
+        status: 200,
+      }),
+    );
+
+    await expect(
+      telegramBotApi(
+        "test-token",
+        "getMe",
+        {},
+        {
+          baseUrl: "https://telegram.test",
+          fetchImpl,
+          maxBodyBytes: 16,
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "Telegram Bot API getMe response body exceeded 16 bytes",
+    });
   });
 });

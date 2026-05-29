@@ -139,6 +139,25 @@ describe("xai speech provider", () => {
     expect(tts.responseFormat).toBe("pcm");
   });
 
+  it("drops malformed speed values before synthesis", async () => {
+    const provider = buildXaiSpeechProvider();
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig: {
+        apiKey: "xai-key",
+        speed: 2,
+      },
+      providerOverrides: {
+        speed: 0.5,
+      },
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(requireLastTtsCall().speed).toBeUndefined();
+  });
+
   it("reports configured when an xAI auth profile exists, even without env or config apiKey", () => {
     isProviderAuthProfileConfiguredMock.mockReturnValue(true);
     const provider = buildXaiSpeechProvider();

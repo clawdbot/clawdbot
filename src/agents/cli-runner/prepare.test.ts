@@ -115,7 +115,6 @@ async function createTestMcpLoopbackServer(port = 0) {
 
 function createCliBackendConfig(
   params: {
-    systemPromptOverride?: string | null;
     bundleMcp?: boolean;
     reseedFromRawTranscriptWhenUncompacted?: boolean;
   } = {},
@@ -123,9 +122,6 @@ function createCliBackendConfig(
   return {
     agents: {
       defaults: {
-        ...(params.systemPromptOverride !== null
-          ? { systemPromptOverride: params.systemPromptOverride ?? "test system prompt" }
-          : {}),
         cliBackends: {
           "test-cli": {
             command: "test-cli",
@@ -560,7 +556,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-legacy-merge",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.params.prompt).toBe("prompt prepend\n\nlegacy prepend\n\nlatest ask");
@@ -595,13 +591,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-hook-failure",
-        config: createCliBackendConfig({ systemPromptOverride: "base extra system" }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.params.prompt).toBe("latest ask");
-      expect(context.systemPrompt).toBe(
-        "base extra system\n\nCurrent model identity: test-cli/test-model. If asked what model you are, answer with this value for the current run.",
+      expect(context.systemPrompt).toContain(
+        "You are a personal assistant running inside OpenClaw.",
       );
+      expect(context.systemPrompt).toContain("Current model identity: test-cli/test-model.");
       expect(context.systemPrompt).not.toContain("hook exploded");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledOnce();
     } finally {
@@ -840,7 +837,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           sessionId: "cli-session",
           cwdHash: hashCliSessionText(dir),
         },
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.systemPrompt).toContain("## Inbound Context\nchannel=telegram");
@@ -865,7 +862,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-cwd-prompt",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.cwd).toBe(taskDir);
@@ -937,7 +934,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           extraSystemPromptHash: hashCliSessionText("old stable prompt"),
         },
         config: createCliBackendConfig({
-          systemPromptOverride: null,
           reseedFromRawTranscriptWhenUncompacted: true,
         }),
       });
@@ -978,7 +974,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           cwdHash: hashCliSessionText(dir),
         },
         config: createCliBackendConfig({
-          systemPromptOverride: null,
           reseedFromRawTranscriptWhenUncompacted: true,
         }),
       });
@@ -1141,7 +1136,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-loopback-prompt-tools",
-        config: createCliBackendConfig({ bundleMcp: true, systemPromptOverride: null }),
+        config: createCliBackendConfig({ bundleMcp: true }),
         cliSessionBinding: {
           sessionId: "cli-session",
           promptToolNamesHash: "old-tool-surface",
@@ -1231,7 +1226,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-test-loopback-prompt-tools-fallback",
-        config: createCliBackendConfig({ bundleMcp: true, systemPromptOverride: null }),
+        config: createCliBackendConfig({ bundleMcp: true }),
       });
 
       expect(ensureMcpLoopbackServer).toHaveBeenCalledTimes(1);
@@ -1435,7 +1430,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         runId: "run-77011-missing",
         cliSessionBinding: { sessionId: "stale-claude-sid" },
         cliSessionId: "stale-claude-sid",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(transcriptCheck).toHaveBeenCalledWith({ sessionId: "stale-claude-sid" });
@@ -1483,7 +1478,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         runId: "run-77011-present",
         cliSessionBinding: { sessionId: "live-claude-sid", cwdHash: hashCliSessionText(dir) },
         cliSessionId: "live-claude-sid",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(transcriptCheck).toHaveBeenCalledWith({ sessionId: "live-claude-sid" });
@@ -1546,7 +1541,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "opus",
         timeoutMs: 1_000,
         runId: "run-claude-plugin-skills-prompt",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
         skillsSnapshot: {
           prompt: [
             "<available_skills>",
@@ -1623,7 +1618,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "opus",
         timeoutMs: 1_000,
         runId: "run-claude-plugin-skills-prompt-fallback",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
         skillsSnapshot: {
           prompt: [
             "<available_skills>",
@@ -1716,7 +1711,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "opus",
         timeoutMs: 1_000,
         runId: "run-claude-plugin-skills-prompt-materialization-fallback",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
         skillsSnapshot: {
           prompt: [
             "<available_skills>",
@@ -1775,7 +1770,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-77011-other-provider",
         cliSessionBinding: { sessionId: "test-cli-sid", cwdHash: hashCliSessionText(dir) },
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(transcriptCheck).not.toHaveBeenCalled();
@@ -1826,7 +1821,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "claude-haiku-3-5",
         timeoutMs: 1_000,
         runId: "run-auto-claude-reseed-history-chars",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.openClawHistoryPrompt).toBeDefined();
@@ -1854,7 +1849,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
               input: "stdin",
               sessionMode: "existing",
               modelAliases: {
-                "claude-opus-4-7": "opus",
+                "claude-opus-4-8": "opus",
               },
             },
           },
@@ -1878,10 +1873,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         workspaceDir: dir,
         prompt: "latest ask",
         provider: "claude-cli",
-        model: "claude-opus-4-7",
+        model: "claude-opus-4-8",
         timeoutMs: 1_000,
         runId: "run-auto-claude-alias-reseed-history-chars",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.openClawHistoryPrompt).toBeDefined();
@@ -1915,7 +1910,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         model: "test-model",
         timeoutMs: 1_000,
         runId: "run-default-reseed-history-chars",
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.openClawHistoryPrompt).toBeDefined();
@@ -1990,7 +1985,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         timeoutMs: 1_000,
         runId: "run-raw-reseed-cap-override",
         cliSessionBinding: { sessionId: "cli-session", cwdHash: hashCliSessionText(dir) },
-        config: createCliBackendConfig({ systemPromptOverride: null }),
+        config: createCliBackendConfig(),
       });
 
       expect(context.reusableCliSession).toEqual({ sessionId: "cli-session" });

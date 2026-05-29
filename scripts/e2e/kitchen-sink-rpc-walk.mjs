@@ -28,6 +28,10 @@ const INSTALL_TIMEOUT_MS = readPositiveInt(
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS, 60000);
 const FETCH_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS, 10000);
+const FETCH_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES,
+  1024 * 1024,
+);
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
@@ -461,6 +465,7 @@ function isRetryableTransientNetworkError(error, seen = new Set()) {
 export async function fetchJson(url, options = {}) {
   const attempts = Math.max(1, options.attempts ?? 3);
   const timeoutMs = Math.max(1, options.timeoutMs ?? FETCH_TIMEOUT_MS);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? FETCH_BODY_MAX_BYTES);
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
@@ -480,7 +485,10 @@ export async function fetchJson(url, options = {}) {
         (options.fetchImpl ?? fetch)(url, { signal: controller.signal }),
         timeoutPromise,
       ]);
-      const text = await Promise.race([response.text(), timeoutPromise]);
+      const text = await Promise.race([
+        readBoundedResponseText(response, maxBodyBytes),
+        timeoutPromise,
+      ]);
       let body = null;
       try {
         body = text ? JSON.parse(text) : null;
@@ -501,6 +509,31 @@ export async function fetchJson(url, options = {}) {
     }
   }
   throw lastError ?? new Error(`fetch ${url} failed`);
+}
+
+export async function readBoundedResponseText(response, byteLimit = FETCH_BODY_MAX_BYTES) {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    return await response.text();
+  }
+  const chunks = [];
+  let totalBytes = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    const chunk = Buffer.from(value);
+    totalBytes += chunk.byteLength;
+    if (totalBytes > byteLimit) {
+      await reader.cancel().catch(() => undefined);
+      throw Object.assign(new Error(`fetch response body exceeded ${byteLimit} bytes`), {
+        code: "ETOOBIG",
+      });
+    }
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
 }
 
 function configureKitchenSink(env, port) {
@@ -581,14 +614,14 @@ async function startGateway(runner, port, env, logPath) {
 }
 
 export async function stopGateway(child, options = {}) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
+  if (!child || hasChildExited(child)) {
     return;
   }
   const teardownGraceMs = Math.max(0, options.teardownGraceMs ?? GATEWAY_TEARDOWN_GRACE_MS);
   const killGraceMs = Math.max(0, options.killGraceMs ?? GATEWAY_TEARDOWN_KILL_GRACE_MS);
   const exited = new Promise((resolve) => child.once("exit", resolve));
   const waitForExit = async (ms) =>
-    child.exitCode !== null || child.signalCode !== null
+    hasChildExited(child)
       ? true
       : await Promise.race([exited.then(() => true), delay(ms).then(() => false)]);
 
@@ -601,6 +634,10 @@ export async function stopGateway(child, options = {}) {
     return;
   }
   releaseUnsettledGatewayChild(child);
+}
+
+export function hasChildExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
 }
 
 function releaseUnsettledGatewayChild(child) {
@@ -671,16 +708,25 @@ export function createGatewayReadyLogScanner(logPath, marker = "[gateway] ready"
   };
 }
 
-async function waitForGatewayReady(child, port, logPath) {
+export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const started = Date.now();
   let lastError = "";
+  const timeoutMs = Math.max(1, options.timeoutMs ?? READY_TIMEOUT_MS);
+  const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
   const logReportedReady = createGatewayReadyLogScanner(logPath);
-  while (Date.now() - started < READY_TIMEOUT_MS) {
-    if (child.exitCode !== null) {
-      throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  const exitedBeforeReadyError = () =>
+    new Error(`gateway exited before ready\n${tailFile(logPath)}`);
+  if (hasChildExited(child)) {
+    throw exitedBeforeReadyError();
+  }
+  while (Date.now() - started < timeoutMs) {
+    if (hasChildExited(child)) {
+      throw exitedBeforeReadyError();
     }
     try {
-      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`);
+      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
+        fetchImpl: options.fetchImpl,
+      });
       if (readyz.ok) {
         return;
       }
@@ -691,7 +737,10 @@ async function waitForGatewayReady(child, port, logPath) {
     if (logReportedReady()) {
       lastError = `${lastError}; gateway log reported ready before HTTP readiness`;
     }
-    await delay(250);
+    await delay(pollDelayMs);
+  }
+  if (hasChildExited(child)) {
+    throw new Error(`gateway exited before ready\n${tailFile(logPath)}`);
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(logPath)}`);
 }

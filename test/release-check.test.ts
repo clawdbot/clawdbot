@@ -34,6 +34,7 @@ import {
   packageNameFromSpecifier,
   resolveReleaseNpmCommand,
   resolveMissingPackBuildHint,
+  runReleaseCheckCommand,
 } from "../scripts/release-check.ts";
 import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../src/cli/completion-runtime.ts";
 import {
@@ -161,6 +162,41 @@ describe("packed CLI smoke", () => {
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
     });
+  });
+});
+
+describe("runReleaseCheckCommand", () => {
+  it("returns captured command output", () => {
+    expect(
+      runReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('ok')"] },
+        { stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toBe("ok");
+  });
+
+  it("bounds commands that ignore termination", () => {
+    const startedAt = Date.now();
+
+    expect(() =>
+      runReleaseCheckCommand(
+        {
+          command: process.execPath,
+          args: ["--eval", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"],
+        },
+        { stdio: ["ignore", "pipe", "pipe"], timeoutMs: 100 },
+      ),
+    ).toThrow();
+    expect(Date.now() - startedAt).toBeLessThan(2500);
+  });
+
+  it("bounds captured command output", () => {
+    expect(() =>
+      runReleaseCheckCommand(
+        { command: process.execPath, args: ["--eval", "process.stdout.write('x'.repeat(4096))"] },
+        { maxBuffer: 1024, stdio: ["ignore", "pipe", "pipe"] },
+      ),
+    ).toThrow();
   });
 });
 

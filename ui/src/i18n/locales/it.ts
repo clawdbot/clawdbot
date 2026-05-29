@@ -1132,6 +1132,11 @@ export const it: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "Riprova",
+      retrySend: "Riprova invio",
+      retryQueuedMessage: "Riprova messaggio in coda",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

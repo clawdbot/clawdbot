@@ -48,12 +48,23 @@ type MSTeamsActivity = {
   [key: string]: unknown;
 };
 
+/** Structural alias for ActivityParams — avoids tsgo resolution bugs with the bundled @microsoft/teams.api package. */
+export type MSTeamsActivityParams = { type?: string; [key: string]: unknown };
+/** Structural alias for ActivityLike. */
+export type MSTeamsActivityLike = MSTeamsActivityParams | string;
+
+export type MSTeamsStreamer = {
+  emit(activity: MSTeamsActivityParams | string): void;
+  update(text: string): void;
+  close(): Promise<unknown>;
+  readonly canceled: boolean;
+};
+
 export type MSTeamsTurnContext = {
   activity: MSTeamsActivity;
-  sendActivity: (textOrActivity: string | object) => Promise<unknown>;
-  sendActivities: (
-    activities: Array<{ type: string } & Record<string, unknown>>,
-  ) => Promise<unknown>;
-  updateActivity: (activity: object) => Promise<{ id?: string } | void>;
+  sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown>;
+  sendActivities: (activities: Array<MSTeamsActivityParams>) => Promise<unknown>;
+  updateActivity: (activity: MSTeamsActivityParams) => Promise<{ id?: string } | void>;
   deleteActivity: (activityId: string) => Promise<void>;
+  stream?: MSTeamsStreamer;
 };

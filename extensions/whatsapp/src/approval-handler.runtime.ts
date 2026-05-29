@@ -1,8 +1,9 @@
 import {
+  buildChannelApprovalExpiredText,
+  buildChannelApprovalResolvedText,
   createChannelApprovalNativeRuntimeAdapter,
-  type ExpiredApprovalView,
   type PendingApprovalView,
-  type ResolvedApprovalView,
+  resolvePreparedApprovalAccountId,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
@@ -10,16 +11,10 @@ import {
   type ApprovalReactionPendingContent,
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
-  buildApprovalResolvedReplyPayload,
-  buildPluginApprovalExpiredMessage,
-  buildPluginApprovalResolvedMessage,
   type ExecApprovalRequest,
-  type ExecApprovalResolved,
   type PluginApprovalRequest,
-  type PluginApprovalResolved,
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   registerWhatsAppApprovalReactionTarget,
   unregisterWhatsAppApprovalReactionTarget,
@@ -31,7 +26,6 @@ import { sendMessageWhatsApp, sendTypingWhatsApp } from "./send.js";
 const log = createSubsystemLogger("whatsapp/approvals");
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 type WhatsAppPendingDelivery = ApprovalReactionPendingContent;
 type PreparedWhatsAppApprovalTarget = {
   to: string;
@@ -55,42 +49,6 @@ function buildPendingPayload(params: {
   return buildApprovalReactionPendingContent(params);
 }
 
-function buildResolvedText(params: {
-  request: ApprovalRequest;
-  resolved: ApprovalResolved;
-  view: ResolvedApprovalView;
-}): string {
-  if (params.view.approvalKind === "plugin") {
-    return buildPluginApprovalResolvedMessage(params.resolved as PluginApprovalResolved);
-  }
-  const resolvedByText = params.resolved.resolvedBy
-    ? ` Resolved by ${params.resolved.resolvedBy}.`
-    : "";
-  const payload = buildApprovalResolvedReplyPayload({
-    approvalId: params.request.id,
-    approvalSlug: params.request.id.slice(0, 8),
-    text: `✅ Exec approval ${params.resolved.decision}.${resolvedByText} ID: ${params.request.id}`,
-  });
-  return payload.text ?? "";
-}
-
-function buildExpiredText(params: { request: ApprovalRequest; view: ExpiredApprovalView }): string {
-  if (params.view.approvalKind === "plugin") {
-    return buildPluginApprovalExpiredMessage(params.request as PluginApprovalRequest);
-  }
-  return `⏱️ Exec approval expired. ID: ${params.request.id}`;
-}
-
-function resolvePreparedAccountId(params: {
-  plannedAccountId?: string | null;
-  contextAccountId?: string | null;
-}): string | undefined {
-  return (
-    normalizeOptionalString(params.plannedAccountId) ??
-    normalizeOptionalString(params.contextAccountId)
-  );
-}
-
 export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
   WhatsAppPendingDelivery,
   PreparedWhatsAppApprovalTarget,
@@ -108,11 +66,11 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       buildPendingPayload({ request, view, nowMs }),
     buildResolvedResult: ({ request, resolved, view }) => ({
       kind: "update",
-      payload: { text: buildResolvedText({ request, resolved, view }) },
+      payload: { text: buildChannelApprovalResolvedText({ request, resolved, view }) },
     }),
     buildExpiredResult: ({ request, view }) => ({
       kind: "update",
-      payload: { text: buildExpiredText({ request, view }) },
+      payload: { text: buildChannelApprovalExpiredText({ request, view }) },
     }),
   },
   transport: {
@@ -123,7 +81,7 @@ export const whatsappApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
       }
       const prepared: PreparedWhatsAppApprovalTarget = {
         to,
-        accountId: resolvePreparedAccountId({
+        accountId: resolvePreparedApprovalAccountId({
           plannedAccountId: (plannedTarget.target as { accountId?: string | null }).accountId,
           contextAccountId: accountId,
         }),

@@ -14,6 +14,11 @@ import {
   resolveImplicitProviders,
   type ProviderConfig,
 } from "./models-config.providers.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  resolvePluginModelCatalogOwnerPluginId,
+} from "./plugin-model-catalog.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ResolveImplicitProvidersForModelsJson = (params: {
@@ -31,14 +36,52 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
 export type ModelsJsonPlan =
   | {
       action: "skip";
+      pluginCatalogWrites?: Record<string, string>;
     }
   | {
       action: "noop";
+      pluginCatalogWrites?: Record<string, string>;
     }
   | {
       action: "write";
       contents: string;
+      pluginCatalogWrites?: Record<string, string>;
     };
+
+function splitProvidersByPluginOwner(params: {
+  providers: Record<string, ProviderConfig>;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
+}): {
+  rootProviders: Record<string, ProviderConfig>;
+  pluginProviders: Record<string, Record<string, ProviderConfig>>;
+} {
+  const rootProviders: Record<string, ProviderConfig> = {};
+  const pluginProviders: Record<string, Record<string, ProviderConfig>> = {};
+  for (const [providerId, provider] of Object.entries(params.providers)) {
+    const pluginId = resolvePluginModelCatalogOwnerPluginId({
+      providerId,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    });
+    if (!pluginId) {
+      rootProviders[providerId] = provider;
+      continue;
+    }
+    const pluginCatalog = (pluginProviders[pluginId] ??= {});
+    pluginCatalog[providerId] = provider;
+  }
+  return { rootProviders, pluginProviders };
+}
+
+function buildPluginCatalogWrites(
+  pluginProviders: Record<string, Record<string, ProviderConfig>>,
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(pluginProviders).map(([pluginId, providers]) => [
+      encodePluginModelCatalogRelativePath(pluginId),
+      `${JSON.stringify({ generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers }, null, 2)}\n`,
+    ]),
+  );
+}
 
 export async function resolveProvidersForModelsJsonWithDeps(
   params: {
@@ -163,6 +206,13 @@ export async function planOpenClawModelsJsonWithDeps(
   );
 
   if (Object.keys(providers).length === 0) {
+    if (params.cfg.models?.mode === "replace") {
+      return {
+        action: "write",
+        contents: `${JSON.stringify({ providers: {} }, null, 2)}\n`,
+        pluginCatalogWrites: {},
+      };
+    }
     return { action: "skip" };
   }
 
@@ -200,15 +250,27 @@ export async function planOpenClawModelsJsonWithDeps(
   const finalProviders = applyNativeStreamingUsageCompat(
     filterWritableProviders(secretEnforcedProviders),
   );
-  const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
+  const splitProviders = splitProvidersByPluginOwner({
+    providers: finalProviders,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+  });
+  const pluginCatalogWrites = buildPluginCatalogWrites(splitProviders.pluginProviders);
+  const nextContents = `${JSON.stringify(
+    {
+      providers: splitProviders.rootProviders,
+    },
+    null,
+    2,
+  )}\n`;
 
-  if (params.existingRaw === nextContents) {
-    return { action: "noop" };
+  if (params.existingRaw === nextContents && Object.keys(pluginCatalogWrites).length === 0) {
+    return { action: "noop", pluginCatalogWrites };
   }
 
   return {
     action: "write",
     contents: nextContents,
+    pluginCatalogWrites,
   };
 }
 

@@ -32,6 +32,20 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
+vi.mock("../channels/plugins/read-only.js", () => ({
+  resolveReadOnlyChannelPluginsForConfig: vi.fn(() => ({
+    plugins: [
+      { id: "discord" },
+      { id: "imessage" },
+      { id: "signal" },
+      { id: "slack" },
+      { id: "telegram" },
+      { id: "whatsapp" },
+    ],
+    missingConfiguredChannelIds: [],
+  })),
+}));
+
 vi.mock("./status.daemon.js", () => ({
   getDaemonStatusSummary: mocks.getDaemonStatusSummary,
   getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,

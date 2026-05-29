@@ -2,17 +2,55 @@ import { parseCustomId, type ComponentParserResult } from "./internal/discord.js
 
 export const DISCORD_COMPONENT_CUSTOM_ID_KEY = "occomp";
 export const DISCORD_MODAL_CUSTOM_ID_KEY = "ocmodal";
+const ENCODED_CUSTOM_ID_VERSION = "1";
+
+function encodeCustomIdValue(value: string): string {
+  return value.replace(/%/g, "%25").replace(/;/g, "%3B");
+}
+
+function needsCustomIdEncoding(value: string): boolean {
+  return /[%;]/.test(value);
+}
+
+function decodeCustomIdValue(value: string): string {
+  return value.replace(/%(25|3B)/gi, (match) => (match.toLowerCase() === "%25" ? "%" : ";"));
+}
+
+function decodeParsedCustomIdData(
+  data: ComponentParserResult["data"],
+): ComponentParserResult["data"] {
+  if (data.e !== ENCODED_CUSTOM_ID_VERSION) {
+    return data;
+  }
+  return Object.fromEntries(
+    Object.entries(data).map(([key, value]) => [
+      key,
+      typeof value === "string" ? decodeCustomIdValue(value) : value,
+    ]),
+  ) as ComponentParserResult["data"];
+}
 
 export function buildDiscordComponentCustomId(params: {
   componentId: string;
   modalId?: string;
 }): string {
-  const base = `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:cid=${params.componentId}`;
-  return params.modalId ? `${base};mid=${params.modalId}` : base;
+  const encoded =
+    needsCustomIdEncoding(params.componentId) || needsCustomIdEncoding(params.modalId ?? "");
+  const componentId = encoded ? encodeCustomIdValue(params.componentId) : params.componentId;
+  const base = encoded
+    ? `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:e=${ENCODED_CUSTOM_ID_VERSION};cid=${componentId}`
+    : `${DISCORD_COMPONENT_CUSTOM_ID_KEY}:cid=${componentId}`;
+  const modalId = params.modalId;
+  if (!modalId) {
+    return base;
+  }
+  return `${base};mid=${encoded ? encodeCustomIdValue(modalId) : modalId}`;
 }
 
 export function buildDiscordModalCustomId(modalId: string): string {
-  return `${DISCORD_MODAL_CUSTOM_ID_KEY}:mid=${modalId}`;
+  return needsCustomIdEncoding(modalId)
+    ? `${DISCORD_MODAL_CUSTOM_ID_KEY}:e=${ENCODED_CUSTOM_ID_VERSION};mid=${encodeCustomIdValue(modalId)}`
+    : `${DISCORD_MODAL_CUSTOM_ID_KEY}:mid=${modalId}`;
 }
 
 export function parseDiscordComponentCustomId(
@@ -22,11 +60,12 @@ export function parseDiscordComponentCustomId(
   if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
     return null;
   }
-  const componentId = parsed.data.cid;
+  const data = decodeParsedCustomIdData(parsed.data);
+  const componentId = data.cid;
   if (typeof componentId !== "string" || !componentId.trim()) {
     return null;
   }
-  const modalId = parsed.data.mid;
+  const modalId = data.mid;
   return {
     componentId,
     modalId: typeof modalId === "string" && modalId.trim() ? modalId : undefined,
@@ -38,7 +77,8 @@ export function parseDiscordModalCustomId(id: string): string | null {
   if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
     return null;
   }
-  const modalId = parsed.data.mid;
+  const data = decodeParsedCustomIdData(parsed.data);
+  const modalId = data.mid;
   if (typeof modalId !== "string" || !modalId.trim()) {
     return null;
   }
@@ -57,7 +97,7 @@ export function parseDiscordComponentCustomIdForInteraction(id: string): Compone
   if (parsed.key !== DISCORD_COMPONENT_CUSTOM_ID_KEY) {
     return parsed;
   }
-  return { key: "*", data: parsed.data };
+  return { key: "*", data: decodeParsedCustomIdData(parsed.data) };
 }
 
 export function parseDiscordModalCustomIdForInteraction(id: string): ComponentParserResult {
@@ -68,5 +108,5 @@ export function parseDiscordModalCustomIdForInteraction(id: string): ComponentPa
   if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
     return parsed;
   }
-  return { key: "*", data: parsed.data };
+  return { key: "*", data: decodeParsedCustomIdData(parsed.data) };
 }

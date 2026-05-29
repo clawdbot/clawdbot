@@ -5,6 +5,7 @@ import { format } from "node:util";
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   buildGoogleMeetCalendarDayWindow,
   findGoogleMeetCalendarEvent,
@@ -150,6 +151,7 @@ type GoogleMeetGatewayMethod =
 type GoogleMeetGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
 
 const GOOGLE_MEET_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 
 type DoctorOptions = {
   json?: boolean;
@@ -237,7 +239,8 @@ function parseOptionalNumber(value: string | undefined): number | undefined {
   if (!value?.trim()) {
     return undefined;
   }
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = PLAIN_DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw new Error(`Expected a numeric value, received ${value}`);
   }
@@ -263,9 +266,21 @@ function parsePositiveNumber(value: string | undefined, label: string): number |
   if (value === undefined) {
     return undefined;
   }
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = PLAIN_DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`${label} must be a positive number`);
+  }
+  return parsed;
+}
+
+function parsePositiveIntegerOption(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error(`${label} must be a positive integer`);
   }
   return parsed;
 }
@@ -743,7 +758,7 @@ function resolveArtifactTokenOptions(
     refreshToken: options.refreshToken?.trim() || config.oauth.refreshToken,
     accessToken: options.accessToken?.trim() || config.oauth.accessToken,
     expiresAt: parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt,
-    pageSize: parseOptionalNumber(options.pageSize),
+    pageSize: parsePositiveIntegerOption(options.pageSize, "page-size"),
     includeTranscriptEntries: options.transcriptEntries !== false,
     allConferenceRecords: Boolean(options.allConferenceRecords),
     includeDocumentBodies: Boolean(options.includeDocBodies),
@@ -1435,7 +1450,7 @@ export function registerGoogleMeetCli(params: {
       const code = await waitForGoogleMeetAuthCode({
         state,
         manual: Boolean(options.manual),
-        timeoutMs: (parseOptionalNumber(options.timeoutSec) ?? 300) * 1000,
+        timeoutMs: (parsePositiveNumber(options.timeoutSec, "timeout-sec") ?? 300) * 1000,
         authUrl,
         promptInput,
         writeLine: (message) => writeStdoutLine("%s", message),

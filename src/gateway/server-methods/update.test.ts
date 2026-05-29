@@ -99,7 +99,7 @@ vi.mock("../../infra/update-runner.js", () => ({
   runGatewayUpdate: runGatewayUpdateMock,
 }));
 
-vi.mock("../protocol/index.js", () => ({
+vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
   validateUpdateStatusParams: () => true,
   validateUpdateRunParams: () => true,
 }));

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import process from "node:process";
 import { spawn } from "@lydell/node-pty";
+import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const [logPath, command, ...args] = process.argv.slice(2);
 
@@ -13,8 +14,8 @@ if (!logPath || !command) {
 const log = fs.createWriteStream(logPath, { flags: "w" });
 const pty = spawn(command, args, {
   name: process.env.TERM || "xterm-256color",
-  cols: Number(process.env.COLUMNS || 120),
-  rows: Number(process.env.LINES || 40),
+  cols: readPositiveIntEnv("COLUMNS", 120),
+  rows: readPositiveIntEnv("LINES", 40),
   cwd: process.cwd(),
   env: process.env,
 });

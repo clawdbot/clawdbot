@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
-import { ConnectErrorDetailCodes } from "../../../src/gateway/protocol/connect-error-details.js";
 import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
@@ -118,6 +118,8 @@ vi.mock("./controllers/control-ui-bootstrap.ts", () => ({
 
 type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatMessages: unknown[];
+  chatQueue: import("./ui-types.ts").ChatQueueItem[];
+  chatQueueBySession: Record<string, import("./ui-types.ts").ChatQueueItem[]>;
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
@@ -169,6 +171,7 @@ function createHost(): TestGatewayHost {
     sessionKey: "main",
     chatMessages: [],
     chatQueue: [],
+    chatQueueBySession: {},
     chatToolMessages: [],
     activityEntries: [],
     chatStreamSegments: [],
@@ -944,6 +947,76 @@ describe("connectGateway", () => {
       sessionKey: "main",
     });
     expect(host.pendingAbort).toBeNull();
+  });
+
+  it("retries reconnectable queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.chatQueue = [
+      {
+        id: "pending-send",
+        text: "retry this prompt",
+        createdAt: 1,
+        sendRunId: "run-retry-1",
+        sendState: "waiting-reconnect",
+        sessionKey: "main",
+      },
+    ];
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry this prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-1",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueue).toStrictEqual([]);
+      expect(host.chatRunId).toBe("run-retry-1");
+    });
+  });
+
+  it("retries saved-session queued chat sends after reconnect hello", async () => {
+    const host = createHost();
+    host.sessionKey = "other";
+    host.chatQueueBySession = {
+      main: [
+        {
+          id: "pending-send-main",
+          text: "retry main prompt",
+          createdAt: 1,
+          sendRunId: "run-retry-main",
+          sendState: "waiting-reconnect",
+          sessionKey: "main",
+        },
+      ],
+    };
+
+    connectGateway(host);
+    const client = requireGatewayClient();
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("chat.send", {
+        sessionKey: "main",
+        message: "retry main prompt",
+        deliver: false,
+        idempotencyKey: "run-retry-main",
+        attachments: undefined,
+      });
+    });
+    await vi.waitFor(() => {
+      expect(host.chatQueueBySession.main).toBeUndefined();
+      expect(host.chatMessages).toStrictEqual([]);
+      expect(host.chatRunId).toBeNull();
+    });
   });
 
   it("logs and drops stale queued chat abort failures after reconnect", async () => {

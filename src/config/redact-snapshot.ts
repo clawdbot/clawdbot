@@ -1,10 +1,10 @@
-import { createSubsystemLogger } from "../logging/subsystem.js";
-import { type ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import {
   hasSensitiveUrlHintTag,
   isSensitiveUrlConfigPath,
   redactSensitiveUrlLikeString,
-} from "../shared/net/redact-sensitive-url.js";
+} from "@openclaw/net-policy/redact-sensitive-url";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { type ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { isRecord as isObjectRecord } from "../shared/record-coerce.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {

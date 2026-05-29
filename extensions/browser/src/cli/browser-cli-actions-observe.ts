@@ -11,6 +11,15 @@ function runBrowserObserve(action: () => Promise<void>) {
   });
 }
 
+function parsePositiveIntegerOption(value: string, flag: string): number {
+  const trimmed = value.trim();
+  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 export function registerBrowserActionObserveCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -79,10 +88,10 @@ export function registerBrowserActionObserveCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the response (default: 20000)",
-      (v: string) => Number(v),
+      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .option("--max-chars <n>", "Max body chars to return (default: 200000)", (v: string) =>
-      Number(v),
+      parsePositiveIntegerOption(v, "--max-chars"),
     )
     .action(async (url: string, opts, cmd) => {
       const parent = parentOpts(cmd);

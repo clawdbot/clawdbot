@@ -109,6 +109,9 @@ type RunMessageActionInput = {
   agentId?: string;
   cfg?: unknown;
   defaultAccountId?: string;
+  gateway?: {
+    timeoutMs?: unknown;
+  };
   params?: Record<string, unknown>;
   requesterSenderId?: string;
   sandboxRoot?: string;
@@ -380,6 +383,77 @@ async function executeSend(params: {
   });
   return lastRunMessageActionInput();
 }
+
+describe("message tool gateway timeout", () => {
+  it("advertises timeoutMs as a positive integer", () => {
+    const tool = createMessageTool();
+    expect(getToolProperties(tool).timeoutMs).toMatchObject({ type: "integer", minimum: 1 });
+  });
+
+  it("advertises shared poll duration as a positive integer", () => {
+    const tool = createMessageTool();
+    expect(getToolProperties(tool).pollDurationHours).toMatchObject({
+      type: "integer",
+      minimum: 1,
+    });
+  });
+
+  it("advertises shared action numeric params with runtime integer bounds", () => {
+    const properties = getToolProperties(createMessageTool());
+
+    for (const name of ["limit", "pageSize", "autoArchiveMin"]) {
+      expect(properties[name]).toMatchObject({ type: "integer", minimum: 1 });
+    }
+    for (const name of ["durationMin", "position", "rateLimitPerUser"]) {
+      expect(properties[name]).toMatchObject({ type: "integer", minimum: 0 });
+    }
+    expect(properties.deleteDays).toMatchObject({
+      type: "integer",
+      minimum: 0,
+      maximum: 7,
+    });
+    expect(properties.channelType).toMatchObject({ type: "integer", minimum: 0 });
+    expect(properties.pollOptionIndex).toMatchObject({ type: "integer", minimum: 1 });
+    expect(properties.pollOptionIndexes).toMatchObject({
+      type: "array",
+      items: { type: "integer", minimum: 1 },
+    });
+  });
+
+  it.each([-1, 1.5, "fast"])(
+    "rejects invalid timeoutMs value %s before dispatch",
+    async (timeoutMs) => {
+      mockSendResult();
+      const tool = createMessageTool({
+        runMessageAction: mocks.runMessageAction as never,
+      });
+
+      await expect(
+        tool.execute("1", {
+          action: "send",
+          target: "telegram:123",
+          message: "hi",
+          timeoutMs,
+        }),
+      ).rejects.toThrow("timeoutMs must be a positive integer");
+      expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts string timeoutMs values through the shared numeric reader", async () => {
+    mockSendResult();
+
+    const call = await executeSend({
+      action: {
+        target: "telegram:123",
+        message: "hi",
+        timeoutMs: "5000",
+      },
+    });
+
+    expect(call?.gateway?.timeoutMs).toBe(5000);
+  });
+});
 
 describe("message tool secret scoping", () => {
   it("marks message-tool-only source replies in the tool description", () => {

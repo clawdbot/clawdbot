@@ -245,6 +245,7 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
     label: "Xiaomi MiMo",
     aliases: ["mimo"],
     autoSelectOrder: 45,
+    defaultModel: DEFAULT_XIAOMI_TTS_MODEL,
     models: XIAOMI_TTS_MODELS,
     voices: XIAOMI_TTS_VOICES,
     resolveConfig: ({ rawConfig }) => normalizeXiaomiTtsProviderConfig(rawConfig),

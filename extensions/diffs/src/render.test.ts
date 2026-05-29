@@ -46,6 +46,31 @@ describe("renderDiffDocument", () => {
     expect(rendered.html).not.toContain("fonts.googleapis.com");
   });
 
+  it("normalizes non-finite presentation numbers before rendering CSS", async () => {
+    const rendered = await renderDiffDocument(
+      {
+        kind: "before_after",
+        before: "old\n",
+        after: "new\n",
+      },
+      {
+        presentation: {
+          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+          fontSize: Number.NaN,
+          lineSpacing: Number.POSITIVE_INFINITY,
+        },
+        image: resolveDiffImageRenderOptions({ defaults: DEFAULT_DIFFS_TOOL_DEFAULTS }),
+        expandUnchanged: false,
+      },
+    );
+
+    expect(rendered.html).toContain("--diffs-font-size: 15px;");
+    expect(rendered.html).toContain("--diffs-line-height: 24px;");
+    expect(rendered.imageHtml).toContain("--diffs-font-size: 16px;");
+    expect(rendered.html).not.toContain("NaNpx");
+    expect(rendered.imageHtml).not.toContain("NaNpx");
+  });
+
   it("resolves viewer assets under an optional base path", async () => {
     const rendered = await renderDiffDocument(
       {

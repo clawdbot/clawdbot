@@ -61,6 +61,37 @@ describe("heartbeat schedule helpers", () => {
       }),
     ).toBe(nextDueMs);
   });
+
+  it("falls back to finite schedule values for non-finite numeric inputs", () => {
+    expect(
+      resolveHeartbeatPhaseMs({
+        schedulerSeed: "device-a",
+        agentId: "main",
+        intervalMs: Number.NaN,
+      }),
+    ).toBe(0);
+
+    expect(
+      computeNextHeartbeatPhaseDueMs({
+        nowMs: Number.NaN,
+        intervalMs: Number.NaN,
+        phaseMs: Number.NaN,
+      }),
+    ).toBe(1);
+
+    expect(
+      resolveNextHeartbeatDueMs({
+        nowMs: 10,
+        intervalMs: Number.NaN,
+        phaseMs: Number.NaN,
+        prev: {
+          intervalMs: 1,
+          phaseMs: 0,
+          nextDueMs: 20,
+        },
+      }),
+    ).toBe(20);
+  });
 });
 
 describe("seekNextActivePhaseDueMs", () => {

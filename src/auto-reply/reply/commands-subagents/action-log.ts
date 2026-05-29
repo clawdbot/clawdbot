@@ -23,7 +23,7 @@ export async function handleSubagentsLogAction(
   const includeTools = restTokens.some(
     (token) => normalizeLowercaseStringOrEmpty(token) === "tools",
   );
-  const limitToken = restTokens.find((token) => /^\d+$/.test(token));
+  const limitToken = restTokens.slice(1).find((token) => /^\d+$/.test(token));
   const limit = limitToken ? Math.min(200, Math.max(1, Number.parseInt(limitToken, 10))) : 20;
 
   const targetResolution = resolveSubagentEntryForToken(runs, target);

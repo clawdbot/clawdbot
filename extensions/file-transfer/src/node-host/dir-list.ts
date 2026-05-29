@@ -1,11 +1,12 @@
-import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  FsSafeError,
-  resolveAbsolutePathForRead,
-  root,
-} from "openclaw/plugin-sdk/security-runtime";
+import { root } from "openclaw/plugin-sdk/security-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
+import {
+  classifyFsSafeReadError,
+  readAbsolutePath,
+  resolveCanonicalReadPath,
+  statRequiredDirectory,
+} from "./path-errors.js";
 
 export const DIR_LIST_DEFAULT_MAX_ENTRIES = 200;
 export const DIR_LIST_HARD_MAX_ENTRIES = 5000;
@@ -71,16 +72,9 @@ function parsePageOffset(input: unknown): number {
 }
 
 function classifyFsError(err: unknown): DirListErrCode {
-  if (err instanceof FsSafeError) {
-    if (err.code === "not-found") {
-      return "NOT_FOUND";
-    }
-    if (err.code === "symlink") {
-      return "SYMLINK_REDIRECT";
-    }
-    if (err.code === "invalid-path") {
-      return "INVALID_PATH";
-    }
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
   }
   const code = (err as { code?: string } | null)?.code;
   if (code === "ENOENT") {
@@ -93,15 +87,9 @@ function classifyFsError(err: unknown): DirListErrCode {
 }
 
 export async function handleDirList(params: DirListParams): Promise<DirListResult> {
-  const requestedPath = params.path;
-  if (typeof requestedPath !== "string" || requestedPath.length === 0) {
-    return { ok: false, code: "INVALID_PATH", message: "path required" };
-  }
-  if (requestedPath.includes("\0")) {
-    return { ok: false, code: "INVALID_PATH", message: "path contains NUL byte" };
-  }
-  if (!path.isAbsolute(requestedPath)) {
-    return { ok: false, code: "INVALID_PATH", message: "path must be absolute" };
+  const requestedPath = readAbsolutePath(params.path);
+  if (typeof requestedPath !== "string") {
+    return requestedPath;
   }
 
   const maxEntries = clampMaxEntries(params.maxEntries);
@@ -109,51 +97,19 @@ export async function handleDirList(params: DirListParams): Promise<DirListResul
 
   const followSymlinks = params.followSymlinks === true;
 
-  let canonical: string;
-  try {
-    canonical = (
-      await resolveAbsolutePathForRead(requestedPath, {
-        symlinks: followSymlinks ? "follow" : "reject",
-      })
-    ).canonicalPath;
-  } catch (err) {
-    const code = classifyFsError(err);
-    const canonicalPath =
-      err instanceof FsSafeError &&
-      err.cause &&
-      typeof err.cause === "object" &&
-      "canonicalPath" in err.cause &&
-      typeof err.cause.canonicalPath === "string"
-        ? err.cause.canonicalPath
-        : undefined;
-    return {
-      ok: false,
-      code,
-      message:
-        code === "NOT_FOUND"
-          ? "path not found"
-          : code === "SYMLINK_REDIRECT"
-            ? "path traverses a symlink; refusing because followSymlinks=false (set plugins.entries.file-transfer.config.nodes.<node>.followSymlinks=true to allow, or update allowReadPaths to the canonical path)"
-            : `realpath failed: ${String(err)}`,
-      ...(canonicalPath ? { canonicalPath } : {}),
-    };
+  const canonical = await resolveCanonicalReadPath({
+    requestedPath,
+    followSymlinks,
+    classifyError: classifyFsError,
+    notFoundMessage: "path not found",
+  });
+  if (typeof canonical !== "string") {
+    return canonical;
   }
 
-  let stats: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stats = await fs.stat(canonical);
-  } catch (err) {
-    const code = classifyFsError(err);
-    return { ok: false, code, message: `stat failed: ${String(err)}`, canonicalPath: canonical };
-  }
-
-  if (!stats.isDirectory()) {
-    return {
-      ok: false,
-      code: "IS_FILE",
-      message: "path is not a directory",
-      canonicalPath: canonical,
-    };
+  const directory = await statRequiredDirectory(canonical, classifyFsError);
+  if (!directory.ok) {
+    return directory;
   }
 
   let listedEntries: { name: string; isDirectory: boolean; size: number; mtimeMs: number }[];

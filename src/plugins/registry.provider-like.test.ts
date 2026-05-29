@@ -60,6 +60,60 @@ describe("plugin registry provider-like registrations", () => {
     expect(catalogRegistration?.provider.kinds).toEqual(["text", "video_generation"]);
   });
 
+  it("combines same-plugin overlapping model catalog hooks", async () => {
+    const pluginRegistry = createTestRegistry();
+    const record = createPluginRecord({
+      id: "catalog-owner",
+      name: "Catalog Owner",
+      source: "/tmp/catalog-owner/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+
+    pluginRegistry.registerModelCatalogProvider(record, {
+      provider: "catalog-provider",
+      kinds: ["voice"],
+      staticCatalog: () => [
+        {
+          kind: "voice",
+          provider: "catalog-provider",
+          model: "tts-model",
+          source: "static",
+        },
+      ],
+    });
+    pluginRegistry.registerModelCatalogProvider(record, {
+      provider: "catalog-provider",
+      kinds: ["voice"],
+      staticCatalog: () => [
+        {
+          kind: "voice",
+          provider: "catalog-provider",
+          model: "realtime-model",
+          source: "static",
+        },
+      ],
+    });
+
+    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
+    const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
+    await expect(catalogProvider?.staticCatalog?.({} as never)).resolves.toEqual([
+      {
+        kind: "voice",
+        provider: "catalog-provider",
+        model: "tts-model",
+        source: "static",
+      },
+      {
+        kind: "voice",
+        provider: "catalog-provider",
+        model: "realtime-model",
+        source: "static",
+      },
+    ]);
+  });
+
   it("publishes text catalog rows for registered provider catalog hooks", async () => {
     const pluginRegistry = createTestRegistry();
     const record = createPluginRecord({
@@ -165,6 +219,121 @@ describe("plugin registry provider-like registrations", () => {
     expect(staticRows?.[1]?.provider).toBe("video-provider");
     expect(staticRows?.[1]?.model).toBe("video-pro");
     expect(staticRows?.[1]?.source).toBe("static");
+  });
+
+  it("publishes synthesized voice catalog rows during speech provider registration", async () => {
+    const pluginRegistry = createTestRegistry();
+    const record = createPluginRecord({
+      id: "speech-owner",
+      name: "Speech Owner",
+      source: "/tmp/speech-owner/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+
+    pluginRegistry.registerSpeechProvider(record, {
+      id: "speech-provider",
+      label: "Speech Provider",
+      defaultModel: "tts-default",
+      models: ["tts-default", "tts-pro"],
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.alloc(0),
+        fileExtension: "mp3",
+        outputFormat: "audio/mpeg",
+        voiceCompatible: true,
+      }),
+    });
+
+    expect(pluginRegistry.registry.speechProviders).toHaveLength(1);
+    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
+    const catalogProvider = pluginRegistry.registry.modelCatalogProviders[0]?.provider;
+    expect(catalogProvider?.provider).toBe("speech-provider");
+    expect(catalogProvider?.kinds).toEqual(["voice"]);
+    const staticRows = await catalogProvider?.staticCatalog?.({} as never);
+    expect(staticRows).toEqual([
+      {
+        kind: "voice",
+        provider: "speech-provider",
+        model: "tts-default",
+        label: "Speech Provider",
+        source: "static",
+        default: true,
+        modes: ["tts"],
+        capabilities: { tts: true },
+      },
+      {
+        kind: "voice",
+        provider: "speech-provider",
+        model: "tts-pro",
+        label: "Speech Provider",
+        source: "static",
+        modes: ["tts"],
+        capabilities: { tts: true },
+      },
+    ]);
+  });
+
+  it("combines voice catalog rows from speech and realtime providers", async () => {
+    const pluginRegistry = createTestRegistry();
+    const record = createPluginRecord({
+      id: "voice-owner",
+      name: "Voice Owner",
+      source: "/tmp/voice-owner/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+
+    pluginRegistry.registerSpeechProvider(record, {
+      id: "voice-provider",
+      label: "Voice Provider",
+      defaultModel: "tts-default",
+      isConfigured: () => true,
+      synthesize: async () => ({
+        audioBuffer: Buffer.alloc(0),
+        fileExtension: "mp3",
+        outputFormat: "audio/mpeg",
+        voiceCompatible: true,
+      }),
+    });
+    pluginRegistry.registerRealtimeTranscriptionProvider(record, {
+      id: "voice-provider",
+      label: "Voice Provider",
+      defaultModel: "stt-default",
+      isConfigured: () => true,
+      createSession: () => ({
+        connect: async () => {},
+        sendAudio() {},
+        close() {},
+        isConnected: () => true,
+      }),
+    });
+    pluginRegistry.registerRealtimeVoiceProvider(record, {
+      id: "voice-provider",
+      label: "Voice Provider",
+      defaultModel: "realtime-default",
+      isConfigured: () => true,
+      createBridge: () => ({
+        connect: async () => {},
+        sendAudio() {},
+        setMediaTimestamp() {},
+        submitToolResult() {},
+        acknowledgeMark() {},
+        close() {},
+        isConnected: () => true,
+      }),
+    });
+
+    expect(pluginRegistry.registry.modelCatalogProviders).toHaveLength(1);
+    const staticRows =
+      await pluginRegistry.registry.modelCatalogProviders[0]?.provider.staticCatalog?.({} as never);
+    expect(staticRows?.map((row) => [row.model, row.modes, row.capabilities])).toEqual([
+      ["tts-default", ["tts"], { tts: true }],
+      ["stt-default", ["realtime_transcription"], { realtime_transcription: true }],
+      ["realtime-default", ["realtime_voice"], { realtime_voice: true }],
+    ]);
   });
 
   it("does not duplicate manifest-declared capability provider ids during runtime registration", () => {

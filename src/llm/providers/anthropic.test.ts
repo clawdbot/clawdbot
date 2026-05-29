@@ -19,7 +19,7 @@ vi.mock("@anthropic-ai/sdk", () => ({
   },
 }));
 
-import { streamAnthropic } from "./anthropic.js";
+import { streamAnthropic, streamSimpleAnthropic } from "./anthropic.js";
 
 function createSseResponse(events: Record<string, unknown>[] = []): Response {
   const body = events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
@@ -166,5 +166,31 @@ describe("Anthropic provider", () => {
         signature: "reasoning_content",
       },
     ]);
+  });
+
+  it("clamps max adaptive effort when the Claude model does not advertise it", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "max",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect((capturedPayload as { output_config?: unknown }).output_config).toEqual({
+      effort: "high",
+    });
   });
 });

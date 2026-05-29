@@ -1,18 +1,14 @@
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
+import { readRoutePositiveInteger } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import {
-  asyncBrowserRoute,
-  getProfileContext,
-  jsonError,
-  toNumber,
-  toStringOrEmpty,
-} from "./utils.js";
+import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
 const permissionRouteDeps = {
   getPwAiModule,
@@ -165,7 +161,12 @@ export function registerBrowserPermissionRoutes(
       }
       const optionalPermissions = readPermissions(body.optionalPermissions ?? []) ?? [];
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = Math.max(1_000, toNumber(body.timeoutMs) ?? 5_000);
+      let timeoutMs: number;
+      try {
+        timeoutMs = Math.max(1_000, readRoutePositiveInteger(body.timeoutMs, "timeoutMs") ?? 5_000);
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
 
       try {
         await profileCtx.ensureBrowserAvailable();

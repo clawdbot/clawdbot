@@ -422,6 +422,37 @@ describe("truncateOversizedToolResultsInMessages", () => {
       expect(text.length).toBeLessThan(500_000);
     }
   });
+
+  it("bounds aggregate tool-result text in prompt history without rewriting callers", () => {
+    const medium = "alpha beta gamma delta epsilon ".repeat(800);
+    const messages: AgentMessage[] = [
+      makeUserMessage("hello"),
+      makeAssistantMessage("calling tools"),
+      makeToolResult(medium, "call_1"),
+      makeToolResult(medium, "call_2"),
+      makeToolResult(medium, "call_3"),
+    ];
+
+    const { messages: result, truncatedCount } = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      12_000,
+      12_000,
+    );
+
+    const totalChars = result.reduce(
+      (sum, message) =>
+        sum + (message.role === "toolResult" ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(truncatedCount).toBeGreaterThan(0);
+    expect(totalChars).toBeLessThanOrEqual(12_000);
+    expect(result[0]).toBe(messages[0]);
+    expect(result[1]).toBe(messages[1]);
+    expect(messages.reduce((sum, message) => sum + getToolResultTextLength(message), 0)).toBe(
+      medium.length * 3,
+    );
+  });
 });
 
 describe("truncateOversizedToolResultsInSession", () => {
@@ -490,7 +521,7 @@ describe("truncateOversizedToolResultsInSession", () => {
     ).toBe(false);
   });
 
-  it("prefers truncating newer aggregate tool-result entries before older larger ones", async () => {
+  it("prefers truncating older aggregate tool-result entries before newer results", async () => {
     const dir = await createTmpDir();
     const sm = SessionManager.create(dir, dir);
     sm.appendMessage(makeUserMessage("hello"));
@@ -526,9 +557,9 @@ describe("truncateOversizedToolResultsInSession", () => {
       entry.type === "message" ? getFirstToolResultText(entry.message) : "",
     );
 
-    expect(afterTexts[0]).toBe(beforeTexts[0]);
-    expect(afterTexts[1]).not.toBe(beforeTexts[1]);
-    expect(afterTexts[1]).toContain("truncated");
+    expect(afterTexts[0]).not.toBe(beforeTexts[0]);
+    expect(afterTexts[0]).toContain("truncated");
+    expect(afterTexts[1]).toBe(beforeTexts[1]);
   });
 
   it("allows persisted-session recovery truncation to shrink below the old 2k floor", async () => {

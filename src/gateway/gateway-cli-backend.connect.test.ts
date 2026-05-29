@@ -5,9 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 const GATEWAY_CONNECT_TIMEOUT_MS = 5_000;
 const tempRoots: string[] = [];

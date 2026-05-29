@@ -25,7 +25,7 @@ type LspSession = {
   process: ChildProcess;
   requestId: number;
   pendingRequests: Map<number, PendingLspRequest>;
-  buffer: string;
+  buffer: Buffer;
   initialized: boolean;
   capabilities: LspServerCapabilities;
   disposed: boolean;
@@ -93,7 +93,7 @@ function createLspSession(serverName: string, child: ChildProcess): LspSession {
     process: child,
     requestId: 0,
     pendingRequests: new Map(),
-    buffer: "",
+    buffer: Buffer.alloc(0),
     initialized: false,
     capabilities: {},
     disposed: false,
@@ -105,8 +105,9 @@ function registerActiveLspSession(session: LspSession): void {
 }
 
 function attachLspProcessHandlers(session: LspSession): void {
-  session.process.stdout?.setEncoding("utf-8");
-  session.process.stdout?.on("data", (chunk: string) => handleIncomingData(session, chunk));
+  session.process.stdout?.on("data", (chunk: Buffer | string) =>
+    handleIncomingData(session, chunk),
+  );
   session.process.stderr?.setEncoding("utf-8");
   session.process.stderr?.on("data", (chunk: string) => {
     for (const line of chunk.split(/\r?\n/).filter(Boolean)) {
@@ -120,38 +121,39 @@ function encodeLspMessage(body: unknown): string {
   return `Content-Length: ${Buffer.byteLength(json, "utf-8")}\r\n\r\n${json}`;
 }
 
-function parseLspMessages(buffer: string): { messages: unknown[]; remaining: string } {
+function parseLspMessages(buffer: Buffer): { messages: unknown[]; remaining: Buffer } {
   const messages: unknown[] = [];
   let remaining = buffer;
+  const headerSeparator = Buffer.from("\r\n\r\n", "ascii");
 
   while (true) {
-    const headerEnd = remaining.indexOf("\r\n\r\n");
+    const headerEnd = remaining.indexOf(headerSeparator);
     if (headerEnd === -1) {
       break;
     }
 
-    const header = remaining.slice(0, headerEnd);
+    const header = remaining.subarray(0, headerEnd).toString("ascii");
     const match = header.match(/Content-Length:\s*(\d+)/i);
     if (!match) {
-      remaining = remaining.slice(headerEnd + 4);
+      remaining = remaining.subarray(headerEnd + headerSeparator.length);
       continue;
     }
 
     const contentLength = Number.parseInt(match[1], 10);
-    const bodyStart = headerEnd + 4;
+    const bodyStart = headerEnd + headerSeparator.length;
     const bodyEnd = bodyStart + contentLength;
 
-    if (Buffer.byteLength(remaining.slice(bodyStart), "utf-8") < contentLength) {
+    if (remaining.length < bodyEnd) {
       break;
     }
 
     try {
-      const body = remaining.slice(bodyStart, bodyStart + contentLength);
+      const body = remaining.subarray(bodyStart, bodyEnd).toString("utf8");
       messages.push(JSON.parse(body));
     } catch {
       // skip malformed
     }
-    remaining = remaining.slice(bodyEnd);
+    remaining = remaining.subarray(bodyEnd);
   }
 
   return { messages, remaining };
@@ -174,10 +176,13 @@ function sendRequest(session: LspSession, method: string, params?: unknown): Pro
   });
 }
 
-function handleIncomingData(session: LspSession, chunk: string) {
-  session.buffer += chunk;
+function handleIncomingData(session: LspSession, chunk: Buffer | string) {
+  session.buffer = Buffer.concat([
+    session.buffer,
+    typeof chunk === "string" ? Buffer.from(chunk, "utf8") : chunk,
+  ]);
   const { messages, remaining } = parseLspMessages(session.buffer);
-  session.buffer = remaining;
+  session.buffer = remaining.length === 0 ? Buffer.alloc(0) : Buffer.from(remaining);
 
   for (const msg of messages) {
     if (typeof msg !== "object" || msg === null) {

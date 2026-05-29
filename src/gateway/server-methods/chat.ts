@@ -7,6 +7,22 @@ import {
   isReplyPayloadTtsSupplement,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateChatAbortParams,
+  validateChatHistoryParams,
+  validateChatInjectParams,
+  validateChatSendParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
@@ -105,22 +121,6 @@ import {
   createManagedOutgoingImageBlocks,
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateChatAbortParams,
-  validateChatHistoryParams,
-  validateChatInjectParams,
-  validateChatSendParams,
-} from "../protocol/index.js";
-import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../protocol/schema/primitives.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
@@ -1607,12 +1607,8 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
   return {
     chatAbortControllers: context.chatAbortControllers,
     chatRunBuffers: context.chatRunBuffers,
-    chatDeltaSentAt: context.chatDeltaSentAt,
-    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
-    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
-    agentDeltaSentAt: context.agentDeltaSentAt,
-    bufferedAgentEvents: context.bufferedAgentEvents,
     chatAbortedRuns: context.chatAbortedRuns,
+    clearChatRunState: context.clearChatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
     broadcast: context.broadcast,

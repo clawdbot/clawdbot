@@ -1,4 +1,4 @@
-import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
+import { resolveFiniteTimeoutDelayMs } from "../utils/timer-delay.js";
 
 export type EventLoopReadyResult = {
   ready: boolean;
@@ -28,7 +28,9 @@ function resolvePositiveInteger(value: number | undefined, fallback: number): nu
 export async function waitForEventLoopReady(
   options: EventLoopReadyOptions = {},
 ): Promise<EventLoopReadyResult> {
-  const maxWaitMs = resolveSafeTimeoutDelayMs(options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS);
+  const maxWaitMs = resolveFiniteTimeoutDelayMs(options.maxWaitMs, DEFAULT_MAX_WAIT_MS, {
+    minMs: 0,
+  });
   const intervalMs = resolvePositiveInteger(options.intervalMs, DEFAULT_INTERVAL_MS);
   const driftThresholdMs = resolvePositiveInteger(
     options.driftThresholdMs,

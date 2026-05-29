@@ -2,7 +2,6 @@ import {
   reconcileChatRunFromCurrentSessionRow,
   type ChatRunUiStatus,
 } from "../chat/run-lifecycle.ts";
-import { toNumber } from "../format.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   GatewaySessionRow,
@@ -209,6 +208,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function hasOwn(record: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(record, key);
+}
+
+export function parseSessionsFilterInteger(value: string): number {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return 0;
+  }
+  const parsed = Number(trimmed);
+  return Number.isSafeInteger(parsed) ? parsed : 0;
+}
+
+function normalizeSessionsFilterOverride(value: number | undefined): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return Number.isSafeInteger(value) ? value : 0;
 }
 
 function normalizeSessionKind(value: unknown): GatewaySessionRow["kind"] | undefined {
@@ -654,8 +669,11 @@ async function loadSessionsOnce(
     const showArchived = overrides?.showArchived ?? state.sessionsShowArchived;
     const activeMinutes = showArchived
       ? 0
-      : (overrides?.activeMinutes ?? toNumber(state.sessionsFilterActive, 0));
-    const limit = overrides?.limit ?? toNumber(state.sessionsFilterLimit, 0);
+      : (normalizeSessionsFilterOverride(overrides?.activeMinutes) ??
+        parseSessionsFilterInteger(state.sessionsFilterActive));
+    const limit =
+      normalizeSessionsFilterOverride(overrides?.limit) ??
+      parseSessionsFilterInteger(state.sessionsFilterLimit);
     const configuredAgentsOnly = overrides?.configuredAgentsOnly ?? true;
     const params: Record<string, unknown> = {
       includeGlobal,

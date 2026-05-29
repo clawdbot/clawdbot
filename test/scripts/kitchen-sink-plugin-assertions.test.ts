@@ -27,6 +27,7 @@ function fullSurfaceInspectPayload(pluginId: string) {
       id: pluginId,
       enabled: true,
       status: "loaded",
+      contextEngineIds: [pluginId],
       channelIds: ["kitchen-sink-channel"],
       providerIds: ["kitchen-sink-provider"],
       speechProviderIds: ["kitchen-sink-speech"],
@@ -115,6 +116,72 @@ function runAssertInstalled({
   }
 }
 
+function runAssertClawhubInstalled({
+  contextEngineIds = [],
+}: {
+  contextEngineIds?: string[];
+} = {}) {
+  const label = `clawhub-context-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const pluginId = "openclaw-kitchen-sink-fixture";
+  const home = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-home-"));
+  const installPath = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-install-"));
+  const scratchRoot = tmpdir();
+  const pluginsJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-plugins.json`);
+  const inspectJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-inspect.json`);
+  const inspectAllJsonPath = path.join(scratchRoot, `kitchen-sink-${label}-inspect-all.json`);
+  const installPathMarker = path.join(scratchRoot, `kitchen-sink-${label}-install-path.txt`);
+  const installsPath = path.join(home, ".openclaw", "plugins", "installs.json");
+  try {
+    const inspectPayload = fullSurfaceInspectPayload(pluginId);
+    inspectPayload.plugin.contextEngineIds = contextEngineIds;
+    writeJson(pluginsJsonPath, {
+      diagnostics: [],
+      plugins: [{ id: pluginId, status: "loaded" }],
+    });
+    writeJson(inspectJsonPath, inspectPayload);
+    writeJson(inspectAllJsonPath, { diagnostics: [] });
+    writeJson(installsPath, {
+      installRecords: {
+        [pluginId]: {
+          artifactFormat: "zip",
+          artifactKind: "legacy-zip",
+          clawhubFamily: "code-plugin",
+          clawhubPackage: "@openclaw/kitchen-sink",
+          integrity: "sha256-test",
+          installPath,
+          resolvedSpec: "clawhub:@openclaw/kitchen-sink@latest",
+          resolvedVersion: "1.0.0",
+          resolvedAt: 1,
+          source: "clawhub",
+          spec: "clawhub:@openclaw/kitchen-sink@latest",
+          version: "1.0.0",
+        },
+      },
+    });
+
+    return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "assert-installed"], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: home,
+        KITCHEN_SINK_ID: pluginId,
+        KITCHEN_SINK_LABEL: label,
+        KITCHEN_SINK_SOURCE: "clawhub",
+        KITCHEN_SINK_SPEC: "clawhub:@openclaw/kitchen-sink@latest",
+        KITCHEN_SINK_SURFACE_MODE: "basic",
+        KITCHEN_SINK_TMP_DIR: scratchRoot,
+      },
+    });
+  } finally {
+    rmSync(home, { force: true, recursive: true });
+    rmSync(installPath, { force: true, recursive: true });
+    rmSync(pluginsJsonPath, { force: true });
+    rmSync(inspectJsonPath, { force: true });
+    rmSync(inspectAllJsonPath, { force: true });
+    rmSync(installPathMarker, { force: true });
+  }
+}
+
 function runScanLogs({ home, scratchRoot }: { home: string; scratchRoot: string }) {
   return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "scan-logs"], {
     encoding: "utf8",
@@ -139,6 +206,21 @@ describe("kitchen-sink plugin assertions", () => {
   it("accepts published full-surface installs with stable diagnostic canaries", () => {
     const result = runAssertInstalled({
       diagnostics: diagnosticErrors(REQUIRED_FULL_DIAGNOSTIC_CANARIES),
+    });
+
+    expect(result.status).toBe(0);
+  });
+
+  it("requires ClawHub kitchen-sink fixtures to expose context engines", () => {
+    const result = runAssertClawhubInstalled({ contextEngineIds: [] });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("context engines missing");
+  });
+
+  it("accepts ClawHub kitchen-sink fixtures with a context engine", () => {
+    const result = runAssertClawhubInstalled({
+      contextEngineIds: ["openclaw-kitchen-sink-fixture"],
     });
 
     expect(result.status).toBe(0);

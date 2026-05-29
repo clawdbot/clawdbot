@@ -3,6 +3,8 @@ import SwiftUI
 import UIKit
 
 struct GatewayProblemBanner: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     let problem: GatewayConnectionProblem
     var primaryActionTitle: String?
     var onPrimaryAction: (() -> Void)?
@@ -57,9 +59,15 @@ struct GatewayProblemBanner: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(14)
-        .background(
-            .thinMaterial,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(.ultraThickMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(self.colorScheme == .dark ? 0.12 : 0.07), lineWidth: 1)
+                }
+                .shadow(color: .black.opacity(self.colorScheme == .dark ? 0.18 : 0.08), radius: 18, y: 8)
+        }
     }
 
     private var iconName: String {

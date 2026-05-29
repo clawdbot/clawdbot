@@ -16,7 +16,6 @@ export {
   waitForEmbeddedAgentRunEnd,
 } from "./embedded-agent-runner/runs.js";
 export { buildEmbeddedSandboxInfo } from "./embedded-agent-runner/sandbox-info.js";
-export { createSystemPromptOverride } from "./embedded-agent-runner/system-prompt.js";
 export { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 export type {
   EmbeddedAgentMeta,

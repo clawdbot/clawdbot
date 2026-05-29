@@ -307,11 +307,18 @@ export async function maybeRepairMemoryRecallHealth(params: {
       if (approved) {
         const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
         if (repair.changed) {
+          const removedOverflowEntries = repair.removedOverflowEntries ?? 0;
+          const details = [
+            repair.removedInvalidEntries > 0
+              ? `-${repair.removedInvalidEntries} invalid entries`
+              : null,
+            removedOverflowEntries > 0 ? `-${removedOverflowEntries} overflow entries` : null,
+          ]
+            .filter(Boolean)
+            .join(", ");
           const lines = [
             "Memory recall artifacts repaired:",
-            repair.rewroteStore
-              ? `- rewrote recall store${repair.removedInvalidEntries > 0 ? ` (-${repair.removedInvalidEntries} invalid entries)` : ""}`
-              : null,
+            repair.rewroteStore ? `- rewrote recall store${details ? ` (${details})` : ""}` : null,
             repair.removedStaleLock ? "- removed stale promotion lock" : null,
             `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
           ].filter(Boolean);

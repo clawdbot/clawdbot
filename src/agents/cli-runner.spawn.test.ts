@@ -39,6 +39,7 @@ import {
   executePreparedCliRun,
 } from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
+import { cliBackendLog, formatCliBackendOutputDigest } from "./cli-runner/log.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
@@ -261,6 +262,11 @@ async function withTempOpenClawHome(run: (home: string) => Promise<void>): Promi
 }
 
 describe("runCliAgent spawn path", () => {
+  it("formats output digests without logging response content", () => {
+    expect(formatCliBackendOutputDigest("one")).toBe("outBytes=3 outHash=7692c3ad3540");
+    expect(formatCliBackendOutputDigest("∑")).toBe("outBytes=3 outHash=be27c7179a61");
+  });
+
   it("formats redacted CLI resume diagnostics without exposing raw session ids", () => {
     const logLine = buildCliExecLogLine({
       provider: "claude-cli",
@@ -680,6 +686,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("runs CLI through supervisor and returns payload", async () => {
+    const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
         reason: "exit",
@@ -700,32 +707,44 @@ describe("runCliAgent spawn path", () => {
     });
     context.reusableCliSession = { sessionId: "thread-123" };
 
-    const result = await executePreparedCliRun(context, "thread-123");
+    try {
+      const result = await executePreparedCliRun(context, "thread-123");
 
-    expect(result.text).toBe("ok");
-    const input = mockCallArg(supervisorSpawnMock) as {
-      argv?: string[];
-      mode?: string;
-      timeoutMs?: number;
-      noOutputTimeoutMs?: number;
-      replaceExistingScope?: boolean;
-      scopeKey?: string;
-    };
-    expect(input.mode).toBe("child");
-    expect(input.argv).toEqual([
-      "codex",
-      "exec",
-      "resume",
-      "thread-123",
-      "--skip-git-repo-check",
-      "--model",
-      "gpt-5.4",
-      "hi",
-    ]);
-    expect(input.timeoutMs).toBe(1_000);
-    expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
-    expect(input.replaceExistingScope).toBe(true);
-    expect(input.scopeKey).toContain("thread-123");
+      expect(result.text).toBe("ok");
+      const input = mockCallArg(supervisorSpawnMock) as {
+        argv?: string[];
+        mode?: string;
+        timeoutMs?: number;
+        noOutputTimeoutMs?: number;
+        replaceExistingScope?: boolean;
+        scopeKey?: string;
+      };
+      expect(input.mode).toBe("child");
+      expect(input.argv).toEqual([
+        "codex",
+        "exec",
+        "resume",
+        "thread-123",
+        "--skip-git-repo-check",
+        "--model",
+        "gpt-5.4",
+        "hi",
+      ]);
+      expect(input.timeoutMs).toBe(1_000);
+      expect(input.noOutputTimeoutMs).toBeGreaterThanOrEqual(1_000);
+      expect(input.replaceExistingScope).toBe(true);
+      expect(input.scopeKey).toContain("thread-123");
+
+      const turnLog = logInfoSpy.mock.calls
+        .map(([message]) => message)
+        .find((message) => message.startsWith("cli turn:"));
+      expect(turnLog).toContain("provider=codex-cli");
+      expect(turnLog).toContain("model=gpt-5.4");
+      expect(turnLog).toContain("outBytes=2 outHash=2689367b205c");
+      expect(turnLog).not.toContain("ok");
+    } finally {
+      logInfoSpy.mockRestore();
+    }
   });
 
   it("passes Codex system prompts through model_instructions_file", async () => {
@@ -890,6 +909,7 @@ describe("runCliAgent spawn path", () => {
   });
 
   it("reuses a Claude live session process across turns", async () => {
+    const logInfoSpy = vi.spyOn(cliBackendLog, "info").mockImplementation(() => undefined);
     const agentEvents: unknown[] = [];
     const stop = onAgentEvent((evt) => {
       if (evt.stream === "assistant") {
@@ -988,7 +1008,16 @@ describe("runCliAgent spawn path", () => {
         { text: "one", delta: "one" },
         { text: "two", delta: "two" },
       ]);
+      const turnLogs = logInfoSpy.mock.calls
+        .map(([message]) => message)
+        .filter((message) => message.startsWith("claude live session turn:"));
+      expect(turnLogs).toHaveLength(2);
+      expect(turnLogs[0]).toContain("outBytes=3 outHash=7692c3ad3540");
+      expect(turnLogs[1]).toContain("outBytes=3 outHash=3fc4ccfe7458");
+      expect(turnLogs.join("\n")).not.toContain("one");
+      expect(turnLogs.join("\n")).not.toContain("two");
     } finally {
+      logInfoSpy.mockRestore();
       stop();
     }
   });

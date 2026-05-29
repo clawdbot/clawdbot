@@ -11,8 +11,10 @@
 /.github/workflows/codeql.yml @openclaw/openclaw-secops
 /.github/workflows/codeql-android-critical-security.yml @openclaw/openclaw-secops
 /.github/workflows/codeql-critical-quality.yml @openclaw/openclaw-secops
-/.github/workflows/dependency-change-awareness.yml @openclaw/openclaw-secops
-/test/scripts/dependency-change-awareness-workflow.test.ts @openclaw/openclaw-secops
+/.github/workflows/dependency-guard.yml @openclaw/openclaw-secops
+/test/scripts/dependency-guard-workflow.test.ts @openclaw/openclaw-secops
+/test/scripts/dependency-guard-script.test.ts @openclaw/openclaw-secops
+/scripts/github/dependency-guard.mjs @openclaw/openclaw-secops
 /package-lock.json @openclaw/openclaw-secops
 /npm-shrinkwrap.json @openclaw/openclaw-secops
 /extensions/*/package-lock.json @openclaw/openclaw-secops
@@ -29,7 +31,7 @@
 /src/gateway/**/*secret*.ts @openclaw/openclaw-secops
 /src/gateway/security-path*.ts @openclaw/openclaw-secops
 /src/gateway/resolve-configured-secret-input-string*.ts @openclaw/openclaw-secops
-/src/gateway/protocol/**/*secret*.ts @openclaw/openclaw-secops
+/packages/gateway-protocol/src/**/*secret*.ts @openclaw/openclaw-secops
 /src/gateway/server-methods/secrets*.ts @openclaw/openclaw-secops
 /src/agents/*auth*.ts @openclaw/openclaw-secops
 /src/agents/**/*auth*.ts @openclaw/openclaw-secops

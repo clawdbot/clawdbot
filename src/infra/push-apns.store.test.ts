@@ -6,6 +6,7 @@ import {
   clearApnsRegistration,
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
+  loadApnsRegistrations,
   registerApnsRegistration,
   registerApnsToken,
 } from "./push-apns.js";
@@ -114,6 +115,35 @@ describe("push APNs registration store", () => {
       updatedAtMs: 2,
     });
     await expect(loadApnsRegistration("ios-node-bad-relay", baseDir)).resolves.toBeNull();
+  });
+
+  it("loads multiple APNs registrations from one store snapshot", async () => {
+    const baseDir = await makeTempDir();
+    const first = await registerApnsToken({
+      nodeId: "ios-node-1",
+      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      baseDir,
+    });
+    const second = await registerApnsRegistration({
+      nodeId: "ios-node-2",
+      transport: "relay",
+      relayHandle: "relay-handle-123",
+      sendGrant: "send-grant-123",
+      installationId: "install-123",
+      topic: "ai.openclaw.ios",
+      environment: "production",
+      distribution: "official",
+      baseDir,
+    });
+
+    await expect(
+      loadApnsRegistrations(["ios-node-2", "missing", "   ", "ios-node-1"], baseDir),
+    ).resolves.toEqual([
+      { nodeId: "ios-node-2", registration: second },
+      { nodeId: "ios-node-1", registration: first },
+    ]);
   });
 
   it("falls back cleanly for malformed or missing registration state", async () => {

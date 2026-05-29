@@ -93,13 +93,17 @@ const throttlerByToken = new Map<string, ApiThrottlerTransformer>();
 
 function readNumericId(value: unknown): number | undefined {
   if (typeof value === "number") {
-    return Number.isFinite(value) ? Math.trunc(value) : undefined;
+    return Number.isSafeInteger(value) ? value : undefined;
   }
   if (typeof value !== "string") {
     return undefined;
   }
-  const numeric = Number(value.trim());
-  return Number.isFinite(numeric) ? Math.trunc(numeric) : undefined;
+  const trimmed = value.trim();
+  if (!/^[+-]?\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  const numeric = Number(trimmed);
+  return Number.isSafeInteger(numeric) ? numeric : undefined;
 }
 
 function readPayload(payload: unknown): TelegramApiPayload | undefined {

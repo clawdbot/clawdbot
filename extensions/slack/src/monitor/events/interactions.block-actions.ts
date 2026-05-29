@@ -4,6 +4,7 @@ import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -225,7 +226,9 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
   ]);
   const inputValue = typeof typed.value === "string" ? typed.value : undefined;
   const inputNumber =
-    actionType === "number_input" && inputValue != null ? Number.parseFloat(inputValue) : undefined;
+    actionType === "number_input" && inputValue != null
+      ? parseStrictFiniteNumber(inputValue)
+      : undefined;
   const parsedNumber = Number.isFinite(inputNumber) ? inputNumber : undefined;
   const inputEmail =
     actionType === "email_text_input" && inputValue?.includes("@") ? inputValue : undefined;

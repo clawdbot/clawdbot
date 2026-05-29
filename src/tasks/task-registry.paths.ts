@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { isMainThread, threadId } from "node:worker_threads";
 import { resolveStateDir } from "../config/paths.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 
 export function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.OPENCLAW_STATE_DIR?.trim();
@@ -10,12 +11,13 @@ export function resolveTaskStateDir(env: NodeJS.ProcessEnv = process.env): strin
   }
   if (env.VITEST || env.NODE_ENV === "test") {
     const workerIdRaw = env.VITEST_WORKER_ID ?? env.VITEST_POOL_ID ?? "";
-    const workerId = Number.parseInt(workerIdRaw, 10);
-    const shardSuffix = Number.isFinite(workerId)
-      ? `${process.pid}-${workerId}`
-      : isMainThread
-        ? String(process.pid)
-        : `${process.pid}-${threadId}`;
+    const workerId = parseStrictNonNegativeInteger(workerIdRaw);
+    const shardSuffix =
+      workerId !== undefined
+        ? `${process.pid}-${workerId}`
+        : isMainThread
+          ? String(process.pid)
+          : `${process.pid}-${threadId}`;
     return path.join(os.tmpdir(), "openclaw-test-state", shardSuffix);
   }
   return resolveStateDir(env);

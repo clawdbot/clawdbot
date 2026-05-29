@@ -45,6 +45,13 @@ function createCliBackendTestConfig() {
 
 function registerCliBackendsForTest(): void {
   cliBackendsTesting.setDepsForTest({
+    resolvePluginSetupRegistry: () => ({
+      providers: [],
+      cliBackends: [],
+      configMigrations: [],
+      autoEnableProbes: [],
+      diagnostics: [],
+    }),
     resolveRuntimeCliBackends: () => [
       {
         id: "claude-cli",
@@ -112,6 +119,24 @@ vi.mock("../../agents/embedded-agent.js", () => {
 vi.mock("../../agents/cli-runner.js", () => ({
   runCliAgent: (...args: unknown[]) => runCliAgentMock(...args),
 }));
+
+vi.mock("../../agents/model-selection.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
+    "../../agents/model-selection.js",
+  );
+  return {
+    ...actual,
+    isCliProvider: (provider: string, cfg?: OpenClawConfig) => {
+      const normalized = provider.trim().toLowerCase();
+      return (
+        normalized === "claude-cli" ||
+        normalized === "google-gemini-cli" ||
+        normalized === "codex-cli" ||
+        Boolean(cfg?.agents?.defaults?.cliBackends?.[normalized])
+      );
+    },
+  };
+});
 
 vi.mock("../../runtime.js", () => {
   return {
@@ -211,6 +236,7 @@ function firstMockCallArg(mock: MockCallSource, label: string): unknown {
 }
 
 beforeEach(() => {
+  vi.useRealTimers();
   registerCliBackendsForTest();
   clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();

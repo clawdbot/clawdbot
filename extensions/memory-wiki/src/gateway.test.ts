@@ -468,6 +468,37 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
+  it.each([
+    ["wiki.importRuns", { limit: 0 }, "limit must be a positive integer"],
+    [
+      "wiki.search",
+      { query: "Teams Azure", maxResults: 1.5 },
+      "maxResults must be a positive integer",
+    ],
+    ["wiki.get", { lookup: "Teams Azure", fromLine: 1.5 }, "fromLine must be a positive integer"],
+    ["wiki.get", { lookup: "Teams Azure", lineCount: 0 }, "lineCount must be a positive integer"],
+  ])("rejects invalid positive integer gateway param for %s", async (method, params, message) => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, method);
+    if (!handler) {
+      throw new Error(`${method} handler missing`);
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params,
+      respond,
+    });
+
+    expect(readRespondError(respond)).toEqual({
+      code: "internal_error",
+      message,
+    });
+  });
+
   it("forwards wiki.search mode and corpus options over the gateway", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();

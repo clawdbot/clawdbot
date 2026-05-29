@@ -6,6 +6,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { captureEnv, withPathResolutionEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
@@ -171,6 +172,7 @@ afterAll(async () => {
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  clearPluginMetadataLifecycleCaches();
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
@@ -286,8 +288,8 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       },
     } satisfies OpenClawConfig;
 
-    // Prime plugin discovery before the bundle exists so command loading proves
-    // it sees the current filesystem state instead of a stale cached snapshot.
+    // Prime plugin discovery before the bundle exists; clear the lifecycle cache
+    // below to model the install/reload boundary that exposes new plugin files.
     buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),
       config,
@@ -313,6 +315,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       ].join("\n"),
       "utf-8",
     );
+    clearPluginMetadataLifecycleCaches();
 
     const commands = buildWorkspaceSkillCommandSpecs(workspaceDir, {
       ...resolveTestSkillDirs(workspaceDir),

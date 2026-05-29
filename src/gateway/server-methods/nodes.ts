@@ -1,4 +1,21 @@
 import { randomUUID } from "node:crypto";
+import {
+  type ConnectParams,
+  ErrorCodes,
+  errorShape,
+  validateNodeDescribeParams,
+  validateNodeEventParams,
+  validateNodeInvokeParams,
+  validateNodeListParams,
+  validateNodePendingAckParams,
+  validateNodePairApproveParams,
+  validateNodePairListParams,
+  validateNodePairRejectParams,
+  validateNodePairRemoveParams,
+  validateNodePairRequestParams,
+  validateNodePairVerifyParams,
+  validateNodeRenameParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
@@ -42,23 +59,6 @@ import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import type { NodeSession } from "../node-registry.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
-import {
-  type ConnectParams,
-  ErrorCodes,
-  errorShape,
-  validateNodeDescribeParams,
-  validateNodeEventParams,
-  validateNodeInvokeParams,
-  validateNodeListParams,
-  validateNodePendingAckParams,
-  validateNodePairApproveParams,
-  validateNodePairListParams,
-  validateNodePairRejectParams,
-  validateNodePairRemoveParams,
-  validateNodePairRequestParams,
-  validateNodePairVerifyParams,
-  validateNodeRenameParams,
-} from "../protocol/index.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
 import {
   NODE_WAKE_RECONNECT_POLL_MS,

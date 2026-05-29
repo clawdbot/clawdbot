@@ -21,6 +21,8 @@ describe("parseSshTarget", () => {
   it("rejects invalid hosts and ports", () => {
     expect(parseSshTarget("")).toBeNull();
     expect(parseSshTarget("me@example.com:0")).toBeNull();
+    expect(parseSshTarget("me@example.com:22abc")).toBeNull();
+    expect(parseSshTarget("me@example.com:70000")).toBeNull();
     expect(parseSshTarget("me@example.com:not-a-port")).toBeNull();
     expect(parseSshTarget("-V")).toBeNull();
     expect(parseSshTarget("me@-badhost")).toBeNull();

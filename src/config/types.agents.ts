@@ -84,8 +84,6 @@ export type AgentConfig = {
   description?: string;
   workspace?: string;
   agentDir?: string;
-  /** Optional per-agent full system prompt replacement. */
-  systemPromptOverride?: AgentDefaultsConfig["systemPromptOverride"];
   model?: AgentModelConfig;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.

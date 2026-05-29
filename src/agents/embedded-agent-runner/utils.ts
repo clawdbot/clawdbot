@@ -8,19 +8,14 @@ export function normalizeContextTokenBudget(value: unknown): number | undefined 
 }
 
 export function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
-  // agent runtime supports "xhigh"; OpenClaw enables it for specific models.
+  // agent runtime supports elevated levels; OpenClaw enables them for specific models.
   if (!level) {
     return "off";
   }
-  if (level === "max") {
-    return "xhigh";
-  }
-  // "adaptive" maps to "medium" at the agent runtime layer.  The provider adapter
-  // provider then translates this to `thinking.type: "adaptive"` with
-  // `output_config.effort: "medium"` for models that support it (Opus 4.6,
-  // Sonnet 4.6).
+  // Runtime streams do not expose a distinct adaptive level. Preserve the
+  // provider-owned adaptive default by using Claude's documented high effort.
   if (level === "adaptive") {
-    return "medium";
+    return "high";
   }
   return level;
 }

@@ -213,6 +213,30 @@ vi.mock("./run-execution.runtime.js", () => ({
   logWarn: (...args: unknown[]) => logWarnMock(...args),
 }));
 
+vi.mock("../../agents/model-runtime-aliases.js", () => ({
+  resolveCliRuntimeExecutionProvider: ({
+    provider,
+    cfg,
+    modelId,
+  }: {
+    provider?: string;
+    cfg?: {
+      agents?: {
+        defaults?: {
+          models?: Record<string, { agentRuntime?: { id?: string } }>;
+        };
+      };
+    };
+    modelId?: string;
+  }) => {
+    const key = provider && modelId ? `${provider}/${modelId}` : undefined;
+    const runtime = key
+      ? cfg?.agents?.defaults?.models?.[key]?.agentRuntime?.id?.trim()
+      : undefined;
+    return runtime || provider;
+  },
+}));
+
 vi.mock("./run-auth-profile.runtime.js", () => ({
   resolveSessionAuthProfileOverride: resolveSessionAuthProfileOverrideMock,
 }));

@@ -5,7 +5,12 @@ import {
 } from "./sdk-node-runtime.js";
 
 type BrowserControlHandle = LazyPluginServiceHandle | null;
+const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER = /^(?:data|http|https|node):/i;
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  return /^(?:1|true|yes|on)$/iu.test(value?.trim() ?? "");
+}
 
 function validateBrowserControlOverrideSpecifier(specifier: string): string {
   const trimmed = specifier.trim();
@@ -21,6 +26,9 @@ export function createBrowserPluginService(): OpenClawPluginService {
   return {
     id: "browser-control",
     start: async () => {
+      if (!isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
+        return;
+      }
       if (handle) {
         return;
       }
@@ -40,10 +48,12 @@ export function createBrowserPluginService(): OpenClawPluginService {
     stop: async () => {
       const current = handle;
       handle = null;
-      if (!current) {
+      if (current) {
+        await current.stop().catch(() => {});
         return;
       }
-      await current.stop().catch(() => {});
+      const { stopBrowserControlService } = await import("./control-service.js");
+      await stopBrowserControlService().catch(() => {});
     },
   };
 }

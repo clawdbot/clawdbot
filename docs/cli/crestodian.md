@@ -157,8 +157,8 @@ order and tells you what it chose:
 
 - existing explicit model, if already configured
 - `OPENAI_API_KEY` -> `openai/gpt-5.5`
-- `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-7`
-- Claude Code CLI -> `claude-cli/claude-opus-4-7`
+- `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-8`
+- Claude Code CLI -> `claude-cli/claude-opus-4-8`
 - Codex -> `openai/gpt-5.5` through the Codex app-server harness
 
 If none are available, setup still writes the default workspace and leaves the
@@ -173,7 +173,7 @@ planner turn through OpenClaw's normal runtime paths. It first uses the
 configured OpenClaw model. If no configured model is usable yet, it can fall
 back to local runtimes already present on the machine:
 
-- Claude Code CLI: `claude-cli/claude-opus-4-7`
+- Claude Code CLI: `claude-cli/claude-opus-4-8`
 - Codex app-server harness: `openai/gpt-5.5`
 
 The model-assisted planner cannot mutate config directly. It must translate the

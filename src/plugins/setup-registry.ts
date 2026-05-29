@@ -212,8 +212,46 @@ function resolveRegister(mod: OpenClawPluginModule): {
   return {};
 }
 
+function rewriteBundledSetupSourceToBuiltArtifact(
+  source: string,
+  record: PluginManifestRecord,
+): string {
+  if (record.origin !== "bundled") {
+    return source;
+  }
+  const rootDir = path.resolve(record.rootDir);
+  const sourcePath = path.resolve(source);
+  const extensionsDir = path.dirname(rootDir);
+  if (path.basename(extensionsDir) !== "extensions") {
+    return source;
+  }
+  const packageRoot = path.dirname(extensionsDir);
+  if (path.basename(packageRoot) === "dist" || path.basename(packageRoot) === "dist-runtime") {
+    return source;
+  }
+  const relativeSource = path.relative(rootDir, sourcePath);
+  if (relativeSource === "" || relativeSource.startsWith("..") || path.isAbsolute(relativeSource)) {
+    return source;
+  }
+  const artifactRelativePath = relativeSource.replace(/\.[^.]+$/u, ".js");
+  for (const artifactRootName of ["dist-runtime", "dist"] as const) {
+    const candidate = path.join(
+      packageRoot,
+      artifactRootName,
+      "extensions",
+      path.basename(rootDir),
+      artifactRelativePath,
+    );
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return source;
+}
+
 function resolveLoadableSetupRuntimeSource(record: PluginManifestRecord): string | null {
-  return record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  const source = record.setupSource ?? resolveSetupApiPath(record.rootDir);
+  return source ? rewriteBundledSetupSourceToBuiltArtifact(source, record) : null;
 }
 
 function resolveDeclaredSetupRuntimeSource(record: PluginManifestRecord): string | null {

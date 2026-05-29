@@ -9,6 +9,7 @@ import { retryAsync, type RetryOptions } from "../infra/retry.js";
 import { isAbortError, isTransientNetworkError } from "../infra/unhandled-rejections.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { MAX_DOCUMENT_BYTES } from "./constants.js";
+import { parseMediaContentLength } from "./content-length.js";
 import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
 import { detectMime, extensionForMime } from "./mime.js";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
@@ -286,12 +287,21 @@ async function assertMediaContentLength(params: {
   sourceUrl: string;
   maxBytes: number;
 }): Promise<void> {
-  const contentLength = params.res.headers.get("content-length");
-  if (!contentLength) {
+  let length: number | null;
+  try {
+    length = parseMediaContentLength(params.res.headers.get("content-length"));
+  } catch (err) {
+    await discardIgnoredResponseBody(params.res);
+    throw new MediaFetchError(
+      "http_error",
+      `Failed to fetch media from ${params.sourceUrl}: ${formatErrorMessage(err)}`,
+      { cause: err },
+    );
+  }
+  if (length === null) {
     return;
   }
-  const length = Number(contentLength);
-  if (Number.isFinite(length) && length > params.maxBytes) {
+  if (length > params.maxBytes) {
     await discardIgnoredResponseBody(params.res);
     throw new MediaFetchError(
       "max_bytes",
@@ -301,7 +311,15 @@ async function assertMediaContentLength(params: {
 }
 
 async function discardIgnoredResponseBody(res: Response): Promise<void> {
-  await res.body?.cancel().catch(() => undefined);
+  const body = res.body;
+  if (!body) {
+    return;
+  }
+  try {
+    await body.cancel();
+  } catch {
+    // Best-effort cleanup after rejecting a response body.
+  }
 }
 
 function resolveRemoteFileName(params: {

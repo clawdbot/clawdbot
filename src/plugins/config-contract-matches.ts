@@ -1,3 +1,4 @@
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 
@@ -23,11 +24,8 @@ function appendPathSegment(path: string, segment: string): string {
 }
 
 function parseCanonicalArrayIndex(segment: string, length: number): number | null {
-  if (!/^(0|[1-9]\d*)$/.test(segment)) {
-    return null;
-  }
-  const index = Number(segment);
-  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
+  const index = parseConfigPathArrayIndex(segment);
+  return index !== undefined && index < length ? index : null;
 }
 
 export function collectPluginConfigContractMatches(params: {

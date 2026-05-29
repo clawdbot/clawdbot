@@ -459,7 +459,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("acknowledges bare /reset without falling through to model execution", async () => {
-    const params = buildResetParams("/reset", {
+    const params = buildResetParams("/RESET", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
@@ -474,7 +474,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("acknowledges bare /new without falling through to model execution", async () => {
-    const params = buildResetParams("/new", {
+    const params = buildResetParams("/NEW", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
@@ -489,7 +489,7 @@ describe("handleCommands reset hooks", () => {
   });
 
   it("keeps reset tails falling through so the model receives the user input", async () => {
-    const params = buildResetParams("/new take notes", {
+    const params = buildResetParams("/Reset take notes", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
@@ -497,6 +497,6 @@ describe("handleCommands reset hooks", () => {
     const result = await maybeHandleResetCommand(params);
 
     expect(result).toBeNull();
-    expectObjectFields(firstHookEvent(), { type: "command", action: "new" }, "hook event");
+    expectObjectFields(firstHookEvent(), { type: "command", action: "reset" }, "hook event");
   });
 });

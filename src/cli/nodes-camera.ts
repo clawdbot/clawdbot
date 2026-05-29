@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveCliName } from "./cli-name.js";
 import {
   asBoolean,
@@ -124,7 +125,7 @@ export async function writeUrlToFile(
     }
 
     const contentLengthRaw = res.headers.get("content-length");
-    const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
+    const contentLength = parseStrictNonNegativeInteger(contentLengthRaw);
     if (
       typeof contentLength === "number" &&
       Number.isFinite(contentLength) &&

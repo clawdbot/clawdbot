@@ -15,7 +15,7 @@
  * @module @openclaw/oc-path/universal
  */
 
-import { isMap, isSeq } from "yaml";
+import { isMap, isScalar, isSeq, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import { setMdOcPath } from "./edit.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
@@ -32,6 +32,7 @@ import {
   hasWildcard,
   isQuotedSeg,
   OcPathError,
+  parseArrayIndexSegment,
   splitRespectingBrackets,
   unquoteSeg,
 } from "./oc-path.js";
@@ -301,9 +302,23 @@ function yamlLine(ast: YamlAst, path: readonly string[]): number {
     if (node === null || typeof node !== "object") {
       break;
     }
-    const getter = node as { get?: (key: string | number, keepScalar?: boolean) => unknown };
-    const index = Number(segment);
-    node = Number.isInteger(index) ? getter.get?.(index, true) : getter.get?.(segment, true);
+    if (isSeq(node)) {
+      const index = parseArrayIndexSegment(segment, node.items.length);
+      if (index === null) {
+        break;
+      }
+      node = node.items[index] ?? null;
+      continue;
+    }
+    if (isMap(node)) {
+      const pair = (node as { items: readonly Pair[] }).items.find((entry) => {
+        const key = isScalar(entry.key) ? entry.key.value : entry.key;
+        return String(key) === segment;
+      });
+      node = pair?.value ?? null;
+      continue;
+    }
+    break;
   }
   const range = (node as { range?: readonly [number, number, number] } | null)?.range;
   if (range === undefined) {
@@ -923,8 +938,8 @@ function mutateAt(
     };
   }
   if (current.kind === "array") {
-    const idx = Number(seg);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
+    const idx = parseArrayIndexSegment(seg, current.items.length);
+    if (idx === null) {
       return null;
     }
     const child = current.items[idx];

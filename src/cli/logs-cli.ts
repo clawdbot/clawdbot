@@ -1,13 +1,16 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Command } from "commander";
 import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import {
   buildGatewayConnectionDetails,
   isGatewayTransportError,
   type GatewayConnectionDetails,
 } from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
-import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";

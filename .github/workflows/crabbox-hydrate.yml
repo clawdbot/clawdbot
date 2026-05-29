@@ -137,7 +137,10 @@ jobs:
           set -euo pipefail
 
           if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+            timeout --signal=TERM --kill-after=10s 30s git \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+              "+refs/heads/main:refs/remotes/origin/main"
           fi
 
       - name: Prepare Crabbox shell
@@ -318,7 +321,26 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           if (git rev-parse --is-inside-work-tree 2>$null) {
-            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+            $repo = (Get-Location).Path
+            $fetchInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $fetchInfo.FileName = "git"
+            $fetchInfo.WorkingDirectory = $repo
+            $fetchInfo.UseShellExecute = $false
+            $fetchInfo.Arguments = '-c protocol.version=2 fetch --no-tags --no-progress --prune --no-recurse-submodules --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"'
+
+            $fetch = New-Object System.Diagnostics.Process
+            $fetch.StartInfo = $fetchInfo
+            if (-not $fetch.Start()) {
+              throw "git fetch failed to start"
+            }
+            if (-not $fetch.WaitForExit(30000)) {
+              $fetch.Kill()
+              $fetch.WaitForExit()
+              throw "git fetch timed out after 30 seconds"
+            }
+            if ($fetch.ExitCode -ne 0) {
+              throw "git fetch failed with exit code $($fetch.ExitCode)"
+            }
           }
 
       - name: Setup pnpm and dependencies
@@ -513,7 +535,10 @@ jobs:
           set -euo pipefail
 
           if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-            git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+            timeout --signal=TERM --kill-after=10s 30s git \
+              -c protocol.version=2 \
+              fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+              "+refs/heads/main:refs/remotes/origin/main"
           fi
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"

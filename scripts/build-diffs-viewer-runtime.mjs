@@ -7,6 +7,8 @@ import { build } from "esbuild";
 
 const modulePath = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(modulePath), "..");
+const pierreDiffsEmptySideEffectNamespace = "openclaw-diffs-empty-side-effect";
+const pierreDiffsEmptySideEffectPath = "pierre-diffs-parse-decorations-side-effect";
 
 const targets = {
   curated: {
@@ -19,6 +21,39 @@ const targets = {
     output: "extensions/diffs-language-pack/assets/viewer-runtime.js",
   },
 };
+
+function toPosixPath(value) {
+  return String(value ?? "").replaceAll("\\", "/");
+}
+
+export function createPierreDiffsSideEffectImportPlugin() {
+  return {
+    name: "openclaw-diffs-pierre-side-effect-imports",
+    setup(buildContext) {
+      buildContext.onResolve({ filter: /^diff$/ }, (args) => {
+        const importer = toPosixPath(args.importer);
+        if (!importer.endsWith("/@pierre/diffs/dist/utils/parseDiffDecorations.js")) {
+          return undefined;
+        }
+        return {
+          path: pierreDiffsEmptySideEffectPath,
+          namespace: pierreDiffsEmptySideEffectNamespace,
+          sideEffects: true,
+        };
+      });
+      buildContext.onLoad(
+        {
+          filter: /^pierre-diffs-parse-decorations-side-effect$/,
+          namespace: pierreDiffsEmptySideEffectNamespace,
+        },
+        () => ({
+          contents: "export {};\n",
+          loader: "js",
+        }),
+      );
+    },
+  };
+}
 
 export async function buildDiffsViewerRuntime(targetName) {
   const target = targets[targetName];
@@ -44,18 +79,21 @@ export async function buildDiffsViewerRuntime(targetName) {
     legalComments: "none",
     outfile: outputPath,
     write: false,
-    plugins: target.shikiAlias
-      ? [
-          {
-            name: "openclaw-diffs-curated-shiki",
-            setup(buildContext) {
-              buildContext.onResolve({ filter: /^shiki$/ }, () => ({
-                path: path.join(repoRoot, target.shikiAlias),
-              }));
+    plugins: [
+      createPierreDiffsSideEffectImportPlugin(),
+      ...(target.shikiAlias
+        ? [
+            {
+              name: "openclaw-diffs-curated-shiki",
+              setup(buildContext) {
+                buildContext.onResolve({ filter: /^shiki$/ }, () => ({
+                  path: path.join(repoRoot, target.shikiAlias),
+                }));
+              },
             },
-          },
-        ]
-      : [],
+          ]
+        : []),
+    ],
   });
 
   const outputFile = result.outputFiles?.[0];

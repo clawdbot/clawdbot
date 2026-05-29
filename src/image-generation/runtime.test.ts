@@ -537,6 +537,64 @@ describe("image-generation runtime", () => {
     expect(result.metadata.aspectRatioDerivedFromSize).toBe("16:9");
   });
 
+  it("uses model-specific geometry lists before provider normalization", async () => {
+    let seenRequest:
+      | {
+          size?: string;
+          aspectRatio?: string;
+        }
+      | undefined;
+    providers = [
+      {
+        id: "fal",
+        capabilities: {
+          generate: {
+            supportsSize: true,
+            supportsAspectRatio: true,
+          },
+          edit: {
+            enabled: true,
+            supportsSize: true,
+            supportsAspectRatio: true,
+          },
+          geometry: {
+            sizes: ["1024x1024", "1536x1024", "1024x1536"],
+            sizesByModel: {
+              "krea/v2/medium/text-to-image": [],
+            },
+            aspectRatios: ["1:1", "4:3", "3:2", "16:9"],
+          },
+        },
+        async generateImage(req) {
+          seenRequest = {
+            size: req.size,
+            aspectRatio: req.aspectRatio,
+          };
+          return {
+            images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+          };
+        },
+      },
+    ];
+
+    await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "fal/krea/v2/medium/text-to-image" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+      size: "1024x768",
+    });
+
+    expect(seenRequest).toEqual({
+      size: "1024x768",
+      aspectRatio: undefined,
+    });
+  });
+
   it("lists runtime image-generation providers through the provider registry", () => {
     const registryProviders: ImageGenerationProvider[] = [
       {

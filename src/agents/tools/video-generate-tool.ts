@@ -181,7 +181,7 @@ const VideoGenerateToolProperties = {
     }),
   ),
   durationSeconds: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Target seconds; may round to nearest supported duration.",
       minimum: 1,
     }),
@@ -203,7 +203,7 @@ const VideoGenerateToolProperties = {
     }),
   ),
   timeoutMs: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Provider timeout ms.",
       minimum: 1,
     }),
@@ -998,9 +998,15 @@ export function createVideoGenerateTool(options?: {
       const aspectRatio = normalizeAspectRatio(readStringParam(args, "aspectRatio"));
       const resolution = normalizeResolution(readStringParam(args, "resolution"));
       const durationSeconds = readNumberParam(args, "durationSeconds", {
-        integer: true,
+        positiveInteger: true,
         strict: true,
       });
+      if (
+        durationSeconds === undefined &&
+        readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
+      ) {
+        throw new ToolInputError("durationSeconds must be a positive integer");
+      }
       const audio = readBooleanToolParam(args, "audio");
       const watermark = readBooleanToolParam(args, "watermark");
       const timeoutMs = readGenerationTimeoutMs(args) ?? videoGenerationModelConfig.timeoutMs;

@@ -21,6 +21,12 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+await Promise.all([
+  import("./server.js"),
+  import("../infra/device-identity.js"),
+  import("../infra/device-pairing.js"),
+]);
+
 const CONTROL_UI_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
   version: "1.0.0",

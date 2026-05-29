@@ -19,7 +19,7 @@ const ExaSearchSchema = {
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {
-      type: "number",
+      type: "integer",
       description: "Number of results to return (1-100, subject to Exa search-type limits).",
       minimum: 1,
       maximum: EXA_MAX_SEARCH_COUNT,

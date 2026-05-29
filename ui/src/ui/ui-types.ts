@@ -17,6 +17,11 @@ export type ChatQueueItem = {
   localCommandArgs?: string;
   localCommandName?: string;
   pendingRunId?: string;
+  sendAttempts?: number;
+  sendError?: string;
+  sendRunId?: string;
+  sendState?: "sending" | "waiting-reconnect" | "failed";
+  sessionKey?: string;
 };
 
 export const CRON_CHANNEL_LAST = "last";

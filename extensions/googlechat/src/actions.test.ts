@@ -286,4 +286,26 @@ describe("googlechat message actions", () => {
     });
     expectJsonResult(result, { ok: true, removed: 2 });
   });
+
+  it("rejects fractional reaction limits before listing reactions", async () => {
+    const account = buildAccount();
+    resolveGoogleChatAccount.mockReturnValue(account);
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "reactions",
+        params: {
+          messageId: "spaces/AAA/messages/msg-1",
+          limit: 2.5,
+        },
+        cfg: {},
+        accountId: "default",
+      } as never),
+    ).rejects.toThrow("limit must be a positive integer");
+
+    expect(listGoogleChatReactions).not.toHaveBeenCalled();
+  });
 });

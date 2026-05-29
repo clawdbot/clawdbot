@@ -206,7 +206,7 @@ describe("diffs tool", () => {
         before: "one\n",
         after: "two\n",
         mode: "file",
-        ttlSeconds: 1,
+        ttlSeconds: "1",
       });
       const filePath = requireString(readDetails(result).filePath, "filePath");
       await fs.access(filePath);
@@ -263,8 +263,8 @@ describe("diffs tool", () => {
       after: "two\n",
       mode: "file",
       imageQuality: "hq",
-      imageScale: 2.4,
-      imageMaxWidth: 1100,
+      imageScale: "2.4",
+      imageMaxWidth: "1100",
     });
 
     expect((result?.details as Record<string, unknown>).fileQuality).toBe("hq");

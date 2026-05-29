@@ -1,4 +1,4 @@
-import { parseFenceSpans, type FenceSpan } from "./fences.js";
+import { scanFenceSpans, type FenceScanState, type FenceSpan } from "./fences.js";
 
 export type InlineCodeState = {
   open: boolean;
@@ -16,11 +16,16 @@ type InlineCodeSpansResult = {
 
 type CodeSpanIndex = {
   inlineState: InlineCodeState;
+  fenceState: FenceScanState;
   isInside: (index: number) => boolean;
 };
 
-export function buildCodeSpanIndex(text: string, inlineState?: InlineCodeState): CodeSpanIndex {
-  const fenceSpans = parseFenceSpans(text);
+export function buildCodeSpanIndex(
+  text: string,
+  inlineState?: InlineCodeState,
+  fenceState?: FenceScanState,
+): CodeSpanIndex {
+  const { spans: fenceSpans, state: nextFenceState } = scanFenceSpans(text, fenceState);
   const startState = inlineState
     ? { open: inlineState.open, ticks: inlineState.ticks }
     : createInlineCodeState();
@@ -32,6 +37,7 @@ export function buildCodeSpanIndex(text: string, inlineState?: InlineCodeState):
 
   return {
     inlineState: nextInlineState,
+    fenceState: nextFenceState,
     isInside: (index: number) =>
       isInsideFenceSpan(index, fenceSpans) || isInsideInlineSpan(index, inlineSpans),
   };

@@ -16,6 +16,10 @@ describe("parseSoftResetCommand", () => {
       matched: true,
       tail: "re-read persona files",
     });
+    expect(parseSoftResetCommand("/RESET soft re-read persona files")).toEqual({
+      matched: true,
+      tail: "re-read persona files",
+    });
   });
 
   it("rejects reset-prefixed typos without a command boundary", () => {

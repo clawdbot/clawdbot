@@ -1,10 +1,10 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   loadVoiceWakeRoutingConfig,
   normalizeVoiceWakeRoutingConfig,
   setVoiceWakeRoutingConfig,
   validateVoiceWakeRoutingConfigInput,
 } from "../../infra/voicewake-routing.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const voicewakeRoutingHandlers: GatewayRequestHandlers = {

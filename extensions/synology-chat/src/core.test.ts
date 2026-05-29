@@ -324,6 +324,28 @@ describe("synology-chat account resolution", () => {
 
     process.env.SYNOLOGY_RATE_LIMIT = "0abc";
     expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
+
+    process.env.SYNOLOGY_RATE_LIMIT = "-1";
+    expect(resolveAccount({ channels: { "synology-chat": {} } }).rateLimitPerMinute).toBe(30);
+  });
+
+  it("ignores malformed configured rate limits", () => {
+    process.env.SYNOLOGY_RATE_LIMIT = "12";
+
+    expect(
+      resolveAccount({
+        channels: {
+          "synology-chat": { rateLimitPerMinute: -1 },
+        },
+      }).rateLimitPerMinute,
+    ).toBe(12);
+    expect(
+      resolveAccount({
+        channels: {
+          "synology-chat": { rateLimitPerMinute: 1.5 },
+        },
+      }).rateLimitPerMinute,
+    ).toBe(12);
   });
 });
 

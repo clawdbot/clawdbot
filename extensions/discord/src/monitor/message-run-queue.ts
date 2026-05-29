@@ -81,7 +81,7 @@ export function createDiscordMessageRunQueue(
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
     onError: (error) => {
-      params.runtime.error?.(danger(`discord message run failed: ${String(error)}`));
+      params.runtime.error(danger(`discord message run failed: ${String(error)}`));
     },
   });
 

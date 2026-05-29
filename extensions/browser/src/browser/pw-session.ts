@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   Browser,
@@ -181,6 +182,11 @@ const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
+
+function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
+  const parsed = parseFiniteNumber(timeoutMs);
+  return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
@@ -784,7 +790,7 @@ export function armObservedDialogResponseOnPage(opts: {
 }): void {
   const state = ensurePageState(opts.page);
   clearArmedDialogResponse(state);
-  const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs ?? OBSERVED_DIALOG_TIMEOUT_MS));
+  const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
   const response: ArmedDialogResponse = {
     accept: opts.accept,
     expiresAt: Date.now() + timeoutMs,

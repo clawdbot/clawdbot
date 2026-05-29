@@ -1,4 +1,4 @@
-import { stripUrlUserInfo } from "../shared/net/url-userinfo.js";
+import { stripUrlUserInfo } from "@openclaw/net-policy/url-userinfo";
 import { asFiniteNumber } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";

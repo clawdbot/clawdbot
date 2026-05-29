@@ -74,7 +74,6 @@ describe("scripts/test-live-shard", () => {
     expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
       "src/gateway/gateway-acp-bind.live.test.ts",
       "src/gateway/gateway-cli-backend.live.test.ts",
-      "src/gateway/gateway-cli-backend.system-prompt-resume.live.test.ts",
       "src/gateway/gateway-codex-bind.live.test.ts",
       "src/gateway/gateway-codex-harness.live.test.ts",
     ]);

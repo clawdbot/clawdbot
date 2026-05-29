@@ -130,7 +130,7 @@ export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[]
   for (const entry of readOfficialCatalogFileSync()) {
     const channelEntry = toBundledChannelEntry(entry);
     if (channelEntry) {
-      entries.set(channelEntry.id, channelEntry);
+      entries.set(channelEntry.id, entries.get(channelEntry.id) ?? channelEntry);
     }
   }
   if (entries.size === 0) {

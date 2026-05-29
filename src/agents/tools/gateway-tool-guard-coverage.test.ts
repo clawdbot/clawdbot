@@ -58,7 +58,7 @@ function expectAllowedApply(
 
 describe("gateway config mutation guard coverage", () => {
   it("keeps a narrow allowlist of agent-tunable config paths", () => {
-    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.systemPromptOverride");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.promptOverlays");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.model");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.defaults.subagents.thinking");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("agents.list[].id");
@@ -512,13 +512,13 @@ describe("gateway config mutation guard coverage", () => {
     expectAllowed(
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a helpful assistant." },
+          defaults: { reasoningDefault: "low" },
           list: [{ id: "worker", model: "sonnet-4" }],
         },
       },
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a terse assistant." },
+          defaults: { reasoningDefault: "medium" },
           list: [{ id: "worker", model: "opus-4.6" }],
         },
       },
@@ -531,7 +531,7 @@ describe("gateway config mutation guard coverage", () => {
         agents: {
           defaults: {
             sandbox: { mode: "all" },
-            systemPromptOverride: "You are a helpful assistant.",
+            reasoningDefault: "low",
           },
         },
       },
@@ -539,7 +539,7 @@ describe("gateway config mutation guard coverage", () => {
         agents: {
           defaults: {
             sandbox: { mode: "off" },
-            systemPromptOverride: "You are a terse assistant.",
+            reasoningDefault: "medium",
           },
         },
       },
@@ -568,13 +568,13 @@ describe("gateway config mutation guard coverage", () => {
     expectAllowedApply(
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a helpful assistant." },
+          defaults: { reasoningDefault: "low" },
           list: [{ id: "worker", model: "sonnet-4" }],
         },
       },
       {
         agents: {
-          defaults: { systemPromptOverride: "You are a terse assistant." },
+          defaults: { reasoningDefault: "medium" },
           list: [{ id: "worker", model: "opus-4.6" }],
         },
       },

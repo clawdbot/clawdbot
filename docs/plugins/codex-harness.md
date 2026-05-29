@@ -738,9 +738,11 @@ protocol version.
 the Codex thread is still trying to use a native hook relay id that OpenClaw no
 longer has registered. This is a native Codex hook transport problem, not an ACP
 backend, provider, GitHub, or shell-command failure. Start a fresh session in
-the affected chat with `/new` or `/reset`, then retry a harmless command. If the
-same fresh session still fails, restart the Codex app-server or OpenClaw Gateway
-so native hook registrations are recreated.
+the affected chat with `/new` or `/reset`, then retry a harmless command. If that
+works once but the next native tool call fails again, treat `/new` as a temporary
+workaround only: copy the prompt into a fresh session after restarting the Codex
+app-server or OpenClaw Gateway so old threads are dropped and native hook
+registrations are recreated.
 
 **A non-Codex model uses the built-in harness:** that is expected unless
 provider or model runtime policy routes it to another harness. Plain non-OpenAI

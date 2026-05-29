@@ -205,7 +205,7 @@ override only `cacheRetention` and inherit other model defaults unchanged.
 
 ### Anthropic 1M context
 
-OpenClaw sizes GA-capable Claude 4.x models such as Opus 4.6, Opus 4.7, and
+OpenClaw sizes GA-capable Claude 4.x models such as Opus 4.8, Opus 4.7, Opus 4.6, and
 Sonnet 4.6 with Anthropic's 1M context window. You do not need
 `params.context1m: true` for those models.
 

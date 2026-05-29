@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
@@ -34,7 +35,6 @@ import {
   formatUnsafeGatewayTailscaleNoAuthMessage,
   isUnsafeGatewayTailscaleNoAuth,
 } from "../shared/gateway-tailscale-auth-policy.js";
-import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";

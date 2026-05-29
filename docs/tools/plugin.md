@@ -136,6 +136,13 @@ bundled copy. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need
 deterministic source selection. See [`openclaw plugins`](/cli/plugins#install)
 for the full command contract.
 
+For npm installs, unpinned package specs and `@latest` choose the newest stable
+package that advertises compatibility with this OpenClaw build. If npm's
+current latest release declares a newer `openclaw.compat.pluginApi` or
+`openclaw.install.minHostVersion`, OpenClaw scans older stable package versions
+and installs the newest one that fits. Exact versions and explicit channel tags
+such as `@beta` stay pinned to the selected package and fail when incompatible.
+
 ### Configure plugin policy
 
 The common plugin config shape is:

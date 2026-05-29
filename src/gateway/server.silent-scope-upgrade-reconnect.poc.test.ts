@@ -28,6 +28,8 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+await import("./server.js");
+
 async function expectRejectedScopeUpgradeAttempt({
   attempt,
   requestedEvent,

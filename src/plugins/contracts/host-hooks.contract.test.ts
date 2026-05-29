@@ -5,12 +5,12 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
-import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import {
   validatePluginsUiDescriptorsParams,
   validateSessionsPluginPatchParams,
-} from "../../gateway/protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { loadSessionStore, updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../../gateway/operator-scopes.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
@@ -1586,6 +1586,14 @@ describe("host-hook fixture plugin contract", () => {
         handler: () => ({ text: "unused" }),
       }),
     ).toBe("Command requiredScopes contains unknown operator scope: operator.unknown");
+    expect(
+      validatePluginCommandDefinition({
+        name: "invalid-owner-status-fixture",
+        description: "Invalid owner status exposure.",
+        exposeSenderIsOwner: "yes" as never,
+        handler: () => ({ text: "unused" }),
+      }),
+    ).toBe("Command exposeSenderIsOwner must be a boolean");
 
     await expect(
       executePluginCommand({

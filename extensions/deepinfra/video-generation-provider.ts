@@ -8,7 +8,8 @@ import {
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  asFiniteNumber as coerceProviderNumber,
+  asFiniteNumber,
+  asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
@@ -93,6 +94,10 @@ function resolveDurationSeconds(value: number | undefined): number | undefined {
   return value <= 6.5 ? 5 : 8;
 }
 
+function resolveSeed(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
+}
+
 function buildDeepInfraVideoBody(
   req: VideoGenerationRequest,
   model: string,
@@ -109,7 +114,7 @@ function buildDeepInfraVideoBody(
   if (duration) {
     body.duration = duration;
   }
-  const seed = coerceProviderNumber(options.seed);
+  const seed = resolveSeed(options.seed);
   if (seed != null) {
     body.seed = seed;
   }
@@ -124,7 +129,7 @@ function buildDeepInfraVideoBody(
     body.style = style;
   }
   const guidanceScale =
-    coerceProviderNumber(options.guidance_scale) ?? coerceProviderNumber(options.guidanceScale);
+    asFiniteNumber(options.guidance_scale) ?? asFiniteNumber(options.guidanceScale);
   if (guidanceScale != null && model.startsWith("Wan-AI/")) {
     body.guidance_scale = guidanceScale;
   }
@@ -280,7 +285,7 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
           model,
           metadata: {
             requestId: normalizeOptionalString(payload.request_id),
-            seed: payload.seed,
+            seed: resolveSeed(payload.seed),
             status: payload.inference_status?.status ?? payload.status,
           },
         };

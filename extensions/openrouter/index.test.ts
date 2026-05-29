@@ -82,6 +82,60 @@ describe("openrouter provider hooks", () => {
     });
   });
 
+  // Regression for #58012: OpenRouter proxies Mistral, which requires the
+  // strict9 tool_call_id mode the direct `mistral` provider already applies.
+  // Without strict9, replayed assistant turns fail with HTTP 400
+  // `invalid_function_call` 3280. Other OpenRouter-routed models (Gemini,
+  // OpenAI, Anthropic, etc.) must keep the existing passthrough policy.
+  describe("OpenRouter Mistral tool_call_id strict9 (#58012)", () => {
+    it.each([
+      ["unprefixed Mistral", "mistral-large-latest"],
+      ["unprefixed Codestral", "codestral-latest"],
+      ["unprefixed Devstral", "devstral-small-latest"],
+      ["bare mistralai prefix", "mistralai/mistral-large-latest"],
+      ["nested openrouter/mistralai", "openrouter/mistralai/mistral-small"],
+      ["bare mistral provider prefix", "mistral/mistral-medium"],
+    ])("applies strict9 sanitisation for %s", async (_label, modelId) => {
+      const provider = await registerSingleProviderPlugin(openrouterPlugin);
+      const policy = provider.buildReplayPolicy?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId,
+      } as never);
+
+      expect(policy?.sanitizeToolCallIds).toBe(true);
+      expect(policy?.toolCallIdMode).toBe("strict9");
+    });
+
+    it.each([
+      ["Gemini", "gemini-2.5-pro"],
+      ["OpenAI", "openai/gpt-5.4"],
+      ["Anthropic", "anthropic/claude-sonnet-4-6"],
+      ["DeepSeek", "deepseek/deepseek-v4-flash"],
+    ])("keeps passthrough policy for %s (no strict9)", async (_label, modelId) => {
+      const provider = await registerSingleProviderPlugin(openrouterPlugin);
+      const policy = provider.buildReplayPolicy?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId,
+      } as never);
+
+      expect(policy?.sanitizeToolCallIds).toBeUndefined();
+      expect(policy?.toolCallIdMode).toBeUndefined();
+    });
+
+    it("preserves Gemini thought-signature sanitisation alongside strict9 logic", async () => {
+      const provider = await registerSingleProviderPlugin(openrouterPlugin);
+      const geminiPolicy = provider.buildReplayPolicy?.({
+        provider: "openrouter",
+        modelApi: "openai-completions",
+        modelId: "google/gemini-2.5-pro",
+      } as never);
+
+      expect(geminiPolicy).toHaveProperty("sanitizeThoughtSignatures");
+    });
+  });
+
   it("owns native reasoning output mode", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
 

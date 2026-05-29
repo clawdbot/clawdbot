@@ -263,16 +263,16 @@ enum TalkModeGatewayConfigParser {
         let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
         let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
         let brain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
-        guard mode == "realtime", brain == nil || brain == "agent-consult" else {
+        guard mode == "realtime" else {
             return .native
         }
-        if transport == "gateway-relay" {
-            return .realtimeRelay
+        if transport == "managed-room" {
+            return .native
         }
-        if transport == nil || transport == "webrtc" {
-            return .realtimeClient
+        if brain != nil, brain != "agent-consult" {
+            return .native
         }
-        return .native
+        return .realtimeRelay
     }
 
     private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {

@@ -13,12 +13,39 @@ export function registerBrowserElementCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
 ) {
+  const parseDecimalNumber = (value: string): number | undefined => {
+    const trimmed = value.trim();
+    if (!/^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed)) {
+      return undefined;
+    }
+    const parsed = Number(trimmed);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  };
+
   const parseRequiredNumber = (value: string, label: string): number | undefined => {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
+    const parsed = parseDecimalNumber(value);
+    if (parsed === undefined) {
       defaultRuntime.error(danger(`Invalid ${label}: must be a finite number`));
       defaultRuntime.exit(1);
       return undefined;
+    }
+    return parsed;
+  };
+
+  const parseNonNegativeIntegerOption = (value: string, flag: string): number => {
+    const trimmed = value.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isSafeInteger(parsed)) {
+      throw new Error(`${flag} must be a non-negative integer.`);
+    }
+    return parsed;
+  };
+
+  const parsePositiveIntegerOption = (value: string, flag: string): number => {
+    const trimmed = value.trim();
+    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+    if (!Number.isSafeInteger(parsed) || parsed < 1) {
+      throw new Error(`${flag} must be a positive integer.`);
     }
     return parsed;
   };
@@ -93,7 +120,9 @@ export function registerBrowserElementCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option("--double", "Double click", false)
     .option("--button <left|right|middle>", "Mouse button to use")
-    .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) => Number(v))
+    .option("--delay-ms <ms>", "Delay between mouse down/up", (v: string) =>
+      parseNonNegativeIntegerOption(v, "--delay-ms"),
+    )
     .action(async (xRaw: string, yRaw: string, opts, cmd) => {
       const x = parseRequiredNumber(xRaw, "x");
       const y = parseRequiredNumber(yRaw, "y");
@@ -178,7 +207,7 @@ export function registerBrowserElementCommands(
     .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option("--timeout-ms <ms>", "How long to wait for scroll (default: 20000)", (v: string) =>
-      Number(v),
+      parsePositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (ref: string | undefined, opts, cmd) => {
       const refValue = requireRef(ref);

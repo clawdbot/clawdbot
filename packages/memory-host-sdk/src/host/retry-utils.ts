@@ -48,11 +48,18 @@ function clampNumber(value: unknown, fallback: number, min?: number, max?: numbe
   return Math.min(Math.max(next, floor), ceiling);
 }
 
+function resolveAttempts(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    return fallback;
+  }
+  return Math.max(1, value);
+}
+
 export function resolveRetryConfig(
   defaults: Required<RetryConfig> = DEFAULT_RETRY_CONFIG,
   overrides?: RetryConfig,
 ): Required<RetryConfig> {
-  const attempts = Math.max(1, Math.round(clampNumber(overrides?.attempts, defaults.attempts, 1)));
+  const attempts = resolveAttempts(overrides?.attempts, defaults.attempts);
   const minDelayMs = Math.max(
     0,
     Math.round(clampNumber(overrides?.minDelayMs, defaults.minDelayMs, 0)),
@@ -79,7 +86,7 @@ export async function retryAsync<T>(
   initialDelayMs = 300,
 ): Promise<T> {
   if (typeof attemptsOrOptions === "number") {
-    const attempts = Math.max(1, Math.round(attemptsOrOptions));
+    const attempts = resolveAttempts(attemptsOrOptions, DEFAULT_RETRY_CONFIG.attempts);
     let lastErr: unknown;
     for (let i = 0; i < attempts; i += 1) {
       try {

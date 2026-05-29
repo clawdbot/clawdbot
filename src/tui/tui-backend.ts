@@ -4,7 +4,7 @@ import type {
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
-} from "../gateway/protocol/index.js";
+} from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 export type ChatSendOptions = {

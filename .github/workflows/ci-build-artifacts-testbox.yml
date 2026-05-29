@@ -188,7 +188,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+          timeout --signal=TERM --kill-after=10s 30s git \
+            -c protocol.version=2 \
+            fetch --no-tags --prune --no-recurse-submodules --depth=50 origin \
+            "+refs/heads/main:refs/remotes/origin/main"
 
           node_bin="$(dirname "$(node -p 'process.execPath')")"
           sudo ln -sf "$node_bin/node" /usr/local/bin/node

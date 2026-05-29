@@ -4,6 +4,7 @@ import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
@@ -368,15 +369,15 @@ function parseGatewayPortFromProgramArguments(
       continue;
     }
     if (current === "--port") {
-      const next = parseStrictPositiveInteger(programArguments[index + 1] ?? "");
-      if (next !== undefined) {
+      const next = parseTcpPort(programArguments[index + 1] ?? "");
+      if (next !== null) {
         return next;
       }
       continue;
     }
     if (current.startsWith("--port=")) {
-      const value = parseStrictPositiveInteger(current.slice("--port=".length));
-      if (value !== undefined) {
+      const value = parseTcpPort(current.slice("--port=".length));
+      if (value !== null) {
         return value;
       }
     }
@@ -390,14 +391,11 @@ async function resolveLaunchAgentGatewayPort(env: GatewayServiceEnv): Promise<nu
   if (fromArgs !== null) {
     return fromArgs;
   }
-  const fromServiceEnv = parseStrictPositiveInteger(
-    command?.environment?.OPENCLAW_GATEWAY_PORT ?? "",
-  );
-  if (fromServiceEnv !== undefined) {
+  const fromServiceEnv = parseTcpPort(command?.environment?.OPENCLAW_GATEWAY_PORT ?? "");
+  if (fromServiceEnv !== null) {
     return fromServiceEnv;
   }
-  const fromEnv = parseStrictPositiveInteger(env.OPENCLAW_GATEWAY_PORT ?? "");
-  return fromEnv ?? null;
+  return parseTcpPort(env.OPENCLAW_GATEWAY_PORT ?? "");
 }
 
 function resolveGuiDomain(): string {

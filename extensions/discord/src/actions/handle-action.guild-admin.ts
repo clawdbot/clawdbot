@@ -1,6 +1,7 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
-  readNumberParam,
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -242,9 +243,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     const name = readStringParam(actionParams, "name", { required: true });
-    const position = readNumberParam(actionParams, "position", {
-      integer: true,
-    });
+    const position = readNonNegativeIntegerParam(actionParams, "position");
     return await handleDiscordAction(
       {
         action: "categoryCreate",
@@ -263,9 +262,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
       required: true,
     });
     const name = readStringParam(actionParams, "name");
-    const position = readNumberParam(actionParams, "position", {
-      integer: true,
-    });
+    const position = readNonNegativeIntegerParam(actionParams, "position");
     return await handleDiscordAction(
       {
         action: "categoryEdit",
@@ -352,9 +349,10 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   if (isDiscordModerationAction(action)) {
     const moderation = readDiscordModerationCommand(action, {
       ...actionParams,
-      durationMinutes: readNumberParam(actionParams, "durationMin", { integer: true }),
-      deleteMessageDays: readNumberParam(actionParams, "deleteDays", {
-        integer: true,
+      durationMinutes: readNonNegativeIntegerParam(actionParams, "durationMin"),
+      deleteMessageDays: readNonNegativeIntegerParam(actionParams, "deleteDays", {
+        max: 7,
+        message: "deleteDays must be an integer from 0 to 7",
       }),
     });
     const senderUserId = normalizeOptionalString(ctx.requesterSenderId);
@@ -383,7 +381,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
     const includeArchived =
       typeof actionParams.includeArchived === "boolean" ? actionParams.includeArchived : undefined;
     const before = readStringParam(actionParams, "before");
-    const limit = readNumberParam(actionParams, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(actionParams, "limit");
     return await handleDiscordAction(
       {
         action: "threadList",
@@ -442,7 +440,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         channelIds: readStringArrayParam(actionParams, "channelIds"),
         authorId: readStringParam(actionParams, "authorId"),
         authorIds: readStringArrayParam(actionParams, "authorIds"),
-        limit: readNumberParam(actionParams, "limit", { integer: true }),
+        limit: readPositiveIntegerParam(actionParams, "limit"),
       },
       cfg,
     );

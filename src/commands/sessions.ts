@@ -134,8 +134,7 @@ function parseSessionsLimit(value: string | number | undefined): number | undefi
     if (!/^\d+$/.test(trimmed)) {
       return null;
     }
-    const parsed = Number.parseInt(trimmed, 10);
-    return parsed > 0 ? parsed : null;
+    return parseStrictPositiveInteger(trimmed) ?? null;
   }
   return Number.isInteger(value) && value > 0 ? value : null;
 }

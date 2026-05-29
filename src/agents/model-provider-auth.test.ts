@@ -260,6 +260,28 @@ describe("prepared provider auth state", () => {
     );
   });
 
+  it("uses an explicit agent auth store directory for provider auth checks", async () => {
+    const cfg = {} as OpenClawConfig;
+    modelAuthMocks.hasRuntimeAvailableProviderAuth.mockReturnValue(false);
+    authProfilesMocks.listProfilesForProvider.mockReturnValueOnce([{} as never]);
+
+    const hasAuth = createProviderAuthChecker({
+      cfg,
+      agentDir: "/state/agents/worker/agent",
+      discoverExternalCliAuth: false,
+    });
+
+    await expect(hasAuth("nvidia")).resolves.toBe(true);
+    expect(authProfilesMocks.ensureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
+      "/state/agents/worker/agent",
+      { allowKeychainPrompt: false },
+    );
+    expect(authProfilesMocks.listProfilesForProvider).toHaveBeenCalledWith(
+      expect.anything(),
+      "nvidia",
+    );
+  });
+
   it("hasAuthForModelProvider uses the prepared answer for equivalent runtime config clones", async () => {
     const cfg = { gateway: { port: 18789 } } as OpenClawConfig;
     const clonedCfg = structuredClone(cfg);

@@ -6,7 +6,7 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ProtocolSchemas,
-} from "../src/gateway/protocol/schema.js";
+} from "../packages/gateway-protocol/src/schema.js";
 
 type JsonSchema = {
   type?: string | string[];
@@ -42,7 +42,7 @@ const STRICT_LITERAL_STRUCTS = new Set([
 
 const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = {
   SessionsAbortParams: new Set(["agentId"]),
-  SessionsUsageParams: new Set(["agentId"]),
+  SessionsUsageParams: new Set(["agentId", "agentScope"]),
   ArtifactsListParams: new Set(["agentId"]),
   ArtifactsGetParams: new Set(["agentId"]),
   ArtifactsDownloadParams: new Set(["agentId"]),
@@ -448,6 +448,20 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
     ) {
       continue;
     }
+    const coversAllBoolCases =
+      literalType === "Bool" &&
+      resolvedCases.some((entry) => entry.literal === true) &&
+      resolvedCases.some((entry) => entry.literal === false);
+    const unknownDiscriminatorLines = coversAllBoolCases
+      ? []
+      : [
+          "        default:",
+          "            throw DecodingError.dataCorruptedError(",
+          "                forKey: .discriminator,",
+          "                in: container,",
+          `                debugDescription: "Unknown ${name} discriminator value"`,
+          "            )",
+        ];
     return [
       `public enum ${name}: Codable, Sendable {`,
       ...resolvedCases.map((entry) => `    case ${entry.caseName}(${entry.branchName})`),
@@ -464,12 +478,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
         (entry) =>
           `        case ${swiftLiteralSource(entry.literal)}: self = try .${entry.caseName}(${entry.branchName}(from: decoder))`,
       ),
-      "        default:",
-      "            throw DecodingError.dataCorruptedError(",
-      "                forKey: .discriminator,",
-      "                in: container,",
-      `                debugDescription: "Unknown ${name} discriminator value"`,
-      "            )",
+      ...unknownDiscriminatorLines,
       "        }",
       "    }",
       "",

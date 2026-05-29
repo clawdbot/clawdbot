@@ -102,6 +102,12 @@ const ChannelStreamingProgressSchema = z
     commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
+const DiscordStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  commentary: z.boolean().optional(),
+}).strict();
+const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  nativeTaskCards: z.boolean().optional(),
+}).strict();
 const ChannelPreviewStreamingConfigSchema = z
   .object({
     mode: UnifiedStreamingModeSchema.optional(),
@@ -114,8 +120,12 @@ const ChannelPreviewStreamingConfigSchema = z
 const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   preview: TelegramStreamingPreviewSchema.optional(),
 }).strict();
+const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  progress: DiscordStreamingProgressSchema.optional(),
+}).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
+  progress: SlackStreamingProgressSchema.optional(),
 }).strict();
 const SlackCapabilitiesSchema = z.union([
   z.array(z.string()),
@@ -570,6 +580,8 @@ const DiscordVoiceRealtimeSchema = z
   .object({
     provider: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    speakerVoice: z.string().min(1).optional(),
+    speakerVoiceId: z.string().min(1).optional(),
     voice: z.string().min(1).optional(),
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
@@ -646,7 +658,7 @@ export const DiscordAccountSchema = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     suppressEmbeds: z.boolean().optional(),
-    streaming: ChannelPreviewStreamingConfigSchema.optional(),
+    streaming: DiscordPreviewStreamingConfigSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,
@@ -1504,6 +1516,42 @@ export const MSTeamsTeamSchema = z
   })
   .strict();
 
+const MSTEAMS_SERVICE_URL_HOST_ALLOWLIST = [
+  "smba.trafficmanager.net",
+  "smba.infra.gcc.teams.microsoft.com",
+  "smba.infra.gov.teams.microsoft.us",
+  "smba.infra.dod.teams.microsoft.us",
+  "botframework.azure.cn",
+] as const;
+
+function isAllowedMSTeamsServiceUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    return MSTEAMS_SERVICE_URL_HOST_ALLOWLIST.some(
+      (allowed) => host === allowed || host.endsWith(`.${allowed}`),
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol !== "https:") {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    return host === "botframework.azure.cn" || host.endsWith(".botframework.azure.cn");
+  } catch {
+    return false;
+  }
+}
+
 export const MSTeamsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -1514,6 +1562,15 @@ export const MSTeamsConfigSchema = z
     appId: z.string().optional(),
     appPassword: SecretInputSchema.optional().register(sensitive),
     tenantId: z.string().optional(),
+    cloud: z.enum(["Public", "USGov", "USGovDoD", "China"]).optional(),
+    serviceUrl: z
+      .string()
+      .url()
+      .refine(isAllowedMSTeamsServiceUrl, {
+        message:
+          "channels.msteams.serviceUrl must use a supported Microsoft Teams Bot Connector host",
+      })
+      .optional(),
     authType: z.enum(["secret", "federated"]).optional(),
     certificatePath: z.string().optional(),
     certificateThumbprint: z.string().optional(),
@@ -1598,6 +1655,42 @@ export const MSTeamsConfigSchema = z
         path: ["sso", "connectionName"],
         message:
           "channels.msteams.sso.enabled=true requires channels.msteams.sso.connectionName to identify the Bot Framework OAuth connection",
+      });
+    }
+    if (
+      value.cloud &&
+      value.cloud !== "Public" &&
+      value.cloud !== "China" &&
+      !value.serviceUrl?.trim()
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["serviceUrl"],
+        message:
+          "channels.msteams.cloud requires channels.msteams.serviceUrl for non-public Teams clouds",
+      });
+    }
+    if (
+      value.cloud === "China" &&
+      value.serviceUrl?.trim() &&
+      !isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["serviceUrl"],
+        message:
+          "channels.msteams.cloud=China requires channels.msteams.serviceUrl to use an Azure China Bot Framework channel host",
+      });
+    }
+    if (
+      value.cloud !== "China" &&
+      value.serviceUrl?.trim() &&
+      isAzureChinaBotFrameworkServiceUrl(value.serviceUrl)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["cloud"],
+        message: "Azure China Bot Framework serviceUrl hosts require channels.msteams.cloud=China",
       });
     }
 

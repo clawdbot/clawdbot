@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveOptionalIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -412,7 +413,7 @@ function readMatrixAccountConfigField(
 }
 
 function clampMatrixInitialSyncLimit(value: unknown): number | undefined {
-  return typeof value === "number" ? Math.max(0, Math.floor(value)) : undefined;
+  return resolveOptionalIntegerOption(value, { min: 0 });
 }
 
 function buildMatrixNetworkFields(params: {

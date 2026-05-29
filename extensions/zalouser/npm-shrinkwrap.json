@@ -356,9 +356,9 @@
       "license": "MIT"
     },
     "node_modules/semver": {
-      "version": "7.8.0",
-      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.0.tgz",
-      "integrity": "sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA==",
+      "version": "7.8.1",
+      "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.1.tgz",
+      "integrity": "sha512-rkVq3IXh+4FDGch+KwzX3aV9W3kO54GyEgpvBzSyctDA6Xtd7RJQV1xmXbeQp5v7+VzLOfVqiutSE6GICgPFvg==",
       "license": "ISC",
       "bin": {
         "semver": "bin/semver.js"

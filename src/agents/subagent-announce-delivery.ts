@@ -37,6 +37,7 @@ import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/r
 import type { EmbeddedAgentQueueMessageOutcome } from "./embedded-agent-runner/runs.js";
 import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import { isSessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
@@ -392,6 +393,16 @@ function isPermanentAnnounceDeliveryError(error: unknown): boolean {
 function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   const message = summarizeDeliveryError(error);
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
+}
+
+function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
+  if (isSessionWriteLockTimeoutError(error)) {
+    return true;
+  }
+  const message = summarizeDeliveryError(error);
+  return (
+    /\bSessionWriteLockTimeoutError\b/.test(message) || /\bsession file locked\b/i.test(message)
+  );
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -1238,6 +1249,17 @@ async function sendSubagentAnnounceDirectly(params: {
         });
         if (textDelivery) {
           return textDelivery;
+        }
+      }
+      if (
+        activeRequesterWakeFailed &&
+        agentMediatedCompletion &&
+        expectedMediaUrls.length > 0 &&
+        isSessionWriteLockAnnounceAgentError(err)
+      ) {
+        const generatedMediaDelivery = await tryGeneratedMediaDirectDelivery();
+        if (generatedMediaDelivery) {
+          return generatedMediaDelivery;
         }
       }
       // The requester-agent handoff is the delivery contract for background

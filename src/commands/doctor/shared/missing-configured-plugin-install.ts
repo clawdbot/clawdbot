@@ -25,6 +25,7 @@ import {
 import {
   resolveDefaultPluginNpmDir,
   resolveDefaultPluginExtensionsDir,
+  resolvePluginNpmPackageDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
@@ -602,6 +603,16 @@ function pathsEqual(left: string, right: string): boolean {
 }
 
 function resolveNpmPackageInstallPath(params: { packageName: string; npmRoot: string }): string {
+  return resolvePluginNpmPackageDir({
+    npmDir: params.npmRoot,
+    packageName: params.packageName,
+  });
+}
+
+function resolveLegacyNpmPackageInstallPath(params: {
+  packageName: string;
+  npmRoot: string;
+}): string {
   return path.join(params.npmRoot, "node_modules", ...params.packageName.split("/"));
 }
 
@@ -698,11 +709,20 @@ function resolveSafeBrokenOfficialInstallRemovalPath(params: {
   if (!parsedNpmSpec?.name) {
     return null;
   }
-  const expectedNpmPath = resolveNpmPackageInstallPath({
-    packageName: parsedNpmSpec.name,
-    npmRoot: resolveDefaultPluginNpmDir(params.env),
-  });
-  return pathsEqual(resolvedInstallPath, expectedNpmPath) ? resolvedInstallPath : null;
+  const npmRoot = resolveDefaultPluginNpmDir(params.env);
+  const expectedNpmPaths = [
+    resolveNpmPackageInstallPath({
+      packageName: parsedNpmSpec.name,
+      npmRoot,
+    }),
+    resolveLegacyNpmPackageInstallPath({
+      packageName: parsedNpmSpec.name,
+      npmRoot,
+    }),
+  ];
+  return expectedNpmPaths.some((expectedPath) => pathsEqual(resolvedInstallPath, expectedPath))
+    ? resolvedInstallPath
+    : null;
 }
 
 function recordMatchesBundledPackage(
@@ -928,7 +948,14 @@ function resolveExistingCandidateNpmPackagePath(params: {
     packageName: npmName,
     npmRoot: params.npmDir,
   });
-  return existsSync(packagePath) ? packagePath : null;
+  if (existsSync(packagePath)) {
+    return packagePath;
+  }
+  const legacyPackagePath = resolveLegacyNpmPackageInstallPath({
+    packageName: npmName,
+    npmRoot: params.npmDir,
+  });
+  return existsSync(legacyPackagePath) ? legacyPackagePath : null;
 }
 
 function resolveExistingCandidateClawHubPackagePath(params: {

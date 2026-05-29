@@ -118,6 +118,26 @@ describe("buildJsonPluginConfigSchema", () => {
       error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
     });
   });
+
+  it("keeps numeric-looking object keys outside array-index range as strings", () => {
+    const result = buildJsonPluginConfigSchema(
+      {
+        type: "object",
+        required: ["100001"],
+        properties: {
+          "100001": { type: "boolean" },
+        },
+      },
+      { cacheKey: "config-schema.test.large-numeric-key" },
+    );
+
+    expect(result.safeParse?.({})).toEqual({
+      success: false,
+      error: {
+        issues: [{ path: ["100001"], message: "must have required property '100001'" }],
+      },
+    });
+  });
 });
 
 describe("emptyPluginConfigSchema", () => {

@@ -106,6 +106,27 @@ describe("Slack live QA runtime helpers", () => {
     expect(account?.channels?.C123456789?.users).toEqual(["U999999999"]);
   });
 
+  it("overrides both owner and channel allowlists for block scenarios", () => {
+    const cfg = testing.buildSlackQaConfig(
+      {},
+      {
+        channelId: "C123456789",
+        driverBotUserId: "U999999999",
+        overrides: {
+          allowFrom: ["U_NEVER_ALLOWED"],
+          users: ["U_NEVER_ALLOWED"],
+        },
+        sutAccountId: "sut",
+        sutAppToken: "xapp-sut",
+        sutBotToken: "xoxb-sut",
+      },
+    );
+
+    const account = cfg.channels?.slack?.accounts?.sut;
+    expect(account?.allowFrom).toEqual(["U_NEVER_ALLOWED"]);
+    expect(account?.channels?.C123456789?.users).toEqual(["U_NEVER_ALLOWED"]);
+  });
+
   it("extracts Slack native approval button values from blocks", () => {
     expect(
       testing.collectSlackActionValues([

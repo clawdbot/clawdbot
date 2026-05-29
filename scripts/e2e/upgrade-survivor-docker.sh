@@ -147,14 +147,17 @@ export npm_config_loglevel=error
 export npm_config_fund=false
 export npm_config_audit=false
 export OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT:-/tmp/openclaw-upgrade-survivor-artifacts}"
+export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
 mkdir -p "$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"
-export TMPDIR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/tmp"
-export OPENCLAW_TEST_STATE_TMPDIR="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/state-tmp"
+export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/tmp}"
+export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/state-tmp}"
 export npm_config_prefix="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/npm-prefix"
 export NPM_CONFIG_PREFIX="$npm_config_prefix"
-export npm_config_cache="$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/npm-cache"
+export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"
+export NPM_CONFIG_CACHE="$npm_config_cache"
 export npm_config_tmp="$TMPDIR"
-mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$npm_config_prefix" "$npm_config_cache"
+mkdir -p "$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$npm_config_prefix" "$npm_config_cache"
+chmod 700 "$npm_config_cache" || true
 export PATH="$npm_config_prefix/bin:$PATH"
 export CI=true
 export OPENCLAW_NO_ONBOARD=1

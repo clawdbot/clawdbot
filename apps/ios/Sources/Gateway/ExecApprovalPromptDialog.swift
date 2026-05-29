@@ -2,7 +2,6 @@ import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
-    @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         content
@@ -16,7 +15,6 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
                             prompt: prompt,
                             isResolving: self.appModel.pendingExecApprovalPromptResolving,
                             errorText: self.appModel.pendingExecApprovalPromptErrorText,
-                            brighten: self.colorScheme == .light,
                             onAllowOnce: {
                                 Task {
                                     await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
@@ -50,7 +48,6 @@ private struct ExecApprovalPromptCard: View {
     let prompt: NodeAppModel.ExecApprovalPrompt
     let isResolving: Bool
     let errorText: String?
-    let brighten: Bool
     let onAllowOnce: () -> Void
     let onAllowAlways: () -> Void
     let onDeny: () -> Void
@@ -147,7 +144,8 @@ private struct ExecApprovalPromptCard: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity)
         }
-        .statusGlassCard(brighten: self.brighten, verticalPadding: 18, horizontalPadding: 18)
+        .padding(18)
+        .proPanelSurface(tint: OpenClawBrand.accentHot, radius: 20, isProminent: true)
     }
 
     private func normalized(_ value: String?) -> String? {

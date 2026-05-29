@@ -200,6 +200,47 @@ function resolveAssistantTextChunk(params: {
   return "";
 }
 
+const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
+
+function resolveStreamVisibleText(params: {
+  previousRawText: string;
+  visibleDelta: string;
+  finalText?: string;
+}): { rawText: string; visibleText: string } {
+  if (params.finalText !== undefined) {
+    const rawText = params.finalText;
+    return { rawText, visibleText: rawText.trim() };
+  }
+  const rawText = `${params.previousRawText}${params.visibleDelta}`;
+  return { rawText, visibleText: rawText.trim() };
+}
+
+function copyPartialBlockState(
+  target: EmbeddedAgentSubscribeState["partialBlockState"],
+  source: EmbeddedAgentSubscribeState["partialBlockState"],
+) {
+  const copyFenceState = (fence?: typeof source.fence) =>
+    fence
+      ? {
+          atLineStart: fence.atLineStart,
+          ...(fence.open ? { open: { ...fence.open } } : {}),
+        }
+      : undefined;
+  target.thinking = source.thinking;
+  target.final = source.final;
+  target.inlineCode = { ...source.inlineCode };
+  target.fence = copyFenceState(source.fence);
+  target.reasoningInlineCode = source.reasoningInlineCode
+    ? { ...source.reasoningInlineCode }
+    : undefined;
+  target.reasoningFence = copyFenceState(source.reasoningFence);
+  target.reasoningPendingFenceFragment = source.reasoningPendingFenceFragment;
+  target.finalInlineCode = source.finalInlineCode ? { ...source.finalInlineCode } : undefined;
+  target.finalFence = copyFenceState(source.finalFence);
+  target.pendingFenceFragment = source.pendingFenceFragment;
+  target.pendingTagFragment = source.pendingTagFragment;
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
@@ -551,9 +592,6 @@ export function handleMessageUpdate(
   if (isPhasePendingOpenAiResponsesTextItem) {
     return;
   }
-  const phaseAwareVisibleText = coerceChatContentText(
-    extractAssistantVisibleText(partialAssistant),
-  ).trim();
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
@@ -567,27 +605,58 @@ export function handleMessageUpdate(
     // Handle partial <think> tags: stream whatever reasoning is visible so far.
     ctx.emitReasoningStream(extractThinkingFromTaggedStream(ctx.state.deltaBuffer));
   }
-  const next =
-    phaseAwareVisibleText ||
-    (deliveryPhase === "final_answer"
-      ? ""
-      : ctx
-          .stripBlockTags(
-            ctx.state.deltaBuffer,
-            {
-              thinking: false,
-              final: false,
-              inlineCode: createInlineCodeState(),
-            },
-            { final: evtType === "text_end" },
-          )
-          .trim());
+  const wasThinking = ctx.state.partialBlockState.thinking;
+  let visibleDelta = "";
+  let next = shouldUsePhaseAwareBlockReply
+    ? coerceChatContentText(extractAssistantVisibleText(partialAssistant)).trim()
+    : "";
+  let nextRawStreamText = next;
+  if (!next && deliveryPhase !== "final_answer") {
+    const pendingTagFragment = ctx.state.partialBlockState.pendingTagFragment;
+    const shouldRecomputeFullStream = Boolean(pendingTagFragment) || REASONING_TAG_RE.test(chunk);
+    if (shouldRecomputeFullStream) {
+      const recomputeState: EmbeddedAgentSubscribeState["partialBlockState"] = {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      };
+      const recomputedRawText = ctx.stripBlockTags(ctx.state.deltaBuffer, recomputeState, {
+        final: evtType === "text_end",
+      });
+      const previousRawText = ctx.state.lastStreamedAssistant ?? "";
+      const isFullStreamReplacement = !recomputedRawText.startsWith(previousRawText);
+      next = recomputedRawText.trim();
+      visibleDelta = isFullStreamReplacement
+        ? recomputedRawText
+        : recomputedRawText.slice(previousRawText.length);
+      nextRawStreamText = recomputedRawText;
+      copyPartialBlockState(ctx.state.partialBlockState, recomputeState);
+    } else {
+      visibleDelta =
+        chunk || evtType === "text_end"
+          ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, {
+              final: evtType === "text_end",
+            })
+          : "";
+      if (ctx.state.partialBlockState.pendingTagFragment) {
+        visibleDelta = "";
+        next = ctx.state.lastStreamedAssistantCleaned ?? "";
+        nextRawStreamText = ctx.state.lastStreamedAssistant ?? "";
+      } else {
+        const streamVisibleText = resolveStreamVisibleText({
+          previousRawText: ctx.state.lastStreamedAssistant ?? "",
+          visibleDelta,
+        });
+        next = streamVisibleText.visibleText;
+        nextRawStreamText = streamVisibleText.rawText;
+      }
+    }
+  } else if (next && (chunk || evtType === "text_end")) {
+    visibleDelta = ctx.stripBlockTags(chunk, ctx.state.partialBlockState, {
+      final: evtType === "text_end",
+    });
+  }
   if (next) {
-    const wasThinking = ctx.state.partialBlockState.thinking;
-    const visibleDelta =
-      chunk || evtType === "text_end"
-        ? ctx.stripBlockTags(chunk, ctx.state.partialBlockState, { final: evtType === "text_end" })
-        : "";
     if (!wasThinking && ctx.state.partialBlockState.thinking) {
       openReasoningStream(ctx);
     }
@@ -636,7 +705,7 @@ export function handleMessageUpdate(
       }
     }
 
-    ctx.state.lastStreamedAssistant = next;
+    ctx.state.lastStreamedAssistant = nextRawStreamText;
     ctx.state.lastStreamedAssistantCleaned = cleanedText;
 
     if (ctx.params.silentExpected || suppressDeterministicApprovalOutput) {
@@ -755,7 +824,21 @@ export function handleMessageEnd(
     ctx.state.blockState.thinking = false;
     ctx.state.blockState.final = false;
     ctx.state.blockState.inlineCode = createInlineCodeState();
+    ctx.state.blockState.fence = undefined;
+    ctx.state.blockState.reasoningInlineCode = undefined;
+    ctx.state.blockState.reasoningFence = undefined;
+    ctx.state.blockState.reasoningPendingFenceFragment = undefined;
+    ctx.state.blockState.finalInlineCode = undefined;
+    ctx.state.blockState.finalFence = undefined;
+    ctx.state.blockState.pendingFenceFragment = undefined;
     ctx.state.blockState.pendingTagFragment = undefined;
+    ctx.state.partialBlockState.fence = undefined;
+    ctx.state.partialBlockState.reasoningInlineCode = undefined;
+    ctx.state.partialBlockState.reasoningFence = undefined;
+    ctx.state.partialBlockState.reasoningPendingFenceFragment = undefined;
+    ctx.state.partialBlockState.finalInlineCode = undefined;
+    ctx.state.partialBlockState.finalFence = undefined;
+    ctx.state.partialBlockState.pendingFenceFragment = undefined;
     ctx.state.partialBlockState.pendingTagFragment = undefined;
     ctx.state.lastStreamedAssistant = undefined;
     ctx.state.lastStreamedAssistantCleaned = undefined;

@@ -1,3 +1,7 @@
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveSystemRunApprovalRuntimeContext } from "../infra/system-run-approval-context.js";
 import { resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
@@ -11,7 +15,6 @@ import {
   evaluateSystemRunApprovalMatch,
   toSystemRunApprovalMismatchError,
 } from "./node-invoke-system-run-approval-match.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 type SystemRunParamsLike = {
   command?: unknown;

@@ -144,7 +144,7 @@ OpenClaw uses the same `VYDRA_API_KEY` for all three capabilities.
           providers: {
             vydra: {
               apiKey: "${VYDRA_API_KEY}",
-              voiceId: "21m00Tcm4TlvDq8ikWAM",
+              speakerVoiceId: "21m00Tcm4TlvDq8ikWAM",
             },
           },
         },

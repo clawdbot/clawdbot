@@ -178,7 +178,7 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
   The task description for the sub-agent.
 </ParamField>
 <ParamField path="taskName" type="string">
-  Optional stable handle for identifying a specific child in later status output. Must match `[a-z][a-z0-9_]{0,63}` and cannot be reserved targets such as `last` or `all`.
+  Optional stable handle for identifying a specific child in later status output. Must match `[a-z][a-z0-9_-]{0,63}` and cannot be reserved targets such as `last` or `all`.
 </ParamField>
 <ParamField path="label" type="string">
   Optional human-readable label.

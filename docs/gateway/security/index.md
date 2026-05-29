@@ -63,67 +63,11 @@ OpenClaw source checkouts use `pnpm-lock.yaml`. The published `openclaw` npm
 package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json`,
 npm's publishable dependency lockfile, so package installs use the reviewed
 transitive dependency graph from the release instead of resolving a fresh graph
-at install time. Suitable OpenClaw-owned npm plugin packages can also publish
-with explicit `bundledDependencies`, so their runtime dependency files are
-carried in the plugin tarball instead of depending only on install-time
-resolution.
+at install time.
 
-This is a supply-chain hardening measure:
-
-- release installs are more reproducible;
-- transitive dependency updates become visible review surfaces;
-- the package tarball contains the dependency graph that release validators
-  checked;
-- suitable OpenClaw-owned plugin tarballs contain the dependency files from
-  that graph;
-- `package-lock.json` stays out of the published package, because npm does not
-  treat it as the publishable lock contract.
-
-Shrinkwrap is not a sandbox and does not make every dependency trustworthy. It
-does not replace `openclaw security audit`, host isolation, npm provenance,
-signature/audit checks, or `--ignore-scripts` install smoke tests when those are
-appropriate. Treat it as a release reproducibility and review-control boundary.
-
-Maintainers should update and verify shrinkwrap whenever the root package or an
-OpenClaw-owned published plugin package changes its published dependency graph:
-
-```bash
-pnpm deps:shrinkwrap:generate
-pnpm deps:shrinkwrap:check
-```
-
-The generator resolves npm's publishable lock format but rejects generated
-package versions that are not already present in `pnpm-lock.yaml`, preserving
-the pnpm dependency age, override, and patch review boundary.
-
-Use `pnpm deps:shrinkwrap:root:generate` and
-`pnpm deps:shrinkwrap:root:check` only when you intentionally want to refresh
-the root `openclaw` package without touching plugin packages.
-
-Review `pnpm-lock.yaml`, `npm-shrinkwrap.json`, bundled plugin dependency
-payloads, and any `package-lock.json` diff as security-sensitive. The package
-validators require shrinkwrap in new root package tarballs and the plugin npm
-publish path checks plugin-local shrinkwrap, installs package-local bundled
-dependencies, and then packs or publishes. Package validators reject
-`package-lock.json`.
-
-To inspect a published package:
-
-```bash
-npm pack openclaw@<version> --json --pack-destination /tmp/openclaw-pack
-tar -tf /tmp/openclaw-pack/openclaw-<version>.tgz | grep '^package/npm-shrinkwrap.json$'
-```
-
-To inspect an OpenClaw-owned plugin package, replace the package spec and check
-the same tar entry:
-
-```bash
-npm pack @openclaw/discord@<version> --json --pack-destination /tmp/openclaw-plugin-pack
-tar -tf /tmp/openclaw-plugin-pack/openclaw-discord-<version>.tgz | grep '^package/npm-shrinkwrap.json$'
-tar -tf /tmp/openclaw-plugin-pack/openclaw-discord-<version>.tgz | grep '^package/node_modules/'
-```
-
-Background: [npm-shrinkwrap.json](https://docs.npmjs.com/cli/v11/configuring-npm/npm-shrinkwrap-json).
+Shrinkwrap is a supply-chain hardening and release reproducibility boundary,
+not a sandbox. For the plain-English model, maintainer commands, and package
+inspection checks, see [npm shrinkwrap](/gateway/security/shrinkwrap).
 
 ### Deployment and host trust
 
@@ -1070,12 +1014,13 @@ Hardening tips:
 
 OpenClaw loads workspace-local `.env` files for agents and tools, but never lets those files silently override gateway runtime controls.
 
+- Provider credential environment variables are blocked from untrusted workspace `.env` files. Examples include `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `PERPLEXITY_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, `FIRECRAWL_API_KEY`, and provider auth keys declared by installed trusted plugins. Put provider credentials in the Gateway process environment, `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`), the config `env` block, or optional login-shell import.
 - Any key that starts with `OPENCLAW_*` is blocked from untrusted workspace `.env` files.
 - Channel endpoint settings for Matrix, Mattermost, IRC, and Synology Chat are also blocked from workspace `.env` overrides, so cloned workspaces cannot redirect bundled connector traffic through local endpoint config. Endpoint env keys (such as `MATRIX_HOMESERVER`, `MATTERMOST_URL`, `IRC_HOST`, `SYNOLOGY_CHAT_INCOMING_URL`) must come from the gateway process environment or `env.shellEnv`, not from a workspace-loaded `.env`.
 - The block is fail-closed: a new runtime-control variable added in a future release cannot be inherited from a checked-in or attacker-supplied `.env`; the key is ignored and the gateway keeps its own value.
-- Trusted process/OS environment variables (the gateway's own shell, launchd/systemd unit, app bundle) still apply - this only constrains `.env` file loading.
+- Trusted process/OS environment variables, global runtime dotenv, config `env`, and enabled login-shell import still apply - this only constrains workspace `.env` file loading.
 
-Why: workspace `.env` files frequently live next to agent code, get committed by accident, or get written by tools. Blocking the whole `OPENCLAW_*` prefix means adding a new `OPENCLAW_*` flag later can never regress into silent inheritance from workspace state.
+Why: workspace `.env` files frequently live next to agent code, get committed by accident, or get written by tools. Blocking provider credentials prevents a cloned workspace from substituting attacker-controlled provider accounts. Blocking the whole `OPENCLAW_*` prefix means adding a new `OPENCLAW_*` flag later can never regress into silent inheritance from workspace state.
 
 ### Logs and transcripts (redaction and retention)
 

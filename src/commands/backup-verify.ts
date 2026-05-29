@@ -5,6 +5,7 @@ import { readStringValue } from "../shared/string-coerce.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+const MAX_MANIFEST_BYTES = 1024 * 1024;
 
 type BackupManifestAsset = {
   kind: string;
@@ -193,7 +194,7 @@ async function extractManifest(params: {
   archivePath: string;
   manifestEntryPath: string;
 }): Promise<string> {
-  let manifestContentPromise: Promise<string> | undefined;
+  let manifestContentPromise: Promise<{ content?: string; error?: Error }> | undefined;
   await tar.t({
     file: params.archivePath,
     gzip: true,
@@ -203,14 +204,44 @@ async function extractManifest(params: {
         return;
       }
 
-      manifestContentPromise = new Promise<string>((resolve, reject) => {
+      manifestContentPromise = new Promise<{ content?: string; error?: Error }>((resolve) => {
         const chunks: Buffer[] = [];
+        let totalBytes = 0;
+        let exceededLimit = false;
+        let settled = false;
+        const settle = (result: { content?: string; error?: Error }) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          resolve(result);
+        };
         entry.on("data", (chunk: Buffer | string) => {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+          if (exceededLimit) {
+            return;
+          }
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          totalBytes += buffer.byteLength;
+          if (totalBytes > MAX_MANIFEST_BYTES) {
+            exceededLimit = true;
+            chunks.length = 0;
+            return;
+          }
+          chunks.push(buffer);
         });
-        entry.on("error", reject);
+        entry.on("error", (error) => {
+          settle({
+            error: error instanceof Error ? error : new Error(String(error)),
+          });
+        });
         entry.on("end", () => {
-          resolve(Buffer.concat(chunks).toString("utf8"));
+          if (exceededLimit) {
+            settle({
+              error: new Error(`Backup manifest exceeds ${MAX_MANIFEST_BYTES} byte limit.`),
+            });
+            return;
+          }
+          settle({ content: Buffer.concat(chunks, totalBytes).toString("utf8") });
         });
       });
     },
@@ -219,7 +250,11 @@ async function extractManifest(params: {
   if (!manifestContentPromise) {
     throw new Error(`Archive is missing manifest entry: ${params.manifestEntryPath}`);
   }
-  return await manifestContentPromise;
+  const result = await manifestContentPromise;
+  if (result.error) {
+    throw result.error;
+  }
+  return result.content ?? "";
 }
 
 function isRootManifestEntry(entryPath: string): boolean {

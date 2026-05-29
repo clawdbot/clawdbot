@@ -1,4 +1,3 @@
-import { matchesApprovalRequestFilters } from "openclaw/plugin-sdk/approval-client-runtime";
 import {
   createChannelApprovalCapability,
   splitChannelApprovalCapability,
@@ -6,10 +5,10 @@ import {
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
+  createChannelApprovalForwardingEvaluator,
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   createNativeApprovalForwardingFallbackSuppressor,
-  doesApprovalRequestMatchChannelAccount,
   nativeApprovalTargetsMatch,
   resolveApprovalRequestSessionTarget,
 } from "openclaw/plugin-sdk/approval-native-runtime";
@@ -36,7 +35,6 @@ import { isWhatsAppGroupJid, normalizeWhatsAppMessagingTarget } from "./normaliz
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalKind = "exec" | "plugin";
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
-type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
 type ChannelApprovalForwardTarget = Parameters<
   NonNullable<
     NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
@@ -48,55 +46,11 @@ type WhatsAppApprovalTarget = {
   threadId?: string | number | null;
 };
 
-const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
-
 function isWhatsAppApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
   return resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
-}
-
-function resolveApprovalKind(request: ApprovalRequest, approvalKind?: ApprovalKind): ApprovalKind {
-  if (approvalKind) {
-    return approvalKind;
-  }
-  return "command" in request.request ? "exec" : "plugin";
-}
-
-function resolveApprovalForwardingConfig(params: {
-  cfg: OpenClawConfig;
-  approvalKind: ApprovalKind;
-}): ApprovalForwardingConfig | undefined {
-  return params.approvalKind === "plugin"
-    ? params.cfg.approvals?.plugin
-    : params.cfg.approvals?.exec;
-}
-
-function normalizeApprovalForwardingMode(
-  mode: ApprovalForwardingConfig["mode"] | undefined,
-): ApprovalForwardingMode {
-  return mode ?? DEFAULT_APPROVAL_FORWARDING_MODE;
-}
-
-function approvalModeIncludesSession(mode: ApprovalForwardingMode): boolean {
-  return mode === "session" || mode === "both";
-}
-
-function approvalModeIncludesTargets(mode: ApprovalForwardingMode): boolean {
-  return mode === "targets" || mode === "both";
-}
-
-function matchesForwardingFilters(params: {
-  config: ApprovalForwardingConfig;
-  request: ApprovalRequest;
-}): boolean {
-  return matchesApprovalRequestFilters({
-    request: params.request.request,
-    agentFilter: params.config.agentFilter,
-    sessionFilter: params.config.sessionFilter,
-    fallbackAgentIdFromSessionKey: true,
-  });
 }
 
 function targetAccountMatchesWhatsAppAccount(params: {
@@ -200,118 +154,17 @@ function hasWhatsAppOriginOrSessionTarget(params: {
   );
 }
 
-function canApprovalPotentiallyRouteToWhatsApp(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: ApprovalKind;
-  nativeSessionOnly?: boolean;
-}): boolean {
-  if (!isWhatsAppApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig(params);
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (approvalModeIncludesSession(mode)) {
-    return true;
-  }
-  if (params.nativeSessionOnly) {
-    return false;
-  }
-  return (
-    approvalModeIncludesTargets(mode) &&
-    hasMatchingWhatsAppTarget({
-      cfg: params.cfg,
-      config,
-      accountId: params.accountId,
-    })
-  );
-}
+const whatsappApprovalForwarding = createChannelApprovalForwardingEvaluator({
+  channel: "whatsapp",
+  isTransportEnabled: isWhatsAppApprovalTransportEnabled,
+  hasMatchingTarget: hasMatchingWhatsAppTarget,
+  hasOriginOrSessionTarget: hasWhatsAppOriginOrSessionTarget,
+});
 
-function canAnyApprovalPotentiallyRouteToWhatsApp(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  nativeSessionOnly?: boolean;
-}): boolean {
-  return (
-    canApprovalPotentiallyRouteToWhatsApp({
-      ...params,
-      approvalKind: "exec",
-    }) ||
-    canApprovalPotentiallyRouteToWhatsApp({
-      ...params,
-      approvalKind: "plugin",
-    })
-  );
-}
-
-function isWhatsAppSessionApprovalEligible(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: ApprovalKind;
-  request: ApprovalRequest;
-}): boolean {
-  if (!isWhatsAppApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig(params);
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (!approvalModeIncludesSession(mode)) {
-    return false;
-  }
-  if (!matchesForwardingFilters({ config, request: params.request })) {
-    return false;
-  }
-  if (
-    !doesApprovalRequestMatchChannelAccount({
-      cfg: params.cfg,
-      request: params.request,
-      channel: "whatsapp",
-      accountId: params.accountId,
-    })
-  ) {
-    return false;
-  }
-  return hasWhatsAppOriginOrSessionTarget({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    request: params.request,
-  });
-}
-
-function isWhatsAppExplicitTargetEligible(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  approvalKind: ApprovalKind;
-  request: ApprovalRequest;
-  target: ChannelApprovalForwardTarget;
-}): boolean {
-  if (!isWhatsAppApprovalTransportEnabled(params)) {
-    return false;
-  }
-  const config = resolveApprovalForwardingConfig(params);
-  if (!config?.enabled) {
-    return false;
-  }
-  const mode = normalizeApprovalForwardingMode(config.mode);
-  if (!approvalModeIncludesTargets(mode)) {
-    return false;
-  }
-  if (!matchesForwardingFilters({ config, request: params.request })) {
-    return false;
-  }
-  return hasMatchingWhatsAppTarget({
-    cfg: params.cfg,
-    config,
-    accountId: params.accountId,
-    target: params.target,
-  });
-}
+const canApprovalPotentiallyRouteToWhatsApp = whatsappApprovalForwarding.isPotentialRoute;
+const canAnyApprovalPotentiallyRouteToWhatsApp = whatsappApprovalForwarding.canAnyPotentiallyRoute;
+const isWhatsAppSessionApprovalEligible = whatsappApprovalForwarding.isSessionEligible;
+const isWhatsAppExplicitTargetEligible = whatsappApprovalForwarding.isExplicitTargetEligible;
 
 function resolveTurnSourceWhatsAppOriginTarget(
   request: ApprovalRequest,
@@ -344,10 +197,7 @@ function shouldHandleWhatsAppApprovalRequest(params: {
   approvalKind?: ApprovalKind;
   request: ApprovalRequest;
 }): boolean {
-  return isWhatsAppSessionApprovalEligible({
-    ...params,
-    approvalKind: resolveApprovalKind(params.request, params.approvalKind),
-  });
+  return whatsappApprovalForwarding.shouldHandleRequest(params);
 }
 
 const resolveWhatsAppOriginTargetBase = createChannelNativeOriginTargetResolver({

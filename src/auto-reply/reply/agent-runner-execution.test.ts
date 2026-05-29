@@ -1101,6 +1101,7 @@ describe("buildContextOverflowRecoveryText", () => {
 
 describe("runAgentTurnWithFallback", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     state.runEmbeddedAgentMock.mockReset();
     state.runCliAgentMock.mockReset();
     state.runWithModelFallbackMock.mockReset();
@@ -2064,6 +2065,131 @@ describe("runAgentTurnWithFallback", () => {
     await runPromise;
 
     expect(previewOrder).toEqual(["Hello", "Hello released", "Hello world"]);
+  });
+
+  it("bridges CLI tool agent events into onToolStart for live preview", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "Bash",
+          toolCallId: "toolu_01ABCD",
+          args: { command: "ls -la" },
+        },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: "Bash",
+          toolCallId: "toolu_01ABCD",
+          isError: false,
+        },
+      });
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
+
+    const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onToolStart },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onToolStart).toHaveBeenCalledTimes(1);
+    const call = onToolStart.mock.calls[0]?.[0];
+    expect(call?.name).toBe("Bash");
+    expect(call?.phase).toBe("start");
+    expect(call?.args).toEqual({ command: "ls -la" });
+  });
+
+  it("does not bridge CLI tool deltas when silentExpected is set", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "Bash",
+          toolCallId: "toolu_silent",
+          args: { command: "echo silent" },
+        },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+    followupRun.run.silentExpected = true;
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onToolStart },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onToolStart).not.toHaveBeenCalled();
   });
 
   it("does not bridge CLI assistant deltas when silentExpected is set (#76869)", async () => {
@@ -3139,6 +3265,8 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
     expect(onItemEvent).not.toHaveBeenCalled();
     expect(onToolStart).toHaveBeenCalledWith({
+      itemId: "cmd-1",
+      toolCallId: "cmd-1",
       name: "bash",
       phase: "start",
       args: { command: "pnpm test" },
@@ -3220,6 +3348,8 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(onToolStart).toHaveBeenCalledWith({
+      itemId: undefined,
+      toolCallId: undefined,
       name: "exec",
       phase: "start",
       args: { command: "pnpm test -- --watch=false" },
@@ -3264,6 +3394,8 @@ describe("runAgentTurnWithFallback", () => {
     try {
       expect(result.kind).toBe("success");
       expect(onToolStart).toHaveBeenCalledWith({
+        itemId: undefined,
+        toolCallId: undefined,
         name: "exec",
         phase: "start",
         args: { command: "echo hi" },
@@ -4118,8 +4250,9 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("prefers onCompactionEnd callback over default notice when notifyUser is enabled", async () => {
+  it("fires both notifyUser notices alongside onCompactionStart / onCompactionEnd callbacks (#87107)", async () => {
     const onBlockReply = vi.fn();
+    const onCompactionStart = vi.fn();
     const onCompactionEnd = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
@@ -4149,7 +4282,7 @@ describe("runAgentTurnWithFallback", () => {
         Provider: "whatsapp",
         MessageSid: "msg",
       } as unknown as TemplateContext,
-      opts: { onBlockReply, onCompactionEnd },
+      opts: { onBlockReply, onCompactionStart, onCompactionEnd },
       typingSignals: createMockTypingSignaler(),
       blockReplyPipeline: null,
       blockStreamingEnabled: false,
@@ -4166,12 +4299,17 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     expect(result.kind).toBe("success");
+    // Internal callbacks (Control UI etc.) and the user-channel notifyUser
+    // notices are independent audiences; both must fire when opted in.
+    expect(onCompactionStart).toHaveBeenCalledTimes(1);
     expect(onCompactionEnd).toHaveBeenCalledTimes(1);
-    // The start notice still fires (no onCompactionStart callback provided),
-    // but the completion notice is suppressed in favor of the callback.
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     expectBlockReplyCall(onBlockReply, 0, {
       text: "🧹 Compacting context...",
+      isCompactionNotice: true,
+    });
+    expectBlockReplyCall(onBlockReply, 1, {
+      text: "🧹 Compaction complete",
       isCompactionNotice: true,
     });
   });

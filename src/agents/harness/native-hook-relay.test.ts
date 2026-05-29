@@ -1,4 +1,5 @@
-import { statSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { rmSync, statSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
@@ -20,10 +21,12 @@ import {
   invokeNativeHookRelay,
   invokeNativeHookRelayBridge,
   registerNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
 } from "./native-hook-relay.js";
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   resetGlobalHookRunner();
   setActivePluginRegistry(createEmptyPluginRegistry());
   testing.clearNativeHookRelaysForTests();
@@ -78,6 +81,36 @@ async function waitForNativeHookRelayBridgeRecord(
     expect(isRecord(record) ? record.relayId : undefined).toBe(relayId);
   });
   return record as Record<string, unknown>;
+}
+
+async function writeForeignNativeHookRelayBridgeRecordForTests(
+  relayId: string,
+  record: {
+    pid: number;
+    expiresAtMs: number;
+  },
+): Promise<string> {
+  const bridgeDir = testing.getNativeHookRelayBridgeDirForTests();
+  await fs.mkdir(bridgeDir, { recursive: true, mode: 0o700 });
+  const registryPath = testing.getNativeHookRelayBridgeRegistryPathForTests(relayId);
+  writeFileSync(
+    registryPath,
+    `${JSON.stringify({
+      version: 1,
+      relayId,
+      pid: record.pid,
+      hostname: "127.0.0.1",
+      port: 9,
+      token: `token-${relayId}`,
+      expiresAtMs: record.expiresAtMs,
+    })}\n`,
+    { mode: 0o600 },
+  );
+  return registryPath;
+}
+
+function uniqueNativeHookRelayIdForTests(prefix: string): string {
+  return `${prefix}-${randomUUID()}`;
 }
 
 function openDeferredNativeHookRelayBridgeRequest(
@@ -850,6 +883,122 @@ describe("native hook relay registry", () => {
     });
 
     expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
+  it("prunes dead foreign direct bridge registry files during registration", async () => {
+    const stalePath = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-dead-foreign-bridge"),
+      {
+        pid: 9_999_991,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 9_999_991) {
+        throw Object.assign(new Error("missing process"), { code: "ESRCH" });
+      }
+      return true;
+    });
+
+    registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-prune-dead-foreign-bridge-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    expect(kill).toHaveBeenCalledWith(9_999_991, 0);
+    await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("prunes expired foreign direct bridge registry files even when their pid is alive", async () => {
+    const stalePath = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-expired-foreign-bridge"),
+      {
+        pid: 9_999_992,
+        expiresAtMs: Date.now() - 1,
+      },
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid !== 9_999_992) {
+        throw Object.assign(new Error("unexpected process"), { code: "ESRCH" });
+      }
+      return true;
+    });
+
+    registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-prune-expired-foreign-bridge-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+    });
+
+    expect(kill).not.toHaveBeenCalled();
+    await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("preserves live unexpired foreign direct bridge registry files during registration", async () => {
+    const livePath = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-live-foreign-bridge"),
+      {
+        pid: 9_999_993,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid !== 9_999_993) {
+        throw Object.assign(new Error("unexpected process"), { code: "ESRCH" });
+      }
+      return true;
+    });
+
+    try {
+      registerNativeHookRelay({
+        provider: "codex",
+        relayId: "codex-preserve-live-foreign-bridge-session",
+        sessionId: "session-1",
+        runId: "run-1",
+        allowedEvents: ["pre_tool_use"],
+      });
+
+      expect(kill).toHaveBeenCalledWith(9_999_993, 0);
+      await expect(fs.stat(livePath)).resolves.toBeDefined();
+    } finally {
+      rmSync(livePath, { force: true });
+    }
+  });
+
+  it("preserves foreign direct bridge registry files when liveness is unknown", async () => {
+    const livePath = await writeForeignNativeHookRelayBridgeRecordForTests(
+      uniqueNativeHookRelayIdForTests("codex-unknown-liveness-foreign-bridge"),
+      {
+        pid: 9_999_994,
+        expiresAtMs: Date.now() + 60_000,
+      },
+    );
+    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      if (pid === 9_999_994) {
+        throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+      }
+      return true;
+    });
+
+    try {
+      registerNativeHookRelay({
+        provider: "codex",
+        relayId: "codex-preserve-unknown-liveness-foreign-bridge-session",
+        sessionId: "session-1",
+        runId: "run-1",
+        allowedEvents: ["pre_tool_use"],
+      });
+
+      expect(kill).toHaveBeenCalledWith(9_999_994, 0);
+      await expect(fs.stat(livePath)).resolves.toBeDefined();
+    } finally {
+      rmSync(livePath, { force: true });
+    }
   });
 
   it("keeps direct bridge registry files private and loopback-only", async () => {
@@ -1696,7 +1845,7 @@ describe("native hook relay registry", () => {
     expect(beforeToolCall).toHaveBeenCalledTimes(1);
   });
 
-  it("reports synthetic app-server PreToolUse approval requirements without opening plugin approvals", async () => {
+  it("defers synthetic app-server PreToolUse approval requirements to the app-server approval", async () => {
     const beforeToolCall = vi.fn(async () => ({
       requireApproval: {
         title: "Needs approval",
@@ -1728,14 +1877,81 @@ describe("native hook relay registry", () => {
       },
     });
 
-    expect(JSON.parse(response.stdout)).toEqual({
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: "native command needs approval",
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares in-flight deferred PreToolUse approvals for duplicate app-server requests", async () => {
+    const beforeToolCall = vi.fn(async () => ({
+      requireApproval: {
+        title: "Needs approval",
+        description: "native command needs approval",
+      },
+    }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        openclaw_approval_mode: "report",
+        cwd: "/repo",
+        tool_name: "exec_command",
+        tool_use_id: "native-approval-report-duplicate",
+        tool_input: { cmd: "cat /tmp/private_key" },
       },
     });
-    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+
+    let resolveApproval:
+      | ((value: { blocked: false; params: unknown; approvalResolution: "allow-once" }) => void)
+      | undefined;
+    const approvalRequester = vi.fn(
+      () =>
+        new Promise<{ blocked: false; params: unknown; approvalResolution: "allow-once" }>(
+          (resolve) => {
+            resolveApproval = resolve;
+          },
+        ),
+    );
+    testing.setNativeHookRelayDeferredToolApprovalRequesterForTests(approvalRequester);
+
+    const firstApproval = resolveNativeHookRelayDeferredToolApproval({
+      relayId: relay.relayId,
+      toolUseId: "native-approval-report-duplicate",
+    });
+    const duplicateApproval = resolveNativeHookRelayDeferredToolApproval({
+      relayId: relay.relayId,
+      toolUseId: "native-approval-report-duplicate",
+    });
+
+    await vi.waitFor(() => expect(approvalRequester).toHaveBeenCalledTimes(1));
+    resolveApproval?.({
+      blocked: false,
+      params: { cmd: "cat /tmp/private_key", command: "cat /tmp/private_key" },
+      approvalResolution: "allow-once",
+    });
+
+    await expect(Promise.all([firstApproval, duplicateApproval])).resolves.toEqual([
+      { handled: true, outcome: "approved-once" },
+      { handled: true, outcome: "approved-once" },
+    ]);
+    await expect(
+      resolveNativeHookRelayDeferredToolApproval({
+        relayId: relay.relayId,
+        toolUseId: "native-approval-report-duplicate",
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("passes config to trusted policies for native pre-tool session extension reads", async () => {

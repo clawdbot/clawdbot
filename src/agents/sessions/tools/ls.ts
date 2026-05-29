@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { LsToolDetails } from "./tool-contracts.js";
@@ -134,7 +135,7 @@ export function createLsToolDefinition(
         void (async () => {
           try {
             const dirPath = resolveToCwd(path || ".", cwd);
-            const effectiveLimit = limit ?? DEFAULT_LIMIT;
+            const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
 
             // Check if path exists.
             if (!(await ops.exists(dirPath))) {

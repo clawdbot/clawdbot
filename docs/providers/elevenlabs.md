@@ -34,7 +34,7 @@ export ELEVENLABS_API_KEY="..."
       providers: {
         elevenlabs: {
           apiKey: "${ELEVENLABS_API_KEY}",
-          voiceId: "pMsXgVXv3BLzUgSXRplE",
+          speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
           modelId: "eleven_multilingual_v2",
         },
       },

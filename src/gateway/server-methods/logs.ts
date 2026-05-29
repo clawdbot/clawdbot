@@ -1,10 +1,10 @@
-import { readConfiguredLogTail } from "../../logging/log-tail.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateLogsTailParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { readConfiguredLogTail } from "../../logging/log-tail.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const logsHandlers: GatewayRequestHandlers = {

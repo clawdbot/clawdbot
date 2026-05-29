@@ -18,6 +18,8 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
+await import("./server.js");
+
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 const HOOK_TOKEN = "hook-secret";
 const HOOKS_MAIN_SESSION_KEY = "agent:hooks:main";

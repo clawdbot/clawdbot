@@ -10,6 +10,7 @@ type ModelRef = {
 };
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
+  "anthropic/claude-opus-4-8",
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-7",
   "google/gemini-3.1-pro-preview",
@@ -26,12 +27,22 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/ai21/jamba-large-1.7",
   "xai/grok-4.3",
   "zai/glm-5.1",
-  "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m2.7",
 ] as const;
 
+const SMALL_LIVE_MODEL_PRIORITY = [
+  "lmstudio/qwen/qwen3.5-9b",
+  "vllm/qwen/qwen3-8b",
+  "sglang/qwen/qwen3-8b",
+  "openrouter/qwen/qwen3.5-9b",
+  "openrouter/z-ai/glm-5.1",
+  "openrouter/z-ai/glm-5",
+  "zai/glm-5.1",
+] as const;
+
 export const DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT = HIGH_SIGNAL_LIVE_MODEL_PRIORITY.length;
+export const DEFAULT_SMALL_LIVE_MODEL_LIMIT = SMALL_LIVE_MODEL_PRIORITY.length;
 const DEFAULT_HIGH_SIGNAL_LIVE_EXCLUDED_PROVIDERS = new Set(["codex", "codex-cli", "openai-codex"]);
 const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
   "fireworks",
@@ -42,6 +53,9 @@ const CURATED_ONLY_HIGH_SIGNAL_LIVE_PROVIDERS = new Set([
 
 const HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
   HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
+);
+const SMALL_LIVE_MODEL_PRIORITY_INDEX = new Map<string, number>(
+  SMALL_LIVE_MODEL_PRIORITY.map((key, index) => [key, index]),
 );
 const HIGH_SIGNAL_LIVE_MODEL_IDS_BY_PROVIDER = new Map<string, Set<string>>();
 for (const key of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
@@ -201,12 +215,29 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
 }
 
 export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
-  const key = toCanonicalHighSignalLiveModelKey(ref);
-  return key !== null && HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.has(key);
+  return hasPrioritizedLiveModelRef(HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX, ref);
+}
+
+export function isSmallLiveModelRef(ref: ModelRef): boolean {
+  return hasPrioritizedLiveModelRef(SMALL_LIVE_MODEL_PRIORITY_INDEX, ref);
+}
+
+export function isPrioritizedSmallLiveModelRef(ref: ModelRef): boolean {
+  return isSmallLiveModelRef(ref);
 }
 
 export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
-  return HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key) => {
+  return listPrioritizedLiveModelRefs(HIGH_SIGNAL_LIVE_MODEL_PRIORITY);
+}
+
+export function listPrioritizedSmallLiveModelRefs(): Array<{ provider: string; id: string }> {
+  return listPrioritizedLiveModelRefs(SMALL_LIVE_MODEL_PRIORITY);
+}
+
+function listPrioritizedLiveModelRefs(
+  priority: readonly string[],
+): Array<{ provider: string; id: string }> {
+  return priority.map((key) => {
     const separatorIndex = key.indexOf("/");
     return {
       provider: key.slice(0, separatorIndex),
@@ -259,13 +290,18 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   return true;
 }
 
-function toCanonicalHighSignalLiveModelKey(ref: ModelRef): string | null {
+function toCanonicalLiveModelKey(ref: ModelRef): string | null {
   const provider = normalizeProviderId(ref.provider ?? "");
   const rawId = normalizeLowercaseStringOrEmpty(ref.id);
   if (!provider || !rawId) {
     return null;
   }
   return `${provider}/${rawId}`;
+}
+
+function hasPrioritizedLiveModelRef(index: ReadonlyMap<string, number>, ref: ModelRef): boolean {
+  const key = toCanonicalLiveModelKey(ref);
+  return key !== null && index.has(key);
 }
 
 function capByProviderSpread<T>(
@@ -317,18 +353,43 @@ export function selectHighSignalLiveItems<T>(
   refOf: (item: T) => ModelRef,
   providerOf: (item: T) => string,
 ): T[] {
+  return selectPrioritizedLiveItems(
+    items,
+    maxItems,
+    refOf,
+    providerOf,
+    HIGH_SIGNAL_LIVE_MODEL_PRIORITY,
+  );
+}
+
+export function selectSmallLiveItems<T>(
+  items: T[],
+  maxItems: number,
+  refOf: (item: T) => ModelRef,
+  providerOf: (item: T) => string,
+): T[] {
+  return selectPrioritizedLiveItems(items, maxItems, refOf, providerOf, SMALL_LIVE_MODEL_PRIORITY);
+}
+
+function selectPrioritizedLiveItems<T>(
+  items: T[],
+  maxItems: number,
+  refOf: (item: T) => ModelRef,
+  providerOf: (item: T) => string,
+  priority: readonly string[],
+): T[] {
   if (maxItems <= 0 || items.length <= maxItems) {
     return items;
   }
 
   const remaining = [...items];
   const selected: T[] = [];
-  for (const preferredKey of HIGH_SIGNAL_LIVE_MODEL_PRIORITY) {
+  for (const preferredKey of priority) {
     if (selected.length >= maxItems) {
       break;
     }
     const preferredIndex = remaining.findIndex(
-      (item) => toCanonicalHighSignalLiveModelKey(refOf(item)) === preferredKey,
+      (item) => toCanonicalLiveModelKey(refOf(item)) === preferredKey,
     );
     if (preferredIndex < 0) {
       continue;
@@ -363,7 +424,7 @@ export function resolveHighSignalLiveModelLimit(params: {
 }
 
 export function getHighSignalLiveModelPriorityIndex(ref: ModelRef): number | null {
-  const key = toCanonicalHighSignalLiveModelKey(ref);
+  const key = toCanonicalLiveModelKey(ref);
   if (!key) {
     return null;
   }

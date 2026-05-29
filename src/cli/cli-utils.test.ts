@@ -150,4 +150,9 @@ describe("parseDurationMs", () => {
     expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
     expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
   });
+
+  it("rejects unsafe millisecond results", () => {
+    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
+  });
 });

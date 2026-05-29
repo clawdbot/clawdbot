@@ -333,6 +333,67 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(inspectPortConnections).not.toHaveBeenCalled();
   });
 
+  it("still audits missing service when gateway health was skipped", async () => {
+    setPlatform("linux");
+    service.isLoaded.mockResolvedValueOnce(false);
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime,
+      prompter: createDoctorPrompter({
+        runtime,
+        options: { nonInteractive: true },
+      }),
+      options: { deep: false, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(note).toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("does not audit local services when skipped gateway health is remote", async () => {
+    setPlatform("linux");
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: { mode: "remote" } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { nonInteractive: true },
+      }),
+      options: { deep: false, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(service.isLoaded).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
+  });
+
+  it("does not start loaded services with unknown runtime when health was skipped", async () => {
+    setPlatform("linux");
+    service.readRuntime.mockResolvedValueOnce({ status: "unknown" });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { repair: true, nonInteractive: true },
+      }),
+      options: { deep: false, repair: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      healthSkipped: true,
+    });
+
+    expect(service.restart).not.toHaveBeenCalled();
+  });
+
   it("reports established gateway clients during deep doctor", async () => {
     setPlatform("linux");
     inspectPortConnections.mockResolvedValueOnce({

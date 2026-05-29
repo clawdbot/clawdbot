@@ -8,18 +8,34 @@ title: "Environment variables"
 ---
 
 OpenClaw pulls environment variables from multiple sources. The rule is **never override existing values**.
+Workspace `.env` files are a lower-trust source: OpenClaw ignores provider credentials and protected runtime controls from workspace `.env` before applying precedence.
 
 ## Precedence (highest → lowest)
 
 1. **Process environment** (what the Gateway process already has from the parent shell/daemon).
-2. **`.env` in the current working directory** (dotenv default; does not override).
-3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; does not override).
+2. **`.env` in the current working directory** (dotenv default; does not override; provider credentials and protected runtime controls are ignored).
+3. **Global `.env`** at `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`; recommended for provider API keys; does not override).
 4. **Config `env` block** in `~/.openclaw/openclaw.json` (applied only if missing).
 5. **Optional login-shell import** (`env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1`), applied only for missing expected keys.
 
 On Ubuntu fresh installs that use the default state dir, OpenClaw also treats `~/.config/openclaw/gateway.env` as a compatibility fallback after the global `.env`. If both files exist and disagree, OpenClaw keeps `~/.openclaw/.env` and prints a warning.
 
 If the config file is missing entirely, step 4 is skipped; shell import still runs if enabled.
+
+## Provider credentials and workspace `.env`
+
+Do not keep provider API keys only in a workspace `.env`. OpenClaw ignores provider credential environment variables from workspace `.env` files, including common keys such as `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `PERPLEXITY_API_KEY`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `EXA_API_KEY`, and `FIRECRAWL_API_KEY`.
+
+Use one of these trusted sources for provider credentials:
+
+- The Gateway process environment, such as a shell, launchd/systemd unit, container secret, or CI secret.
+- The global runtime dotenv file at `~/.openclaw/.env` or `$OPENCLAW_STATE_DIR/.env`.
+- The config `env` block in `~/.openclaw/openclaw.json`.
+- Optional login-shell import when `env.shellEnv.enabled` or `OPENCLAW_LOAD_SHELL_ENV=1` is enabled.
+
+If you previously stored provider keys only in a workspace `.env`, move them to one of the trusted sources above. Workspace `.env` can still provide ordinary project variables that are not credentials, endpoint redirects, host overrides, or `OPENCLAW_*` runtime controls.
+
+See [Workspace `.env` files](/gateway/security#workspace-env-files) for the security rationale.
 
 ## Config `env` block
 

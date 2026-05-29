@@ -1127,6 +1127,11 @@ export const fa: TranslationMap = {
       send: "Send",
       sendMessage: "Send message",
     },
+    queue: {
+      retry: "تلاش مجدد",
+      retrySend: "ارسال مجدد",
+      retryQueuedMessage: "تلاش مجدد برای پیام در صف",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

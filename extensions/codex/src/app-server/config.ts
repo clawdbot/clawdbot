@@ -10,6 +10,7 @@ const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStart
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
+const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
@@ -1035,10 +1036,11 @@ function readBooleanEnv(value: string | undefined): boolean | undefined {
 }
 
 function readNumberEnv(value: string | undefined): number | undefined {
-  if (value === undefined) {
+  const trimmed = value?.trim();
+  if (!trimmed || !PLAIN_DECIMAL_NUMBER_RE.test(trimmed)) {
     return undefined;
   }
-  const parsed = Number(value);
+  const parsed = Number(trimmed);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

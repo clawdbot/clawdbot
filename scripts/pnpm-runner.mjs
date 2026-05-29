@@ -46,13 +46,21 @@ function isExecutableFile(value) {
   }
 }
 
+function isFile(value) {
+  try {
+    return statSync(value).isFile();
+  } catch {
+    return false;
+  }
+}
+
 function isNodeRunnablePnpmExecPath(value) {
   if (!isPnpmExecPath(value)) {
     return false;
   }
   const extension = getPortableExtension(value);
   if (extension === ".js" || extension === ".cjs" || extension === ".mjs") {
-    return true;
+    return isFile(value);
   }
   if (extension.length > 0) {
     return false;

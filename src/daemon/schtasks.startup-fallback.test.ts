@@ -108,6 +108,58 @@ async function writeNodeScript(env: Record<string, string>, port = "18789") {
   );
 }
 
+const NODE_PROCESS_QUERY =
+  "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress";
+
+function makeNodeServiceEnv(env: Record<string, string>): Record<string, string> {
+  return {
+    ...env,
+    OPENCLAW_SERVICE_KIND: "node",
+    OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
+  };
+}
+
+function makeSpawnSyncResult(overrides: Partial<SpawnSyncResult> = {}): SpawnSyncResult {
+  return {
+    pid: 0,
+    output: [null, "", ""],
+    stdout: "",
+    stderr: "",
+    status: 0,
+    signal: null,
+    ...overrides,
+  };
+}
+
+function mockWindowsNodeHostProcess(processId = 5151): void {
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  spawnSync.mockImplementation((command, args) => {
+    if (command === "powershell" && Array.isArray(args) && args.includes(NODE_PROCESS_QUERY)) {
+      return makeSpawnSyncResult({
+        stdout: JSON.stringify([
+          {
+            ProcessId: processId,
+            CommandLine: "C:\\bin\\openclaw.cmd node run --host 127.0.0.1 --port 18789",
+          },
+        ]),
+      });
+    }
+    return makeSpawnSyncResult();
+  });
+}
+
+function expectTaskkillPid(pid: number): void {
+  expect(
+    spawnSync.mock.calls.some(
+      ([command, args]) =>
+        command.endsWith("taskkill.exe") &&
+        Array.isArray(args) &&
+        args.includes("/PID") &&
+        args.includes(String(pid)),
+    ),
+  ).toBe(true);
+}
+
 function expectStartupFallbackSpawn() {
   expect(spawn).toHaveBeenCalled();
   const calls = spawn.mock.calls as unknown as Array<
@@ -634,11 +686,7 @@ describe("Windows startup fallback", () => {
 
   it("does not report a node Startup fallback as running from the gateway listener", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      const nodeEnv = {
-        ...env,
-        OPENCLAW_SERVICE_KIND: "node",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
-      };
+      const nodeEnv = makeNodeServiceEnv(env);
       addStartupFallbackMissingResponses();
       await writeStartupFallbackEntry(nodeEnv);
       inspectPortUsage.mockResolvedValue({
@@ -657,11 +705,7 @@ describe("Windows startup fallback", () => {
 
   it("does not kill the gateway listener when stopping a node Startup fallback", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      const nodeEnv = {
-        ...env,
-        OPENCLAW_SERVICE_KIND: "node",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
-      };
+      const nodeEnv = makeNodeServiceEnv(env);
       addStartupFallbackMissingResponses();
       await writeStartupFallbackEntry(nodeEnv);
       inspectPortUsage.mockResolvedValue({
@@ -680,70 +724,22 @@ describe("Windows startup fallback", () => {
 
   it("stops a node Startup fallback by terminating the matching node host process", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const nodeEnv = {
-        ...env,
-        OPENCLAW_SERVICE_KIND: "node",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
-      };
+      const nodeEnv = makeNodeServiceEnv(env);
       addStartupFallbackMissingResponses();
       await writeStartupFallbackEntry(nodeEnv);
       await writeNodeScript(nodeEnv);
-      spawnSync.mockImplementation((command, args) => {
-        if (
-          command === "powershell" &&
-          Array.isArray(args) &&
-          args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
-          )
-        ) {
-          return {
-            pid: 0,
-            output: [null, "", ""],
-            stdout: JSON.stringify([
-              {
-                ProcessId: 5151,
-                CommandLine: "C:\\bin\\openclaw.cmd node run --host 127.0.0.1 --port 18789",
-              },
-            ]),
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
-        }
-        return {
-          pid: 0,
-          output: [null, "", ""],
-          stdout: "",
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
-      });
+      mockWindowsNodeHostProcess();
 
       await stopScheduledTask({ env: nodeEnv, stdout: new PassThrough() });
 
       expect(inspectPortUsage).not.toHaveBeenCalled();
-      expect(
-        spawnSync.mock.calls.some(
-          ([command, args]) =>
-            command.endsWith("taskkill.exe") &&
-            Array.isArray(args) &&
-            args.includes("/PID") &&
-            args.includes("5151"),
-        ),
-      ).toBe(true);
+      expectTaskkillPid(5151);
     });
   });
 
   it("cleans up a stale node Startup fallback when a node Scheduled Task is registered", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const nodeEnv = {
-        ...env,
-        OPENCLAW_SERVICE_KIND: "node",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
-      };
+      const nodeEnv = makeNodeServiceEnv(env);
       schtasksResponses.push(
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
@@ -751,111 +747,30 @@ describe("Windows startup fallback", () => {
       );
       await writeStartupFallbackEntry(nodeEnv);
       await writeNodeScript(nodeEnv);
-      spawnSync.mockImplementation((command, args) => {
-        if (
-          command === "powershell" &&
-          Array.isArray(args) &&
-          args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
-          )
-        ) {
-          return {
-            pid: 0,
-            output: [null, "", ""],
-            stdout: JSON.stringify([
-              {
-                ProcessId: 5151,
-                CommandLine: "C:\\bin\\openclaw.cmd node run --host 127.0.0.1 --port 18789",
-              },
-            ]),
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
-        }
-        return {
-          pid: 0,
-          output: [null, "", ""],
-          stdout: "",
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
-      });
+      mockWindowsNodeHostProcess();
 
       await stopScheduledTask({ env: nodeEnv, stdout: new PassThrough() });
 
       expect(inspectPortUsage).not.toHaveBeenCalled();
-      expect(
-        spawnSync.mock.calls.some(
-          ([command, args]) =>
-            command.endsWith("taskkill.exe") &&
-            Array.isArray(args) &&
-            args.includes("/PID") &&
-            args.includes("5151"),
-        ),
-      ).toBe(true);
+      expectTaskkillPid(5151);
     });
   });
 
   it("stops a registered node Scheduled Task by terminating the matching node host process", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      const nodeEnv = {
-        ...env,
-        OPENCLAW_SERVICE_KIND: "node",
-        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Node",
-      };
+      const nodeEnv = makeNodeServiceEnv(env);
       schtasksResponses.push(
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
         { code: 0, stdout: "", stderr: "" },
       );
       await writeNodeScript(nodeEnv);
-      spawnSync.mockImplementation((command, args) => {
-        if (
-          command === "powershell" &&
-          Array.isArray(args) &&
-          args.includes(
-            "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
-          )
-        ) {
-          return {
-            pid: 0,
-            output: [null, "", ""],
-            stdout: JSON.stringify([
-              {
-                ProcessId: 5151,
-                CommandLine: "C:\\bin\\openclaw.cmd node run --host 127.0.0.1 --port 18789",
-              },
-            ]),
-            stderr: "",
-            status: 0,
-            signal: null,
-          };
-        }
-        return {
-          pid: 0,
-          output: [null, "", ""],
-          stdout: "",
-          stderr: "",
-          status: 0,
-          signal: null,
-        };
-      });
+      mockWindowsNodeHostProcess();
 
       await stopScheduledTask({ env: nodeEnv, stdout: new PassThrough() });
 
       expect(inspectPortUsage).not.toHaveBeenCalled();
-      expect(
-        spawnSync.mock.calls.some(
-          ([command, args]) =>
-            command.endsWith("taskkill.exe") &&
-            Array.isArray(args) &&
-            args.includes("/PID") &&
-            args.includes("5151"),
-        ),
-      ).toBe(true);
+      expectTaskkillPid(5151);
     });
   });
 

@@ -33,6 +33,21 @@ describe("usage-helpers", () => {
     expect(filterSessionsByQuery([a, b], "maxTokens:10").sessions).toEqual([b]);
   });
 
+  it("rejects non-decimal numeric filter values", () => {
+    const session = { key: "a", usage: { totalTokens: 10_000, totalCost: 0 } };
+
+    expect(filterSessionsByQuery([session], "minTokens:1k").sessions).toEqual([session]);
+    expect(filterSessionsByQuery([session], "minTokens:1e3").warnings).toEqual([
+      "Invalid number for minTokens",
+    ]);
+    expect(filterSessionsByQuery([session], "minTokens:0x1000").warnings).toEqual([
+      "Invalid number for minTokens",
+    ]);
+    expect(filterSessionsByQuery([session], "minTokens:9007199254740993").warnings).toEqual([
+      "Invalid number for minTokens",
+    ]);
+  });
+
   it("warns on unknown keys and invalid numbers", () => {
     const session = { key: "a", usage: { totalTokens: 10, totalCost: 0 } };
     const res = filterSessionsByQuery([session], "wat:1 minTokens:wat");

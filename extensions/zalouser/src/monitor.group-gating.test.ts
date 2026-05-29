@@ -62,6 +62,9 @@ type DispatchReplyCallArg = {
     CommandBody?: string;
     InboundHistory?: unknown;
     OriginatingTo?: string;
+    ReplyToBody?: string;
+    ReplyToId?: string;
+    ReplyToIsQuote?: boolean;
     SessionKey?: string;
     To?: string;
     WasMentioned?: boolean;
@@ -833,6 +836,21 @@ describe("zalouser monitor group mention gating", () => {
     expect(sessionKeyInput?.dmScope).toBe("per-channel-peer");
     const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
     expect(callArg?.ctx?.SessionKey).toBe("agent:main:zalouser:direct:321");
+  });
+
+  it("surfaces quote metadata in inbound reply context", async () => {
+    const { dispatchReplyWithBufferedBlockDispatcher } = await processOpenDmMessage({
+      message: {
+        quotedGlobalMsgId: "987654321234",
+        quotedOwnerId: "555444333",
+        quotedBody: "Previous bot message content",
+      },
+    });
+
+    const callArg = dispatchReplyCall(dispatchReplyWithBufferedBlockDispatcher);
+    expect(callArg?.ctx?.ReplyToId).toBe("987654321234");
+    expect(callArg?.ctx?.ReplyToBody).toBe("Previous bot message content");
+    expect(callArg?.ctx?.ReplyToIsQuote).toBe(true);
   });
 
   it("reuses the legacy DM session key when only the old group-shaped session exists", async () => {

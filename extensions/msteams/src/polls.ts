@@ -107,7 +107,10 @@ export function extractMSTeamsPollVote(
     readNestedString(value, ["openclaw", "poll", "id"]) ??
     readNestedString(value, ["data", "openclawPollId"]) ??
     readNestedString(value, ["data", "pollId"]) ??
-    readNestedString(value, ["data", "openclaw", "pollId"]);
+    readNestedString(value, ["data", "openclaw", "pollId"]) ??
+    // Action.Execute (Universal Action Model) payload shape: value.action.data
+    readNestedString(value, ["action", "data", "openclawPollId"]) ??
+    readNestedString(value, ["action", "data", "pollId"]);
   if (!pollId) {
     return null;
   }
@@ -115,12 +118,17 @@ export function extractMSTeamsPollVote(
   const directSelections = extractSelections(value.choices);
   const nestedSelections = extractSelections(readNestedValue(value, ["choices"]));
   const dataSelections = extractSelections(readNestedValue(value, ["data", "choices"]));
+  const actionDataSelections = extractSelections(
+    readNestedValue(value, ["action", "data", "choices"]),
+  );
   const selections =
     directSelections.length > 0
       ? directSelections
       : nestedSelections.length > 0
         ? nestedSelections
-        : dataSelections;
+        : dataSelections.length > 0
+          ? dataSelections
+          : actionDataSelections;
 
   if (selections.length === 0) {
     return null;
@@ -181,17 +189,12 @@ export function buildMSTeamsPollCard(params: {
     ],
     actions: [
       {
-        type: "Action.Submit",
+        type: "Action.Execute",
         title: "Vote",
+        verb: "openclaw.poll.vote",
         data: {
           openclawPollId: pollId,
           pollId,
-        },
-        msteams: {
-          type: "messageBack",
-          text: "openclaw poll vote",
-          displayText: "Vote recorded",
-          value: { openclawPollId: pollId, pollId },
         },
       },
     ],

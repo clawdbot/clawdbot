@@ -161,6 +161,10 @@ export const slackChannelConfigUiHints = {
     label: "Slack Progress Renderer",
     help: 'Progress draft renderer: "text" uses one portable text body; "rich" renders structured Slack Block Kit fields with the same text fallback.',
   },
+  "streaming.progress.nativeTaskCards": {
+    label: "Slack Native Progress Task Cards",
+    help: 'Opt in to Slack native task-card progress updates when channels.slack.streaming.mode="progress" and streaming.nativeTransport is enabled. Default: false.',
+  },
   "streaming.progress.toolProgress": {
     label: "Slack Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",

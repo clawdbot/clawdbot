@@ -101,6 +101,134 @@ describe("doctor runtime tool schema checks", () => {
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
   });
 
+  it("reports bundle MCP runtime diagnostics when tool listing fails schema validation", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual({
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message:
+        'Configured MCP server "dofbot" could not expose runtime tools for schema validation.',
+      path: "mcp.servers.dofbot",
+      requirement: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+      fixHint:
+        "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
+    });
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports bundle MCP runtime diagnostics for exact MCP tool allowlists", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { allow: ["dofbot__healthy"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        path: "mcp.servers.dofbot",
+      }),
+    );
+  });
+
+  it("reports exact MCP allowlists when the safe server name contains the separator", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "my__server",
+          safeServerName: "my__server",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { allow: ["my__server__healthy"] },
+        mcp: {
+          servers: {
+            my__server: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        path: "mcp.servers.my__server",
+      }),
+    );
+  });
+
+  it("reports bundle MCP runtime diagnostics for glob MCP tool allowlists", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { allow: ["*__healthy"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/runtime-tool-schemas",
+        path: "mcp.servers.dofbot",
+      }),
+    );
+  });
+
   it("reports unsupported schemas exposed only to a non-default configured agent", async () => {
     mocks.createOpenClawCodingTools.mockImplementation((options) =>
       options?.agentId === "worker"
@@ -237,6 +365,58 @@ describe("doctor runtime tool schema checks", () => {
     await expect(
       collectRuntimeToolSchemaFindings({
         tools: { deny: ["bundle-mcp"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not report bundle MCP diagnostics filtered out by the final runtime tool policy", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { deny: ["bundle-mcp"] },
+        mcp: {
+          servers: {
+            dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },
+          },
+        },
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("does not report bundle MCP diagnostics filtered out by server-level deny policy", async () => {
+    mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
+      tools: [],
+      diagnostics: [
+        {
+          serverName: "dofbot",
+          safeServerName: "dofbot",
+          launchSummary: "node dofbot-mcp.mjs",
+          message: 'tools[0].inputSchema.type: Invalid input: expected "object"',
+        },
+      ],
+      dispose: mocks.disposeBundleRuntime,
+    });
+
+    await expect(
+      collectRuntimeToolSchemaFindings({
+        tools: { deny: ["dofbot__*"] },
         mcp: {
           servers: {
             dofbot: { command: "node", args: ["dofbot-mcp.mjs"] },

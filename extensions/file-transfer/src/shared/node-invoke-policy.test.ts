@@ -161,6 +161,77 @@ describe("file-transfer node invoke policy", () => {
     });
   });
 
+  it("normalizes string maxBytes before invoking the node", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/file.txt", maxBytes: "1024" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/tmp/**"],
+          },
+        },
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expect(result.ok).toBe(true);
+    expect(invokeNode).toHaveBeenNthCalledWith(1, {
+      params: {
+        path: "/tmp/file.txt",
+        maxBytes: 1024,
+        followSymlinks: false,
+        preflightOnly: true,
+      },
+    });
+  });
+
+  it("rejects malformed maxBytes before invoking the node", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/file.txt", maxBytes: "1024.5" },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: "maxBytes must be a positive integer",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed maxBytes before requesting approval", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const approvals = {
+      request: vi.fn(async () => ({ id: "approval-1", decision: "allow-always" as const })),
+    };
+    const { ctx, invokeNode } = createCtx({
+      params: { path: "/tmp/new.txt", maxBytes: "1024.5" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            ask: "on-miss",
+            allowReadPaths: ["/allowed/**"],
+          },
+        },
+      },
+      approvals,
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, {
+      ok: false,
+      code: "INVALID_PARAMS",
+      message: "maxBytes must be a positive integer",
+    });
+    expect(approvals.request).not.toHaveBeenCalled();
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
   it("denies raw node.invoke before the node when plugin policy is missing", async () => {
     const policy = createFileTransferNodeInvokePolicy();
     const { ctx, invokeNode } = createCtx({ pluginConfig: {} });
@@ -468,6 +539,37 @@ describe("file-transfer node invoke policy", () => {
     expect(invokeNode).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects oversized dir.fetch preflight entry lists before requesting the archive", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const entries = Array.from({ length: 5001 }, (_, index) => `file-${index}.txt`);
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/home/me" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/home/me", "/home/me/**"],
+          },
+        },
+      },
+    });
+    invokeNode.mockResolvedValueOnce({
+      ok: true,
+      payload: {
+        ok: true,
+        path: "/home/me",
+        entries,
+        fileCount: entries.length,
+        preflightOnly: true,
+      },
+    });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "PREFLIGHT_ENTRIES_TOO_MANY" });
+    expect(invokeNode).toHaveBeenCalledTimes(1);
+  });
+
   testUnlessWindows(
     "continues dir.fetch after preflight without forwarding caller preflightOnly",
     async () => {
@@ -568,6 +670,51 @@ describe("file-transfer node invoke policy", () => {
       expect(invokeNode).toHaveBeenCalledTimes(2);
     },
   );
+
+  testUnlessWindows("rejects oversized final dir.fetch archive entry lists", async () => {
+    const policy = createFileTransferNodeInvokePolicy();
+    const tarBase64 = await tarEntries(
+      Object.fromEntries(Array.from({ length: 5001 }, (_, index) => [`file-${index}.txt`, "x"])),
+    );
+    const { ctx, invokeNode } = createCtx({
+      command: "dir.fetch",
+      params: { path: "/tmp/project" },
+      pluginConfig: {
+        nodes: {
+          "node-1": {
+            allowReadPaths: ["/tmp/project", "/tmp/project/**"],
+          },
+        },
+      },
+    });
+    invokeNode
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          entries: ["file-0.txt"],
+          fileCount: 1,
+          preflightOnly: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        payload: {
+          ok: true,
+          path: "/tmp/project",
+          tarBase64,
+          tarBytes: 7,
+          sha256: "c".repeat(64),
+          fileCount: 5001,
+        },
+      });
+
+    const result = await policy.handle(ctx);
+
+    expectResultFields(result, { ok: false, code: "ARCHIVE_ENTRIES_TOO_MANY" });
+    expect(invokeNode).toHaveBeenCalledTimes(2);
+  });
 
   it("rejects final dir.fetch archive responses without readable archive entries", async () => {
     const policy = createFileTransferNodeInvokePolicy();

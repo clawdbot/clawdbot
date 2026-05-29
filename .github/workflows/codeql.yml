@@ -19,6 +19,15 @@ on:
       - ".github/workflows/**"
       - "packages/**"
       - "src/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/actions/**"
+      - ".github/codeql/**"
+      - ".github/workflows/**"
+      - "packages/**"
+      - "src/**"
   schedule:
     - cron: "0 6 * * *"
 
@@ -76,9 +85,20 @@ jobs:
             config_file: ./.github/codeql/codeql-actions-critical-security.yml
     steps:
       - name: Checkout
+        if: ${{ matrix.category != 'actions' }}
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           submodules: false
+
+      - name: Checkout Actions security sources
+        if: ${{ matrix.category == 'actions' }}
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          submodules: false
+          sparse-checkout: |
+            .github/actions
+            .github/workflows
+            .github/codeql
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4

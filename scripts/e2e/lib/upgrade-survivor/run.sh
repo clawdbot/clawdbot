@@ -21,14 +21,21 @@ export MATRIX_ACCESS_TOKEN="upgrade-survivor-matrix-token"
 export BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
+export OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT:-/tmp/openclaw-upgrade-survivor-runtime}"
+RUNTIME_ROOT="$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT"
+STATE_HOME_ROOT="${OPENCLAW_UPGRADE_SURVIVOR_STATE_HOME_ROOT:-$RUNTIME_ROOT/state-home}"
 mkdir -p "$ARTIFACT_ROOT"
-export TMPDIR="$ARTIFACT_ROOT/tmp"
-mkdir -p "$TMPDIR"
+mkdir -p "$RUNTIME_ROOT"
+export TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TMPDIR:-$RUNTIME_ROOT/tmp}"
+export OPENCLAW_TEST_STATE_TMPDIR="${OPENCLAW_UPGRADE_SURVIVOR_TEST_STATE_TMPDIR:-$RUNTIME_ROOT/state-tmp}"
+mkdir -p "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 export npm_config_prefix="$ARTIFACT_ROOT/npm-prefix"
 export NPM_CONFIG_PREFIX="$npm_config_prefix"
-export npm_config_cache="$ARTIFACT_ROOT/npm-cache"
+export npm_config_cache="${OPENCLAW_UPGRADE_SURVIVOR_NPM_CACHE:-$OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT/npm-cache}"
+export NPM_CONFIG_CACHE="$npm_config_cache"
 export npm_config_tmp="$TMPDIR"
 mkdir -p "$npm_config_prefix" "$npm_config_cache"
+chmod 700 "$npm_config_cache" || true
 export PATH="$npm_config_prefix/bin:$PATH"
 
 SUMMARY_JSON="${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-$ARTIFACT_ROOT/summary.json}"
@@ -642,9 +649,9 @@ rm_rf_retry() {
 }
 
 reset_run_state() {
-  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$ARTIFACT_ROOT/state-home"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR" "$STATE_HOME_ROOT"
   rm -f "$SYSTEMCTL_SHIM_PID_FILE" "$SYSTEMCTL_SHIM_DAEMON_LOG"
-  mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR"
+  mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR" "$OPENCLAW_TEST_STATE_TMPDIR"
 }
 
 install_baseline() {
@@ -691,7 +698,7 @@ seed_state() {
     rm -rf /root/.openclaw /root/workspace
     openclaw_test_state_create /root minimal
   else
-    openclaw_test_state_create "$ARTIFACT_ROOT/state-home" minimal
+    openclaw_test_state_create "$STATE_HOME_ROOT" minimal
   fi
   export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed

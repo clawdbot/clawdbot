@@ -12,23 +12,31 @@ title: "Claude Max API proxy"
 <Warning>
 This path is technical compatibility only. Anthropic has blocked some subscription
 usage outside Claude Code in the past. You must decide for yourself whether to use
-it and verify Anthropic's current terms before relying on it.
+it and verify Anthropic's current billing rules before relying on it.
+
+Anthropic's current support docs say `claude -p` is Agent SDK/programmatic usage.
+Starting June 15, 2026, subscription-plan `claude -p` usage draws from a separate
+monthly Agent SDK credit first, then from usage credits at standard API rates if
+usage credits are enabled.
 </Warning>
 
 ## Why use this?
 
-| Approach                | Cost                                                | Best For                                   |
-| ----------------------- | --------------------------------------------------- | ------------------------------------------ |
-| Anthropic API           | Pay per token (~$15/M input, $75/M output for Opus) | Production apps, high volume               |
-| Claude Max subscription | $200/month flat                                     | Personal use, development, unlimited usage |
+| Approach                  | Cost route                                      | Best for                                   |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------ |
+| Anthropic API             | Pay per token through Claude Console or cloud   | Production apps, shared automation, volume |
+| Claude subscription proxy | Claude Code / `claude -p` plan and credit rules | Personal experiments with compatible tools |
 
-If you have a Claude Max subscription and want to use it with OpenAI-compatible tools, this proxy may reduce cost for some workflows. API keys remain the clearer policy path for production use.
+If you have a Claude Max or Pro subscription and want to use it with
+OpenAI-compatible tools, this proxy may fit some personal workflows. It is not an
+unlimited flat-rate path. API keys remain the clearer policy and billing path for
+production use.
 
 ## How it works
 
 ```
-Your App → claude-max-api-proxy → Claude Code CLI → Anthropic (via subscription)
-     (OpenAI format)              (converts format)      (uses your login)
+Your App → claude-max-api-proxy → Claude Code CLI / claude -p → Anthropic
+     (OpenAI format)              (converts format)          (uses your login)
 ```
 
 The proxy:
@@ -157,6 +165,7 @@ The proxy:
 
 - This is a **community tool**, not officially supported by Anthropic or OpenClaw
 - Requires an active Claude Max/Pro subscription with Claude Code CLI authenticated
+- Inherits Claude Code `claude -p` billing, usage-credit, and rate-limit behavior
 - The proxy runs locally and does not send data to any third-party servers
 - Streaming responses are fully supported
 

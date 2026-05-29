@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   renderBitmapTextPngBase64,
   renderSolidColorPngBase64,
@@ -35,7 +36,6 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
-import type { EventFrame } from "./protocol/index.js";
 
 const LIVE = isLiveTestEnabled();
 const CODEX_HARNESS_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS);

@@ -1,8 +1,8 @@
+import { readConnectErrorDetailCode } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
 import type { GatewayClient, GatewayReconnectPausedInfo } from "../gateway/client.js";
 import { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
-import { readConnectErrorDetailCode } from "../gateway/protocol/connect-error-details.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatErrorMessage } from "./errors.js";
 import type {

@@ -339,6 +339,106 @@ describe("fal image-generation provider", () => {
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
+  it("routes Nano Banana 2 text generation with native resolution", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/nb2-wide.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("nb2-wide-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "fal-ai/nano-banana-2",
+      prompt: "ultrawide banana test",
+      cfg: {},
+      aspectRatio: "4:1",
+      resolution: "2K",
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/fal-ai/nano-banana-2",
+      body: {
+        prompt: "ultrawide banana test",
+        aspect_ratio: "4:1",
+        resolution: "2K",
+        num_images: 1,
+        output_format: "png",
+      },
+    });
+  });
+
+  it("does not synthesize Nano Banana 2 aspect ratio from resolution alone", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/nb2-auto.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("nb2-auto-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "fal-ai/nano-banana-2",
+      prompt: "auto aspect banana test",
+      cfg: {},
+      resolution: "2K",
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/fal-ai/nano-banana-2",
+      body: {
+        prompt: "auto aspect banana test",
+        resolution: "2K",
+        num_images: 1,
+        output_format: "png",
+      },
+    });
+  });
+
   it("routes Nano Banana 2 edits through /edit with NB2 geometry", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
@@ -418,7 +518,28 @@ describe("fal image-generation provider", () => {
           mimeType: "image/png",
         })),
       }),
-    ).rejects.toThrow("fal Nano Banana edit supports at most 14 reference images");
+    ).rejects.toThrow("fal Nano Banana 2 supports at most 14 reference images");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects Krea-only aspect ratios for Nano Banana 2", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "fal-ai/nano-banana-2",
+        prompt: "unsupported ratio",
+        cfg: {},
+        aspectRatio: "2.35:1",
+      }),
+    ).rejects.toThrow("fal Nano Banana 2 supports aspectRatio values");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
@@ -568,6 +689,231 @@ describe("fal image-generation provider", () => {
         output_format: "png",
       },
     });
+  });
+
+  it("uses Krea 2 native aspect-ratio and creativity payload schema", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/krea.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("krea-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "fal",
+      model: "krea/v2/medium/text-to-image",
+      prompt: "expressive risograph poster",
+      cfg: {},
+      aspectRatio: "9:16",
+      providerOptions: {
+        fal: {
+          creativity: "high",
+        },
+      },
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/krea/v2/medium/text-to-image",
+      body: {
+        prompt: "expressive risograph poster",
+        creativity: "high",
+        aspect_ratio: "9:16",
+      },
+    });
+    expect(result.model).toBe("krea/v2/medium/text-to-image");
+  });
+
+  it("passes reference images to Krea 2 as style references without edit suffix", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/krea-style.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("krea-style-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "krea/v2/large/text-to-image",
+      prompt: "portrait with the same palette and texture",
+      cfg: {},
+      size: "1024x1536",
+      inputImages: [
+        { buffer: Buffer.from("style-a"), mimeType: "image/png" },
+        { buffer: Buffer.from("style-b"), mimeType: "image/jpeg" },
+      ],
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/krea/v2/large/text-to-image",
+      body: {
+        prompt: "portrait with the same palette and texture",
+        creativity: "medium",
+        aspect_ratio: "2:3",
+        image_style_references: [
+          { image_url: `data:image/png;base64,${Buffer.from("style-a").toString("base64")}` },
+          { image_url: `data:image/jpeg;base64,${Buffer.from("style-b").toString("base64")}` },
+        ],
+      },
+    });
+  });
+
+  it("maps Krea 2 size hints to the closest native aspect ratio", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/krea-sized.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("krea-sized-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "krea/v2/medium/text-to-image",
+      prompt: "portrait poster",
+      cfg: {},
+      size: "1024x1536",
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/krea/v2/medium/text-to-image",
+      body: {
+        prompt: "portrait poster",
+        creativity: "medium",
+        aspect_ratio: "2:3",
+      },
+    });
+  });
+
+  it("rejects Krea 2 resolution hints instead of dropping them", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "krea/v2/medium/text-to-image",
+        prompt: "too many pixels",
+        cfg: {},
+        resolution: "2K",
+      }),
+    ).rejects.toThrow("fal Krea 2 supports aspectRatio but not resolution overrides");
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "krea/v2/medium/text-to-image",
+        prompt: "style refs with unsupported pixels",
+        cfg: {},
+        resolution: "1K",
+        inputImages: [{ buffer: Buffer.from("style"), mimeType: "image/png" }],
+      }),
+    ).rejects.toThrow("fal Krea 2 supports aspectRatio but not resolution overrides");
+  });
+
+  it("rejects multi-image count for Krea 2 single-image endpoints", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "krea/v2/medium/text-to-image",
+        prompt: "too many outputs",
+        cfg: {},
+        count: 2,
+      }),
+    ).rejects.toThrow("supports one output image per request");
+  });
+
+  it("rejects output format overrides for Krea 2", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "krea/v2/medium/text-to-image",
+        prompt: "jpeg please",
+        cfg: {},
+        outputFormat: "jpeg",
+      }),
+    ).rejects.toThrow("does not support outputFormat overrides");
   });
 
   it("rejects multi-image for Flux edit", async () => {

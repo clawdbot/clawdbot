@@ -299,4 +299,16 @@ describe("collectPluginConfigContractMatches", () => {
       }),
     ).toEqual([]);
   });
+
+  it("rejects array indexes outside canonical config path bounds", () => {
+    const items = Array<string>(100_002);
+    items[100_001] = "too far";
+
+    expect(
+      collectPluginConfigContractMatches({
+        root: { items },
+        pathPattern: "items.100001",
+      }),
+    ).toEqual([]);
+  });
 });

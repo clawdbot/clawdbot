@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { tryReadJsonSync } from "../infra/json-files.js";
@@ -28,10 +29,45 @@ export type PluginRuntimeModuleResolution = {
 type PluginSdkPackageJson = {
   exports?: Record<string, unknown>;
   bin?: string | Record<string, unknown>;
+  version?: string;
 };
 
 const STARTUP_ARGV1 = process.argv[1];
 const pluginSdkPackageJsonByRoot = new Map<string, PluginSdkPackageJson | null>();
+
+function sanitizeJitiCachePathSegment(value: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
+  return normalized.length > 0 ? normalized : "unknown";
+}
+
+function resolveJitiFsCacheTmpDir(): string {
+  let tmpDir = os.tmpdir();
+  if (process.env.TMPDIR && tmpDir === process.cwd() && !process.env.JITI_RESPECT_TMPDIR_ENV) {
+    const originalTmpDir = process.env.TMPDIR;
+    delete process.env.TMPDIR;
+    try {
+      tmpDir = os.tmpdir();
+    } finally {
+      process.env.TMPDIR = originalTmpDir;
+    }
+  }
+  return tmpDir;
+}
+
+function readJitiBooleanEnv(name: string, defaultValue: boolean): boolean {
+  if (!(name in process.env)) {
+    return defaultValue;
+  }
+  try {
+    return Boolean(JSON.parse(process.env[name] ?? ""));
+  } catch {
+    return defaultValue;
+  }
+}
+
+function shouldUseJitiFsCache(): boolean {
+  return readJitiBooleanEnv("JITI_FS_CACHE", readJitiBooleanEnv("JITI_CACHE", true));
+}
 
 export function normalizeJitiAliasTargetPath(targetPath: string): string {
   return process.platform === "win32" ? targetPath.replace(/\\/g, "/") : targetPath;
@@ -53,6 +89,47 @@ function readPluginSdkPackageJson(packageRoot: string): PluginSdkPackageJson | n
   }
   pluginSdkPackageJsonByRoot.set(cacheKey, parsed);
   return parsed;
+}
+
+function resolveJitiCacheModulePath(params: LoaderModuleResolveParams = {}): string {
+  if (params.modulePath?.startsWith("file://")) {
+    try {
+      return fileURLToPath(params.modulePath);
+    } catch {
+      // Fall through to the shared module resolver for malformed test inputs.
+    }
+  }
+  return resolveLoaderModulePath(params);
+}
+
+export function resolvePluginLoaderJitiFsCacheDir(params: LoaderModuleResolveParams = {}): string {
+  const modulePath = resolveJitiCacheModulePath(params);
+  const packageRoot =
+    resolveLoaderPackageRoot({ ...params, modulePath }) ?? path.dirname(modulePath);
+  const packageJsonPath = path.join(packageRoot, "package.json");
+  const version = sanitizeJitiCachePathSegment(
+    readPluginSdkPackageJson(packageRoot)?.version ?? "unknown",
+  );
+  let installMarker = "no-package-json";
+  try {
+    const stat = fs.statSync(packageJsonPath);
+    installMarker = `${Math.trunc(stat.mtimeMs)}-${stat.size}`;
+  } catch {
+    // Package installs should have package.json; keep cache setup best-effort.
+  }
+  return path.join(
+    resolveJitiFsCacheTmpDir(),
+    "jiti",
+    "openclaw",
+    version,
+    sanitizeJitiCachePathSegment(installMarker),
+  );
+}
+
+export function resolvePluginLoaderJitiFsCacheOption(
+  params: LoaderModuleResolveParams = {},
+): false | string {
+  return shouldUseJitiFsCache() ? resolvePluginLoaderJitiFsCacheDir(params) : false;
 }
 
 function isSafePluginSdkSubpathSegment(subpath: string): boolean {
@@ -416,6 +493,71 @@ const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
 const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
+const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
+  {
+    packageName: "@openclaw/gateway-client",
+    packageDir: "gateway-client",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-client",
+    packageDir: "gateway-client",
+    subpath: "readiness",
+    srcFile: "readiness.ts",
+    distFile: "readiness.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-client",
+    packageDir: "gateway-client",
+    subpath: "timeouts",
+    srcFile: "timeouts.ts",
+    distFile: "timeouts.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
+    subpath: "client-info",
+    srcFile: "client-info.ts",
+    distFile: "client-info.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
+    subpath: "connect-error-details",
+    srcFile: "connect-error-details.ts",
+    distFile: "connect-error-details.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
+    subpath: "schema",
+    srcFile: "schema.ts",
+    distFile: "schema.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
+    subpath: "startup-unavailable",
+    srcFile: "startup-unavailable.ts",
+    distFile: "startup-unavailable.mjs",
+  },
+  {
+    packageName: "@openclaw/gateway-protocol",
+    packageDir: "gateway-protocol",
+    subpath: "version",
+    srcFile: "version.ts",
+    distFile: "version.mjs",
+  },
+] as const;
 
 function isUsableDistPluginSdkArtifact(candidate: string): boolean {
   if (!fs.existsSync(candidate)) {
@@ -599,6 +741,39 @@ function resolveBundledPluginPackagePublicSurfaceAliasMap(params: {
     }
   }
   cachedBundledPluginPublicSurfaceAliasMaps.set(cacheKey, aliasMap);
+  return aliasMap;
+}
+
+function resolveWorkspacePackageAliasMap(params: {
+  modulePath: string;
+  argv1?: string;
+  moduleUrl?: string;
+  pluginSdkResolution: PluginSdkResolutionPreference;
+}): Record<string, string> {
+  const packageRoot = resolveLoaderPluginSdkPackageRoot(params);
+  if (!packageRoot) {
+    return {};
+  }
+  const orderedKinds = resolvePluginSdkAliasCandidateOrder({
+    modulePath: params.modulePath,
+    isProduction: process.env.NODE_ENV === "production",
+    pluginSdkResolution: params.pluginSdkResolution,
+  });
+  const aliasMap: Record<string, string> = {};
+  for (const entry of WORKSPACE_PACKAGE_ALIAS_ENTRIES) {
+    const alias = entry.subpath ? `${entry.packageName}/${entry.subpath}` : entry.packageName;
+    for (const kind of orderedKinds) {
+      const candidate =
+        kind === "dist"
+          ? path.join(packageRoot, "packages", entry.packageDir, "dist", entry.distFile)
+          : path.join(packageRoot, "packages", entry.packageDir, "src", entry.srcFile);
+      if (!fs.existsSync(candidate)) {
+        continue;
+      }
+      aliasMap[alias] = normalizeJitiAliasTargetPath(candidate);
+      break;
+    }
+  }
   return aliasMap;
 }
 
@@ -1081,6 +1256,12 @@ export function buildPluginLoaderAliasMap(
       moduleUrl,
       pluginSdkResolution,
     }),
+    ...resolveWorkspacePackageAliasMap({
+      modulePath,
+      argv1,
+      moduleUrl,
+      pluginSdkResolution,
+    }),
     ...(pluginSdkAlias
       ? Object.fromEntries(
           PLUGIN_SDK_PACKAGE_NAMES.map((packageName) => [
@@ -1163,11 +1344,15 @@ export function resolvePluginRuntimeModulePathWithDiagnostics(
   };
 }
 
-export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
+export function buildPluginLoaderJitiOptions(
+  aliasMap: Record<string, string>,
+  params: LoaderModuleResolveParams = {},
+) {
   const hasAliases = Object.keys(aliasMap).length > 0;
   const jitiAliasMap = hasAliases ? normalizePluginLoaderAliasMapForJiti(aliasMap) : aliasMap;
   return {
     interopDefault: true,
+    fsCache: resolvePluginLoaderJitiFsCacheOption(params),
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,

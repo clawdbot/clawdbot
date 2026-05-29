@@ -25,10 +25,12 @@
         "description": "Allowlist of provider/model keys like openai-codex/gpt-5.2."
       },
       "maxTokens": {
-        "type": "number"
+        "type": "integer",
+        "minimum": 1
       },
       "timeoutMs": {
-        "type": "number"
+        "type": "integer",
+        "minimum": 1
       }
     },
     "additionalProperties": false

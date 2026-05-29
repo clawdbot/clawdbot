@@ -80,7 +80,7 @@ on:
         default: ""
         type: string
       evidence_package_spec:
-        description: Optional published package spec to prove in the private release evidence report
+        description: Optional published package spec to prove in the release evidence report
         required: false
         default: ""
         type: string
@@ -1450,9 +1450,9 @@ jobs:
 
           exit "$failed"
 
-      - name: Request private evidence update
+      - name: Request release evidence update
         env:
-          RELEASE_PRIVATE_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN }}
+          RELEASES_DISPATCH_TOKEN: ${{ secrets.OPENCLAW_RELEASES_DISPATCH_TOKEN }}
           TARGET_REF: ${{ inputs.ref }}
           PACKAGE_SPEC: ${{ inputs.evidence_package_spec || inputs.npm_telegram_package_spec }}
           GITHUB_RUN_ID_VALUE: ${{ github.run_id }}
@@ -1460,11 +1460,11 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" ]]; then
-            echo "Release checks were skipped by rerun group; skipping automatic private evidence update."
+            echo "Release checks were skipped by rerun group; skipping automatic release evidence update."
             exit 0
           fi
-          if [[ -z "${RELEASE_PRIVATE_DISPATCH_TOKEN// }" ]]; then
-            echo "OPENCLAW_RELEASES_PRIVATE_DISPATCH_TOKEN is not configured; skipping automatic private evidence update."
+          if [[ -z "${RELEASES_DISPATCH_TOKEN// }" ]]; then
+            echo "OPENCLAW_RELEASES_DISPATCH_TOKEN is not configured; skipping automatic release evidence update."
             exit 0
           fi
 
@@ -1483,7 +1483,7 @@ jobs:
           fi
           release_id="$(printf '%s' "$release_id" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9._-')"
           if [[ -z "$release_id" ]]; then
-            echo "::warning::Could not derive release evidence id from target ref '${TARGET_REF}'; skipping automatic private evidence update."
+            echo "::warning::Could not derive release evidence id from target ref '${TARGET_REF}'; skipping automatic release evidence update."
             exit 0
           fi
 
@@ -1509,18 +1509,18 @@ jobs:
           if ! curl --fail-with-body \
             -X POST \
             -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${RELEASE_PRIVATE_DISPATCH_TOKEN}" \
+            -H "Authorization: Bearer ${RELEASES_DISPATCH_TOKEN}" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/openclaw/releases-private/dispatches \
+            https://api.github.com/repos/openclaw/releases/dispatches \
             -d "$payload"; then
-            echo "::warning::Automatic private release evidence dispatch failed; child workflow validation remains authoritative."
+            echo "::warning::Automatic release evidence dispatch failed; child workflow validation remains authoritative."
             {
-              echo "### Private release evidence dispatch failed"
+              echo "### Release evidence dispatch failed"
               echo
-              echo "Child workflow validation remains authoritative. Backfill durable evidence from \`openclaw/releases-private\`:"
+              echo "Child workflow validation remains authoritative. Backfill durable evidence from \`openclaw/releases\`:"
               echo
               echo "\`\`\`bash"
-              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases-private --ref main -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec}"
+              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases --ref main -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec}"
               echo "\`\`\`"
             } >> "$GITHUB_STEP_SUMMARY"
           fi

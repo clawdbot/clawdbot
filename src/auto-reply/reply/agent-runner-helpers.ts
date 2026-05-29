@@ -27,7 +27,7 @@ function readCurrentVerboseLevel(params: VerboseGateParams): VerboseLevel | unde
     return undefined;
   }
   try {
-    const store = loadSessionStore(params.storePath);
+    const store = loadSessionStore(params.storePath, { clone: false });
     const entry = store[params.sessionKey];
     return typeof entry?.verboseLevel === "string"
       ? normalizeVerboseLevel(entry.verboseLevel)

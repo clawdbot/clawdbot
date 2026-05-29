@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -79,6 +80,54 @@ describe("detectImageReferences", () => {
       type: "path",
       resolved: path.join(process.env.HOME ?? os.homedir(), "Pictures/vacation.png"),
     });
+  });
+
+  it("ignores OpenClaw CLI image cache paths from prior prompt transcripts", () => {
+    const refs = detectImageReferences(
+      [
+        '<system-reminder>Called the Read tool with {"file_path":"/Users/ada/.openclaw/workspace/.openclaw-cli-images/stale.png"}</system-reminder>',
+        "Compare it with /Users/ada/Pictures/current.png",
+      ].join("\n"),
+    );
+
+    expect(refs).toStrictEqual([
+      {
+        raw: "/Users/ada/Pictures/current.png",
+        type: "path",
+        resolved: "/Users/ada/Pictures/current.png",
+      },
+    ]);
+  });
+
+  it("ignores temporary OpenClaw CLI image cache paths", () => {
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")}`,
+    );
+    expectNoImageReferences(
+      `[media attached: ${path.join(resolvePreferredOpenClawTmpDir(), "openclaw-cli-images", "stale.jpg")} (image/jpeg)]`,
+    );
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.jpg")}`,
+    );
+    expectNoImageReferences(
+      `Prior turn wrote ${path.join(os.tmpdir(), "openclaw-501", "openclaw-cli-images", "stale.jpg")}`,
+    );
+  });
+
+  it("ignores file URLs into the OpenClaw CLI image cache", () => {
+    const stalePath = path.join(os.tmpdir(), "openclaw", "openclaw-cli-images", "stale.png");
+
+    expectNoImageReferences(`Prior turn wrote ${pathToFileURL(stalePath).href}`);
+  });
+
+  it("detects normal user image paths in similarly named directories", () => {
+    expect(detectImageReferences("/workspace/openclaw-cli-images/current.png")).toStrictEqual([
+      {
+        raw: "/workspace/openclaw-cli-images/current.png",
+        type: "path",
+        resolved: "/workspace/openclaw-cli-images/current.png",
+      },
+    ]);
   });
 
   it("detects multiple image references in a prompt", () => {

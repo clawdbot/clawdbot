@@ -552,6 +552,37 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     ).toBe(true);
   });
 
+  it("uses activation source config to discover channel setup metadata after secret stripping", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
+    const plugins = listReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": {},
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat"],
+        },
+      } as never,
+      {
+        activationSourceConfig: {
+          channels: {
+            "external-chat": { token: "configured" },
+          },
+          plugins: {
+            load: { paths: [pluginDir] },
+            allow: ["external-chat"],
+          },
+        } as never,
+        env: { ...process.env },
+        includePersistedAuthState: false,
+        includeSetupFallbackPlugins: true,
+      },
+    );
+
+    expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
+  });
+
   it("reuses default read-only channel plugin resolution for the same config", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
     const cfg = {

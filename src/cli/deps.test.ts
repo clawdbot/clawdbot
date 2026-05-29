@@ -85,6 +85,15 @@ describe("createDefaultDeps", () => {
     expectUnusedRuntimeFactoriesNotLoaded("telegram");
   });
 
+  it("does not create channel senders for Discord voice helper keys", async () => {
+    const createDefaultDeps = await loadCreateDefaultDeps("discord-voice-helper");
+    const deps = createDefaultDeps();
+
+    expect(deps.discordVoice).toBeUndefined();
+    expect(deps.sendDiscordVoice).toBeUndefined();
+    expect(runtimeFactories.discord).not.toHaveBeenCalled();
+  });
+
   it("reuses cached runtime send surfaces after first lazy load", async () => {
     const createDefaultDeps = await loadCreateDefaultDeps("module-cache");
     const deps = createDefaultDeps();

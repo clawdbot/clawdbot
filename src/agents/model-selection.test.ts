@@ -147,6 +147,33 @@ const ANTHROPIC_OPUS_47_CATALOG = [
   },
 ];
 
+const ANTHROPIC_OPUS_48_CATALOG = [
+  {
+    provider: "anthropic",
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    reasoning: true,
+  },
+];
+
+const ANTHROPIC_VERTEX_OPUS_48_CATALOG = [
+  {
+    provider: "anthropic-vertex",
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    reasoning: true,
+  },
+];
+
+const CLAUDE_CLI_OPUS_48_CATALOG = [
+  {
+    provider: "claude-cli",
+    id: "claude-opus-4-8",
+    name: "Claude Opus 4.8",
+    reasoning: true,
+  },
+];
+
 function resolveAnthropicOpusThinking(cfg: OpenClawConfig) {
   return resolveThinkingDefault({
     cfg,
@@ -162,6 +189,33 @@ function resolveAnthropicOpus47Thinking(cfg: OpenClawConfig) {
     provider: "anthropic",
     model: "claude-opus-4-7",
     catalog: ANTHROPIC_OPUS_47_CATALOG,
+  });
+}
+
+function resolveAnthropicOpus48Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic",
+    model: "claude-opus-4-8",
+    catalog: ANTHROPIC_OPUS_48_CATALOG,
+  });
+}
+
+function resolveAnthropicVertexOpus48Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "anthropic-vertex",
+    model: "claude-opus-4-8",
+    catalog: ANTHROPIC_VERTEX_OPUS_48_CATALOG,
+  });
+}
+
+function resolveClaudeCliOpus48Thinking(cfg: OpenClawConfig) {
+  return resolveThinkingDefault({
+    cfg,
+    provider: "claude-cli",
+    model: "claude-opus-4-8",
+    catalog: CLAUDE_CLI_OPUS_48_CATALOG,
   });
 }
 
@@ -2298,6 +2352,42 @@ describe("model-selection", () => {
       } as OpenClawConfig;
 
       expect(resolveAnthropicOpus47Thinking(cfg)).toBe("off");
+    });
+
+    it("leaves explicitly configured Anthropic Opus 4.8 thinking off by default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-8" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicOpus48Thinking(cfg)).toBe("off");
+    });
+
+    it("leaves explicitly configured Anthropic Vertex Opus 4.8 thinking off by default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic-vertex/claude-opus-4-8" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveAnthropicVertexOpus48Thinking(cfg)).toBe("off");
+    });
+
+    it("leaves explicitly configured Claude CLI Opus 4.8 thinking off by default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "claude-cli/claude-opus-4-8" },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(resolveClaudeCliOpus48Thinking(cfg)).toBe("off");
     });
 
     it("uses bundled provider thinking defaults when no explicit config overrides them", () => {

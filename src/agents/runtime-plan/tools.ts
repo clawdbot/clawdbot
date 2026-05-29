@@ -18,6 +18,7 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  allowProviderRuntimePluginLoad?: boolean;
 };
 
 function runtimePlanToolContext(params: {
@@ -48,6 +49,7 @@ export function normalizeAgentRuntimeTools<
       modelId: params.modelId,
       modelApi: params.modelApi,
       model: params.model,
+      allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
     })
   );
 }

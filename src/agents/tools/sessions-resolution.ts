@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { callGateway } from "../../gateway/call.js";
 import {
   GATEWAY_CLIENT_IDS,
   normalizeGatewayClientId,
-} from "../../gateway/protocol/client-info.js";
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   listSpawnedSessionKeys,

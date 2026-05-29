@@ -546,9 +546,7 @@ describeLive("subagent announce live", () => {
       });
 
       const listSteeredChildRuns = () =>
-        listSubagentRunsForRequester(sessionKey).filter(
-          (run) => run.taskName === "steered_child",
-        );
+        listSubagentRunsForRequester(sessionKey).filter((run) => run.taskName === "steered_child");
       const spawnedRun = await waitFor("steered child spawn", () => {
         if (initialError) {
           throw initialError;
@@ -584,9 +582,7 @@ describeLive("subagent announce live", () => {
       expect(runBeforeSteer.endedAt, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.pauseReason, runStateBeforeSteer).toBeUndefined();
       expect(runBeforeSteer.completion?.resultText, runStateBeforeSteer).toBeUndefined();
-      console.log(
-        `[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`,
-      );
+      console.log(`[subagent-steer] steering active child run; runs=${runStateBeforeSteer}`);
 
       const cfg = getRuntimeConfig();
       const steerResult = await steerControlledSubagentRun({

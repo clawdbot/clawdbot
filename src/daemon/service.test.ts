@@ -112,6 +112,32 @@ describe("readGatewayServiceState", () => {
     expect(state.running).toBe(true);
     expect(state.env.OPENCLAW_GATEWAY_PORT).toBe("18789");
   });
+
+  it("keeps the caller-selected service identity when merging persisted env", async () => {
+    const readRuntime = vi.fn(async () => ({ status: "running" }));
+    const service = createService({
+      isLoaded: vi.fn(async () => true),
+      readCommand: vi.fn(async () => ({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_GATEWAY_PORT: "18789",
+          OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+        },
+      })),
+      readRuntime,
+    });
+
+    const state = await readGatewayServiceState(service, {
+      env: { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service" },
+    });
+
+    expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+    expect(readRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+      }),
+    );
+  });
 });
 
 describe("startGatewayService", () => {

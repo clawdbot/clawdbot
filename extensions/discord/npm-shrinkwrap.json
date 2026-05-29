@@ -10,7 +10,6 @@
       "dependencies": {
         "@discordjs/voice": "0.19.2",
         "discord-api-types": "0.38.48",
-        "https-proxy-agent": "9.0.0",
         "libopus-wasm": "0.1.0",
         "typebox": "1.1.38",
         "undici": "8.3.0",
@@ -374,32 +373,6 @@
         "@types/node": "*"
       }
     },
-    "node_modules/agent-base": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/agent-base/-/agent-base-9.0.0.tgz",
-      "integrity": "sha512-TQf59BsZnytt8GdJKLPfUZ54g/iaUL2OWDSFCCvMOhsHduDQxO8xC4PNeyIkVcA5KwL2phPSv0douC0fgWzmnA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">= 20"
-      }
-    },
-    "node_modules/debug": {
-      "version": "4.4.3",
-      "resolved": "https://registry.npmjs.org/debug/-/debug-4.4.3.tgz",
-      "integrity": "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==",
-      "license": "MIT",
-      "dependencies": {
-        "ms": "^2.1.3"
-      },
-      "engines": {
-        "node": ">=6.0"
-      },
-      "peerDependenciesMeta": {
-        "supports-color": {
-          "optional": true
-        }
-      }
-    },
     "node_modules/discord-api-types": {
       "version": "0.38.48",
       "resolved": "https://registry.npmjs.org/discord-api-types/-/discord-api-types-0.38.48.tgz",
@@ -409,19 +382,6 @@
         "scripts/actions/documentation"
       ]
     },
-    "node_modules/https-proxy-agent": {
-      "version": "9.0.0",
-      "resolved": "https://registry.npmjs.org/https-proxy-agent/-/https-proxy-agent-9.0.0.tgz",
-      "integrity": "sha512-/MVmHp58WkOypgFhCLk4fzpPcFQvTJ/e6LBI7irpIO2HfxUbpmYoHF+KzipzJpxxzJu7aJNWQ0xojJ/dzV2G5g==",
-      "license": "MIT",
-      "dependencies": {
-        "agent-base": "9.0.0",
-        "debug": "^4.3.4"
-      },
-      "engines": {
-        "node": ">= 20"
-      }
-    },
     "node_modules/libopus-wasm": {
       "version": "0.1.0",
       "resolved": "https://registry.npmjs.org/libopus-wasm/-/libopus-wasm-0.1.0.tgz",
@@ -430,12 +390,6 @@
       "engines": {
         "node": ">=20"
       }
-    },
-    "node_modules/ms": {
-      "version": "2.1.3",
-      "resolved": "https://registry.npmjs.org/ms/-/ms-2.1.3.tgz",
-      "integrity": "sha512-6FlzubTLZG3J2a/NVCAleEhjzq5oxgHyaCU9yYXvcLsvoVaHJq/s5xXI6/XXP6tz7R9xAOtHnSO/tXtF3WRTlA==",
-      "license": "MIT"
     },
     "node_modules/prism-media": {
       "version": "1.3.5",

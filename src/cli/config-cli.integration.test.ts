@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runConfigSet } from "./config-cli.js";
@@ -110,6 +110,30 @@ async function withExecDryRunConfigHarness(
 }
 
 describe("config cli integration", () => {
+  beforeAll(async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-warmup-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_TEST_FAST"]);
+    try {
+      fs.writeFileSync(configPath, `${JSON.stringify({ gateway: { port: 18789 } }, null, 2)}\n`);
+      process.env.OPENCLAW_TEST_FAST = "1";
+      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      await runConfigSet({
+        path: "gateway.port",
+        value: "18790",
+        cliOptions: {},
+        runtime: createTestRuntime().runtime,
+      });
+    } finally {
+      envSnapshot.restore();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("accepts plugin hook conversation-access policy via config set", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-cli-plugin-hooks-"));
     const configPath = path.join(tempDir, "openclaw.json");

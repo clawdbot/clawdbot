@@ -1,6 +1,7 @@
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
+import { parseFiniteNumber } from "../shared/number-coercion.js";
 import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "./run-termination.js";
 import {
   normalizeAgentRunTimeoutPhase,
@@ -18,6 +19,10 @@ const defaultRunWaitDeps = {
 let runWaitDeps: {
   callGateway: GatewayCaller;
 } = defaultRunWaitDeps;
+
+function resolveRunWaitTimeoutMs(value: number | undefined): number {
+  return Math.max(1, Math.floor(parseFiniteNumber(value) ?? 1));
+}
 
 export type AssistantReplySnapshot = {
   text?: string;
@@ -176,7 +181,7 @@ export async function waitForAgentRun(params: {
   timeoutMs: number;
   callGateway?: GatewayCaller;
 }): Promise<AgentWaitResult> {
-  const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
+  const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
     const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
       method: "agent.wait",
@@ -246,7 +251,7 @@ export async function waitForAgentRunsToDrain(params: {
   callGateway?: GatewayCaller;
 }): Promise<AgentRunsDrainResult> {
   const deadlineAtMs =
-    params.deadlineAtMs ?? Date.now() + Math.max(1, Math.floor(params.timeoutMs ?? 0));
+    params.deadlineAtMs ?? Date.now() + resolveRunWaitTimeoutMs(params.timeoutMs);
 
   // Runs may finish and spawn more runs, so refresh until no pending IDs remain.
   let pendingRunIds = new Set<string>(

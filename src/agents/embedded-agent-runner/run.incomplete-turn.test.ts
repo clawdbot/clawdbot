@@ -36,6 +36,7 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
+  shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
@@ -746,6 +747,43 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expectWarnMessageWith("empty response detected");
   });
 
+  it("retries replay-safe missing terminal assistant turns once with the same prompt", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: undefined,
+        currentAttemptAssistant: undefined,
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Recovered answer."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "end_turn",
+          provider: "openai",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "Recovered answer." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-missing-assistant-retry",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(runAttemptCall(1).prompt).toBe(runAttemptCall(0).prompt);
+    expect(result.meta?.finalAssistantVisibleText).toBe("Recovered answer.");
+    expectWarnMessageWith("missing assistant terminal message detected");
+    expectNoWarnMessageWith("empty response detected");
+    expectNoWarnMessageWith("incomplete turn detected");
+  });
+
   it("retries zero-token empty Claude stop turns with a visible-answer continuation instruction", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -1272,6 +1310,53 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(explicitCancellationText).toBeNull();
+  });
+
+  it("allows a same-prompt retry only for replay-safe missing assistant turns", () => {
+    const replaySafeAttempt = makeAttemptResult({
+      assistantTexts: [],
+      lastAssistant: undefined,
+      currentAttemptAssistant: undefined,
+    });
+
+    expect(
+      shouldRetryMissingAssistantTurn({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: replaySafeAttempt,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRetryMissingAssistantTurn({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          currentAttemptAssistant: undefined,
+          toolMetas: [{ toolName: "image_generate", asyncStarted: true }],
+        }),
+      }),
+    ).toBe(false);
+    expect(
+      shouldRetryMissingAssistantTurn({
+        payloadCount: 0,
+        aborted: false,
+        timedOut: false,
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          lastAssistant: undefined,
+          currentAttemptAssistant: undefined,
+          itemLifecycle: {
+            startedCount: 1,
+            completedCount: 0,
+            activeCount: 1,
+          },
+        }),
+      }),
+    ).toBe(false);
   });
 
   it("detects tool-use terminal turn with pre-tool text as incomplete (#76477)", () => {

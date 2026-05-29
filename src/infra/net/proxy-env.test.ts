@@ -294,6 +294,12 @@ describe("matchesNoProxy", () => {
       expected: true,
     },
     {
+      name: "matches bare IPv6 literal",
+      url: "http://[::1]:8080/health",
+      env: { NO_PROXY: "::1" } as NodeJS.ProcessEnv,
+      expected: true,
+    },
+    {
       name: "matches IPv4 CIDR entries",
       url: "http://100.64.0.3:8990/v1/messages",
       env: { NO_PROXY: "100.64.0.0/10" } as NodeJS.ProcessEnv,
@@ -384,6 +390,15 @@ describe("shouldUseEnvHttpProxyForUrl", () => {
       env: {
         HTTP_PROXY: "http://proxy.test:8080",
         NO_PROXY: "100.64.*",
+      } as NodeJS.ProcessEnv,
+      expected: false,
+    },
+    {
+      name: "keeps strict mode for bare IPv6 NO_PROXY matches",
+      url: "http://[::1]:11434/v1",
+      env: {
+        HTTP_PROXY: "http://proxy.test:8080",
+        NO_PROXY: "::1",
       } as NodeJS.ProcessEnv,
       expected: false,
     },

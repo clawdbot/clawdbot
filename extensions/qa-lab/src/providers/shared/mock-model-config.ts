@@ -71,14 +71,14 @@ function createMockAnthropicMessagesProvider(baseUrl: string): ModelProviderConf
     },
     models: [
       {
-        id: "claude-opus-4-7",
-        name: "claude-opus-4-7",
+        id: "claude-opus-4-8",
+        name: "claude-opus-4-8",
         api: "anthropic-messages",
         reasoning: false,
         input: ["text", "image"],
         cost: ZERO_COST,
-        contextWindow: 200_000,
-        maxTokens: 4096,
+        contextWindow: 1_048_576,
+        maxTokens: 128_000,
       },
       {
         id: "claude-sonnet-4-6",

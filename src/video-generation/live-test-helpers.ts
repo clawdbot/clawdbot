@@ -29,6 +29,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
 
 const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "openai", "qwen", "xai"]);
 const BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS = new Set(["vydra"]);
+const TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL = "Wan-AI/Wan2.2-I2V-A14B";
 
 export function resolveLiveVideoResolution(params: {
   providerId: string;
@@ -84,6 +85,9 @@ export function canRunBufferBackedImageToVideoLiveLane(params: {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
   if (BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS.has(providerId)) {
     return false;
+  }
+  if (providerId === "together") {
+    return params.modelRef.includes(TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL);
   }
   return true;
 }

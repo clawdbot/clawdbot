@@ -64,6 +64,7 @@ function adjustMaxTokensForThinking(
     medium: 8192,
     high: 16384,
     xhigh: 16384,
+    max: 16384,
   } as const;
   const budgets = { ...defaultBudgets, ...customBudgets };
   const minOutputTokens = 1024;

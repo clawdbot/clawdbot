@@ -1,15 +1,15 @@
 import {
+  ErrorCodes,
+  errorShape,
+  validateNodePendingDrainParams,
+  validateNodePendingEnqueueParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   drainNodePendingWork,
   enqueueNodePendingWork,
   type NodePendingWorkPriority,
   type NodePendingWorkType,
 } from "../node-pending-work.js";
-import {
-  ErrorCodes,
-  errorShape,
-  validateNodePendingDrainParams,
-  validateNodePendingEnqueueParams,
-} from "../protocol/index.js";
 import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
 import {
   maybeSendNodeWakeNudge,

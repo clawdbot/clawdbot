@@ -55,6 +55,18 @@ function makeConfiguredRuntime(
       },
       tools,
     }),
+    peekCatalog: () => ({
+      version: 1,
+      generatedAt: 0,
+      servers: {
+        [serverName]: {
+          serverName,
+          launchSummary: serverName,
+          toolCount: tools.length,
+        },
+      },
+      tools,
+    }),
     callTool: async () => ({
       content: [{ type: "text", text: "FROM-CONFIG" }],
       isError: false,

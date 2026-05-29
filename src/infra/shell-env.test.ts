@@ -150,6 +150,11 @@ describe("shell env fallback", () => {
         OPENCLAW_SHELL_ENV_TIMEOUT_MS: "nope",
       }),
     ).toBe(15000);
+    expect(
+      resolveShellEnvFallbackTimeoutMs({
+        OPENCLAW_SHELL_ENV_TIMEOUT_MS: "42abc",
+      }),
+    ).toBe(15000);
   });
 
   it("skips when already has all expected keys", () => {

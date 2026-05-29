@@ -77,9 +77,14 @@ describe("anthropic-vertex provider plugin", () => {
     expect(result.provider.baseUrl).toBe("https://europe-west4-aiplatform.googleapis.com");
     expect(result.provider.headers).toEqual({ "x-test-header": "1" });
     expect(result.provider.models.map((model) => model.id)).toEqual([
+      "claude-opus-4-8",
       "claude-opus-4-6",
       "claude-sonnet-4-6",
     ]);
+    expect(result.provider.models[0]?.thinkingLevelMap).toEqual({
+      xhigh: "xhigh",
+      max: "max",
+    });
   });
 
   it("owns Anthropic-style replay policy", async () => {
@@ -101,6 +106,18 @@ describe("anthropic-vertex provider plugin", () => {
       validateAnthropicTurns: true,
       allowSyntheticToolResults: true,
     });
+  });
+
+  it("owns Anthropic-style thinking policy", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicVertexPlugin);
+
+    const opus48Profile = provider.resolveThinkingProfile?.({
+      provider: "anthropic-vertex",
+      modelId: "claude-opus-4-8",
+    } as never);
+
+    expect(opus48Profile?.defaultLevel).toBe("off");
+    expect(opus48Profile?.levels.map((level) => level.id)).toContain("max");
   });
 
   it("resolves synthetic auth when ADC is available", async () => {

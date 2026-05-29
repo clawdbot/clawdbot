@@ -82,7 +82,7 @@ an `assistant` message and optional style guidance as a `user` message.
         xiaomi: {
           apiKey: "xiaomi_api_key",
           model: "mimo-v2.5-tts",
-          voice: "mimo_default",
+          speakerVoice: "mimo_default",
           format: "mp3",
           style: "Bright, natural, conversational tone.",
         },

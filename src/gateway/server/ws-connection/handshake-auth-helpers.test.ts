@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/schema.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
-import type { ConnectParams } from "../../protocol/schema/types.js";
 import {
   BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX,
   BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP,

@@ -33,7 +33,8 @@ describe("OpenClawSchema talk validation", () => {
             providers: {
               openai: {
                 model: "gpt-realtime",
-                voice: "alloy",
+                speakerVoice: "alloy",
+                speakerVoiceId: "voice-123",
               },
             },
             instructions: "Speak with crisp diction.",

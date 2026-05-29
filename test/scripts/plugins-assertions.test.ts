@@ -236,4 +236,38 @@ describe("plugins Docker assertions", () => {
       });
     }
   });
+
+  it("bounds ClawHub package metadata response bodies", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(500, { "content-type": "text/plain" });
+      response.end("x".repeat(128));
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected TCP server address");
+      }
+      const result = await runAssertionAsync(["clawhub-preflight"], {
+        CLAWHUB_PLUGIN_ID: "openclaw-kitchen-sink-fixture",
+        CLAWHUB_PLUGIN_SPEC: "clawhub:@openclaw/kitchen-sink",
+        OPENCLAW_CLAWHUB_URL: `http://127.0.0.1:${address.port}`,
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES: "16",
+        OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: "1000",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "ClawHub package preflight response for @openclaw/kitchen-sink response body exceeded 16 bytes",
+      );
+      expect(result.stderr).not.toContain("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  });
 });

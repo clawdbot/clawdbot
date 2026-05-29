@@ -91,10 +91,21 @@ function mergeGatewayServiceEnv(
   if (!command?.environment) {
     return baseEnv;
   }
-  return {
+  const merged = {
     ...baseEnv,
     ...command.environment,
   };
+  for (const key of [
+    "OPENCLAW_LAUNCHD_LABEL",
+    "OPENCLAW_SYSTEMD_UNIT",
+    "OPENCLAW_WINDOWS_TASK_NAME",
+  ]) {
+    const value = baseEnv[key]?.trim();
+    if (value) {
+      merged[key] = value;
+    }
+  }
+  return merged;
 }
 
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>

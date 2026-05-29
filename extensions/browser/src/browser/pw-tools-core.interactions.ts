@@ -1,3 +1,4 @@
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -792,7 +793,7 @@ export async function pressKeyViaPlaywright(opts: {
       action: async () => {
         await awaitActionWithAbort(
           page.keyboard.press(key, {
-            delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+            delay: resolveNonNegativeIntegerOption(opts.delayMs, 0),
           }),
           abortPromise,
           reconcileRemoteDialog,

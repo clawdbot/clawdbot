@@ -21,6 +21,7 @@ type VitestConfig = {
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
 const PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST =
   "src/plugins/npm-install-security-scan.release.test.ts";
+const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
   "src/gateway/embeddings-http.test.ts",
   "src/gateway/models-http.test.ts",
@@ -172,6 +173,13 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     expect(requiresDistShardNames).toEqual(["core-support-boundary"]);
   });
 
+  it("assigns Blacksmith runners to every core node shard", () => {
+    const shards = createNodeTestShards();
+
+    expect(shards).not.toHaveLength(0);
+    expect(shards.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
+  });
+
   it("splits core runtime configs into smaller source-only shards", () => {
     const runtimeShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-runtime-"))
@@ -212,7 +220,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.wizard.config.ts",
         ],
         requiresDist: false,
-        runner: undefined,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "core-runtime-media-ui",
       },
       {
@@ -223,25 +231,25 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
-        runner: undefined,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "core-runtime-shared",
       },
       {
         configs: ["test/vitest/vitest.cron.config.ts"],
         requiresDist: false,
-        runner: undefined,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "core-runtime-cron-core",
       },
       {
         configs: ["test/vitest/vitest.cron.config.ts"],
         requiresDist: false,
-        runner: undefined,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "core-runtime-cron-isolated-agent",
       },
       {
         configs: ["test/vitest/vitest.cron.config.ts"],
         requiresDist: false,
-        runner: undefined,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: "core-runtime-cron-service",
       },
     ]);
@@ -313,6 +321,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       shardName: "agentic-cli",
       configs: ["test/vitest/vitest.cli.config.ts"],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
     });
     expect(commandSupportShard).toEqual({
       checkName: "checks-node-agentic-command-support",
@@ -322,6 +331,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         "test/vitest/vitest.daemon.config.ts",
       ],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
     });
     expect(commandShards.map((shard) => shard.shardName)).toEqual([
       "agentic-commands-agent-channel",
@@ -337,6 +347,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         configs: ["test/vitest/vitest.commands.config.ts"],
         includePatterns: shard.includePatterns,
         requiresDist: false,
+        runner: DEFAULT_NODE_TEST_RUNNER,
         shardName: shard.shardName,
       })),
     );
@@ -358,6 +369,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         "test/vitest/vitest.agents-tools.config.ts",
       ],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
     });
     expect(pluginSdkShard).toEqual({
       checkName: "checks-node-agentic-plugin-sdk",
@@ -367,6 +379,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         "test/vitest/vitest.plugin-sdk.config.ts",
       ],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
     });
     expect(gatewayCoreShard).toEqual({
       checkName: "checks-node-agentic-gateway-core",
@@ -376,18 +389,21 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         "test/vitest/vitest.gateway-client.config.ts",
       ],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
     });
     expect(gatewayMethodsShard).toEqual({
       checkName: "checks-node-agentic-gateway-methods",
       shardName: "agentic-gateway-methods",
       configs: ["test/vitest/vitest.gateway-methods.config.ts"],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
     });
     expect(pluginsShard).toEqual({
       checkName: "checks-node-agentic-plugins",
       shardName: "agentic-plugins",
       configs: ["test/vitest/vitest.plugins.config.ts"],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
     });
   });
 
@@ -400,6 +416,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       checkName: "checks-node-agentic-plugins",
       configs: ["test/vitest/vitest.plugins.config.ts"],
       requiresDist: false,
+      runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: "agentic-plugins",
     });
     expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(

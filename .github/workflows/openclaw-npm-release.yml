@@ -47,8 +47,8 @@ jobs:
   # KEEP THIS WORKFLOW SHORT AND DETERMINISTIC OR IT CAN GET STUCK AND JEOPARDIZE THE RELEASE.
   # RELEASE-TIME LIVE OR END-TO-END VALIDATION BELONGS IN openclaw-release-checks.yml.
   # SECURITY NOTE: TOKEN-BASED npm dist-tag mutation moved to
-  # openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml
-  # so this public workflow can stay focused on OIDC publish only.
+  # openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml
+  # so this source workflow can stay focused on OIDC publish only.
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
     runs-on: ubuntu-latest

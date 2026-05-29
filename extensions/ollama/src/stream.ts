@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createMoonshotThinkingWrapper,
+  createPlainTextToolCallCompatWrapper,
   resolveMoonshotThinkingType,
   streamWithPayloadPatch,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -1080,7 +1081,7 @@ function resolveOllamaRequestTimeoutMs(
   return typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : undefined;
 }
 
-export function createOllamaStreamFn(
+function createRawOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
@@ -1407,6 +1408,13 @@ export function createOllamaStreamFn(
     queueMicrotask(() => void run());
     return stream;
   };
+}
+
+export function createOllamaStreamFn(
+  baseUrl: string,
+  defaultHeaders?: Record<string, string>,
+): StreamFn {
+  return createPlainTextToolCallCompatWrapper(createRawOllamaStreamFn(baseUrl, defaultHeaders));
 }
 
 export function createConfiguredOllamaStreamFn(params: {

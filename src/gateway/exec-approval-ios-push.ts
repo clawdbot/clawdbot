@@ -9,7 +9,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import {
   clearApnsRegistrationIfCurrent,
-  loadApnsRegistration,
+  loadApnsRegistrations,
   resolveApnsAuthConfigFromEnv,
   resolveApnsRelayConfigFromEnv,
   sendApnsExecApprovalAlert,
@@ -96,13 +96,10 @@ function shouldTargetDevice(params: {
 async function loadRegisteredTargets(params: {
   deviceIds: readonly string[];
 }): Promise<DeliveryTarget[]> {
-  const targets = await Promise.all(
-    params.deviceIds.map(async (nodeId) => {
-      const registration = await loadApnsRegistration(nodeId);
-      return registration ? { nodeId, registration } : null;
-    }),
-  );
-  return targets.filter((target): target is DeliveryTarget => target !== null);
+  if (params.deviceIds.length === 0) {
+    return [];
+  }
+  return await loadApnsRegistrations(params.deviceIds);
 }
 
 async function resolvePairedTargets(params: {

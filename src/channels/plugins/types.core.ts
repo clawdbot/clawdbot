@@ -1,10 +1,13 @@
 import type { TSchema } from "typebox";
+import type {
+  GatewayClientMode,
+  GatewayClientName,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { AgentTool, AgentToolResult } from "../../agents/runtime/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayClientMode, GatewayClientName } from "../../gateway/protocol/client-info.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";

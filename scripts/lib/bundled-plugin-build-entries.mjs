@@ -12,6 +12,8 @@ const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
 const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
+const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
+  /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
 const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function parseBundledPluginBuildIdFilter(env = process.env) {
@@ -50,6 +52,17 @@ function shouldBuildBundledDistEntry(packageJson) {
   return packageJson?.openclaw?.build?.bundledDist !== false;
 }
 
+function isExcludedTopLevelPublicSurfaceFile(fileName) {
+  const normalizedName = fileName.toLowerCase();
+  return (
+    normalizedName.endsWith(".d.ts") ||
+    /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
+    TOP_LEVEL_PRIVATE_TEST_SURFACE_RE.test(normalizedName) ||
+    normalizedName.includes(".fixture.") ||
+    normalizedName.includes(".snap")
+  );
+}
+
 export function collectPluginSourceEntries(packageJson) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
@@ -84,15 +97,7 @@ export function collectTopLevelPublicSurfaceEntries(pluginDir) {
         return [];
       }
 
-      const normalizedName = dirent.name.toLowerCase();
-      if (
-        normalizedName.endsWith(".d.ts") ||
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        normalizedName.includes(".test.") ||
-        normalizedName.includes(".spec.") ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
+      if (isExcludedTopLevelPublicSurfaceFile(dirent.name)) {
         return [];
       }
 
@@ -113,15 +118,7 @@ function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
         return [];
       }
 
-      const normalizedName = relativeFile.toLowerCase();
-      if (
-        normalizedName.endsWith(".d.ts") ||
-        /^config-api\.(?:[cm]?[jt]s)$/u.test(normalizedName) ||
-        normalizedName.includes(".test.") ||
-        normalizedName.includes(".spec.") ||
-        normalizedName.includes(".fixture.") ||
-        normalizedName.includes(".snap")
-      ) {
+      if (isExcludedTopLevelPublicSurfaceFile(relativeFile)) {
         return [];
       }
 

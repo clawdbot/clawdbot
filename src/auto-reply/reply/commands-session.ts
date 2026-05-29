@@ -83,13 +83,6 @@ function parseSessionDurationMs(raw: string): number {
   if (SESSION_DURATION_OFF_VALUES.has(normalized)) {
     return 0;
   }
-  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
-    const hours = Number(normalized);
-    if (!Number.isFinite(hours) || hours < 0) {
-      throw new Error("invalid duration");
-    }
-    return Math.round(hours * 60 * 60 * 1000);
-  }
   return parseDurationMs(normalized, { defaultUnit: "h" });
 }
 

@@ -1,9 +1,12 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const clientPath = path.resolve("scripts/e2e/lib/openai-chat-tools/client.mjs");
+const writeConfigPath = path.resolve("scripts/e2e/lib/openai-chat-tools/write-config.mjs");
 
 interface ClientResult {
   error?: Error;
@@ -77,6 +80,22 @@ function runClient(
   });
 }
 
+function runWriteConfig(root: string, env: Record<string, string> = {}) {
+  return spawnSync(process.execPath, [writeConfigPath], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_GATEWAY_TOKEN: "test-token",
+      OPENCLAW_OPENAI_CHAT_TOOLS_MODEL: "openai/gpt-5.5",
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_TEST_WORKSPACE_DIR: path.join(root, "workspace"),
+      PORT: "18789",
+      ...env,
+    },
+  });
+}
+
 function toolCallResponse() {
   return {
     choices: [
@@ -99,6 +118,56 @@ function toolCallResponse() {
 }
 
 describe("scripts/e2e/lib/openai-chat-tools/client.mjs", () => {
+  it("rejects loose timeout env values instead of parsing numeric prefixes", async () => {
+    const result = await runClient(1, {
+      OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1e3",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("invalid OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: 1e3");
+  });
+
+  it("rejects loose body limit env values instead of parsing numeric prefixes", async () => {
+    const result = await runClient(1, {
+      OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: "64bytes",
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("invalid OPENCLAW_OPENAI_CHAT_TOOLS_MAX_BODY_BYTES: 64bytes");
+  });
+
+  it("rejects loose write-config timeout env values", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
+    try {
+      const result = runWriteConfig(root, {
+        OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "1e3",
+      });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("invalid OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: 1e3");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("writes strict positive timeout and port values into generated config", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-openai-chat-tools-"));
+    try {
+      const result = runWriteConfig(root, {
+        OPENCLAW_OPENAI_CHAT_TOOLS_TIMEOUT_SECONDS: "240",
+        PORT: "19001",
+      });
+
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+      expect(config.gateway.port).toBe(19001);
+      expect(config.models.providers.openai.timeoutSeconds).toBe(240);
+      expect(config.agents.defaults.timeoutSeconds).toBe(240);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("accepts a matching chat completions tool call response", async () => {
     const server = createServer((request, response) => {
       expect(request.method).toBe("POST");

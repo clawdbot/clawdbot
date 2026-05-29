@@ -8,6 +8,10 @@ const CLAWHUB_PREFLIGHT_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS,
   30_000,
 );
+const CLAWHUB_PREFLIGHT_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES,
+  1024 * 1024,
+);
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 
@@ -39,6 +43,47 @@ async function withTimeout(label, timeoutMs, run) {
     if (timeout) {
       clearTimeout(timeout);
     }
+  }
+}
+
+function bodyTooLargeError(label, byteLimit) {
+  return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
+}
+
+async function readBoundedResponseText(response, label, byteLimit) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw bodyTooLargeError(label, byteLimit);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw bodyTooLargeError(label, byteLimit);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -806,16 +851,31 @@ async function assertClawHubPreflight() {
     const body = await withTimeout(
       `ClawHub package preflight response for ${packageName}`,
       CLAWHUB_PREFLIGHT_TIMEOUT_MS,
-      () => response.text().catch(() => ""),
+      () =>
+        readBoundedResponseText(
+          response,
+          `ClawHub package preflight response for ${packageName}`,
+          CLAWHUB_PREFLIGHT_BODY_MAX_BYTES,
+        ),
     );
     throw new Error(
       `ClawHub package preflight failed for ${packageName}: ${response.status} ${body}`,
     );
   }
-  const detail = await withTimeout(
+  const rawDetail = await withTimeout(
     `ClawHub package preflight response for ${packageName}`,
     CLAWHUB_PREFLIGHT_TIMEOUT_MS,
-    () => response.json(),
+    () =>
+      readBoundedResponseText(
+        response,
+        `ClawHub package preflight response for ${packageName}`,
+        CLAWHUB_PREFLIGHT_BODY_MAX_BYTES,
+      ),
+  );
+  const detail = await withTimeout(
+    `ClawHub package preflight JSON for ${packageName}`,
+    CLAWHUB_PREFLIGHT_TIMEOUT_MS,
+    () => JSON.parse(rawDetail),
   );
   const family = detail.package?.family;
   if (family !== "code-plugin" && family !== "bundle-plugin") {

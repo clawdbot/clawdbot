@@ -14,6 +14,7 @@ type Lane = "normal" | "code";
 
 type FetchJsonOptions = {
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
+  maxBodyBytes?: number;
   timeoutMs?: number;
 };
 
@@ -35,6 +36,10 @@ const DEFAULT_FETCH_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_TIMEOUT_MS,
   180_000,
 );
+const DEFAULT_FETCH_BODY_MAX_BYTES = readPositiveInt(
+  process.env.OPENCLAW_TOOL_SEARCH_GATEWAY_E2E_FETCH_BODY_MAX_BYTES,
+  1024 * 1024,
+);
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
@@ -49,6 +54,52 @@ function readPositiveInt(raw: string | undefined, fallback: number) {
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
+}
+
+function bodyTooLargeError(url: string, byteLimit: number) {
+  return Object.assign(new Error(`HTTP response from ${url} exceeded ${byteLimit} bytes`), {
+    code: "ETOOBIG",
+  });
+}
+
+async function readBoundedResponseText(
+  response: Response,
+  url: string,
+  byteLimit: number,
+  timeoutPromise: Promise<never>,
+) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const parsedLength = Number(contentLength);
+    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
+      await response.body?.cancel().catch(() => {});
+      throw bodyTooLargeError(url, byteLimit);
+    }
+  }
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteCount = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      if (done) {
+        return text + decoder.decode();
+      }
+      byteCount += value.byteLength;
+      if (byteCount > byteLimit) {
+        await reader.cancel().catch(() => {});
+        throw bodyTooLargeError(url, byteLimit);
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 async function freePort(): Promise<number> {
@@ -135,6 +186,7 @@ export async function fetchJson(
   options: FetchJsonOptions = {},
 ): Promise<unknown> {
   const timeoutMs = Math.max(1, options.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS);
+  const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? DEFAULT_FETCH_BODY_MAX_BYTES);
   const controller = new AbortController();
   const error = timeoutError(`HTTP request to ${url} timed out after ${timeoutMs}ms`);
   let timeout: NodeJS.Timeout | undefined;
@@ -156,7 +208,7 @@ export async function fetchJson(
       }),
       timeoutPromise,
     ]);
-    text = await Promise.race([response.text(), timeoutPromise]);
+    text = await readBoundedResponseText(response, url, maxBodyBytes, timeoutPromise);
   } finally {
     if (timeout) {
       clearTimeout(timeout);

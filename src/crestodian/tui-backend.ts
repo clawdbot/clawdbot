@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { SessionsPatchParams, SessionsPatchResult } from "../gateway/protocol/index.js";
+import type {
+  SessionsPatchParams,
+  SessionsPatchResult,
+} from "../../packages/gateway-protocol/src/index.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {

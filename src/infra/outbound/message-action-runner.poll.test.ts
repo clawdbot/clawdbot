@@ -191,6 +191,24 @@ describe("runMessageAction poll handling", () => {
     expect(call?.ctx?.params?.threadId).toBe("42");
   });
 
+  it.each([0, -1, 1.5, "1.5", "soon"])(
+    "rejects invalid pollDurationHours value %s",
+    async (pollDurationHours) => {
+      await expect(
+        runPollAction({
+          cfg: pollerConfig,
+          actionParams: {
+            channel: "poller",
+            target: "poller:123",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+            pollDurationHours,
+          },
+        }),
+      ).rejects.toThrow(/pollDurationHours must be a positive integer/i);
+    },
+  );
+
   it("passes inbound event kind to poll execution", async () => {
     const call = await runPollAction({
       cfg: pollerConfig,

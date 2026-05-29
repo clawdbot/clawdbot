@@ -1,11 +1,4 @@
 import {
-  installSkillArchiveFromPath,
-  type SkillArchiveInstallFailureKind,
-  validateRequestedSkillSlug,
-} from "../../agents/skills-archive-install.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
-import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
@@ -13,8 +6,15 @@ import {
   validateSkillsUploadBeginParams,
   validateSkillsUploadChunkParams,
   validateSkillsUploadCommitParams,
-} from "../protocol/index.js";
-import type { ErrorShape } from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  installSkillArchiveFromPath,
+  type SkillArchiveInstallFailureKind,
+  validateRequestedSkillSlug,
+} from "../../agents/skills-archive-install.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   defaultSkillUploadStore,
   normalizeSkillUploadSha256,

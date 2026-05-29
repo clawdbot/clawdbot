@@ -166,6 +166,9 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         providers: ["openai", "openai-codex"],
         cliBackends: [],
         contracts: {
+          speechProviders: ["openai"],
+          realtimeTranscriptionProviders: ["openai"],
+          realtimeVoiceProviders: ["openai"],
           imageGenerationProviders: ["openai"],
           videoGenerationProviders: ["openai"],
         },
@@ -178,6 +181,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         providers: ["google", "google-gemini-cli"],
         cliBackends: ["google-gemini-cli"],
         contracts: {
+          realtimeVoiceProviders: ["google"],
           imageGenerationProviders: ["google"],
           videoGenerationProviders: ["google"],
           musicGenerationProviders: ["google"],
@@ -869,6 +873,34 @@ describe("resolveGatewayStartupPluginIds", () => {
           },
         },
         plugins: { entries: { google: { enabled: false } } },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "includes bundled voice providers configured by voice defaults at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            voiceModel: {
+              primary: "openai/gpt-4o-mini-tts",
+              fallbacks: ["google/gemini-live-2.5-flash-preview"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "google", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for configured voice providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            voiceModel: { primary: "openai/gpt-4o-mini-tts" },
+          },
+        },
+        plugins: { entries: { openai: { enabled: false } } },
       } as OpenClawConfig,
       ["browser", "memory-core"],
     ],

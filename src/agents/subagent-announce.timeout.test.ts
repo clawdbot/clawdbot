@@ -475,6 +475,23 @@ describe("subagent announce timeout config", () => {
     expect(internalEvents[0]?.result).not.toContain("data");
   });
 
+  it("keeps delete-mode timeout retryable while the embedded child request is still active", async () => {
+    sessionStore["agent:main:subagent:worker"] = {
+      sessionId: "child-session",
+    };
+    isEmbeddedAgentRunActiveMock.mockReturnValue(true);
+    waitForEmbeddedAgentRunEndMock.mockResolvedValue(false);
+
+    const didAnnounce = await runAnnounceFlowForTest("run-timeout-delete-still-active", {
+      cleanup: "delete",
+      outcome: { status: "timeout" },
+      roundOneReply: undefined,
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(findFinalDirectAgentCall()).toBeUndefined();
+  });
+
   it("does not announce cached reply text when the child run terminally failed", async () => {
     chatHistoryMessages = [
       { role: "assistant", content: [{ type: "text", text: "stale history output" }] },

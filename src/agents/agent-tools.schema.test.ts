@@ -20,6 +20,23 @@ const TEST_USAGE = {
 };
 
 describe("normalizeToolParameterSchema", () => {
+  it("reuses normalized schemas for the same schema object and provider options", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        names: { type: "array" },
+      },
+    };
+
+    const first = normalizeToolParameterSchema(schema);
+    const second = normalizeToolParameterSchema(schema);
+    const providerSpecific = normalizeToolParameterSchema(schema, { modelProvider: "gemini" });
+
+    expect(second).toBe(first);
+    expect(providerSpecific).not.toBe(first);
+    expect(providerSpecific).toEqual(first);
+  });
+
   it("normalizes truly empty schemas to type:object with properties:{}", () => {
     expect(normalizeToolParameterSchema({})).toEqual({
       type: "object",

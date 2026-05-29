@@ -175,9 +175,9 @@ Current behavior:
   rasterized into images and passed to the model, and the injected file block uses
   the placeholder `[PDF content rendered to images]`.
 
-PDF parsing is provided by the bundled `document-extract` plugin, which uses the
-Node-friendly `pdfjs-dist` legacy build (no worker). The modern PDF.js build
-expects browser workers/DOM globals, so it is not used in the Gateway.
+PDF parsing is provided by the bundled `document-extract` plugin, which uses
+`clawpdf` and its packaged PDFium WebAssembly runtime for text extraction and
+page rendering.
 
 URL fetch defaults:
 

@@ -8,16 +8,25 @@ if (!summaryPath || !phase || separator !== "--" || !command) {
   process.exit(2);
 }
 
-const pageSize = Number.parseInt(process.env.OPENCLAW_PROC_PAGE_SIZE || "4096", 10);
-const clockTicks = Number.parseInt(process.env.OPENCLAW_PROC_CLK_TCK || "100", 10);
-const pollMs = Number.parseInt(process.env.OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS || "100", 10);
-const timeoutMs = Number.parseInt(
-  process.env.OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS || "300000",
-  10,
-);
-const timeoutKillGraceMs = Number.parseInt(
-  process.env.OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS || "2000",
-  10,
+function readPositiveIntEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${name} must be a positive integer; got: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer; got: ${text}`);
+  }
+  return value;
+}
+
+const pageSize = readPositiveIntEnv("OPENCLAW_PROC_PAGE_SIZE", 4096);
+const clockTicks = readPositiveIntEnv("OPENCLAW_PROC_CLK_TCK", 100);
+const pollMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100);
+const timeoutMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000);
+const timeoutKillGraceMs = readPositiveIntEnv(
+  "OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS",
+  2000,
 );
 
 if (!fs.existsSync("/proc")) {

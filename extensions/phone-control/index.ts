@@ -75,7 +75,8 @@ function parseDurationMs(input: string | undefined): number | null {
   }
   const unit = m[2];
   const mult = unit === "s" ? 1000 : unit === "m" ? 60_000 : unit === "h" ? 3_600_000 : 86_400_000;
-  return n * mult;
+  const durationMs = n * mult;
+  return Number.isSafeInteger(durationMs) ? durationMs : null;
 }
 
 function formatDuration(ms: number): string {
@@ -282,14 +283,15 @@ function parseGroup(raw: string | undefined): ArmGroup | null {
   return null;
 }
 
-function requiresAdminToMutatePhoneControl(
-  channel: string,
-  gatewayClientScopes?: readonly string[],
-): boolean {
+function lacksAdminToMutatePhoneControl(params: {
+  senderIsOwner?: boolean;
+  gatewayClientScopes?: readonly string[];
+}): boolean {
+  const { senderIsOwner, gatewayClientScopes } = params;
   if (Array.isArray(gatewayClientScopes)) {
     return !gatewayClientScopes.includes(PHONE_ADMIN_SCOPE);
   }
-  return channel === "webchat";
+  return senderIsOwner !== true;
 }
 
 function formatStatus(state: ArmStateFile | null): string {
@@ -363,6 +365,7 @@ export default definePluginEntry({
       name: "phone",
       description: "Arm/disarm high-risk phone node commands (camera/screen/writes).",
       acceptsArgs: true,
+      exposeSenderIsOwner: true,
       handler: async (ctx) => {
         const args = ctx.args?.trim() ?? "";
         const tokens = args.split(/\s+/).filter(Boolean);
@@ -382,7 +385,12 @@ export default definePluginEntry({
         }
 
         if (action === "disarm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone disarm requires operator.admin.",
             };
@@ -404,7 +412,12 @@ export default definePluginEntry({
         }
 
         if (action === "arm") {
-          if (requiresAdminToMutatePhoneControl(ctx.channel, ctx.gatewayClientScopes)) {
+          if (
+            lacksAdminToMutatePhoneControl({
+              senderIsOwner: ctx.senderIsOwner,
+              gatewayClientScopes: ctx.gatewayClientScopes,
+            })
+          ) {
             return {
               text: "⚠️ /phone arm requires operator.admin.",
             };
@@ -413,7 +426,10 @@ export default definePluginEntry({
           if (!group) {
             return { text: `Usage: /phone arm <group> [duration]\nGroups: ${formatGroupList()}` };
           }
-          const durationMs = parseDurationMs(tokens[2]) ?? 10 * 60_000;
+          const durationMs = tokens[2] === undefined ? 10 * 60_000 : parseDurationMs(tokens[2]);
+          if (durationMs === null) {
+            return { text: "Invalid duration. Use values like 30s, 10m, 2h, or 1d." };
+          }
           const expiresAtMs = Date.now() + durationMs;
 
           const commands = resolveCommandsForGroup(group);

@@ -214,7 +214,7 @@ public actor GatewayChannelActor {
     private let encoder = JSONEncoder()
     // Remote gateways (tailscale/wan) can take longer to deliver connect.challenge.
     // Connect now requires this nonce before we send device-auth.
-    private let connectTimeoutSeconds: Double = 12
+    private let connectTimeoutSeconds: Double = 30
     private let connectChallengeTimeoutSeconds: Double = 6.0
     // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
     // but NATs/proxies often require outbound traffic to keep the connection alive.

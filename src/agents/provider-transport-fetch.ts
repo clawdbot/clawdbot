@@ -1,4 +1,9 @@
 import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
+import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
@@ -12,11 +17,6 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import {
-  isCloudMetadataIpAddress,
-  isLinkLocalIpAddress,
-  parseCanonicalIpAddress,
-} from "../shared/net/ip.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -33,6 +33,9 @@ import {
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const log = createSubsystemLogger("provider-transport-fetch");
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const RETRY_AFTER_HTTP_DATE_RE =
+  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -251,7 +254,12 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return seconds;
   }
 
-  const retryAt = Date.parse(retryAfter);
+  const trimmedRetryAfter = retryAfter.trim();
+  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
+    return undefined;
+  }
+
+  const retryAt = Date.parse(trimmedRetryAfter);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
@@ -267,6 +275,10 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
 
   if (/^(?:0|false|off|none|disabled)$/i.test(raw)) {
     return undefined;
+  }
+
+  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
   }
 
   const seconds = Number(raw);

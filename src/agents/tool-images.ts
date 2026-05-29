@@ -8,6 +8,7 @@ import {
   isImageProcessorUnavailableError,
   resizeToJpeg,
 } from "../media/media-services.js";
+import { resolveIntegerOption } from "../shared/number-coercion.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,
   DEFAULT_IMAGE_MAX_DIMENSION_PX,
@@ -289,8 +290,10 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: ImageSanitizationLimits = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = Math.max(opts.maxDimensionPx ?? MAX_IMAGE_DIMENSION_PX, 1);
-  const maxBytes = Math.max(opts.maxBytes ?? MAX_IMAGE_BYTES, 1);
+  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, MAX_IMAGE_DIMENSION_PX, {
+    min: 1,
+  });
+  const maxBytes = resolveIntegerOption(opts.maxBytes, MAX_IMAGE_BYTES, { min: 1 });
   const out: ToolContentBlock[] = [];
   let mediaPathHint: string | undefined;
 

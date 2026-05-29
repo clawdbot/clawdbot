@@ -1,6 +1,7 @@
 import type { FileContents, FileDiffMetadata, SupportedLanguages } from "@pierre/diffs";
 import { parsePatchFiles } from "@pierre/diffs";
 import { preloadFileDiff, preloadMultiFileDiff } from "@pierre/diffs/ssr";
+import { normalizeDiffFontSize, normalizeDiffLineSpacing } from "./config.js";
 import {
   collectDiffPayloadLanguageHints,
   isBaseDiffViewerLanguage,
@@ -66,8 +67,9 @@ function resolveBeforeAfterFileName(params: {
 
 function buildDiffOptions(options: DiffRenderOptions): DiffViewerOptions {
   const fontFamily = escapeCssString(options.presentation.fontFamily);
-  const fontSize = Math.max(10, Math.floor(options.presentation.fontSize));
-  const lineHeight = Math.max(20, Math.round(fontSize * options.presentation.lineSpacing));
+  const fontSize = normalizeDiffFontSize(options.presentation.fontSize);
+  const lineSpacing = normalizeDiffLineSpacing(options.presentation.lineSpacing);
+  const lineHeight = Math.max(20, Math.round(fontSize * lineSpacing));
   return {
     theme: {
       light: "pierre-light",
@@ -158,7 +160,7 @@ function buildImageRenderOptions(options: DiffRenderOptions): DiffRenderOptions 
     ...options,
     presentation: {
       ...options.presentation,
-      fontSize: Math.max(16, options.presentation.fontSize),
+      fontSize: Math.max(16, normalizeDiffFontSize(options.presentation.fontSize)),
     },
   };
 }

@@ -9,6 +9,7 @@ import {
 } from "./lib/local-heavy-check-runtime.mjs";
 
 const DEFAULT_WINDOWS_EXTENSION_CHUNK_SIZE = 8;
+const DEFAULT_SHARD_HEARTBEAT_MS = 30_000;
 const FAST_LOCAL_CHECK_MIN_CPUS = 12;
 const FAST_LOCAL_CHECK_MIN_MEMORY_BYTES = 48 * 1024 ** 3;
 const EXTENSION_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
@@ -126,10 +127,13 @@ export function shouldRunOxlintShardsSerial({
   if (localCheckMode === "throttled" || localCheckMode === "low-memory") {
     return true;
   }
-  if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
-    return false;
-  }
   const resources = resolveHostResources(hostResources);
+  if (env.CI === "true" || env.GITHUB_ACTIONS === "true") {
+    return (
+      resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+      resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
+    );
+  }
   return (
     resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
@@ -321,6 +325,8 @@ async function runShardsSerial({ entries, env, extraArgs, runner }) {
 
 async function runShard({ env, extraArgs, runner, shard }) {
   console.error(`[oxlint:${shard.name}] starting`);
+  const startedAt = Date.now();
+  const heartbeatMs = resolveShardHeartbeatMs(env);
   const child = spawn(process.execPath, [runner, ...shard.args, ...extraArgs], {
     stdio: "inherit",
     env: {
@@ -331,13 +337,39 @@ async function runShard({ env, extraArgs, runner, shard }) {
   });
 
   return await new Promise((resolve) => {
+    const heartbeat =
+      heartbeatMs > 0
+        ? setInterval(() => {
+            const elapsedSeconds = Math.round((Date.now() - startedAt) / 1000);
+            console.error(`[oxlint:${shard.name}] still running after ${elapsedSeconds}s`);
+          }, heartbeatMs)
+        : null;
+    heartbeat?.unref();
+    const finish = (status) => {
+      if (heartbeat) {
+        clearInterval(heartbeat);
+      }
+      console.error(`[oxlint:${shard.name}] finished`);
+      resolve(status);
+    };
     child.once("error", (error) => {
       console.error(error);
-      resolve(1);
+      finish(1);
     });
     child.once("close", (status) => {
-      console.error(`[oxlint:${shard.name}] finished`);
-      resolve(status ?? 1);
+      finish(status ?? 1);
     });
   });
+}
+
+export function resolveShardHeartbeatMs(env) {
+  const rawValue = env.OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS;
+  if (rawValue === undefined) {
+    return DEFAULT_SHARD_HEARTBEAT_MS;
+  }
+
+  const parsedValue = Number.parseInt(rawValue, 10);
+  return Number.isFinite(parsedValue) && parsedValue >= 0
+    ? parsedValue
+    : DEFAULT_SHARD_HEARTBEAT_MS;
 }

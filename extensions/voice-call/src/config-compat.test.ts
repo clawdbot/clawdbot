@@ -62,6 +62,67 @@ describe("voice-call config compatibility", () => {
     expect(streaming?.sttModel).toBeUndefined();
   });
 
+  it("removes legacy realtime agentContext system prompt toggle", () => {
+    const normalized = normalizeVoiceCallLegacyConfigInput({
+      realtime: {
+        agentContext: {
+          enabled: true,
+          includeSystemPrompt: false,
+          includeWorkspaceFiles: true,
+        },
+      },
+    });
+
+    const agentContext = (
+      normalized.realtime as
+        | {
+            agentContext?: {
+              enabled?: boolean;
+              includeSystemPrompt?: unknown;
+              includeWorkspaceFiles?: boolean;
+            };
+          }
+        | undefined
+    )?.agentContext;
+
+    expect(agentContext).toEqual({
+      enabled: true,
+      includeWorkspaceFiles: true,
+    });
+  });
+
+  it("does not migrate non-finite legacy streaming numbers", () => {
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: {
+        streaming: {
+          silenceDurationMs: Number.NaN,
+          vadThreshold: Number.POSITIVE_INFINITY,
+        },
+      },
+      configPathPrefix: "plugins.entries.voice-call.config",
+    });
+    const streaming = migration.config.streaming as
+      | {
+          providers?: {
+            openai?: {
+              silenceDurationMs?: number;
+              vadThreshold?: number;
+            };
+          };
+        }
+      | undefined;
+
+    expect(streaming?.providers?.openai).toBeUndefined();
+    expect(migration.changes).toEqual([
+      "Removed invalid plugins.entries.voice-call.config.streaming.silenceDurationMs.",
+      "Removed invalid plugins.entries.voice-call.config.streaming.vadThreshold.",
+    ]);
+    expect(migration.issues.map((issue) => issue.path)).toEqual([
+      "streaming.silenceDurationMs",
+      "streaming.vadThreshold",
+    ]);
+  });
+
   it("reports doctor-oriented legacy issues and warnings", () => {
     const raw = {
       provider: "log",
@@ -71,6 +132,11 @@ describe("voice-call config compatibility", () => {
       streaming: {
         sttProvider: "openai",
         openaiApiKey: "sk-test", // pragma: allowlist secret
+      },
+      realtime: {
+        agentContext: {
+          includeSystemPrompt: true,
+        },
       },
     };
 
@@ -95,6 +161,12 @@ describe("voice-call config compatibility", () => {
         replacement: "streaming.providers.openai.apiKey",
         message: "Move streaming.openaiApiKey to streaming.providers.openai.apiKey.",
       },
+      {
+        path: "realtime.agentContext.includeSystemPrompt",
+        replacement: "realtime.agentContext",
+        message:
+          "Remove realtime.agentContext.includeSystemPrompt; realtime context now uses the generated agent prompt.",
+      },
     ]);
     expect(
       formatVoiceCallLegacyConfigWarnings({
@@ -108,6 +180,7 @@ describe("voice-call config compatibility", () => {
       "[voice-call] plugins.entries.voice-call.config.twilio.from: Move twilio.from to fromNumber.",
       "[voice-call] plugins.entries.voice-call.config.streaming.sttProvider: Move streaming.sttProvider to streaming.provider.",
       "[voice-call] plugins.entries.voice-call.config.streaming.openaiApiKey: Move streaming.openaiApiKey to streaming.providers.openai.apiKey.",
+      "[voice-call] plugins.entries.voice-call.config.realtime.agentContext.includeSystemPrompt: Remove realtime.agentContext.includeSystemPrompt; realtime context now uses the generated agent prompt.",
     ]);
   });
 
@@ -118,6 +191,11 @@ describe("voice-call config compatibility", () => {
         streaming: {
           sttProvider: "openai",
         },
+        realtime: {
+          agentContext: {
+            includeSystemPrompt: true,
+          },
+        },
       },
       configPathPrefix: "plugins.entries.voice-call.config",
     });
@@ -125,6 +203,7 @@ describe("voice-call config compatibility", () => {
     expect(migration.changes).toEqual([
       'Moved plugins.entries.voice-call.config.provider "log" → "mock".',
       "Moved plugins.entries.voice-call.config.streaming.sttProvider → plugins.entries.voice-call.config.streaming.provider.",
+      "Removed plugins.entries.voice-call.config.realtime.agentContext.includeSystemPrompt.",
     ]);
   });
 });

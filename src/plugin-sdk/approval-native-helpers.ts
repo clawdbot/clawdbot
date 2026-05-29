@@ -1,3 +1,8 @@
+import type {
+  ExecApprovalForwardingConfig,
+  ExecApprovalForwardingMode,
+} from "../config/types.approvals.js";
+import { doesApprovalRequestMatchChannelAccount } from "../infra/approval-request-account-binding.js";
 import { matchesApprovalRequestFilters } from "../infra/approval-request-filters.js";
 import {
   getExecApprovalReplyMetadata,
@@ -26,6 +31,7 @@ type LocalNativeExecApprovalConfig = {
   agentFilter?: string[];
   sessionFilter?: string[];
 };
+type ChannelApprovalForwardTarget = DeliverySuppressionInput["target"];
 
 type ApprovalResolverParams = {
   cfg: OpenClawConfig;
@@ -33,6 +39,41 @@ type ApprovalResolverParams = {
   approvalKind?: ApprovalKind;
   request: ApprovalRequest;
 };
+
+type ChannelApprovalForwardingEvaluatorParams = {
+  channel: string;
+  isTransportEnabled: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  hasMatchingTarget: (params: {
+    cfg: OpenClawConfig;
+    config: ExecApprovalForwardingConfig;
+    accountId?: string | null;
+    target?: ChannelApprovalForwardTarget;
+  }) => boolean;
+  hasOriginOrSessionTarget: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    request: ApprovalRequest;
+  }) => boolean;
+};
+
+export type ChannelApprovalForwardingEligibilityParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  approvalKind: ApprovalKind;
+  request: ApprovalRequest;
+};
+
+export type ChannelApprovalPotentialRouteParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  approvalKind: ApprovalKind;
+  nativeSessionOnly?: boolean;
+};
+
+export type ChannelApprovalExplicitTargetEligibilityParams =
+  ChannelApprovalForwardingEligibilityParams & {
+    target: ChannelApprovalForwardTarget;
+  };
 
 type NativeApprovalTargetNormalizer<TTarget> = (
   target: TTarget,
@@ -230,11 +271,168 @@ function nativeApprovalTargetMatcher(channel: string): (left: unknown, right: un
     nativeApprovalTargetsMatch({ channel, left, right });
 }
 
-function resolveApprovalKind(request: ApprovalRequest, approvalKind?: ApprovalKind): ApprovalKind {
+export function resolveApprovalKind(
+  request: ApprovalRequest,
+  approvalKind?: ApprovalKind,
+): ApprovalKind {
   if (approvalKind) {
     return approvalKind;
   }
   return "command" in request.request ? "exec" : "plugin";
+}
+
+function resolveApprovalForwardingConfig(params: {
+  cfg: OpenClawConfig;
+  approvalKind: ApprovalKind;
+}): ExecApprovalForwardingConfig | undefined {
+  return params.approvalKind === "plugin"
+    ? params.cfg.approvals?.plugin
+    : params.cfg.approvals?.exec;
+}
+
+function normalizeApprovalForwardingMode(
+  mode: ExecApprovalForwardingConfig["mode"] | undefined,
+): ExecApprovalForwardingMode {
+  return mode ?? "session";
+}
+
+function approvalModeIncludesSession(mode: ExecApprovalForwardingMode): boolean {
+  return mode === "session" || mode === "both";
+}
+
+function approvalModeIncludesTargets(mode: ExecApprovalForwardingMode): boolean {
+  return mode === "targets" || mode === "both";
+}
+
+function matchesForwardingFilters(params: {
+  config: ExecApprovalForwardingConfig;
+  request: ApprovalRequest;
+}): boolean {
+  return matchesApprovalRequestFilters({
+    request: params.request.request,
+    agentFilter: params.config.agentFilter,
+    sessionFilter: params.config.sessionFilter,
+    fallbackAgentIdFromSessionKey: true,
+  });
+}
+
+export function createChannelApprovalForwardingEvaluator(
+  params: ChannelApprovalForwardingEvaluatorParams,
+) {
+  const isPotentialRoute = (input: ChannelApprovalPotentialRouteParams): boolean => {
+    if (!params.isTransportEnabled(input)) {
+      return false;
+    }
+    const config = resolveApprovalForwardingConfig(input);
+    if (!config?.enabled) {
+      return false;
+    }
+    const mode = normalizeApprovalForwardingMode(config.mode);
+    if (approvalModeIncludesSession(mode)) {
+      return true;
+    }
+    if (input.nativeSessionOnly) {
+      return false;
+    }
+    return (
+      approvalModeIncludesTargets(mode) &&
+      params.hasMatchingTarget({
+        cfg: input.cfg,
+        config,
+        accountId: input.accountId,
+      })
+    );
+  };
+
+  const isSessionEligible = (input: ChannelApprovalForwardingEligibilityParams): boolean => {
+    if (!params.isTransportEnabled(input)) {
+      return false;
+    }
+    const config = resolveApprovalForwardingConfig(input);
+    if (!config?.enabled) {
+      return false;
+    }
+    const mode = normalizeApprovalForwardingMode(config.mode);
+    if (!approvalModeIncludesSession(mode)) {
+      return false;
+    }
+    if (!matchesForwardingFilters({ config, request: input.request })) {
+      return false;
+    }
+    if (
+      !doesApprovalRequestMatchChannelAccount({
+        cfg: input.cfg,
+        request: input.request,
+        channel: params.channel,
+        accountId: input.accountId,
+      })
+    ) {
+      return false;
+    }
+    return params.hasOriginOrSessionTarget({
+      cfg: input.cfg,
+      accountId: input.accountId,
+      request: input.request,
+    });
+  };
+
+  const isExplicitTargetEligible = (
+    input: ChannelApprovalExplicitTargetEligibilityParams,
+  ): boolean => {
+    if (!params.isTransportEnabled(input)) {
+      return false;
+    }
+    const config = resolveApprovalForwardingConfig(input);
+    if (!config?.enabled) {
+      return false;
+    }
+    const mode = normalizeApprovalForwardingMode(config.mode);
+    if (!approvalModeIncludesTargets(mode)) {
+      return false;
+    }
+    if (!matchesForwardingFilters({ config, request: input.request })) {
+      return false;
+    }
+    return params.hasMatchingTarget({
+      cfg: input.cfg,
+      config,
+      accountId: input.accountId,
+      target: input.target,
+    });
+  };
+
+  const canAnyPotentiallyRoute = (input: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    nativeSessionOnly?: boolean;
+  }): boolean =>
+    isPotentialRoute({
+      ...input,
+      approvalKind: "exec",
+    }) ||
+    isPotentialRoute({
+      ...input,
+      approvalKind: "plugin",
+    });
+
+  const shouldHandleRequest = (input: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+    approvalKind?: ApprovalKind;
+    request: ApprovalRequest;
+  }): boolean =>
+    isSessionEligible({
+      ...input,
+      approvalKind: resolveApprovalKind(input.request, input.approvalKind),
+    });
+
+  return {
+    canAnyPotentiallyRoute,
+    isExplicitTargetEligible,
+    isPotentialRoute,
+    isSessionEligible,
+    shouldHandleRequest,
+  };
 }
 
 function normalizeOptionalAccountId(value?: string | null): string | undefined {

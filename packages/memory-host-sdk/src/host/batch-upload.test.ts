@@ -9,12 +9,25 @@ vi.mock("./remote-http.js", () => ({
 const remoteHttpMock = vi.mocked(withRemoteHttpResponse);
 
 function textResponse(body: string, status: number): Response {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => JSON.parse(body) as unknown,
-    text: async () => body,
-  } as Response;
+  return new Response(body, { status });
+}
+
+function streamingTextResponse(params: {
+  body: string;
+  status: number;
+  headers?: HeadersInit;
+  onCancel: () => void;
+}): Response {
+  const encoded = new TextEncoder().encode(params.body);
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+    },
+    cancel() {
+      params.onCancel();
+    },
+  });
+  return new Response(stream, { status: params.status, headers: params.headers });
 }
 
 describe("uploadBatchJsonlFile", () => {
@@ -37,5 +50,61 @@ describe("uploadBatchJsonlFile", () => {
         errorPrefix: "file upload failed",
       }),
     ).rejects.toThrow("file upload failed: malformed JSON response");
+  });
+
+  it("bounds non-ok file-upload response bodies before formatting the error", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: "x".repeat(12_000),
+          status: 413,
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      uploadBatchJsonlFile({
+        client: {
+          baseUrl: "https://memory.example/v1",
+          headers: { Authorization: "Bearer test" },
+        },
+        requests: [{ input: "one" }],
+        errorPrefix: "file upload failed",
+      }),
+    ).rejects.toThrow(`file upload failed: 413 ${"x".repeat(1_000)}... [truncated]`);
+    expect(canceled).toBe(true);
+  });
+
+  it("rejects oversized successful file-upload JSON before parsing", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: '{"id":"file_123"}',
+          status: 200,
+          headers: { "content-length": "64" },
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      uploadBatchJsonlFile({
+        client: {
+          baseUrl: "https://memory.example/v1",
+          headers: { Authorization: "Bearer test" },
+        },
+        requests: [{ input: "one" }],
+        errorPrefix: "file upload failed",
+        maxResponseBytes: 8,
+      }),
+    ).rejects.toThrow("file upload failed: response body too large: 64 bytes (limit: 8 bytes)");
+    expect(canceled).toBe(true);
   });
 });

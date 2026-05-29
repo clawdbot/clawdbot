@@ -9,6 +9,7 @@ queries:
 paths:
   - src
   - extensions
+  - packages/net-policy/src
 
 paths-ignore:
   - "**/node_modules"

@@ -14,6 +14,10 @@ self-hosted-runner:
     - blacksmith-16vcpu-ubuntu-2404-arm
     - blacksmith-6vcpu-macos-latest
     - blacksmith-12vcpu-macos-latest
+    - blacksmith-6vcpu-macos-15
+    - blacksmith-12vcpu-macos-15
+    - blacksmith-6vcpu-macos-26
+    - blacksmith-12vcpu-macos-26
 
 # Ignore patterns for known issues
 paths:

@@ -1,6 +1,19 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_MODES,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  validateAgentIdentityParams,
+  validateAgentParams,
+  validateAgentWaitParams,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
   listAgentIds,
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
@@ -119,19 +132,6 @@ import {
 } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_MODES,
-  hasGatewayClientCap,
-} from "../protocol/client-info.js";
-import {
-  ErrorCodes,
-  errorShape,
-  formatValidationErrors,
-  validateAgentIdentityParams,
-  validateAgentParams,
-  validateAgentWaitParams,
-} from "../protocol/index.js";
 import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,

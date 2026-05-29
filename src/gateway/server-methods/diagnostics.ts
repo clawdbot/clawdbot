@@ -1,8 +1,8 @@
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
-import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const diagnosticsHandlers: GatewayRequestHandlers = {

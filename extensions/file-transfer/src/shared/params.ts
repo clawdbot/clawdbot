@@ -1,6 +1,8 @@
 // Shared param-validation helpers used by all four agent tools.
 // Goal: identical validation behavior + identical error shapes everywhere.
 
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
+
 type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
@@ -15,9 +17,7 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
   if (typeof params.gatewayToken === "string" && params.gatewayToken.trim()) {
     opts.gatewayToken = params.gatewayToken.trim();
   }
-  if (typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)) {
-    opts.timeoutMs = params.timeoutMs;
-  }
+  opts.timeoutMs = readPositiveIntegerParam(params, "timeoutMs");
   return opts;
 }
 
@@ -45,9 +45,7 @@ export function readClampedInt(params: {
   hardMin: number;
   hardMax: number;
 }): number {
-  const value = params.input[params.key];
-  const requested =
-    typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : params.defaultValue;
+  const requested = readPositiveIntegerParam(params.input, params.key) ?? params.defaultValue;
   return Math.max(params.hardMin, Math.min(requested, params.hardMax));
 }
 

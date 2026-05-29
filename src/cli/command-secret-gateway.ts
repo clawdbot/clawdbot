@@ -1,8 +1,11 @@
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import { validateSecretsResolveResult } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { callGateway } from "../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
-import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
 import {

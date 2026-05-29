@@ -1,3 +1,5 @@
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
+
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
 export type TaglineMode = "random" | "default" | "off";
 
@@ -271,8 +273,8 @@ export function pickTagline(options: TaglineOptions = {}): string {
   const env = options.env ?? process.env;
   const override = env?.OPENCLAW_TAGLINE_INDEX;
   if (override !== undefined) {
-    const parsed = Number.parseInt(override, 10);
-    if (!Number.isNaN(parsed) && parsed >= 0) {
+    const parsed = parseStrictNonNegativeInteger(override);
+    if (parsed !== undefined) {
       const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
       return pool[parsed % pool.length];
     }

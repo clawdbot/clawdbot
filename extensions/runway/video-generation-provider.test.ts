@@ -50,6 +50,18 @@ function firstFetchWithTimeoutCall() {
   };
 }
 
+function streamedVideoResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
+}
+
 describe("runway video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
@@ -113,6 +125,70 @@ describe("runway video generation provider", () => {
     expect(metadata.taskId).toBe("task-1");
     expect(metadata.status).toBe("SUCCEEDED");
     expect(metadata.endpoint).toBe("/v1/text_to_video");
+  });
+
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task-too-large" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "task-too-large",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+        headers: new Headers(),
+      })
+      .mockResolvedValueOnce(streamedVideoResponse("too-large"));
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "short video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Runway generated video download exceeds 1 bytes");
+  });
+
+  it("does not round malformed duration values into create requests", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task-duration" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "task-duration",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+        headers: new Headers(),
+      })
+      .mockResolvedValueOnce({
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "runway",
+      model: "gen4.5",
+      prompt: "a tiny lobster DJ under neon lights",
+      cfg: {},
+      durationSeconds: 4.5,
+      aspectRatio: "16:9",
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    expect(firstPostJsonRequest().body?.duration).toBe(5);
   });
 
   it("accepts local image buffers by converting them into data URIs", async () => {

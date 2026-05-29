@@ -1,7 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { defaultRuntime } from "../../runtime.js";
-import { readStringValue } from "../../shared/string-coerce.js";
-import { WizardSession } from "../../wizard/session.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,7 +6,10 @@ import {
   validateWizardNextParams,
   validateWizardStartParams,
   validateWizardStatusParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { defaultRuntime } from "../../runtime.js";
+import { readStringValue } from "../../shared/string-coerce.js";
+import { WizardSession } from "../../wizard/session.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";

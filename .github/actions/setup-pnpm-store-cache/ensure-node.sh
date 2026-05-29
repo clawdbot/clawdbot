@@ -95,7 +95,7 @@ openclaw_find_toolcache_node() {
   done
 
   local node_root candidate candidate_version
-  for node_root in "${roots[@]}"; do
+  for node_root in ${roots[@]+"${roots[@]}"}; do
     while IFS= read -r candidate; do
       candidate_version="$("$candidate" -p 'process.versions.node' 2>/dev/null || true)"
       if openclaw_node_version_matches "$candidate_version" "$requested_node"; then

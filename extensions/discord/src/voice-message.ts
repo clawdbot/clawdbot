@@ -21,6 +21,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
+import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -90,8 +91,8 @@ export async function getAudioDuration(filePath: string): Promise<number> {
       "csv=p=0",
       filePath,
     ]);
-    const duration = Number.parseFloat(stdout.trim());
-    if (Number.isNaN(duration)) {
+    const duration = parseStrictFiniteNumber(stdout);
+    if (duration === undefined) {
       throw new Error("Could not parse duration");
     }
     return Math.round(duration * 100) / 100; // Round to 2 decimal places
