@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-explain",
+  "name": "VC Trader AI Explain",
+  "description": "Read-only inspector for a single decision-ledger entry with a brief narrative summary.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["explain"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

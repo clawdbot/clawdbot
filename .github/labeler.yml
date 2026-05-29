@@ -583,3 +583,15 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/zai/**"
+"plugin: vctraderai-account-state":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-account-state/**"
+"plugin: vctraderai-explain":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-explain/**"
+"plugin: vctraderai-audit":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-audit/**"

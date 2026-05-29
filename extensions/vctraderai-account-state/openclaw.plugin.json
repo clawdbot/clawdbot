@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-account-state",
+  "name": "VC Trader AI Account State",
+  "description": "Read-only inspector for workspace account state (dashboard 5-stat block + accounts list).",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["account_state"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

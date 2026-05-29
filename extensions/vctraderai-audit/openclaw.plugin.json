@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-audit",
+  "name": "VC Trader AI Audit",
+  "description": "Read-only inspector for an agent thread's audit timeline.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["audit"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

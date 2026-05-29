@@ -1590,6 +1590,42 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/vctraderai-account-state:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
+  extensions/vctraderai-audit:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
+  extensions/vctraderai-explain:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+      typebox:
+        specifier: 1.1.38
+        version: 1.1.38
+
   extensions/venice:
     devDependencies:
       '@openclaw/plugin-sdk':

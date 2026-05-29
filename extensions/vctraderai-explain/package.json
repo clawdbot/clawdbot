@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/vctraderai-explain",
+  "version": "2026.5.29",
+  "private": true,
+  "description": "VC Trader AI read-only decision-ledger entry explainer.",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*",
+    "typebox": "1.1.38"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
