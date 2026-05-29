@@ -1,0 +1,17 @@
+{
+  "name": "@openclaw/vctraderai-account-state",
+  "version": "2026.5.29",
+  "private": true,
+  "description": "VC Trader AI read-only account state tool (workspace dashboard + accounts list).",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*",
+    "typebox": "1.1.38"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
