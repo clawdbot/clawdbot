@@ -1,4 +1,5 @@
 import { runQaCoverageReportCommand } from "../extensions/qa-lab/src/cli.runtime.ts";
+import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mjs";
 
 type Options = {
   json?: boolean;
@@ -9,21 +10,23 @@ type Options = {
   tools?: boolean;
 };
 
-function takeValue(args: string[], index: number, flag: string): string {
-  const value = args[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value.`);
-  }
-  return value;
-}
-
 function parseArgs(args: string[]): Options {
-  const opts: Options = {};
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    switch (arg) {
-      case "--help":
-      case "-h":
+  return parseFlagArgs(
+    args,
+    {},
+    [
+      booleanFlag("--json", "json"),
+      stringListFlag("--match", "match", { rejectShortOptions: true }),
+      stringFlag("--output", "output", { rejectShortOptions: true }),
+      stringFlag("--repo-root", "repoRoot", { rejectShortOptions: true }),
+      stringFlag("--summary", "summary", { rejectShortOptions: true }),
+      booleanFlag("--tools", "tools"),
+    ],
+    {
+      onUnhandledArg(arg: string) {
+        if (arg !== "--help" && arg !== "-h") {
+          throw new Error(`Unknown qa coverage option: ${arg}`);
+        }
         process.stdout.write(`Usage: openclaw qa coverage [options]
 
 Options:
@@ -36,34 +39,9 @@ Options:
   -h, --help            Display help
 `);
         process.exit(0);
-      case "--json":
-        opts.json = true;
-        break;
-      case "--match":
-        opts.match ??= [];
-        opts.match.push(takeValue(args, index, arg));
-        index += 1;
-        break;
-      case "--output":
-        opts.output = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--repo-root":
-        opts.repoRoot = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--summary":
-        opts.summary = takeValue(args, index, arg);
-        index += 1;
-        break;
-      case "--tools":
-        opts.tools = true;
-        break;
-      default:
-        throw new Error(`Unknown qa coverage option: ${arg}`);
-    }
-  }
-  return opts;
+      },
+    },
+  ) as Options;
 }
 
 const opts = parseArgs(process.argv.slice(2));

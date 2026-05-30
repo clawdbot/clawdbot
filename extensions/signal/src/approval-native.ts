@@ -5,12 +5,10 @@ import {
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
-  createChannelApprovalForwardingEvaluator,
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
-  nativeApprovalTargetsMatch,
-  resolveApprovalRequestSessionTarget,
   shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import { buildApprovalReactionPendingContentForRequest } from "openclaw/plugin-sdk/approval-reaction-runtime";
@@ -24,7 +22,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeAccountId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -40,6 +38,7 @@ import { normalizeSignalMessagingTarget } from "./normalize.js";
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalKind = "exec" | "plugin";
 type ApprovalForwardingConfig = NonNullable<NonNullable<OpenClawConfig["approvals"]>["exec"]>;
+type ApprovalForwardingMode = NonNullable<ApprovalForwardingConfig["mode"]>;
 type ChannelApprovalForwardTarget = Parameters<
   NonNullable<
     NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
@@ -51,40 +50,13 @@ type SignalApprovalTarget = {
   threadId?: string | number | null;
 };
 
+const DEFAULT_APPROVAL_FORWARDING_MODE: ApprovalForwardingMode = "session";
+
 function isSignalApprovalTransportEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
   return resolveSignalAccount({ cfg: params.cfg, accountId: params.accountId }).enabled;
-}
-
-function targetAccountMatchesSignalAccount(params: {
-  cfg: OpenClawConfig;
-  targetAccountId?: string | null;
-  accountId?: string | null;
-}): boolean {
-  const targetAccountId = normalizeOptionalString(params.targetAccountId);
-  const accountId = normalizeOptionalString(params.accountId);
-  if (targetAccountId) {
-    return !accountId || normalizeAccountId(targetAccountId) === normalizeAccountId(accountId);
-  }
-  if (!accountId) {
-    return true;
-  }
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const defaultAccountId = normalizeAccountId(resolveDefaultSignalAccountId(params.cfg));
-  if (normalizedAccountId === defaultAccountId) {
-    return true;
-  }
-  const enabledAccountIds = listSignalAccountIds(params.cfg)
-    .filter((candidateAccountId) =>
-      isSignalApprovalTransportEnabled({
-        cfg: params.cfg,
-        accountId: candidateAccountId,
-      }),
-    )
-    .map((candidateAccountId) => normalizeAccountId(candidateAccountId));
-  return enabledAccountIds.length === 1 && enabledAccountIds[0] === normalizedAccountId;
 }
 
 function normalizeSignalForwardTarget(
@@ -102,82 +74,6 @@ function normalizeSignalForwardTarget(
     accountId: normalizeOptionalString(target.accountId),
     threadId: target.threadId ?? null,
   };
-}
-
-function hasMatchingSignalTarget(params: {
-  cfg: OpenClawConfig;
-  config: ApprovalForwardingConfig;
-  accountId?: string | null;
-  target?: ChannelApprovalForwardTarget;
-}): boolean {
-  const candidateTarget = params.target ? normalizeSignalForwardTarget(params.target) : null;
-  return (params.config.targets ?? []).some((target) => {
-    const configuredTarget = normalizeSignalForwardTarget(target);
-    if (!configuredTarget) {
-      return false;
-    }
-    if (
-      !targetAccountMatchesSignalAccount({
-        cfg: params.cfg,
-        targetAccountId: configuredTarget.accountId,
-        accountId: params.accountId,
-      })
-    ) {
-      return false;
-    }
-    if (!candidateTarget) {
-      return true;
-    }
-    return nativeApprovalTargetsMatch({
-      channel: "signal",
-      left: configuredTarget,
-      right: candidateTarget,
-    });
-  });
-}
-
-function hasSignalOriginOrSessionTarget(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-  request: ApprovalRequest;
-}): boolean {
-  if (resolveTurnSourceSignalOriginTarget(params.request)) {
-    return true;
-  }
-
-  const sessionTarget = resolveApprovalRequestSessionTarget({
-    cfg: params.cfg,
-    request: params.request,
-  });
-  return (
-    normalizeLowercaseStringOrEmpty(sessionTarget?.channel) === "signal" &&
-    targetAccountMatchesSignalAccount({
-      cfg: params.cfg,
-      targetAccountId: sessionTarget?.accountId,
-      accountId: params.accountId,
-    })
-  );
-}
-
-const signalApprovalForwarding = createChannelApprovalForwardingEvaluator({
-  channel: "signal",
-  isTransportEnabled: isSignalApprovalTransportEnabled,
-  hasMatchingTarget: hasMatchingSignalTarget,
-  hasOriginOrSessionTarget: hasSignalOriginOrSessionTarget,
-});
-
-const canApprovalPotentiallyRouteToSignal = signalApprovalForwarding.isPotentialRoute;
-const canAnyApprovalPotentiallyRouteToSignal = signalApprovalForwarding.canAnyPotentiallyRoute;
-const isSignalSessionApprovalEligible = signalApprovalForwarding.isSessionEligible;
-
-export function isSignalNativeApprovalHandlerConfigured(params: {
-  cfg: OpenClawConfig;
-  accountId?: string | null;
-}): boolean {
-  return canAnyApprovalPotentiallyRouteToSignal({
-    ...params,
-    nativeSessionOnly: true,
-  });
 }
 
 function resolveTurnSourceSignalOriginTarget(
@@ -205,13 +101,29 @@ function resolveSessionSignalOriginTarget(sessionTarget: {
   return to ? { to, accountId: normalizeOptionalString(sessionTarget.accountId) } : null;
 }
 
-function shouldHandleSignalApprovalRequest(params: {
+const signalApprovalRouteGates = createNativeApprovalChannelRouteGates({
+  channel: "signal",
+  defaultForwardingMode: DEFAULT_APPROVAL_FORWARDING_MODE,
+  isTransportEnabled: isSignalApprovalTransportEnabled,
+  listAccountIds: listSignalAccountIds,
+  resolveDefaultAccountId: resolveDefaultSignalAccountId,
+  normalizeForwardTarget: normalizeSignalForwardTarget,
+  resolveTurnSourceTarget: resolveTurnSourceSignalOriginTarget,
+});
+
+const {
+  canApprovalPotentiallyRouteToChannel: canApprovalPotentiallyRouteToSignal,
+  canAnyApprovalPotentiallyRouteToChannel: canAnyApprovalPotentiallyRouteToSignal,
+  isNativeApprovalHandlerConfigured: isSignalNativeApprovalHandlerConfiguredBase,
+  isSessionApprovalEligible: isSignalSessionApprovalEligible,
+  shouldHandleApprovalRequest: shouldHandleSignalApprovalRequest,
+} = signalApprovalRouteGates;
+
+export function isSignalNativeApprovalHandlerConfigured(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-  approvalKind?: ApprovalKind;
-  request: ApprovalRequest;
 }): boolean {
-  return signalApprovalForwarding.shouldHandleRequest(params);
+  return isSignalNativeApprovalHandlerConfiguredBase(params);
 }
 
 function resolveSignalSessionTargetFromSessionKey(sessionKey?: string | null): string | null {

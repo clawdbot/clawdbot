@@ -1,3 +1,5 @@
+import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+
 export const PROOF_OVERRIDE_LABEL = "proof: override";
 export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
@@ -5,6 +7,7 @@ export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proo
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
 export const MAINTAINER_TEAM_SLUG = "maintainer";
 export const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
+export const GITHUB_API_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
 export const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
 const CLAWSWEEPER_BOT_LOGINS = new Set(["clawsweeper[bot]", "openclaw-clawsweeper[bot]"]);
@@ -88,6 +91,12 @@ function createTimeoutError(label, timeoutMs) {
   return error;
 }
 
+function createTooLargeGitHubApiBodyError(label, maxBytes) {
+  const error = new Error(`${label} response body exceeded ${maxBytes} bytes`);
+  error.code = "ETOOBIG";
+  return error;
+}
+
 export async function withGitHubApiTimeout(label, timeoutMs, run) {
   const boundedTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
@@ -108,6 +117,19 @@ export async function withGitHubApiTimeout(label, timeoutMs, run) {
       clearTimeout(timeout);
     }
   }
+}
+
+export async function readBoundedGitHubApiJson(
+  response,
+  label,
+  maxBytes = GITHUB_API_RESPONSE_BODY_MAX_BYTES,
+  options = {},
+) {
+  const text = await readBoundedResponseText(response, label, maxBytes, {
+    ...options,
+    createTooLargeError: () => createTooLargeGitHubApiBodyError(label, maxBytes),
+  });
+  return JSON.parse(text);
 }
 
 function normalizeLineEndings(text = "") {
@@ -178,7 +200,10 @@ export async function isMaintainerTeamMember({
   const body = await withGitHubApiTimeout(
     `maintainer membership response for ${login}`,
     timeoutMs,
-    () => response.json(),
+    (signal) =>
+      readBoundedGitHubApiJson(response, `maintainer membership response for ${login}`, undefined, {
+        signal,
+      }),
   );
   return body?.state === "active";
 }

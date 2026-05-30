@@ -2,7 +2,11 @@ import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { completeSimple } from "../llm/stream.js";
-import type { Model, ThinkingLevel as SimpleCompletionThinkingLevel } from "../llm/types.js";
+import type {
+  AssistantMessage,
+  Model,
+  ThinkingLevel as SimpleCompletionThinkingLevel,
+} from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -330,7 +334,7 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   context: Parameters<typeof completeSimple>[1];
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
-}) {
+}): Promise<AssistantMessage> {
   const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
   const { reasoning: rawReasoning, ...options } = params.options ?? {};
   const reasoning = normalizeSimpleCompletionReasoning(rawReasoning);

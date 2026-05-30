@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.5.28",
+  "version": "2026.5.30",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/diffs",
-      "version": "2026.5.28",
+      "version": "2026.5.30",
       "dependencies": {
         "@pierre/diffs": "1.2.3",
         "@pierre/theme": "1.0.3",

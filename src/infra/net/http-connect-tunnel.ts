@@ -1,5 +1,6 @@
 import * as net from "node:net";
 import * as tls from "node:tls";
+import { resolveTimerTimeoutMs } from "../../shared/number-coercion.js";
 import type { ManagedProxyTlsOptions } from "./proxy/proxy-tls.js";
 
 export type HttpConnectTunnelParams = {
@@ -11,6 +12,7 @@ export type HttpConnectTunnelParams = {
 };
 
 const MAX_CONNECT_RESPONSE_HEADER_BYTES = 16 * 1024;
+const MIN_CONNECT_TIMEOUT_MS = 1;
 
 type ProxySocket = net.Socket | tls.TLSSocket;
 type ConnectResponseBuffer = Buffer;
@@ -159,11 +161,14 @@ class HttpConnectTunnelAttempt {
   }
 
   private startTimeout(): void {
-    const timeoutMs = this.params.timeoutMs;
-    if (timeoutMs && Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    const timeoutMs =
+      this.params.timeoutMs === undefined || this.params.timeoutMs <= 0
+        ? undefined
+        : resolveTimerTimeoutMs(this.params.timeoutMs, MIN_CONNECT_TIMEOUT_MS);
+    if (timeoutMs !== undefined) {
       this.timeout = setTimeout(() => {
-        this.fail(new Error(`Proxy CONNECT timed out after ${Math.trunc(timeoutMs)}ms`));
-      }, Math.trunc(timeoutMs));
+        this.fail(new Error(`Proxy CONNECT timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
     }
   }
 

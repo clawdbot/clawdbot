@@ -147,6 +147,28 @@ describe("discord components", () => {
     expect(result.entries).toHaveLength(0);
   });
 
+  it("omits unset optional fields from persisted button entries", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Allow Once", style: "success" }],
+        },
+      ],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    const entry = result.entries[0];
+    if (!entry) {
+      throw new Error("Expected button entry");
+    }
+
+    expect(Object.entries(entry).filter(([, value]) => value === undefined)).toEqual([]);
+  });
+
   it("requires options for modal select fields", () => {
     expect(() =>
       readDiscordComponentSpec({

@@ -14,8 +14,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dependency-guard:
+  dependency-guard-detect:
     if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      autoscrub: ${{ steps.guard.outputs.autoscrub }}
+      autoscrub-owner: ${{ steps.guard.outputs.autoscrub-owner }}
+      autoscrub-repository: ${{ steps.guard.outputs.autoscrub-repository }}
+    steps:
+      - name: Check out trusted base workflow scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Detect dependency changes
+        id: guard
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_DEPENDENCY_GUARD_MODE: detect
+          OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
+          OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
+        run: node scripts/github/dependency-guard.mjs
+
+  dependency-guard-autoscrub:
+    if: ${{ !github.event.pull_request.draft && needs.dependency-guard-detect.outputs.autoscrub == 'true' }}
+    needs: dependency-guard-detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - name: Check out trusted base workflow scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Create autoscrub app token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ needs.dependency-guard-detect.outputs.autoscrub-owner }}
+          repositories: ${{ needs.dependency-guard-detect.outputs.autoscrub-repository }}
+          permission-contents: write
+
+      - name: Create fallback autoscrub app token
+        id: app-token-fallback
+        continue-on-error: true
+        if: steps.app-token.outcome == 'failure'
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        with:
+          app-id: "2971289"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
+          owner: ${{ needs.dependency-guard-detect.outputs.autoscrub-owner }}
+          repositories: ${{ needs.dependency-guard-detect.outputs.autoscrub-repository }}
+          permission-contents: write
+
+      - name: Remove package lockfile changes
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_DEPENDENCY_GUARD_AUTOSCRUB_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
+          OPENCLAW_DEPENDENCY_GUARD_MODE: autoscrub
+          OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
+          OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
+        run: node scripts/github/dependency-guard.mjs
+
+  dependency-guard:
+    if: ${{ !github.event.pull_request.draft && always() }}
+    needs:
+      - dependency-guard-detect
+      - dependency-guard-autoscrub
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -25,9 +100,10 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
 
-      - name: Label, comment, and guard dependency changes
+      - name: Enforce dependency guard
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          OPENCLAW_DEPENDENCY_GUARD_MODE: enforce
           OPENCLAW_SECURITY_APPROVERS: vincentkoc,steipete,joshavant
           OPENCLAW_SECURITY_TEAM_SLUG: openclaw-secops
         run: node scripts/github/dependency-guard.mjs

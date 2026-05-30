@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startWebLoginWithQr, waitForWebLogin } from "./login-qr.js";
 import { renderQrPngDataUrl } from "./qr-image.js";
 import {
@@ -101,6 +102,10 @@ describe("login-qr", () => {
       .mockImplementation(async (input) => `data:image/png;base64,encoded:${input}`);
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("restarts login once on status 515 and completes", async () => {
     waitForWaConnectionMock
       // Baileys v7 wraps the error: { error: BoomError(515) }
@@ -129,6 +134,37 @@ describe("login-qr", () => {
     expect(logoutWebMock).not.toHaveBeenCalled();
   });
 
+  it("returns a replacement QR when status 408 happens before the first QR", async () => {
+    const accountId = "timeout-before-first-qr";
+    createWaSocketMock
+      .mockImplementationOnce(async () => ({ ws: { close: vi.fn() } }) as never)
+      .mockImplementationOnce(
+        async (
+          _printQr: boolean,
+          _verbose: boolean,
+          opts?: { authDir?: string; onQr?: (qr: string) => void },
+        ) => {
+          const sock = { ws: { close: vi.fn() } };
+          setImmediate(() => opts?.onQr?.("qr-after-timeout"));
+          return sock as never;
+        },
+      );
+    waitForWaConnectionMock
+      .mockRejectedValueOnce({ output: { statusCode: 408 } })
+      .mockImplementation(() => new Promise(() => {}));
+
+    const start = await startWebLoginWithQr({
+      timeoutMs: 5000,
+      accountId,
+    });
+
+    expect(start).toEqual({
+      qrDataUrl: "data:image/png;base64,encoded:qr-after-timeout",
+      message: "Scan this QR in WhatsApp → Linked Devices.",
+    });
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+  });
+
   it("clears auth and reports a relink message when WhatsApp is logged out", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: 401 },
@@ -148,6 +184,27 @@ describe("login-qr", () => {
         "WhatsApp reported the session is logged out. Cleared cached web session; please scan a new QR.",
     });
     expect(logoutWebMock).toHaveBeenCalledOnce();
+  });
+
+  it("caps oversized wait timeouts to a timer-safe delay", async () => {
+    const accountId = "oversized-wait-timeout";
+    waitForWaConnectionMock.mockImplementation(() => new Promise(() => {}));
+
+    const start = await startWebLoginWithQr({ timeoutMs: 5000, accountId });
+    expect(start.qrDataUrl).toBe("data:image/png;base64,encoded:qr-data");
+
+    vi.useFakeTimers();
+    const resultPromise = waitForWebLogin({
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      currentQrDataUrl: start.qrDataUrl,
+      accountId,
+    });
+
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await expect(resultPromise).resolves.toEqual({
+      connected: false,
+      message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+    });
   });
 
   it("turns unexpected login cleanup failures into a normal login error", async () => {

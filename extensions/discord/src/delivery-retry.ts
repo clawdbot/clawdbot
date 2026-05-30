@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/retry-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
 import { DiscordError } from "./internal/discord.js";
+import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 
 const DISCORD_DELIVERY_RETRY_DEFAULTS = {
   attempts: 3,
@@ -22,27 +23,21 @@ export function isRetryableDiscordDeliveryError(err: unknown): boolean {
   return status === 429 || (status !== undefined && status >= 500);
 }
 
-function getDiscordDeliveryRetryAfterMs(err: unknown): number | undefined {
+export function getDiscordDeliveryRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
   }
-  if (
-    "retryAfter" in err &&
-    typeof err.retryAfter === "number" &&
-    Number.isFinite(err.retryAfter)
-  ) {
-    return err.retryAfter * 1000;
+  const retryAfterSeconds =
+    "retryAfter" in err ? parseDiscordRetryAfterBodySeconds(err.retryAfter) : undefined;
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds * 1000;
   }
   const retryAfterRaw = (err as { headers?: Record<string, string> }).headers?.["retry-after"];
   if (!retryAfterRaw) {
     return undefined;
   }
-  const trimmedRetryAfter = retryAfterRaw.trim();
-  if (!/^\d+(?:\.\d+)?$/.test(trimmedRetryAfter)) {
-    return undefined;
-  }
-  const retryAfterMs = Number(trimmedRetryAfter) * 1000;
-  return Number.isFinite(retryAfterMs) ? retryAfterMs : undefined;
+  const headerSeconds = parseDiscordRetryAfterBodySeconds(retryAfterRaw);
+  return headerSeconds === undefined ? undefined : headerSeconds * 1000;
 }
 
 export async function withDiscordDeliveryRetry<T>(params: {

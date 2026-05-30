@@ -233,6 +233,37 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
   });
 
+  it("marks first work-row anomalies as cold-start observations", () => {
+    const observations = collectMetricObservations(
+      [
+        { phase: "prebuild", wallMs: 100, maxRssMb: 100 },
+        {
+          pluginId: "first-plugin",
+          phase: "lifecycle:install",
+          wallMs: 1_000,
+          cpuCoreRatio: 1.2,
+          maxRssMb: 500,
+        },
+        { pluginId: "second-plugin", phase: "lifecycle:install", wallMs: 100, maxRssMb: 100 },
+        { pluginId: "third-plugin", phase: "lifecycle:install", wallMs: 110, maxRssMb: 110 },
+      ],
+      {
+        cpuCoreWarn: 0.9,
+        hotWallWarnMs: 900,
+        maxRssWarnMb: 450,
+        wallAnomalyMultiplier: 3,
+        rssAnomalyMultiplier: 2.5,
+      },
+    );
+
+    expect(observations).toEqual([
+      expect.objectContaining({ kind: "phase-cpu-hot", coldStart: true }),
+      expect.objectContaining({ kind: "phase-wall-anomaly", coldStart: true }),
+      expect.objectContaining({ kind: "phase-rss-high", coldStart: true }),
+      expect.objectContaining({ kind: "phase-rss-anomaly", coldStart: true }),
+    ]);
+  });
+
   it("uses QA gateway metrics instead of source CLI wrapper CPU for QA hot observations", () => {
     const observations = collectMetricObservations(
       [

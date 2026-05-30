@@ -69,9 +69,13 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   or clawgrit reports. Report regressions explicitly. A major regression is a
   release blocker unless the operator waives it or the data clearly proves
   infrastructure noise.
-- Generate the changelog before version/tag preparation so the top changelog
-  section is deduped and ordered by user impact. Use
-  `$openclaw-changelog-update` for the rewrite.
+- Generate the changelog before every beta, beta rerun, stable release, or
+  stable rerun, before version/tag preparation. Use
+  `$openclaw-changelog-update` for the rewrite. Do not continue release prep if
+  the target `CHANGELOG.md` section does not have `### Highlights`,
+  `### Changes`, and `### Fixes`, grouped by user-facing surface while
+  preserving every relevant PR/issue ref and every human `Thanks @...`
+  attribution in the grouped bullet.
 - Do not create beta-specific `CHANGELOG.md` headings. Beta releases use the
   stable base version section, for example `v2026.4.20-beta.1` uses
   `## 2026.4.20` release notes.
@@ -144,6 +148,9 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
   section from history, not existing notes. Use the last reachable stable or
   beta release tag as the base, then inspect every commit through the target
   release SHA.
+- The changelog rewrite is not optional for beta reruns: any `beta.N` after a
+  rebase or backport must refresh the same stable-base `## YYYY.M.D` section
+  before the new version/tag commit.
 - Include both merged PR commits and direct commits on `main`. Direct commits
   matter: infer notes from their subject, body, touched files, linked issues,
   tests, and nearby code when no PR body exists.
@@ -157,6 +164,11 @@ Use this skill for release and publish-time workflow. Load `$release-private` if
 - Add missed user-facing changes, remove internal-only noise, dedupe overlapping
   PR/direct-commit entries, and sort each section from most to least interesting
   for users.
+- Group related highlights, changes, and fixes by user-facing surface and
+  impact, but never lose traceability: each grouped bullet keeps every relevant
+  `#issue`, `(#PR)`, `Fixes #...`, and every human `Thanks @...` handle.
+  Multiple thanks in one bullet are expected when multiple contributor PRs are
+  grouped.
 - Changelog entries should be user-facing, not internal release-process notes.
 - GitHub release and prerelease bodies must use the full matching
   `CHANGELOG.md` version section, not highlights or an excerpt. When creating

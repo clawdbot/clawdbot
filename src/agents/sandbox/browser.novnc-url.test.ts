@@ -74,6 +74,25 @@ describe("noVNC auth helpers", () => {
     expect(consumeNoVncObserverToken(expiredToken, 61_001)).toBeNull();
   });
 
+  it("uses the default ttl when observer token ttlMs is unsafe or too large", () => {
+    resetNoVncObserverTokensForTests();
+    const unsafeToken = issueNoVncObserverToken({
+      noVncPort: 50123,
+      password: "abcd1234", // pragma: allowlist secret
+      nowMs: 1000,
+      ttlMs: Number.MAX_SAFE_INTEGER,
+    });
+    const tooLargeToken = issueNoVncObserverToken({
+      noVncPort: 50123,
+      password: "abcd1234", // pragma: allowlist secret
+      nowMs: 1000,
+      ttlMs: 60_001,
+    });
+
+    expect(consumeNoVncObserverToken(unsafeToken, 61_001)).toBeNull();
+    expect(consumeNoVncObserverToken(tooLargeToken, 61_001)).toBeNull();
+  });
+
   it("generates 8-char alphanumeric passwords", () => {
     const password = generateNoVncPassword();
     expect(password).toMatch(/^[a-zA-Z0-9]{8}$/);

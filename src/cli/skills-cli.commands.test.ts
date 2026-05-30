@@ -85,6 +85,9 @@ const mocks = vi.hoisted(() => {
     updateSkillsFromClawHubMock: vi.fn(),
     readTrackedClawHubSkillSlugsMock: vi.fn(),
     resolveClawHubSkillVerificationTargetMock: vi.fn(),
+    readClawHubSkillsLockfileStatusSyncMock: vi.fn((..._args: unknown[]) => ({ kind: "missing" })),
+    resolveClawHubSkillStatusLinkSyncMock: vi.fn(),
+    resolveLocalSkillCardStatusSyncMock: vi.fn(),
     fetchClawHubSkillVerificationMock: vi.fn(),
     fetchClawHubSkillCardMock: vi.fn(),
     buildWorkspaceSkillStatusMock,
@@ -107,6 +110,9 @@ const {
   updateSkillsFromClawHubMock,
   readTrackedClawHubSkillSlugsMock,
   resolveClawHubSkillVerificationTargetMock,
+  readClawHubSkillsLockfileStatusSyncMock,
+  resolveClawHubSkillStatusLinkSyncMock,
+  resolveLocalSkillCardStatusSyncMock,
   fetchClawHubSkillVerificationMock,
   fetchClawHubSkillCardMock,
   buildWorkspaceSkillStatusMock,
@@ -178,7 +184,7 @@ vi.mock("../agents/agent-scope.js", () => ({
     mocks.resolveAgentWorkspaceDirMock(config, agentId),
 }));
 
-vi.mock("../agents/skills-clawhub.js", () => ({
+vi.mock("../skills/lifecycle/clawhub.js", () => ({
   searchSkillsFromClawHub: (...args: unknown[]) => mocks.searchSkillsFromClawHubMock(...args),
   installSkillFromClawHub: (...args: unknown[]) => mocks.installSkillFromClawHubMock(...args),
   updateSkillsFromClawHub: (...args: unknown[]) => mocks.updateSkillsFromClawHubMock(...args),
@@ -186,6 +192,12 @@ vi.mock("../agents/skills-clawhub.js", () => ({
     mocks.readTrackedClawHubSkillSlugsMock(...args),
   resolveClawHubSkillVerificationTarget: (...args: unknown[]) =>
     mocks.resolveClawHubSkillVerificationTargetMock(...args),
+  readClawHubSkillsLockfileStatusSync: (...args: unknown[]) =>
+    mocks.readClawHubSkillsLockfileStatusSyncMock(...args),
+  resolveClawHubSkillStatusLinkSync: (...args: unknown[]) =>
+    mocks.resolveClawHubSkillStatusLinkSyncMock(...args),
+  resolveLocalSkillCardStatusSync: (...args: unknown[]) =>
+    mocks.resolveLocalSkillCardStatusSyncMock(...args),
 }));
 
 vi.mock("../infra/clawhub.js", () => ({
@@ -194,7 +206,7 @@ vi.mock("../infra/clawhub.js", () => ({
   fetchClawHubSkillCard: (...args: unknown[]) => mocks.fetchClawHubSkillCardMock(...args),
 }));
 
-vi.mock("../agents/skills-source-install.js", () => ({
+vi.mock("../skills/lifecycle/source-install.js", () => ({
   installSkillFromSource: (...args: unknown[]) => mocks.installSkillFromSourceMock(...args),
   isSkillSourceInstallSpec: (raw: string) =>
     raw.startsWith("git:") ||
@@ -204,7 +216,8 @@ vi.mock("../agents/skills-source-install.js", () => ({
     raw.startsWith("/"),
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/discovery/status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/discovery/status.js")>()),
   buildWorkspaceSkillStatus: (workspaceDir: string, options?: unknown) =>
     mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
 }));
@@ -242,6 +255,9 @@ describe("skills cli commands", () => {
     updateSkillsFromClawHubMock.mockReset();
     readTrackedClawHubSkillSlugsMock.mockReset();
     resolveClawHubSkillVerificationTargetMock.mockReset();
+    readClawHubSkillsLockfileStatusSyncMock.mockReset();
+    resolveClawHubSkillStatusLinkSyncMock.mockReset();
+    resolveLocalSkillCardStatusSyncMock.mockReset();
     fetchClawHubSkillVerificationMock.mockReset();
     fetchClawHubSkillCardMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
@@ -261,6 +277,9 @@ describe("skills cli commands", () => {
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
+    readClawHubSkillsLockfileStatusSyncMock.mockReturnValue({ kind: "missing" });
+    resolveClawHubSkillStatusLinkSyncMock.mockReturnValue(undefined);
+    resolveLocalSkillCardStatusSyncMock.mockReturnValue(undefined);
     resolveClawHubSkillVerificationTargetMock.mockResolvedValue({
       ok: true,
       slug: "agentreceipt",

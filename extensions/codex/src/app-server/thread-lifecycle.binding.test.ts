@@ -640,6 +640,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ...config,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     };
 
     await startOrResumeThread({
@@ -708,6 +709,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
       hooks: { PreToolUse: [] },
       ...createPluginAppConfigPatch(),
     });
@@ -786,6 +788,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
       ...createPluginAppConfigPatch(),
     });
@@ -793,6 +796,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
       "hooks.PreToolUse": finalConfigPatch["hooks.PreToolUse"],
     });
   });
@@ -854,12 +858,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
       ...createPluginAppConfigPatch(),
     });
     expect(requestCalls[1]?.[1].config).toEqual({
       "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
   });
 
@@ -922,6 +928,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
       apps: {
         _default: {
           enabled: false,
@@ -980,6 +987,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
@@ -1039,6 +1047,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -1104,6 +1113,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
   });
 
@@ -1159,6 +1169,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ...createTwoPluginAppConfigPatch(),
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -1223,6 +1234,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ...createTwoCalendarAppConfigPatch(),
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
@@ -1276,6 +1288,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
       ...createPluginAppConfigPatch(),
       "features.code_mode": true,
       "features.code_mode_only": false,
+      "features.apply_patch_streaming_events": true,
     });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-plugins");

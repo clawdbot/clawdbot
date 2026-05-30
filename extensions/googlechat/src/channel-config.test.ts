@@ -1,8 +1,17 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { googlechatPlugin } from "./channel.js";
+import { googlechatSetupPlugin } from "./channel.setup.js";
 
 describe("googlechatPlugin config adapter", () => {
+  it("keeps setup metadata aligned with the runtime plugin", () => {
+    expect(googlechatSetupPlugin.id).toBe(googlechatPlugin.id);
+    expect(googlechatSetupPlugin.meta).toEqual(googlechatPlugin.meta);
+    expect(googlechatSetupPlugin.capabilities?.chatTypes).toEqual(
+      googlechatPlugin.capabilities?.chatTypes,
+    );
+  });
+
   it("keeps read-only accessors from resolving service account SecretRefs", () => {
     const cfg = {
       secrets: {

@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
 
 const GATEWAY_CONNECT_TIMEOUT_MS = 5_000;
@@ -22,6 +23,7 @@ async function startMinimalGatewayServer(params: { token: string }) {
   const httpServer = createServer();
   const wss = new WebSocketServer({ server: httpServer });
   const requests: string[] = [];
+  let connectParams: Record<string, unknown> | undefined;
 
   wss.on("connection", (ws) => {
     ws.send(
@@ -43,6 +45,7 @@ async function startMinimalGatewayServer(params: { token: string }) {
       }
       requests.push(frame.method ?? "");
       if (frame.method === "connect") {
+        connectParams = frame.params as Record<string, unknown> | undefined;
         expect(frame.params?.auth?.token).toBe(params.token);
         expect(frame.params?.device?.nonce).toBe("test-nonce");
         ws.send(
@@ -81,6 +84,9 @@ async function startMinimalGatewayServer(params: { token: string }) {
   const address = httpServer.address() as AddressInfo;
   return {
     requests,
+    get connectParams() {
+      return connectParams;
+    },
     url: `ws://127.0.0.1:${address.port}`,
     close: async () => {
       for (const client of wss.clients) {
@@ -136,7 +142,12 @@ describe("gateway cli backend connect", () => {
         const health = await client.request("health", undefined, {
           timeoutMs: 1_000,
         });
+        const connectClient = server.connectParams?.client as Record<string, unknown> | undefined;
         expect(health.ok).toBe(true);
+        expect(connectClient?.id).toBe(GATEWAY_CLIENT_NAMES.TEST);
+        expect(connectClient?.displayName).toBe("vitest-live");
+        expect(connectClient?.version).toBe("dev");
+        expect(connectClient?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
         expect(server.requests).toEqual(["connect", "health"]);
       } finally {
         await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});

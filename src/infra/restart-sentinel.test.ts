@@ -4,7 +4,6 @@ import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
-  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   buildRestartSuccessContinuation,
   consumeRestartSentinel,
   finalizeUpdateRestartSentinelRunningVersion,
@@ -271,11 +270,8 @@ describe("restart sentinel", () => {
 });
 
 describe("restart success continuation", () => {
-  it("builds the default agent turn for session-scoped restarts", () => {
-    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toEqual({
-      kind: "agentTurn",
-      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-    });
+  it("does not infer an agent turn from session context alone", () => {
+    expect(buildRestartSuccessContinuation({ sessionKey: "agent:main:main" })).toBeNull();
   });
 
   it("keeps explicit continuation messages", () => {

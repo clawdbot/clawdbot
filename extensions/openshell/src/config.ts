@@ -4,6 +4,7 @@ import {
   formatPluginConfigIssue,
   mapPluginConfigIssues,
 } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 
 type OpenShellPluginConfig = {
@@ -90,8 +91,13 @@ const OpenShellPluginConfigSchema = z.strictObject({
     "remoteAgentWorkspaceDir must be a non-empty string",
   ).optional(),
   timeoutSeconds: z
-    .number({ error: "timeoutSeconds must be a number >= 1" })
+    .number({
+      error: `timeoutSeconds must be a number between 1 and ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
     .min(1, { error: "timeoutSeconds must be a number >= 1" })
+    .max(MAX_TIMER_TIMEOUT_SECONDS, {
+      error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
     .optional(),
 });
 

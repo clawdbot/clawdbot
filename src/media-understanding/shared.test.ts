@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { VERSION } from "../version.js";
 
 const { fetchWithSsrFGuardMock, shouldUseEnvHttpProxyForUrlMock } = vi.hoisted(() => ({
@@ -68,6 +69,25 @@ describe("provider operation deadlines", () => {
     });
 
     expect(resolveProviderOperationTimeoutMs({ deadline, defaultTimeoutMs: 60_000 })).toBe(60_000);
+  });
+
+  it("caps oversized operation and per-call timeouts to timer-safe values", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+
+    const deadline = createProviderOperationDeadline({
+      label: "video generation",
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(deadline.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(deadline.deadlineAtMs).toBe(1_000 + MAX_TIMER_TIMEOUT_MS);
+    expect(
+      resolveProviderOperationTimeoutMs({
+        deadline: createProviderOperationDeadline({ label: "no deadline" }),
+        defaultTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+      }),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("clamps per-call timeouts to the remaining operation deadline", () => {

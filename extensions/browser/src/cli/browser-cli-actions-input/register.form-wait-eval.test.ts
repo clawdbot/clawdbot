@@ -44,7 +44,7 @@ describe("browser action input wait command", () => {
   it("keeps the outer request open longer than a time-based wait", async () => {
     const program = createActionInputProgram();
 
-    await program.parseAsync(["browser", "wait", "--time", "25000"], { from: "user" });
+    await program.parseAsync(["browser", "wait", "--time", "+025000"], { from: "user" });
 
     const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
       | { timeoutMs?: number }
@@ -102,7 +102,7 @@ describe("browser action input evaluate command", () => {
     const program = createActionInputProgram();
 
     await program.parseAsync(
-      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "30000"],
+      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "+030000"],
       { from: "user" },
     );
 

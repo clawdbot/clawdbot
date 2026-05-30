@@ -17,6 +17,7 @@ vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
   };
 });
 
+import { sanitizeCompactionMessages } from "./compaction-planning.js";
 import { chunkMessagesByMaxTokens, splitMessagesByTokenShare } from "./compaction.js";
 
 describe("compaction token accounting sanitization", () => {
@@ -47,5 +48,36 @@ describe("compaction token accounting sanitization", () => {
     });
 
     expect(calledWithDetails).toBe(false);
+  });
+
+  it("projects worker inputs to planning-safe messages before cloning", () => {
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "browser",
+        isError: false,
+        content: [{ type: "text", text: "ok" }],
+        details: { raw: "x".repeat(50_000) },
+        timestamp: 1,
+      } as any,
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "internal",
+        timestamp: 2,
+      } as any,
+      {
+        role: "user",
+        content: "next",
+        timestamp: 3,
+      },
+    ];
+
+    const sanitized = sanitizeCompactionMessages(messages);
+
+    expect(sanitized).toHaveLength(2);
+    expect(sanitized[0]).not.toHaveProperty("details");
+    expect(sanitized.map((message) => message.role)).toEqual(["toolResult", "user"]);
   });
 });

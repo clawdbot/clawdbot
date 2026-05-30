@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  clearCliSessionMock,
   clearFastTestEnv,
   getCliSessionIdMock,
   isCliProviderMock,
@@ -282,6 +283,45 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
         firstModelCallStarted: true,
       }),
     ).toBe(true);
+  });
+
+  it("clears stale CLI bindings when cron CLI replacement is unflushed", async () => {
+    isCliProviderMock.mockReturnValue(true);
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      const result = await run(provider, model);
+      return { result, provider, model, attempts: [] };
+    });
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({
+        cliSessionBindings: {
+          "claude-cli": { sessionId: "stale-cli-session" },
+          "codex-cli": { sessionId: "codex-session" },
+        },
+      }),
+      isNewSession: false,
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "summary done" }],
+      meta: {
+        agentMeta: {
+          provider: "claude-cli",
+          model: "claude-opus-4-6",
+          sessionId: "",
+          clearCliSessionBinding: true,
+          usage: { input: 10, output: 20 },
+        },
+      },
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        job: makeJob({ sessionTarget: "session:existing-cron-session" }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(clearCliSessionMock).toHaveBeenCalledWith(cronSession.sessionEntry, "claude-cli");
   });
 
   it("validates cron thinking with catalog reasoning metadata", async () => {

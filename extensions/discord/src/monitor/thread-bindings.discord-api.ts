@@ -1,5 +1,6 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createDiscordRestClient } from "../client.js";
@@ -84,13 +85,7 @@ export function summarizeDiscordError(err: unknown): string {
 }
 
 function extractNumericDiscordErrorValue(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-    return Number(value);
-  }
-  return undefined;
+  return parseStrictNonNegativeInteger(value);
 }
 
 function extractDiscordErrorStatus(err: unknown): number | undefined {

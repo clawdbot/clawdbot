@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { formatErrorMessage } from "./errors.js";
 import { parseStrictNonNegativeInteger } from "./parse-finite-number.js";
 
@@ -101,11 +102,14 @@ function resolveRequestBodyLimitValues(options: {
     ? Math.max(1, Math.floor(options.maxBytes))
     : 1;
   const timeoutMs =
-    typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs)
-      ? Math.max(1, Math.floor(options.timeoutMs))
-      : DEFAULT_WEBHOOK_BODY_TIMEOUT_MS;
+    options.timeoutMs === undefined
+      ? DEFAULT_WEBHOOK_BODY_TIMEOUT_MS
+      : resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_WEBHOOK_BODY_TIMEOUT_MS);
   return { maxBytes, timeoutMs };
 }
+
+export const testApi = { resolveRequestBodyLimitValues };
+export { testApi as __test__ };
 
 function advanceRequestBodyChunk(
   chunk: Buffer | string,

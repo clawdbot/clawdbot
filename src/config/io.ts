@@ -26,6 +26,7 @@ import {
   resolvePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
+import { collectManifestModelIdNormalizationPolicies } from "../shared/provider-model-id-normalization.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
@@ -222,6 +223,10 @@ export type ConfigWriteOptions = {
    * Avoids rereading the full config just to prepare an immediate write.
    */
   baseSnapshot?: ConfigFileSnapshot;
+  /**
+   * Plugin metadata paired with baseSnapshot when the caller already read it.
+   */
+  basePluginMetadataSnapshot?: PluginMetadataSnapshot;
   /**
    * Internal one-shot CLI fast path. When no runtime snapshot is active, skip
    * the post-write runtime snapshot refresh/reload tail entirely.
@@ -2091,6 +2096,7 @@ export function createConfigIO(
     return {
       snapshot: result.snapshot,
       writeOptions: {
+        basePluginMetadataSnapshot: result.pluginMetadataSnapshot,
         envSnapshotForRestore: result.envSnapshotForRestore,
         expectedConfigPath: configPath,
         unsetPaths: resolveManagedUnsetPathsForWrite(undefined),
@@ -2146,7 +2152,13 @@ export function createConfigIO(
     clearConfigCache();
     const unsetPaths = resolveManagedUnsetPathsForWrite(options.unsetPaths);
     let persistCandidate: unknown = cfg;
-    const snapshot = options.baseSnapshot ?? (await readConfigFileSnapshotInternal()).snapshot;
+    const snapshotRead = options.baseSnapshot
+      ? {
+          snapshot: options.baseSnapshot,
+          pluginMetadataSnapshot: options.basePluginMetadataSnapshot,
+        }
+      : await readConfigFileSnapshotInternal();
+    const snapshot = snapshotRead.snapshot;
     let envRefMap: Map<string, string> | null = null;
     let changedPaths: Set<string> | null = null;
     if (snapshot.valid && snapshot.exists) {
@@ -2158,6 +2170,9 @@ export function createConfigIO(
         unsetPaths,
         explicitSetPaths: options.explicitSetPaths,
         explicitSetValueSource: options.explicitSetValueSource,
+        modelIdNormalizationPolicies: snapshotRead.pluginMetadataSnapshot
+          ? collectManifestModelIdNormalizationPolicies(snapshotRead.pluginMetadataSnapshot.plugins)
+          : undefined,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(
@@ -2540,16 +2555,25 @@ export function projectConfigOntoRuntimeSourceSnapshot(config: OpenClawConfig): 
   return coerceConfig(applyMergePatch(projectedSource, runtimePatch));
 }
 
-export function loadConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function loadConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
+  const loadFresh = () =>
+    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig();
+  if (options?.pin === false) {
+    return loadFresh();
+  }
   // First successful load becomes the process snapshot. Long-lived runtimes
   // should swap this snapshot via explicit reload/watcher paths instead of
   // reparsing openclaw.json on hot code paths.
-  return loadPinnedRuntimeConfig(() =>
-    createConfigIO(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}).loadConfig(),
-  );
+  return loadPinnedRuntimeConfig(loadFresh);
 }
 
-export function getRuntimeConfig(options?: { skipPluginValidation?: boolean }): OpenClawConfig {
+export function getRuntimeConfig(options?: {
+  skipPluginValidation?: boolean;
+  pin?: boolean;
+}): OpenClawConfig {
   return loadConfig(options);
 }
 
@@ -2642,10 +2666,17 @@ export async function writeConfigFile(
     const runtimePatch = createMergePatch(runtimeConfigSnapshot!, cfg);
     nextCfg = coerceConfig(applyMergePatch(runtimeConfigSourceSnapshot!, runtimePatch));
   }
-  const baseSnapshot = options.baseSnapshot ?? (await io.readConfigFileSnapshot());
+  const baseSnapshotRead = options.baseSnapshot
+    ? {
+        snapshot: options.baseSnapshot,
+        pluginMetadataSnapshot: options.basePluginMetadataSnapshot,
+      }
+    : await io.readConfigFileSnapshotWithPluginMetadata();
+  const baseSnapshot = baseSnapshotRead.snapshot;
   let runtimePreflightResult: unknown;
   const writeResult = await io.writeConfigFile(nextCfg, {
     baseSnapshot,
+    basePluginMetadataSnapshot: baseSnapshotRead.pluginMetadataSnapshot,
     envSnapshotForRestore: resolveWriteEnvSnapshotForPath({
       actualConfigPath: io.configPath,
       expectedConfigPath: options.expectedConfigPath,

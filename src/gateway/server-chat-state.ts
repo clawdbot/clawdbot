@@ -2,11 +2,13 @@ import type { AgentEventPayload } from "../infra/agent-events.js";
 
 export type ChatRunEntry = {
   sessionKey: string;
+  agentId?: string;
   clientRunId: string;
 };
 
 export type BufferedAgentEvent = {
   sessionKey?: string;
+  agentId?: string;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 

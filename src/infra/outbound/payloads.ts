@@ -66,16 +66,18 @@ export type OutboundPayloadMirror = {
   mediaUrls: string[];
 };
 
-function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
-  if (!presentation) {
-    return [];
-  }
+type MirrorTextBlock = MessagePresentation["blocks"][number] | InteractiveReply["blocks"][number];
+
+function collectBlockMirrorText(
+  blocks: readonly MirrorTextBlock[],
+  options: { includeContext?: boolean } = {},
+): string[] {
   const lines: string[] = [];
-  if (presentation.title?.trim()) {
-    lines.push(presentation.title.trim());
-  }
-  for (const block of presentation.blocks) {
-    if ((block.type === "text" || block.type === "context") && block.text.trim()) {
+  for (const block of blocks) {
+    if (
+      (block.type === "text" || (options.includeContext === true && block.type === "context")) &&
+      block.text.trim()
+    ) {
       lines.push(block.text.trim());
       continue;
     }
@@ -101,36 +103,23 @@ function collectPresentationMirrorText(presentation: MessagePresentation | undef
   return lines;
 }
 
+function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
+  if (!presentation) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (presentation.title?.trim()) {
+    lines.push(presentation.title.trim());
+  }
+  lines.push(...collectBlockMirrorText(presentation.blocks, { includeContext: true }));
+  return lines;
+}
+
 function collectInteractiveMirrorText(interactive: InteractiveReply | undefined): string[] {
   if (!interactive) {
     return [];
   }
-  const lines: string[] = [];
-  for (const block of interactive.blocks) {
-    if (block.type === "text" && block.text.trim()) {
-      lines.push(block.text.trim());
-      continue;
-    }
-    if (block.type === "buttons") {
-      for (const button of block.buttons) {
-        if (button.label.trim()) {
-          lines.push(button.label.trim());
-        }
-      }
-      continue;
-    }
-    if (block.type === "select") {
-      if (block.placeholder?.trim()) {
-        lines.push(block.placeholder.trim());
-      }
-      for (const option of block.options) {
-        if (option.label.trim()) {
-          lines.push(option.label.trim());
-        }
-      }
-    }
-  }
-  return lines;
+  return collectBlockMirrorText(interactive.blocks);
 }
 
 function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {

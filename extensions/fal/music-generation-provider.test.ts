@@ -45,6 +45,18 @@ function postRequest(): Record<string, unknown> {
   return request as Record<string, unknown>;
 }
 
+function streamedAudioResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "audio/mpeg" } },
+  );
+}
+
 describe("fal music generation provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
@@ -109,6 +121,33 @@ describe("fal music generation provider", () => {
     expect(result.tracks[0]?.buffer).toEqual(Buffer.from("mp3-bytes"));
     expect(result.tracks[0]?.fileName).toBe("out.mp3");
     expect(result.metadata?.audioUrl).toBe("https://v3b.fal.media/files/b/kangaroo/out.mp3");
+  });
+
+  it("rejects generated music downloads that exceed the configured media cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          audio: {
+            url: "https://v3b.fal.media/files/b/out.mp3",
+            content_type: "audio/mpeg",
+          },
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamedAudioResponse("too-large")),
+    );
+
+    await expect(
+      buildFalMusicGenerationProvider().generateMusic({
+        provider: "fal",
+        model: "fal-ai/minimax-music/v2.6",
+        prompt: "short track",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("fal generated music download exceeds 1 bytes");
   });
 
   it("rejects MiniMax lyrics requests that also ask for instrumental output", async () => {

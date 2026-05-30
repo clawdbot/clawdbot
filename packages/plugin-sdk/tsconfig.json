@@ -13,6 +13,8 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": [
+    "../../packages/markdown-core/src/**/*.ts",
+    "../../packages/media-generation-core/src/**/*.ts",
     "../../src/plugin-sdk/**/*.ts",
     "../../src/video-generation/dashscope-compatible.ts",
     "../../src/video-generation/types.ts",
@@ -21,6 +23,7 @@
   "exclude": [
     "node_modules",
     "dist",
+    "../../packages/**/*.test.ts",
     "../../src/**/*.test.ts",
     "../../src/plugin-sdk/AGENTS.md",
     "../../src/plugin-sdk/CLAUDE.md"

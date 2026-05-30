@@ -703,6 +703,33 @@ describe("session store writer queue", () => {
     expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
   });
 
+  it("returns an owned parsed store for fresh skip-cache loads without cloning again", async () => {
+    const key = "agent:main:owned-skip-cache";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "s-owned-skip-cache",
+        updatedAt: Date.now(),
+        skillsSnapshot: {
+          prompt: "owned prompt",
+          skills: [{ name: "demo" }],
+          version: 1,
+        },
+      },
+    });
+    const parseSpy = vi.spyOn(JSON, "parse");
+    try {
+      const loaded = loadSessionStore(storePath, { skipCache: true, clone: false });
+      loaded[key].sessionId = "mutated-owned-store";
+
+      expect(parseSpy).toHaveBeenCalledTimes(1);
+      expect(loadSessionStore(storePath, { skipCache: true, clone: false })[key].sessionId).toBe(
+        "s-owned-skip-cache",
+      );
+    } finally {
+      parseSpy.mockRestore();
+    }
+  });
+
   it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
     const key = "agent:main:no-fsync";
     const { storePath } = await makeTmpStore({

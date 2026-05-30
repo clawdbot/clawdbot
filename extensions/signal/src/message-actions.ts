@@ -4,6 +4,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { removeReactionSignal, sendReactionSignal } from "../reaction-runtime-api.js";
 import { listEnabledSignalAccounts, resolveSignalAccount } from "./accounts.js";
@@ -146,8 +147,8 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
       const remove = typeof params.remove === "boolean" ? params.remove : undefined;
 
-      const timestamp = Number.parseInt(messageId, 10);
-      if (!Number.isFinite(timestamp)) {
+      const timestamp = parseStrictNonNegativeInteger(messageId);
+      if (timestamp === undefined) {
         throw new Error(`Invalid messageId: ${messageId}. Expected numeric timestamp.`);
       }
 

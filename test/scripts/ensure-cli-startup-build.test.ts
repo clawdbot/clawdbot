@@ -167,21 +167,15 @@ describe("ensure-cli-startup-build", () => {
 });
 
 describe("resolveCliStartupBuildTimeoutMs", () => {
-  it("uses a positive environment timeout", () => {
-    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "4321" })).toBe(
-      4321,
-    );
-  });
-
-  it("falls back when the environment timeout is invalid", () => {
-    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "nope" })).toBe(
-      10 * 60 * 1000,
-    );
-  });
-
-  it("falls back when the environment timeout has a numeric prefix", () => {
-    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "10m" })).toBe(
-      10 * 60 * 1000,
-    );
+  it("parses only positive integer environment timeouts", () => {
+    for (const [raw, expected] of [
+      ["4321", 4321],
+      ["nope", 10 * 60 * 1000],
+      ["10m", 10 * 60 * 1000],
+    ] as const) {
+      expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: raw })).toBe(
+        expected,
+      );
+    }
   });
 });

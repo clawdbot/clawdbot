@@ -8,16 +8,17 @@ import {
   type DiagnosticEventPayload,
   type DiagnosticToolLoopEvent,
 } from "../infra/diagnostic-events.js";
+import { MAX_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
+import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -1258,6 +1259,38 @@ describe("before_tool_call requireApproval handling", () => {
     expect(waitCall[0]).toBe("plugin.approval.waitDecision");
     requireRecord(waitCall[1], "approval wait gateway client");
     expect(waitCall[2]).toEqual({ id: "server-id-1" });
+  });
+
+  it("caps oversized plugin approval timeouts before calling gateway", async () => {
+    hookRunner.runBeforeToolCall.mockResolvedValue({
+      requireApproval: {
+        title: "Oversized timeout",
+        description: "Still valid gateway payload",
+        pluginId: "sage",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      },
+    });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", status: "accepted" });
+    mockCallGateway.mockResolvedValueOnce({ id: "server-id-oversized", decision: "allow-once" });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "bash",
+      params: { command: "rm -rf" },
+      ctx: { agentId: "main", sessionKey: "main" },
+    });
+
+    expect(result.blocked).toBe(false);
+    const requestCall = requireGatewayCall(0);
+    expect(requireRecord(requestCall[1], "approval request gateway client").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
+    );
+    expect(requireRecord(requestCall[2], "approval request params").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+    );
+    const waitCall = requireGatewayCall(1);
+    expect(requireRecord(waitCall[1], "approval wait gateway client").timeoutMs).toBe(
+      MAX_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000,
+    );
   });
 
   it("blocks on deny decision", async () => {

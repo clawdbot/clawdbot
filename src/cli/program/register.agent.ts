@@ -14,7 +14,6 @@ type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
 type AgentsDeleteModule = typeof import("../../commands/agents.commands.delete.js");
 type AgentsIdentityModule = typeof import("../../commands/agents.commands.identity.js");
 type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
-type CliDepsModule = typeof import("../deps.js");
 type GlobalStateModule = typeof import("../../global-state.js");
 
 async function loadAgentCliCommand(): Promise<AgentViaGatewayModule["agentCliCommand"]> {
@@ -49,10 +48,6 @@ async function loadAgentsSetIdentityCommand(): Promise<
 
 async function loadAgentsListCommand(): Promise<AgentsListModule["agentsListCommand"]> {
   return (await import("../../commands/agents.commands.list.js")).agentsListCommand;
-}
-
-async function loadCreateDefaultDeps(): Promise<CliDepsModule["createDefaultDeps"]> {
-  return (await import("../deps.js")).createDefaultDeps;
 }
 
 async function loadSetVerbose(): Promise<GlobalStateModule["setVerbose"]> {
@@ -130,11 +125,8 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       await runCommandWithRuntime(defaultRuntime, async () => {
         const setVerbose = await loadSetVerbose();
         setVerbose(verboseLevel === "on");
-        // Build default deps (keeps parity with other commands; future-proofing).
-        const createDefaultDeps = await loadCreateDefaultDeps();
-        const deps = createDefaultDeps();
         const agentCliCommand = await loadAgentCliCommand();
-        await agentCliCommand(opts, defaultRuntime, deps);
+        await agentCliCommand(opts, defaultRuntime);
       });
     });
 

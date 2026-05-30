@@ -1,4 +1,4 @@
-import type { StreamFn as CoreStreamFn } from "../../../../packages/agent-core/src/llm.js";
+import type { StreamFn as CoreStreamFn } from "../../../../packages/llm-core/src/index.js";
 import type { Model } from "../../../llm/types.js";
 import {
   calculateContextTokens,

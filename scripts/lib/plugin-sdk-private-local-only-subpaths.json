@@ -6,6 +6,7 @@
   "codex-native-task-runtime",
   "plugin-test-api",
   "plugin-test-contracts",
+  "plugin-state-test-runtime",
   "plugin-test-runtime",
   "provider-http-test-mocks",
   "provider-test-contracts",

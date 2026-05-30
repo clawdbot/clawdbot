@@ -99,6 +99,112 @@ describe("Agent-specific exec tool defaults", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
+  it("passes normalized exec mode defaults into the exec tool", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            mode: "deny",
+          },
+        },
+      },
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-mode-deny",
+      agentDir: "/tmp/agent-main-mode-deny",
+    });
+    const execTool = requireExecTool(tools);
+
+    await expect(
+      execTool.execute("call-mode-deny", {
+        command: "echo blocked",
+      }),
+    ).rejects.toThrow("security=deny");
+  });
+
+  it("ignores per-call legacy security when configured mode is full", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            mode: "full",
+          },
+        },
+      },
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-mode-call-security",
+      agentDir: "/tmp/agent-main-mode-call-security",
+    });
+    const execTool = requireExecTool(tools);
+
+    const result = await execTool.execute("call-mode-security-deny", {
+      command: "echo allowed",
+      security: "deny",
+    });
+    const text = (result.content[0] as { text?: string } | undefined)?.text ?? "";
+    expect(text).toContain("allowed");
+  });
+
+  it("preserves mode-derived security for partial agent exec overrides", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            mode: "auto",
+            safeBins: [],
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: {
+                exec: {
+                  ask: "off",
+                },
+              },
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-mode-partial-agent",
+      agentDir: "/tmp/agent-main-mode-partial-agent",
+    });
+    const execTool = requireExecTool(tools);
+
+    await expect(
+      execTool.execute("call-mode-partial-agent", {
+        command: "echo blocked",
+      }),
+    ).rejects.toThrow(/allowlist miss/);
+  });
+
+  it("lets session legacy exec overrides clear inherited mode", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          exec: {
+            mode: "auto",
+            safeBins: [],
+          },
+        },
+      },
+      exec: {
+        security: "deny",
+      },
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-session-legacy-override",
+      agentDir: "/tmp/agent-main-session-legacy-override",
+    });
+    const execTool = requireExecTool(tools);
+
+    await expect(
+      execTool.execute("call-session-legacy-override", {
+        command: "echo denied",
+      }),
+    ).rejects.toThrow("security=deny");
+  });
+
   it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
     const tools = createOpenClawCodingTools({
       config: {},

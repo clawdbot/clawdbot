@@ -10,6 +10,8 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   // src/ so edits restart the same process that consumes them.
   "packages/gateway-client/src",
   "packages/gateway-protocol/src",
+  "packages/markdown-core/src",
+  "packages/media-generation-core/src",
   "packages/net-policy/src",
 ];
 

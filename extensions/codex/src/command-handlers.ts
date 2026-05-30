@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
@@ -545,6 +546,7 @@ async function bindConversation(
     sessionFile: ctx.sessionFile,
     workspaceDir,
     agentDir: scope.agentDir,
+    sessionKey: ctx.sessionKey,
     threadId: parsed.threadId,
     model: parsed.model,
     modelProvider: parsed.provider,
@@ -1932,9 +1934,8 @@ function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
     }
     if (arg === "--limit") {
       const value = readRequiredOptionValue(args, index);
-      const parsedLimit =
-        value && /^\+?\d+$/.test(value.trim()) ? Number(value.trim()) : Number.NaN;
-      if (!Number.isSafeInteger(parsedLimit) || parsedLimit <= 0) {
+      const parsedLimit = parseStrictPositiveInteger(value);
+      if (parsedLimit === undefined) {
         parsed.help = true;
         continue;
       }

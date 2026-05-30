@@ -1,4 +1,6 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
@@ -7,6 +9,7 @@ export type ChatAbortControllerEntry = {
   controller: AbortController;
   sessionId: string;
   sessionKey: string;
+  agentId?: string;
   startedAtMs: number;
   expiresAtMs: number;
   ownerConnId?: string;
@@ -90,6 +93,7 @@ export function registerChatAbortController(params: {
   runId: string;
   sessionId: string;
   sessionKey?: string | null;
+  agentId?: string;
   timeoutMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
@@ -116,6 +120,7 @@ export function registerChatAbortController(params: {
     controller,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    agentId: normalizeActiveAgentId(params.agentId),
     startedAtMs: now,
     expiresAtMs:
       params.expiresAtMs ?? resolveChatRunExpiresAtMs({ now, timeoutMs: params.timeoutMs }),
@@ -135,6 +140,11 @@ function normalizeProviderIdForActiveRun(providerId: string | undefined): string
   return trimmed || undefined;
 }
 
+function normalizeActiveAgentId(agentId: string | undefined): string | undefined {
+  const trimmed = agentId?.trim().toLowerCase();
+  return trimmed || undefined;
+}
+
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
@@ -144,25 +154,55 @@ export type ChatAbortOps = {
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
+  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   agentRunSeq: Map<string, number>;
+  getRuntimeConfig?: () => OpenClawConfig;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
+
+function resolveChatAbortDeliverySessionKeys(
+  ops: ChatAbortOps,
+  sessionKey: string,
+  agentId: string | undefined,
+): string[] {
+  if (sessionKey !== "global") {
+    return [sessionKey];
+  }
+  const scopedAgentId = normalizeActiveAgentId(agentId);
+  if (!scopedAgentId) {
+    return [sessionKey];
+  }
+  const keys = [`agent:${scopedAgentId}:global`];
+  const cfg = ops.getRuntimeConfig?.();
+  const defaultAgentId = cfg ? resolveDefaultAgentId(cfg) : undefined;
+  if (defaultAgentId && scopedAgentId === defaultAgentId) {
+    keys.push(sessionKey);
+  }
+  return keys;
+}
 
 function broadcastChatAborted(
   ops: ChatAbortOps,
   params: {
     runId: string;
     sessionKey: string;
+    agentId?: string;
     stopReason?: string;
     partialText?: string;
   },
 ) {
   const { runId, sessionKey, stopReason, partialText } = params;
+  const defaultGlobalAgentId =
+    sessionKey === "global" ? normalizeActiveAgentId(resolveDefaultGlobalAgentId(ops)) : undefined;
+  const payloadAgentId =
+    sessionKey === "global"
+      ? (normalizeActiveAgentId(params.agentId) ?? defaultGlobalAgentId)
+      : normalizeActiveAgentId(params.agentId);
   const payload = {
     runId,
     sessionKey,
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
     state: "aborted" as const,
     stopReason,
@@ -175,7 +215,18 @@ function broadcastChatAborted(
       : undefined,
   };
   ops.broadcast("chat", payload);
-  ops.nodeSendToSession(sessionKey, "chat", payload);
+  for (const deliverySessionKey of resolveChatAbortDeliverySessionKeys(
+    ops,
+    sessionKey,
+    payloadAgentId,
+  )) {
+    ops.nodeSendToSession(deliverySessionKey, "chat", payload);
+  }
+}
+
+function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
+  const cfg = ops.getRuntimeConfig?.();
+  return cfg ? resolveDefaultAgentId(cfg) : undefined;
 }
 
 export function abortChatRunById(
@@ -205,10 +256,17 @@ export function abortChatRunById(
   ops.chatAbortControllers.delete(runId);
   ops.clearChatRunState(runId);
   const removed = ops.removeChatRun(runId, runId, sessionKey);
-  broadcastChatAborted(ops, { runId, sessionKey, stopReason, partialText });
+  broadcastChatAborted(ops, {
+    runId,
+    sessionKey,
+    agentId: active.agentId,
+    stopReason,
+    partialText,
+  });
   emitAgentEvent({
     runId,
     sessionKey,
+    agentId: active.agentId,
     stream: "lifecycle",
     data: {
       phase: "end",

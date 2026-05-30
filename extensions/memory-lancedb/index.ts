@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readFiniteNumberParam, readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
@@ -196,8 +197,8 @@ function parsePositiveIntegerOption(value: string | undefined, flag: string): nu
   if (value === undefined) {
     return undefined;
   }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer`);
   }
   return parsed;

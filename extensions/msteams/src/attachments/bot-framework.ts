@@ -1,3 +1,4 @@
+import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
 import { ensureUserAgentHeader } from "../user-agent.js";
 import {
@@ -164,8 +165,17 @@ async function saveBotFrameworkAttachmentView(params: {
     });
     return undefined;
   }
-  const contentLength = response.headers.get("content-length");
-  if (contentLength && Number(contentLength) > params.maxBytes) {
+  let contentLength: number | null;
+  try {
+    contentLength = parseMediaContentLength(response.headers.get("content-length"));
+  } catch (err) {
+    await response.body?.cancel();
+    params.logger?.warn?.("msteams botFramework attachmentView invalid content-length", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+  if (contentLength !== null && contentLength > params.maxBytes) {
     await response.body?.cancel();
     return undefined;
   }

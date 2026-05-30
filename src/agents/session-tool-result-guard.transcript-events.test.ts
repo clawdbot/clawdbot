@@ -43,6 +43,7 @@ describe("guardSessionManager transcript updates", () => {
 
     expect(updates).toStrictEqual([
       {
+        agentId: "main",
         message: {
           content: [{ text: "hello from subagent", type: "text" }],
           role: "assistant",

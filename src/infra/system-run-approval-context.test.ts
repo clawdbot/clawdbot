@@ -120,6 +120,29 @@ describe("parsePreparedSystemRunPayload", () => {
     });
   });
 
+  test("parses prepared exec policy metadata", () => {
+    expect(
+      parsePreparedSystemRunPayload({
+        plan: {
+          argv: ["jq", "--version"],
+          cwd: "/tmp",
+          commandText: "jq --version",
+        },
+        execPolicy: { security: "allowlist", ask: "always" },
+      }),
+    ).toEqual({
+      plan: {
+        argv: ["jq", "--version"],
+        cwd: "/tmp",
+        commandText: "jq --version",
+        commandPreview: null,
+        agentId: null,
+        sessionKey: null,
+      },
+      execPolicy: { security: "allowlist", ask: "always" },
+    });
+  });
+
   test("rejects legacy payloads missing argv or command text", () => {
     expect(parsePreparedSystemRunPayload({ plan: { argv: [] }, commandText: "jq --version" })).toBe(
       null,

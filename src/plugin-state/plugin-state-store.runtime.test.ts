@@ -57,6 +57,9 @@ function createTestPluginRegistry() {
         openKeyedStore: () => {
           throw new Error("registry plugin runtime proxy should bind openKeyedStore");
         },
+        openSyncKeyedStore: () => {
+          throw new Error("registry plugin runtime proxy should bind openSyncKeyedStore");
+        },
       },
     } as unknown as PluginRuntime,
   });
@@ -91,6 +94,13 @@ describe("plugin runtime state proxy", () => {
       });
       await expect(telegramStore.lookup("k")).resolves.toBeUndefined();
       await expect(store.lookup("k")).resolves.toEqual({ plugin: "discord" });
+
+      const syncStore = api.runtime.state.openSyncKeyedStore<{ plugin: string }>({
+        namespace: "sync-runtime",
+        maxEntries: 10,
+      });
+      expect(syncStore.registerIfAbsent("k", { plugin: "discord" })).toBe(true);
+      expect(syncStore.lookup("k")).toEqual({ plugin: "discord" });
     });
   });
 
@@ -118,6 +128,9 @@ describe("plugin runtime state proxy", () => {
 
     expect(() =>
       api.runtime.state.openKeyedStore({ namespace: "runtime", maxEntries: 10 }),
+    ).toThrow("openKeyedStore is only available for trusted plugins");
+    expect(() =>
+      api.runtime.state.openSyncKeyedStore({ namespace: "runtime", maxEntries: 10 }),
     ).toThrow("openKeyedStore is only available for trusted plugins");
   });
 

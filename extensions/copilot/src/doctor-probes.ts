@@ -136,7 +136,7 @@ export async function probeCopilotCliVersion(
           });
           return;
         }
-        // Many version commands (notably the bundled `copilot --version`)
+        // Many version commands (notably the GitHub Copilot CLI's `copilot --version`)
         // print a banner plus an "update available" hint on subsequent
         // lines. Surface only the first non-empty line as `version` so the
         // doctor UI gets a clean string; keep the full stdout in

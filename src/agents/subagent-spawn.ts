@@ -10,6 +10,7 @@ import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../plugins/command-registry-state.js";
 import type { SubagentLifecycleHookRunner } from "../plugins/hooks.js";
 import { isValidAgentId, normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { finiteSecondsToTimerSafeMilliseconds } from "../shared/number-coercion.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -484,7 +485,9 @@ async function prepareContextEngineSubagentSpawn(params: {
         params.context.mode === "fork"
           ? params.context.forked.sessionFile
           : params.context.childEntry?.sessionFile,
-      ttlMs: params.runTimeoutSeconds > 0 ? params.runTimeoutSeconds * 1000 : undefined,
+      ttlMs: finiteSecondsToTimerSafeMilliseconds(params.runTimeoutSeconds, {
+        floorSeconds: true,
+      }),
     });
     return { status: "ok", preparation };
   } catch (err) {

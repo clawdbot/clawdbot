@@ -2,6 +2,7 @@ import type { FileSystem, JsonlSessionMetadata, SessionTreeEntry } from "../type
 import { SessionError, toError } from "../types.js";
 import { getFileSystemResultOrThrow } from "./repo-utils.js";
 import { BaseSessionStorage, leafIdAfterEntry } from "./storage-base.js";
+import { parseSessionTimestampMs } from "./timestamps.js";
 
 type JsonlSessionStorageFileSystem = Pick<
   FileSystem,
@@ -64,6 +65,9 @@ function parseHeaderLine(line: string, filePath: string): SessionHeader {
   if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
     throw invalidSession(filePath, "session header is missing timestamp");
   }
+  if (parseSessionTimestampMs(parsed.timestamp) === undefined) {
+    throw invalidSession(filePath, "session header has invalid timestamp");
+  }
   if (typeof parsed.cwd !== "string" || !parsed.cwd) {
     throw invalidSession(filePath, "session header is missing cwd");
   }
@@ -101,6 +105,9 @@ function parseEntryLine(line: string, filePath: string, lineNumber: number): Ses
   }
   if (typeof parsed.timestamp !== "string" || !parsed.timestamp) {
     throw invalidEntry(filePath, lineNumber, "is missing timestamp");
+  }
+  if (parseSessionTimestampMs(parsed.timestamp) === undefined) {
+    throw invalidEntry(filePath, lineNumber, "has invalid timestamp");
   }
   if (parsed.type === "leaf" && parsed.targetId !== null && typeof parsed.targetId !== "string") {
     throw invalidEntry(filePath, lineNumber, "has invalid targetId");

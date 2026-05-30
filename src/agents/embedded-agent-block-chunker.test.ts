@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as fences from "../markdown/fences.js";
+import * as fences from "../../packages/markdown-core/src/fences.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 
 function createFlushOnParagraphChunker(params: { minChars: number; maxChars: number }) {

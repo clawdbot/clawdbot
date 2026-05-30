@@ -2,6 +2,10 @@ import { intro, note, outro, spinner } from "@clack/prompts";
 import { stylePromptTitle } from "openclaw/plugin-sdk/cli-runtime";
 import { logConfigUpdated, updateConfig } from "openclaw/plugin-sdk/config-mutation";
 import {
+  nonNegativeSecondsToSafeMilliseconds,
+  positiveSecondsToSafeMilliseconds,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
   applyAuthProfileConfig,
   ensureAuthProfileStore,
   upsertAuthProfileWithLock,
@@ -16,11 +20,12 @@ const GITHUB_DEVICE_VERIFICATION_URL = "https://github.com/login/device";
 const GITHUB_AUTH_SSRF_POLICY: SsrFPolicy = { hostnameAllowlist: ["github.com"] };
 
 type DeviceCodeResponse = {
-  device_code: string;
-  user_code: string;
-  verification_uri: string;
-  expires_in: number;
-  interval: number;
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  expiresInMs: number;
+  expiresAt: number;
+  intervalMs: number;
 };
 
 type DeviceTokenResponse =
@@ -81,6 +86,39 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function parseDeviceCodeResponse(
+  value: Record<string, unknown>,
+  issuedAt: number,
+): DeviceCodeResponse {
+  const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
+  const intervalMs = nonNegativeSecondsToSafeMilliseconds(value.interval);
+  const expiresAt = expiresInMs === undefined ? undefined : issuedAt + expiresInMs;
+
+  if (
+    typeof value.device_code !== "string" ||
+    !value.device_code ||
+    typeof value.user_code !== "string" ||
+    !value.user_code ||
+    typeof value.verification_uri !== "string" ||
+    !value.verification_uri ||
+    expiresInMs === undefined ||
+    expiresAt === undefined ||
+    !Number.isSafeInteger(expiresAt) ||
+    intervalMs === undefined
+  ) {
+    throw new Error("GitHub device code response missing fields");
+  }
+
+  return {
+    deviceCode: value.device_code,
+    userCode: value.user_code,
+    verificationUri: value.verification_uri,
+    expiresInMs,
+    expiresAt,
+    intervalMs,
+  };
+}
+
 async function postGitHubDeviceFlowForm(params: {
   url: string;
   body: URLSearchParams;
@@ -116,15 +154,13 @@ async function requestDeviceCode(params: { scope: string }): Promise<DeviceCodeR
     scope: params.scope,
   });
 
-  const json = (await postGitHubDeviceFlowForm({
+  const json = await postGitHubDeviceFlowForm({
     url: DEVICE_CODE_URL,
     body,
     failureLabel: "GitHub device code failed",
-  })) as DeviceCodeResponse;
-  if (!json.device_code || !json.user_code || !json.verification_uri) {
-    throw new Error("GitHub device code response missing fields");
-  }
-  return json;
+  });
+  // Anchor expiry to when GitHub issued the code, before UI prompts or browser launch.
+  return parseDeviceCodeResponse(json, Date.now());
 }
 
 async function pollForAccessToken(params: {
@@ -218,16 +254,12 @@ export async function runGitHubCopilotDeviceFlow(
   io: GitHubCopilotDeviceFlowIO,
 ): Promise<GitHubCopilotDeviceFlowResult> {
   const device = await requestDeviceCode({ scope: "read:user" });
-  const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verification_uri);
-  const userCode = normalizeGitHubDeviceUserCode(device.user_code);
-  const expiresInMs = device.expires_in * 1000;
-  // Anchor expiry to when GitHub issued the code, not when the UI finishes prompting.
-  const expiresAt = Date.now() + expiresInMs;
-
+  const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verificationUri);
+  const userCode = normalizeGitHubDeviceUserCode(device.userCode);
   await io.showCode({
     verificationUrl,
     userCode,
-    expiresInMs,
+    expiresInMs: device.expiresInMs,
   });
 
   try {
@@ -238,9 +270,9 @@ export async function runGitHubCopilotDeviceFlow(
 
   try {
     const accessToken = await pollForAccessToken({
-      deviceCode: device.device_code,
-      intervalMs: Math.max(1000, device.interval * 1000),
-      expiresAt,
+      deviceCode: device.deviceCode,
+      intervalMs: Math.max(1000, device.intervalMs),
+      expiresAt: device.expiresAt,
     });
     return { status: "authorized", accessToken };
   } catch (err) {
@@ -282,19 +314,18 @@ export async function githubCopilotLoginCommand(
   spin.stop("Device code ready");
 
   note(
-    [`Visit: ${device.verification_uri}`, `Code: ${device.user_code}`].join("\n"),
+    [`Visit: ${device.verificationUri}`, `Code: ${device.userCode}`].join("\n"),
     stylePromptTitle("Authorize"),
   );
 
-  const expiresAt = Date.now() + device.expires_in * 1000;
-  const intervalMs = Math.max(1000, device.interval * 1000);
+  const intervalMs = Math.max(1000, device.intervalMs);
 
   const polling = spinner();
   polling.start("Waiting for GitHub authorization...");
   const accessToken = await pollForAccessToken({
-    deviceCode: device.device_code,
+    deviceCode: device.deviceCode,
     intervalMs,
-    expiresAt,
+    expiresAt: device.expiresAt,
   });
   polling.stop("GitHub access token acquired");
 

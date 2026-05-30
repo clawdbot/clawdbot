@@ -1,9 +1,11 @@
+import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-file-access.js";
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
@@ -157,6 +159,9 @@ const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
 // security-boundary review, but extension-declared .html files still need to
 // fail closed instead of falling through to binary/media sniffing.
 const HOST_READ_DECLARED_TEXT_MIMES = new Set([...HOST_READ_TEXT_PLAIN_ALIASES, "text/html"]);
+const HOST_READ_DECLARED_TEXT_ERROR =
+  "hostReadCapability permits only validated plain-text CSV/Markdown documents " +
+  "and trusted generated HTML reports for local reads";
 const MB = 1024 * 1024;
 
 function getTextStats(text: string): { printableRatio: number } {
@@ -226,18 +231,71 @@ function decodeHostReadText(buffer: Buffer): string | undefined {
 }
 
 function isValidatedHostReadText(buffer?: Buffer): boolean {
+  return getValidatedHostReadText(buffer) !== undefined;
+}
+
+function getValidatedHostReadText(buffer?: Buffer): string | undefined {
   if (!buffer) {
-    return false;
+    return undefined;
   }
   if (buffer.length === 0) {
-    return true;
+    return "";
   }
   const text = decodeHostReadText(buffer);
   if (text === undefined) {
-    return false;
+    return undefined;
   }
   const { printableRatio } = getTextStats(text);
-  return printableRatio > 0.95;
+  return printableRatio > 0.95 ? text : undefined;
+}
+
+function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
+  if (!filePath) {
+    return false;
+  }
+  const relative = path.relative(path.resolve(root), path.resolve(filePath));
+  return (
+    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function hasHtmlDocumentShape(text: string): boolean {
+  const sample = text.trimStart().slice(0, 8192);
+  return /^(?:<!doctype\s+html\b|<html\b)/iu.test(sample) || /<\/(?:html|body)>/iu.test(sample);
+}
+
+async function isTrustedGeneratedHostReadHtmlPath(filePath: string | undefined): Promise<boolean> {
+  if (!filePath) {
+    return false;
+  }
+  const info = await lstat(filePath).catch(() => undefined);
+  if (!info?.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
+    return false;
+  }
+  const [resolvedFilePath, resolvedTmpRoot] = await Promise.all([
+    realpath(filePath).catch(() => undefined),
+    realpath(resolvePreferredOpenClawTmpDir()).catch(() => undefined),
+  ]);
+  return Boolean(
+    resolvedFilePath && resolvedTmpRoot && isPathInsideRoot(resolvedFilePath, resolvedTmpRoot),
+  );
+}
+
+function isTrustedGeneratedHostReadHtml(params: {
+  filePath?: string;
+  sniffedContentType?: string;
+  buffer?: Buffer;
+  trustedGeneratedHtmlPath?: boolean;
+}): boolean {
+  const sniffedMime = normalizeMimeType(params.sniffedContentType);
+  if (sniffedMime && sniffedMime !== "text/html") {
+    return false;
+  }
+  if (!params.trustedGeneratedHtmlPath) {
+    return false;
+  }
+  const text = getValidatedHostReadText(params.buffer);
+  return text !== undefined && hasHtmlDocumentShape(text);
 }
 
 function formatMb(bytes: number, digits = 2): string {
@@ -268,6 +326,7 @@ function assertHostReadMediaAllowed(params: {
   filePath?: string;
   kind: MediaKind | undefined;
   buffer?: Buffer;
+  trustedGeneratedHtmlPath?: boolean;
 }): void {
   const declaredMime = normalizeMimeType(mimeTypeFromFilePath(params.filePath));
   const normalizedMime = normalizeMimeType(params.contentType);
@@ -277,6 +336,17 @@ function assertHostReadMediaAllowed(params: {
   // host-read should reject those instead of returning early on the sniff.
   if (declaredMime && HOST_READ_DECLARED_TEXT_MIMES.has(declaredMime)) {
     if (
+      declaredMime === "text/html" &&
+      isTrustedGeneratedHostReadHtml({
+        filePath: params.filePath,
+        sniffedContentType: params.sniffedContentType,
+        buffer: params.buffer,
+        trustedGeneratedHtmlPath: params.trustedGeneratedHtmlPath,
+      })
+    ) {
+      return;
+    }
+    if (
       HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime) &&
       !params.sniffedContentType &&
       params.buffer &&
@@ -284,10 +354,7 @@ function assertHostReadMediaAllowed(params: {
     ) {
       return;
     }
-    throw new LocalMediaAccessError(
-      "path-not-allowed",
-      "hostReadCapability permits only validated plain-text CSV/Markdown documents for local reads",
-    );
+    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
   }
   const sniffedKind = kindFromMime(params.sniffedContentType);
   if (sniffedKind === "image" || sniffedKind === "audio" || sniffedKind === "video") {
@@ -915,6 +982,17 @@ async function loadWebMediaInternal(
     await assertLocalMediaAllowed(mediaUrl, localRoots, { inboundRoots });
   }
 
+  const hostReadDeclaredMime = hostReadCapability
+    ? normalizeMimeType(mimeTypeFromFilePath(mediaUrl))
+    : undefined;
+  const trustedGeneratedHtmlPath =
+    hostReadDeclaredMime === "text/html"
+      ? await isTrustedGeneratedHostReadHtmlPath(mediaUrl)
+      : false;
+  if (hostReadDeclaredMime === "text/html" && !trustedGeneratedHtmlPath) {
+    throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
+  }
+
   // Local path
   let data: Buffer;
   if (readFileOverride) {
@@ -955,6 +1033,7 @@ async function loadWebMediaInternal(
       filePath: mediaUrl,
       kind,
       buffer: data,
+      trustedGeneratedHtmlPath,
     });
   }
   let fileName = basenameFromAnyPath(mediaUrl) || undefined;

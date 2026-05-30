@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
@@ -246,6 +247,20 @@ describe("resolveCdpReachabilityTimeouts", () => {
     ).toEqual({
       httpTimeoutMs: 1750,
       wsTimeoutMs: 3250,
+    });
+  });
+
+  it("caps remote reachability timeouts to timer-safe values", () => {
+    expect(
+      resolveCdpReachabilityTimeouts({
+        profileIsLoopback: false,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+        remoteHttpTimeoutMs: Number.MAX_SAFE_INTEGER,
+        remoteHandshakeTimeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({
+      httpTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      wsTimeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
   });
 });

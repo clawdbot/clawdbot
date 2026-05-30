@@ -1,4 +1,4 @@
-import { resolveIntegerOption } from "../../shared/number-coercion.js";
+import { parseStrictPositiveInteger, resolveIntegerOption } from "../../shared/number-coercion.js";
 
 const DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP = 32;
 const UNKNOWN_CLIENT_IP_BUDGET_KEY = "__openclaw_unknown_client_ip__";
@@ -10,11 +10,11 @@ function getMaxPreauthConnectionsPerIpFromEnv(env: NodeJS.ProcessEnv = process.e
   if (!configured) {
     return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
   }
-  const parsed = Number(configured);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(configured);
+  if (parsed === undefined) {
     return DEFAULT_MAX_PREAUTH_CONNECTIONS_PER_IP;
   }
-  return Math.max(1, Math.floor(parsed));
+  return parsed;
 }
 
 export type PreauthConnectionBudget = {

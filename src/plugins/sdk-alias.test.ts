@@ -1346,7 +1346,7 @@ describe("plugin sdk alias helpers", () => {
     });
   });
 
-  it("aliases gateway workspace packages to source when dist artifacts are missing", () => {
+  it("aliases workspace packages to source when dist artifacts are missing", () => {
     const fixture = createPluginSdkAliasFixture();
     const gatewayClient = writeWorkspacePackageEntry({
       root: fixture.root,
@@ -1372,10 +1372,52 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "schema.ts",
       distFile: "schema.mjs",
     });
+    const netPolicy = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "net-policy",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const mediaGenerationCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "media-generation-core",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const markdownCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "markdown-core",
+      srcFile: "index.ts",
+      distFile: "index.mjs",
+    });
+    const markdownCoreTables = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "markdown-core",
+      srcFile: "tables.ts",
+      distFile: "tables.mjs",
+    });
+    const mediaGenerationModelRef = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "media-generation-core",
+      srcFile: "model-ref.ts",
+      distFile: "model-ref.mjs",
+    });
+    const netPolicyIp = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "net-policy",
+      srcFile: "ip.ts",
+      distFile: "ip.mjs",
+    });
     fs.rmSync(gatewayClient.distFile);
     fs.rmSync(gatewayClientTimeouts.distFile);
     fs.rmSync(gatewayProtocol.distFile);
     fs.rmSync(gatewayProtocolSchema.distFile);
+    fs.rmSync(markdownCore.distFile);
+    fs.rmSync(markdownCoreTables.distFile);
+    fs.rmSync(mediaGenerationCore.distFile);
+    fs.rmSync(mediaGenerationModelRef.distFile);
+    fs.rmSync(netPolicy.distFile);
+    fs.rmSync(netPolicyIp.distFile);
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
       bundledPluginFile("demo", "src/index.ts"),
@@ -1397,9 +1439,27 @@ describe("plugin sdk alias helpers", () => {
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/schema"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocolSchema.srcFile),
     );
+    expect(fs.realpathSync(aliases["@openclaw/markdown-core"] ?? "")).toBe(
+      fs.realpathSync(markdownCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/markdown-core/tables"] ?? "")).toBe(
+      fs.realpathSync(markdownCoreTables.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/media-generation-core"] ?? "")).toBe(
+      fs.realpathSync(mediaGenerationCore.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/media-generation-core/model-ref"] ?? "")).toBe(
+      fs.realpathSync(mediaGenerationModelRef.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/net-policy"] ?? "")).toBe(
+      fs.realpathSync(netPolicy.srcFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/net-policy/ip"] ?? "")).toBe(
+      fs.realpathSync(netPolicyIp.srcFile),
+    );
   });
 
-  it("aliases gateway workspace package subpaths to dist when available", () => {
+  it("aliases workspace package subpaths to dist when available", () => {
     const fixture = createPluginSdkAliasFixture();
     const gatewayClient = writeWorkspacePackageEntry({
       root: fixture.root,
@@ -1412,6 +1472,24 @@ describe("plugin sdk alias helpers", () => {
       packageDir: "gateway-protocol",
       srcFile: "connect-error-details.ts",
       distFile: "connect-error-details.mjs",
+    });
+    const mediaGenerationCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "media-generation-core",
+      srcFile: "catalog.ts",
+      distFile: "catalog.mjs",
+    });
+    const markdownCore = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "markdown-core",
+      srcFile: "render.ts",
+      distFile: "render.mjs",
+    });
+    const netPolicy = writeWorkspacePackageEntry({
+      root: fixture.root,
+      packageDir: "net-policy",
+      srcFile: "redact-sensitive-url.ts",
+      distFile: "redact-sensitive-url.mjs",
     });
     const sourcePluginEntry = writePluginEntry(
       fixture.root,
@@ -1427,6 +1505,15 @@ describe("plugin sdk alias helpers", () => {
     );
     expect(fs.realpathSync(aliases["@openclaw/gateway-protocol/connect-error-details"] ?? "")).toBe(
       fs.realpathSync(gatewayProtocol.distFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/markdown-core/render"] ?? "")).toBe(
+      fs.realpathSync(markdownCore.distFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/media-generation-core/catalog"] ?? "")).toBe(
+      fs.realpathSync(mediaGenerationCore.distFile),
+    );
+    expect(fs.realpathSync(aliases["@openclaw/net-policy/redact-sensitive-url"] ?? "")).toBe(
+      fs.realpathSync(netPolicy.distFile),
     );
   });
 

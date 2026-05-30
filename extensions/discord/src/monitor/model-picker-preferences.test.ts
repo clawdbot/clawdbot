@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, describe, expect, it } from "vitest";
+import { setDiscordRuntime, type DiscordRuntime } from "../runtime.js";
+import {
+  buildDiscordModelPickerPreferenceKey,
   readDiscordModelPickerRecentModels,
   recordDiscordModelPickerRecentModel,
 } from "./model-picker-preferences.js";
@@ -12,10 +19,21 @@ const tempDirs: string[] = [];
 async function createStateEnv(): Promise<NodeJS.ProcessEnv> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-picker-"));
   tempDirs.push(dir);
-  return { ...process.env, OPENCLAW_STATE_DIR: dir };
+  const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+  setDiscordRuntime({
+    state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("discord", {
+          ...options,
+          env: options.env ?? env,
+        }),
+    },
+  } as unknown as DiscordRuntime);
+  return env;
 }
 
 afterEach(async () => {
+  resetPluginStateStoreForTests();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await fs.rm(dir, { recursive: true, force: true });
@@ -51,17 +69,142 @@ describe("discord model picker preferences", () => {
     expect(recent).toEqual(["openai/gpt-4.1"]);
   });
 
-  it("falls back to an empty store when the file is corrupt", async () => {
+  it("prunes older stored models beyond the recent limit", async () => {
     const env = await createStateEnv();
-    const stateDir = env.OPENCLAW_STATE_DIR as string;
-    const filePath = path.join(stateDir, "discord", "model-picker-preferences.json");
-    await fs.mkdir(path.dirname(filePath), { recursive: true });
-    await fs.writeFile(filePath, "{not-json", "utf-8");
+    const scope = { userId: "limited-user" };
+    for (const modelRef of [
+      "openai/model-a",
+      "openai/model-b",
+      "openai/model-c",
+      "openai/model-d",
+    ]) {
+      await recordDiscordModelPickerRecentModel({ env, scope, modelRef, limit: 2 });
+    }
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope, limit: 10 })).resolves.toEqual([
+      "openai/model-d",
+      "openai/model-c",
+    ]);
+    const store = createPluginStateKeyedStoreForTests<unknown>("discord", {
+      namespace: "model-picker-preferences",
+      maxEntries: 2_000,
+      env,
+    });
+    expect(await store.entries()).toHaveLength(2);
+  });
+
+  it("falls back to empty recents when stored state is malformed", async () => {
+    const env = await createStateEnv();
+    const key = buildDiscordModelPickerPreferenceKey({ userId: "789" });
+    expect(key).toBeTruthy();
+    const store = createPluginStateKeyedStoreForTests<unknown>("discord", {
+      namespace: "model-picker-preferences",
+      maxEntries: 2_000,
+      env,
+    });
+    await store.register(key as string, "not-an-entry");
 
     const recent = await readDiscordModelPickerRecentModels({
       env,
       scope: { userId: "789" },
     });
     expect(recent).toStrictEqual([]);
+  });
+
+  it("treats plugin-state failures as optional preference misses", async () => {
+    const env = await createStateEnv();
+    const scope = { userId: "state-failure-user" };
+    setDiscordRuntime({
+      state: {
+        openKeyedStore: () => {
+          throw new Error("state unavailable");
+        },
+      },
+    } as unknown as DiscordRuntime);
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([]);
+    await expect(
+      recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4.1" }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("imports legacy JSON preferences into plugin state", async () => {
+    const env = await createStateEnv();
+    const scope = { accountId: "main", guildId: "guild-1", userId: "user-1" };
+    const key = buildDiscordModelPickerPreferenceKey(scope);
+    expect(key).toBeTruthy();
+    const legacyPath = path.join(
+      env.OPENCLAW_STATE_DIR as string,
+      "discord",
+      "model-picker-preferences.json",
+    );
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          [key as string]: {
+            recent: ["openai/gpt-4.1", "bad-model", "openai/gpt-4o"],
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const recent = await readDiscordModelPickerRecentModels({ env, scope });
+    expect(recent).toEqual(["openai/gpt-4.1", "openai/gpt-4o"]);
+
+    await fs.rm(legacyPath, { force: true });
+    expect(await readDiscordModelPickerRecentModels({ env, scope })).toEqual([
+      "openai/gpt-4.1",
+      "openai/gpt-4o",
+    ]);
+  });
+
+  it("skips malformed legacy JSON entries during import", async () => {
+    const env = await createStateEnv();
+    const scope = { userId: "valid-legacy-user" };
+    const key = buildDiscordModelPickerPreferenceKey(scope);
+    expect(key).toBeTruthy();
+    const legacyPath = path.join(
+      env.OPENCLAW_STATE_DIR as string,
+      "discord",
+      "model-picker-preferences.json",
+    );
+    await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+    await fs.writeFile(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "": { recent: ["openai/bad-empty"], updatedAt: "bad" },
+          ["x".repeat(600)]: { recent: ["openai/bad-long"], updatedAt: "bad" },
+          [key as string]: {
+            recent: ["not-a-model", "openai/gpt-4.1"],
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    await expect(readDiscordModelPickerRecentModels({ env, scope })).resolves.toEqual([
+      "openai/gpt-4.1",
+    ]);
+  });
+
+  it("preserves concurrent model picker selections for the same scope", async () => {
+    const env = await createStateEnv();
+    const scope = { userId: "concurrent-user" };
+
+    await Promise.all([
+      recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4.1" }),
+      recordDiscordModelPickerRecentModel({ env, scope, modelRef: "openai/gpt-4o" }),
+    ]);
+
+    const recent = await readDiscordModelPickerRecentModels({ env, scope });
+    expect(new Set(recent)).toEqual(new Set(["openai/gpt-4o", "openai/gpt-4.1"]));
   });
 });

@@ -1,43 +1,40 @@
 {
   "name": "@openclaw/copilot",
-  "version": "2026.5.28",
-  "description": "OpenClaw GitHub Copilot agent runtime plugin (registers a `github-copilot` AgentHarness backed by @github/copilot-sdk over JSON-RPC to the bundled GitHub Copilot CLI)",
+  "version": "2026.5.30",
+  "description": "OpenClaw GitHub Copilot agent runtime plugin (registers a `github-copilot` AgentHarness backed by @github/copilot-sdk over JSON-RPC to the GitHub Copilot CLI)",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
-  "devDependencies": {
-    "@github/copilot": "1.0.48",
-    "@github/copilot-sdk": "1.0.0-beta.4",
-    "@openclaw/plugin-sdk": "workspace:*"
-  },
-  "peerDependencies": {
+  "dependencies": {
     "@github/copilot-sdk": "1.0.0-beta.4"
   },
-  "peerDependenciesMeta": {
-    "@github/copilot-sdk": {
-      "optional": true
-    }
+  "devDependencies": {
+    "@github/copilot": "1.0.48",
+    "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
     "extensions": [
       "./index.ts"
     ],
     "install": {
+      "clawhubSpec": "clawhub:@openclaw/copilot",
       "npmSpec": "@openclaw/copilot",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.1-beta.1"
+      "minHostVersion": ">=2026.5.28"
     },
     "compat": {
-      "pluginApi": ">=2026.5.28"
+      "pluginApi": ">=2026.5.30"
     },
     "build": {
-      "openclawVersion": "2026.5.28"
+      "openclawVersion": "2026.5.30",
+      "bundledDist": false
     },
     "release": {
-      "publishToClawHub": false,
-      "publishToNpm": false
+      "bundleRuntimeDependencies": false,
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

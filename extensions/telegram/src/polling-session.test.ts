@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
 
@@ -459,6 +460,7 @@ function startIsolatedIngressSession(params: {
   log?: (message: string) => void;
   stop?: () => Promise<void>;
   spooledUpdateHandlerTimeoutMs?: number;
+  spooledUpdateHandlerAbortGraceMs?: number;
 }) {
   const worker = createIdleIngressWorker();
   const bot = {
@@ -481,6 +483,9 @@ function startIsolatedIngressSession(params: {
       drainIntervalMs: params.drainIntervalMs ?? 10,
       ...(params.spooledUpdateHandlerTimeoutMs !== undefined
         ? { spooledUpdateHandlerTimeoutMs: params.spooledUpdateHandlerTimeoutMs }
+        : {}),
+      ...(params.spooledUpdateHandlerAbortGraceMs !== undefined
+        ? { spooledUpdateHandlerAbortGraceMs: params.spooledUpdateHandlerAbortGraceMs }
         : {}),
     },
   });
@@ -2236,6 +2241,47 @@ describe("TelegramPollingSession", () => {
       releaseFirstTurn?.();
       abort.abort();
       worker.stop();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps oversized spooled update handler abort grace timers", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    let releaseTurn: (() => void) | undefined;
+    const turnDone = new Promise<void>((resolve) => {
+      releaseTurn = resolve;
+    });
+
+    try {
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "wedged topic 10 turn")]);
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        spooledUpdateHandlerTimeoutMs: 100,
+        spooledUpdateHandlerAbortGraceMs: Number.MAX_SAFE_INTEGER,
+        handleUpdate: async () => {
+          await turnDone;
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => {
+        expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      });
+
+      releaseTurn?.();
+      abort.abort();
+      stopWorker();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      releaseTurn?.();
+      abort.abort();
+      setTimeoutSpy.mockRestore();
       vi.useRealTimers();
       await fs.rm(tempDir, { recursive: true, force: true });
     }

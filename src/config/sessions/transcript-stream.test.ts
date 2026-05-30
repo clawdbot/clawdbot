@@ -33,6 +33,15 @@ async function collect(iter: AsyncGenerator<string>): Promise<string[]> {
   return out;
 }
 
+describe("transcript stream empty files", () => {
+  it("returns empty iterators for empty files in both directions", async () => {
+    fs.writeFileSync(transcriptPath, "", "utf-8");
+
+    await expect(collect(streamSessionTranscriptLines(transcriptPath))).resolves.toEqual([]);
+    await expect(collect(streamSessionTranscriptLinesReverse(transcriptPath))).resolves.toEqual([]);
+  });
+});
+
 describe("streamSessionTranscriptLines", () => {
   it("yields trimmed non-empty lines in file order", async () => {
     fs.writeFileSync(transcriptPath, "  alpha  \n\nbeta\n  \r\ngamma\n", "utf-8");
@@ -44,14 +53,6 @@ describe("streamSessionTranscriptLines", () => {
 
   it("returns an empty iterator when the file does not exist", async () => {
     const lines = await collect(streamSessionTranscriptLines(path.join(tempDir, "missing.jsonl")));
-
-    expect(lines).toEqual([]);
-  });
-
-  it("returns an empty iterator for an empty file", async () => {
-    fs.writeFileSync(transcriptPath, "", "utf-8");
-
-    const lines = await collect(streamSessionTranscriptLines(transcriptPath));
 
     expect(lines).toEqual([]);
   });
@@ -108,14 +109,6 @@ describe("streamSessionTranscriptLinesReverse", () => {
     const lines = await collect(
       streamSessionTranscriptLinesReverse(path.join(tempDir, "missing.jsonl")),
     );
-
-    expect(lines).toEqual([]);
-  });
-
-  it("returns an empty iterator for an empty file", async () => {
-    fs.writeFileSync(transcriptPath, "", "utf-8");
-
-    const lines = await collect(streamSessionTranscriptLinesReverse(transcriptPath));
 
     expect(lines).toEqual([]);
   });

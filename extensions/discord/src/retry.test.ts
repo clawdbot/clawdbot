@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { isRetryableDiscordDeliveryError } from "./delivery-retry.js";
+import {
+  getDiscordDeliveryRetryAfterMs,
+  isRetryableDiscordDeliveryError,
+} from "./delivery-retry.js";
 import { DiscordError, RateLimitError } from "./internal/discord.js";
 import { createDiscordRetryRunner, isRetryableDiscordTransientError } from "./retry.js";
 
@@ -30,6 +33,10 @@ describe("isRetryableDiscordTransientError", () => {
     ["408 status", Object.assign(new Error("request timeout"), { status: 408 })],
     ["502 status", Object.assign(new Error("bad gateway"), { status: 502 })],
     ["503 statusCode", Object.assign(new Error("service unavailable"), { statusCode: 503 })],
+    [
+      "signed string statusCode",
+      Object.assign(new Error("service unavailable"), { statusCode: "+503" }),
+    ],
     ["fetch failed", new TypeError("fetch failed")],
     ["ECONNRESET", Object.assign(new Error("socket hang up"), { code: "ECONNRESET" })],
     ["ETIMEDOUT cause", new Error("request failed", { cause: { code: "ETIMEDOUT" } })],
@@ -40,6 +47,7 @@ describe("isRetryableDiscordTransientError", () => {
 
   it.each([
     ["400 status", Object.assign(new Error("bad request"), { status: 400 })],
+    ["fractional status", Object.assign(new Error("upstream rejected request"), { status: 500.5 })],
     ["403 status", Object.assign(new Error("missing permissions"), { statusCode: 403 })],
     ["unknown channel", new Error("Unknown Channel")],
     ["plain string", "fetch failed"],
@@ -79,5 +87,19 @@ describe("isRetryableDiscordDeliveryError", () => {
     });
 
     expect(isRetryableDiscordDeliveryError(err)).toBe(false);
+  });
+});
+
+describe("getDiscordDeliveryRetryAfterMs", () => {
+  it("reads finite retry delays from delivery errors", () => {
+    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 0.25 })).toBe(250);
+    expect(getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "0.25" } })).toBe(250);
+  });
+
+  it("rejects unsafe retry delay magnitudes", () => {
+    expect(getDiscordDeliveryRetryAfterMs({ retryAfter: 9_007_199_254_741 })).toBeUndefined();
+    expect(
+      getDiscordDeliveryRetryAfterMs({ headers: { "retry-after": "9007199254741" } }),
+    ).toBeUndefined();
   });
 });

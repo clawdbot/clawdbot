@@ -8,7 +8,7 @@ export type EventLoopReadyResult = {
   aborted: boolean;
 };
 
-type EventLoopReadyOptions = {
+export type EventLoopReadyOptions = {
   maxWaitMs?: number;
   intervalMs?: number;
   driftThresholdMs?: number;

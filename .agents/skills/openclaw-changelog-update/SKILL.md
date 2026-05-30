@@ -6,14 +6,16 @@ description: Regenerate OpenClaw release changelog sections from git history bef
 # OpenClaw Changelog Update
 
 Use this for release changelog rewrites and GitHub release-note source text.
-Use it with `release-openclaw-maintainer`; this skill owns changelog content,
-ordering, and audit discipline.
+This is mandatory before every beta, beta rerun, stable release, or stable
+rerun. Use it with `release-openclaw-maintainer`; this skill owns changelog
+content, ordering, grouping, and attribution discipline.
 
 ## Goal
 
 Rewrite the target `CHANGELOG.md` version section from history, not from stale
-draft notes. Produce user-facing release notes sorted by user interest while
-preserving issue/PR refs and thanks.
+draft notes. Produce grouped user-facing release notes sorted by user interest
+while preserving every relevant issue/PR ref and every human `Thanks @...`
+attribution.
 
 ## Inputs
 
@@ -44,10 +46,18 @@ preserving issue/PR refs and thanks.
    - `### Highlights`: 5-8 bullets, broad user wins first
    - `### Changes`: new capabilities and behavior changes
    - `### Fixes`: user-facing fixes first, grouped by impact and surface
+   - group related changes/fixes by surface and user impact; avoid one bullet
+     per tiny commit when several commits tell one user-facing story
 6. Preserve attribution:
    - keep `#issue`, `(#PR)`, `Fixes #...`, and `Thanks @...`
    - every human-authored merged PR represented by a user-facing entry needs
      its PR ref and `Thanks @author`, even when the PR had no linked issue
+   - when grouping multiple PRs/issues in one bullet, include every relevant
+     PR/issue ref and every human contributor handle in that same bullet
+   - multiple `Thanks @...` handles in one bullet are expected; do not drop or
+     collapse contributor credit just because the note is grouped
+   - if one grouped bullet covers both direct commits and PRs, keep all PR refs
+     and thanks, plus any issue refs from the direct commits
    - do not add GHSA references, advisory IDs, or security advisory slugs to
      changelog entries or GitHub release-note text unless explicitly requested
    - never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`

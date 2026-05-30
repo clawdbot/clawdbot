@@ -34,15 +34,16 @@ export {
 } from "./outbound-media-send.js";
 
 import type { GatewayAccount } from "../types.js";
+import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 import { debugError, debugLog, debugWarn } from "../utils/log.js";
 import { normalizeMediaTags } from "../utils/media-tags.js";
 import { decodeCronPayload } from "../utils/payload.js";
-import { normalizePath } from "../utils/platform.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../utils/string-normalize.js";
+import { decodeMediaPath } from "./decode-media-path.js";
 import {
   isImageFile as coreIsImageFile,
   isVideoFile as coreIsVideoFile,
@@ -77,6 +78,11 @@ import {
 
 const isImageFile = coreIsImageFile;
 const isVideoFile = coreIsVideoFile;
+const mediaPathDecodeLog = {
+  info: (message: string) => debugLog(`[qqbot] sendText: ${message}`),
+  error: (message: string) => debugError(`[qqbot] sendText: ${message}`),
+  debug: (message: string) => debugLog(`[qqbot] sendText: ${message}`),
+} satisfies EngineLogger;
 
 /**
  * Send text, optionally falling back from passive reply mode to proactive mode.
@@ -155,52 +161,10 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
 
       const tagName = normalizeLowercaseStringOrEmpty(match[1]);
 
-      let mediaPath = normalizeOptionalString(match[2]) ?? "";
-      if (mediaPath.startsWith("MEDIA:")) {
-        mediaPath = mediaPath.slice("MEDIA:".length);
-      }
-      mediaPath = normalizePath(mediaPath);
-
-      mediaPath = mediaPath.replace(/\\\\/g, "\\");
-
-      const isWinLocal = /^[a-zA-Z]:[\\/]/.test(mediaPath) || mediaPath.startsWith("\\\\");
-      try {
-        const hasOctal = /\\[0-7]{1,3}/.test(mediaPath);
-        const hasNonASCII = /[\u0080-\u00FF]/.test(mediaPath);
-
-        if (!isWinLocal && (hasOctal || hasNonASCII)) {
-          debugLog(`[qqbot] sendText: Decoding path with mixed encoding: ${mediaPath}`);
-
-          let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
-            return String.fromCharCode(Number.parseInt(octal, 8));
-          });
-
-          const bytes: number[] = [];
-          for (let i = 0; i < decoded.length; i++) {
-            const code = decoded.charCodeAt(i);
-            if (code <= 0xff) {
-              bytes.push(code);
-            } else {
-              const charBytes = Buffer.from(decoded[i], "utf8");
-              bytes.push(...charBytes);
-            }
-          }
-
-          const buffer = Buffer.from(bytes);
-          const utf8Decoded = buffer.toString("utf8");
-
-          if (!utf8Decoded.includes("\uFFFD") || utf8Decoded.length < decoded.length) {
-            mediaPath = utf8Decoded;
-            debugLog(`[qqbot] sendText: Successfully decoded path: ${mediaPath}`);
-          }
-        }
-      } catch (decodeErr) {
-        debugError(
-          `[qqbot] sendText: Path decode error: ${
-            decodeErr instanceof Error ? decodeErr.message : JSON.stringify(decodeErr)
-          }`,
-        );
-      }
+      const mediaPath = decodeMediaPath(
+        normalizeOptionalString(match[2]) ?? "",
+        mediaPathDecodeLog,
+      );
 
       if (mediaPath) {
         if (tagName === "qqmedia") {

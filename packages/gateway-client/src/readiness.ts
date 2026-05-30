@@ -1,6 +1,18 @@
-import type { GatewayClient, GatewayClientOptions } from "./client.js";
-import { waitForEventLoopReady, type EventLoopReadyResult } from "./event-loop-ready.js";
+import type { GatewayClientOptions } from "./client.js";
+import {
+  waitForEventLoopReady,
+  type EventLoopReadyOptions,
+  type EventLoopReadyResult,
+} from "./event-loop-ready.js";
 import { resolveConnectChallengeTimeoutMs } from "./timeouts.js";
+
+export type GatewayClientStartable = {
+  start(): void;
+};
+
+export type EventLoopReadyWaiter = (
+  options?: EventLoopReadyOptions,
+) => Promise<EventLoopReadyResult>;
 
 export type GatewayClientStartReadinessOptions = {
   timeoutMs?: number;
@@ -31,11 +43,12 @@ function resolveGatewayClientStartReadinessTimeoutMs(
   });
 }
 
-export async function startGatewayClientWhenEventLoopReady(
-  client: GatewayClient,
+export async function startGatewayClientWithReadinessWait(
+  waitForReady: EventLoopReadyWaiter,
+  client: GatewayClientStartable,
   options: GatewayClientStartReadinessOptions = {},
 ): Promise<EventLoopReadyResult> {
-  const readiness = await waitForEventLoopReady({
+  const readiness = await waitForReady({
     maxWaitMs: resolveGatewayClientStartReadinessTimeoutMs(options),
     signal: options.signal,
   });
@@ -43,4 +56,11 @@ export async function startGatewayClientWhenEventLoopReady(
     client.start();
   }
   return readiness;
+}
+
+export async function startGatewayClientWhenEventLoopReady(
+  client: GatewayClientStartable,
+  options: GatewayClientStartReadinessOptions = {},
+): Promise<EventLoopReadyResult> {
+  return startGatewayClientWithReadinessWait(waitForEventLoopReady, client, options);
 }

@@ -110,6 +110,40 @@ describe("createCodexSupervisorTools", () => {
     ).rejects.toThrow("Codex write controls are disabled");
   });
 
+  it("rejects stored session limits outside the runtime bounds", async () => {
+    const { supervisor } = createSupervisorStub();
+    const tools = createCodexSupervisorTools({
+      supervisor,
+      policy: { allowRawTranscripts: false, allowWriteControls: false },
+    });
+
+    await expect(
+      toolByName(tools, "codex_sessions_list").execute("call-1", {
+        include_stored: true,
+        max_stored_sessions: "2",
+      }),
+    ).rejects.toThrow("max_stored_sessions must be an integer");
+
+    await expect(
+      toolByName(tools, "codex_sessions_list").execute("call-2", {
+        include_stored: true,
+        max_stored_sessions: 1001,
+      }),
+    ).rejects.toThrow("max_stored_sessions must be between 1 and 1000");
+    await expect(
+      toolByName(tools, "codex_sessions_list").execute("call-2", {
+        include_stored: true,
+        max_stored_sessions: null,
+      }),
+    ).rejects.toThrow("max_stored_sessions must be an integer");
+    await expect(
+      toolByName(tools, "codex_sessions_list").execute("call-3", {
+        include_stored: true,
+        max_stored_sessions: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    ).rejects.toThrow("max_stored_sessions must be between 1 and 1000");
+  });
+
   it("allows trusted read and write tools when policy enables them", async () => {
     const { calls, supervisor } = createSupervisorStub();
     const tools = createCodexSupervisorTools({

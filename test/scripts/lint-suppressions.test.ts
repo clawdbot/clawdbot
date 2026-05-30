@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -16,6 +17,7 @@ type SuppressionEntry = {
 };
 
 let productionLintSuppressionsCache: SuppressionEntry[] | null = null;
+let productionCodeFilesCache: string[] | null = null;
 
 function isProductionCodeFile(relativePath: string): boolean {
   const basename = path.posix.basename(relativePath);
@@ -77,8 +79,13 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
   if (productionLintSuppressionsCache) {
     return [...productionLintSuppressionsCache];
   }
+  const gitEntries = collectProductionLintSuppressionsFromGit();
+  if (gitEntries) {
+    productionLintSuppressionsCache = gitEntries;
+    return [...gitEntries];
+  }
   const entries: SuppressionEntry[] = [];
-  const files = ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root))).toSorted();
+  const files = listProductionCodeFiles();
   for (const relativePath of files) {
     const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
     for (const line of source.split("\n")) {
@@ -96,6 +103,56 @@ function collectProductionLintSuppressions(): SuppressionEntry[] {
   return [...entries];
 }
 
+function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
+  const result = spawnSync(
+    "git",
+    [
+      "grep",
+      "-n",
+      "-E",
+      String.raw`(oxlint|eslint)-disable(-next-line)?[[:space:]]+[@/[:alnum:]_-]+`,
+      "--",
+      ...ROOTS,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    return null;
+  }
+  const entries: SuppressionEntry[] = [];
+  for (const line of result.stdout.split("\n")) {
+    const match = /^([^:]+):\d+:(.*)$/u.exec(line);
+    if (!match) {
+      continue;
+    }
+    const [, file, sourceLine] = match;
+    if (!isProductionCodeFile(file)) {
+      continue;
+    }
+    const suppression = sourceLine.match(SUPPRESSION_PATTERN);
+    if (!suppression) {
+      continue;
+    }
+    entries.push({ file, rule: suppression[1] });
+  }
+  return entries;
+}
+
+function listProductionCodeFiles(): string[] {
+  productionCodeFilesCache ??= ROOTS.flatMap((root) =>
+    walkCodeFiles(path.join(repoRoot, root)),
+  ).toSorted();
+  return [...productionCodeFilesCache];
+}
+
 function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
   const counts = new Map<string, number>();
   for (const entry of entries) {
@@ -108,7 +165,7 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 describe("production lint suppressions", () => {
   it("lists production files from git without walking source roots", () => {
     expectNoReaddirSyncDuring(() => {
-      const files = ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root))).toSorted();
+      const files = listProductionCodeFiles();
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
@@ -134,7 +191,6 @@ describe("production lint suppressions", () => {
       "src/agents/agent-scope.ts|no-control-regex|1",
       "src/agents/code-mode.worker.ts|unicorn/require-post-message-target-origin|1",
       "src/agents/embedded-agent-runner/run/images.ts|no-control-regex|1",
-      "src/agents/subagent-attachments.ts|no-control-regex|1",
       "src/agents/subagent-spawn.ts|no-control-regex|1",
       "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
       "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",

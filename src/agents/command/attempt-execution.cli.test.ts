@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
 import { persistCliTurnTranscript, runAgentAttempt } from "./attempt-execution.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
 const runCliAgentMock = vi.hoisted(() => vi.fn());
 const runEmbeddedAgentMock = vi.hoisted(() => vi.fn());
@@ -179,6 +180,7 @@ describe("CLI attempt execution", () => {
     sessionStore: Record<string, SessionEntry>;
     body: string;
     runId: string;
+    cwd?: string;
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
@@ -191,6 +193,7 @@ describe("CLI attempt execution", () => {
       sessionAgentId: "main",
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
+      cwd: params.cwd,
       body: params.body,
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
@@ -213,7 +216,10 @@ describe("CLI attempt execution", () => {
 
   async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
     const homeDir = path.join(tmpDir, `home-${cliSessionId}`);
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -247,7 +253,10 @@ describe("CLI attempt execution", () => {
   it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
     const homeDir = path.join(tmpDir, "home");
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -437,7 +446,10 @@ describe("CLI attempt execution", () => {
     const sessionKey = "agent:main:direct:claude-transcript-present";
     const cliSessionId = "existing-claude-session";
     const homeDir = path.join(tmpDir, "home");
-    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      homeDir,
+    });
     process.env.HOME = homeDir;
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
@@ -483,6 +495,48 @@ describe("CLI attempt execution", () => {
     });
     expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
     expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
+  });
+
+  it("checks Claude CLI transcript content under the process cwd", async () => {
+    const sessionKey = "agent:main:direct:claude-transcript-cwd-present";
+    const cliSessionId = "existing-claude-cwd-session";
+    const homeDir = path.join(tmpDir, "home");
+    const cwd = path.join(tmpDir, "task");
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: cwd,
+      homeDir,
+    });
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, `${cliSessionId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "previous reply" }],
+        },
+      })}\n`,
+      "utf-8",
+    );
+    const sessionEntry = makeClaudeCliSessionEntry("openclaw-session-cwd", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("resumed cli response"));
+
+    await runClaudeCliAttempt({
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      body: "continue from task cwd",
+      runId: "run-cli-transcript-cwd-present",
+      cwd,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(firstRunCliAgentArg().cwd).toBe(cwd);
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
   });
 
   it("passes session-bound OpenAI Codex auth profile to codex-cli aliases", async () => {

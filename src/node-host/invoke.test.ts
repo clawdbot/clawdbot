@@ -32,4 +32,40 @@ describe("node host invoke", () => {
       }),
     );
   });
+
+  it("includes effective exec policy in system.run.prepare responses", async () => {
+    const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+    const skillBins: SkillBinsProvider = { current: async () => [] };
+
+    await handleInvoke(
+      {
+        id: "invoke-1",
+        nodeId: "node-1",
+        command: "system.run.prepare",
+        paramsJSON: JSON.stringify({
+          command: ["echo", "ok"],
+          rawCommand: "echo ok",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      },
+      { request } as unknown as GatewayClient,
+      skillBins,
+    );
+
+    expect(request).toHaveBeenCalledWith(
+      "node.invoke.result",
+      expect.objectContaining({
+        ok: true,
+        payloadJSON: expect.any(String),
+      }),
+    );
+    const result = request.mock.calls.find(([method]) => method === "node.invoke.result")?.[1] as {
+      payloadJSON?: string;
+    };
+    const payload = JSON.parse(result.payloadJSON ?? "{}") as {
+      execPolicy?: { security?: string; ask?: string };
+    };
+    expect(payload.execPolicy).toEqual({ security: "allowlist", ask: "on-miss" });
+  });
 });

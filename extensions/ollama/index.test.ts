@@ -76,10 +76,10 @@ beforeEach(() => {
 });
 
 function registerProvider() {
-  return registerProviderWithPluginConfig({});
+  return registerProvidersWithPluginConfig({}).find((provider) => provider.id === "ollama");
 }
 
-function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
+function registerProvidersWithPluginConfig(pluginConfig: Record<string, unknown>) {
   const registerProviderMock = vi.fn();
 
   plugin.register(
@@ -94,8 +94,18 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
     }),
   );
 
-  expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls[0]?.[0];
+  expect(registerProviderMock).toHaveBeenCalledTimes(2);
+  return registerProviderMock.mock.calls.map((call) => call[0]);
+}
+
+function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
+  return registerProvidersWithPluginConfig(pluginConfig).find(
+    (provider) => provider.id === "ollama",
+  );
+}
+
+function registerOllamaCloudProvider() {
+  return registerProvidersWithPluginConfig({}).find((provider) => provider.id === "ollama-cloud");
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -692,6 +702,36 @@ describe("ollama plugin", () => {
     });
 
     expect(auth).toBeUndefined();
+  });
+
+  it("registers ollama-cloud as a hosted provider", async () => {
+    const provider = registerOllamaCloudProvider();
+
+    expect(provider.id).toBe("ollama-cloud");
+    expect(provider.envVars).toEqual(["OLLAMA_API_KEY"]);
+    expect(provider.auth?.map((method: { id: string }) => method.id)).toEqual(["api-key"]);
+
+    const result = await provider.staticCatalog?.run({
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({}),
+    } as never);
+    if (!result || !("provider" in result)) {
+      throw new Error("single provider catalog result missing");
+    }
+    expect(result.provider.baseUrl).toBe("https://ollama.com");
+    expect(result.provider.models?.map((model: { id: string }) => model.id)).toEqual([
+      "kimi-k2.5:cloud",
+      "minimax-m2.7:cloud",
+      "glm-5.1:cloud",
+    ]);
+
+    provider.createStreamFn?.({
+      config: {},
+      model: { id: "kimi-k2.5:cloud" },
+      provider: "ollama-cloud",
+    } as never);
+    expect(requireConfiguredStreamParams().providerBaseUrl).toBe("https://ollama.com");
   });
 
   it("does not mint synthetic auth for public IPv4 baseUrl", () => {

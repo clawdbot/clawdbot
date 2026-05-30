@@ -3,7 +3,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
@@ -102,6 +103,43 @@ describe("provider local service", () => {
     expect((await fetch(healthUrl)).ok).toBe(true);
     lease.release();
     await waitForProbeFailure(healthUrl);
+  });
+
+  it("caps oversized local service idle stop timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const port = await freePort();
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-huge-idle",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const http=require("http");const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(${port},"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
+        ],
+        healthUrl,
+        readyTimeoutMs: 5_000,
+        idleStopMs: Number.MAX_SAFE_INTEGER,
+      },
+    );
+
+    try {
+      const lease = await ensureModelProviderLocalService(model);
+
+      if (!lease) {
+        throw new Error("Expected provider local service lease");
+      }
+      lease.release();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("sends provider request headers on local service health probes", async () => {

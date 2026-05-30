@@ -17,6 +17,12 @@ import {
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import {
+  asFiniteNumberInRange,
+  clampTimerTimeoutMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "../shared/number-coercion.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -238,9 +244,12 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
     const trimmedRetryAfterMs = retryAfterMs.trim();
-    const milliseconds = Number(trimmedRetryAfterMs);
-    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs) && Number.isFinite(milliseconds)) {
-      return milliseconds / 1000;
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs)) {
+      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmedRetryAfterMs), {
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+      });
+      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
     }
   }
 
@@ -249,12 +258,12 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = Number(retryAfter.trim());
-  if (/^\d+$/.test(retryAfter.trim()) && Number.isFinite(seconds) && seconds >= 0) {
-    return seconds;
+  const trimmedRetryAfterSeconds = retryAfter.trim();
+  if (/^\d+$/.test(trimmedRetryAfterSeconds)) {
+    return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
   }
 
-  const trimmedRetryAfter = retryAfter.trim();
+  const trimmedRetryAfter = trimmedRetryAfterSeconds;
   if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
     return undefined;
   }
@@ -281,8 +290,12 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
   }
 
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds > 0) {
+  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+    min: 0,
+    minExclusive: true,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (seconds !== undefined) {
     return seconds;
   }
 
@@ -405,11 +418,13 @@ export function resolveModelRequestTimeoutMs(
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
-    return timeoutMs;
+    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? clampTimerTimeoutMs(timeoutMs)
+      : undefined;
   }
   const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? Math.floor(modelTimeoutMs)
+    ? clampTimerTimeoutMs(modelTimeoutMs)
     : undefined;
 }
 

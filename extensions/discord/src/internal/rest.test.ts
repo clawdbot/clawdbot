@@ -554,6 +554,41 @@ describe("RequestClient", () => {
     });
   });
 
+  it("ignores unsafe numeric Discord error code strings", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            message: "Slow down",
+            retry_after: 1,
+            global: false,
+            code: "9007199254740993",
+          }),
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
+  it("ignores unsafe numeric Discord error codes", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          '{"message":"Slow down","retry_after":1,"global":false,"code":9007199254740993}',
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
   it("parses HTTP-date Retry-After headers on rate limit errors", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
@@ -585,9 +620,27 @@ describe("RequestClient", () => {
     await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
   });
 
+  it("falls back to Retry-After when the rate limit body value is unsafe", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ message: "Slow down", retry_after: "9007199254741", global: false }),
+          {
+            status: 429,
+            headers: { "Retry-After": "7" },
+          },
+        ),
+    });
+
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
+  });
+
   it.each([
     ["hex", "0x10"],
     ["fractional", "1.5"],
+    ["unsafe-ms", "9007199254741"],
+    ["unsafe-integer", "9007199254740993"],
     ["overflow", `1${"0".repeat(309)}`],
   ])("rejects invalid Retry-After numeric strings: %s", async (_label, header) => {
     const client = new RequestClient("test-token", {

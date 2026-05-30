@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
 import {
@@ -22,6 +23,7 @@ export function resolveReasoningOutputMode(params: {
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
 }): "native" | "tagged" {
   const provider = normalizeOptionalString(params.provider);
   if (!provider) {
@@ -34,6 +36,7 @@ export function resolveReasoningOutputMode(params: {
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
+    runtimeHandle: params.runtimeHandle,
     context: {
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -72,6 +75,7 @@ export function isReasoningTagProvider(
     modelId?: string;
     modelApi?: string | null;
     model?: ProviderRuntimeModel;
+    runtimeHandle?: ProviderRuntimePluginHandle;
   },
 ): boolean {
   return (
@@ -83,6 +87,7 @@ export function isReasoningTagProvider(
       modelId: options?.modelId,
       modelApi: options?.modelApi,
       model: options?.model,
+      runtimeHandle: options?.runtimeHandle,
     }) === "tagged"
   );
 }

@@ -683,6 +683,72 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("does not recover forum thread context from malformed payload thread ids", async () => {
+    const generalHistoryKey = "-1003774691294:topic:1";
+    const spoofedHistoryKey = "-1003774691294:topic:3731";
+    const groupHistories = new Map([
+      [generalHistoryKey, [{ sender: "Alice", body: "general topic context", timestamp: 1 }]],
+      [spoofedHistoryKey, [{ sender: "Bob", body: "spoofed topic context", timestamp: 2 }]],
+    ]);
+    deliverInboundReplyWithMessageSendContext.mockResolvedValue({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["1"],
+        visibleReplySent: true,
+      },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "general final" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          Body:
+            "[Chat messages since your last reply - for context]\n" +
+            "general topic context\n" +
+            "[Current message - respond to this]\n" +
+            "current general question",
+          BodyForAgent: "current general question",
+          ChatType: "group",
+          From: "telegram:group:-1003774691294:topic:1",
+          MessageThreadId: "0xE93",
+          OriginatingTo: "telegram:-1003774691294",
+          SessionKey: "agent:main:telegram:group:-1003774691294:topic:1",
+          To: "telegram:-1003774691294",
+          TransportThreadId: "0xE93",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -1003774691294, type: "supergroup" },
+          message_id: 27788,
+          message_thread_id: undefined,
+        } as unknown as TelegramMessageContext["msg"],
+        primaryCtx: {
+          message: { chat: { id: -1003774691294, type: "supergroup" } },
+        } as unknown as TelegramMessageContext["primaryCtx"],
+        chatId: -1003774691294,
+        isGroup: true,
+        replyThreadId: undefined,
+        resolvedThreadId: undefined,
+        threadSpec: { id: 1, scope: "forum" },
+        historyKey: generalHistoryKey,
+        historyLimit: 10,
+        groupHistories,
+      }),
+      replyToMode: "off",
+      streamMode: "off",
+    });
+
+    const outbound = expectRecordFields(mockCallArg(deliverInboundReplyWithMessageSendContext), {
+      threadId: 1,
+    });
+    expectRecordFields(outbound.ctxPayload, {
+      MessageThreadId: 1,
+      TransportThreadId: 1,
+    });
+  });
+
   it("does not recover forum thread context from a different group session key", async () => {
     const currentHistoryKey = "-100555:topic:1";
     const otherGroupHistoryKey = "-1003774691294:topic:3731";

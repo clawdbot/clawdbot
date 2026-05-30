@@ -376,6 +376,7 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
   sessionFile: string;
   sessionId?: string;
   sessionKey?: string;
+  agentId?: string;
   request: TranscriptRewriteRequest;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }): Promise<TranscriptRewriteResult> {
@@ -402,6 +403,7 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
       emitSessionTranscriptUpdate({
         sessionFile: params.sessionFile,
         sessionKey: params.sessionKey,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
       });
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +

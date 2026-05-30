@@ -213,7 +213,32 @@ function runParallels(beta: string, model: string): void {
 }
 
 function ghJson(repo: string, pathSuffix: string): unknown {
-  return JSON.parse(run("gh", ["api", `repos/${repo}/${pathSuffix}`], { capture: true }));
+  const url = `https://api.github.com/repos/${repo}/${pathSuffix}`;
+  const result = spawnSync(
+    "bash",
+    [
+      "-lc",
+      [
+        "set -euo pipefail",
+        'token="$(gh auth token)"',
+        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env: { ...process.env, OPENCLAW_GITHUB_REST_URL: url },
+      killSignal: "SIGKILL",
+      maxBuffer: CAPTURE_MAX_BUFFER_BYTES,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: DEFAULT_COMMAND_TIMEOUT_MS,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    const reason = result.status ?? result.signal ?? result.error?.message ?? "unknown";
+    const stderr = result.stderr ? `\n${result.stderr}` : "";
+    throw new Error(`GitHub REST request failed for ${pathSuffix} with ${reason}${stderr}`);
+  }
+  return JSON.parse(result.stdout ?? "");
 }
 
 export function parseWorkflowRunIdFromOutput(output: string): string | undefined {

@@ -595,6 +595,26 @@ describe("codex command", () => {
     });
   });
 
+  it("normalizes signed decimal Codex CLI session limits before node dispatch", async () => {
+    const listCodexCliSessionsOnNode = vi.fn(async () => ({
+      node: { nodeId: "mb-m5", displayName: "mb-m5" },
+      result: {
+        codexHome: "/Users/mariano/.codex",
+        sessions: [],
+      },
+    }));
+
+    await handleCodexCommand(createContext("sessions --host mb-m5 --limit +05 bridge"), {
+      deps: createDeps({ listCodexCliSessionsOnNode }),
+    });
+
+    expect(listCodexCliSessionsOnNode).toHaveBeenCalledWith({
+      requestedNode: "mb-m5",
+      filter: "bridge",
+      limit: 5,
+    });
+  });
+
   it("rejects partial Codex CLI session limits before node dispatch", async () => {
     const listCodexCliSessionsOnNode = vi.fn();
 
@@ -3347,6 +3367,7 @@ describe("codex command", () => {
       sessionFile,
       workspaceDir: "/repo",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
+      sessionKey: undefined,
       threadId: "thread-123",
       model: "gpt-5.4",
       modelProvider: "openai",
@@ -3406,6 +3427,7 @@ describe("codex command", () => {
       sessionFile,
       workspaceDir: "/repo with space",
       agentDir: path.join(tempDir, "agents", "main", "agent"),
+      sessionKey: undefined,
       threadId: "thread-123",
       model: undefined,
       modelProvider: undefined,

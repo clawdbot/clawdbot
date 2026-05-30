@@ -169,6 +169,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `modelIdNormalization`               | No       | `object`                         | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                       |
 | `providerEndpoints`                  | No       | `object[]`                       | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                        |
 | `providerRequest`                    | No       | `object`                         | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                          |
+| `secretProviderIntegrations`         | No       | `Record<string, object>`         | Declarative SecretRef exec provider presets that setup or install surfaces can offer without hardcoding provider-specific integrations in core.                                                                                                 |
 | `cliBackends`                        | No       | `string[]`                       | CLI inference backend ids owned by this plugin. Used for startup auto-activation from explicit config refs.                                                                                                                                     |
 | `syntheticAuthRefs`                  | No       | `string[]`                       | Provider or CLI backend refs whose plugin-owned synthetic auth hook should be probed during cold model discovery before runtime loads.                                                                                                          |
 | `nonSecretAuthMarkers`               | No       | `string[]`                       | Bundled-plugin-owned placeholder API key values that represent non-secret local, OAuth, or ambient credential state.                                                                                                                            |
@@ -1079,6 +1080,72 @@ Provider fields:
 | `family`              | `string`     | Provider family label used by generic request compatibility decisions and diagnostics. |
 | `compatibilityFamily` | `"moonshot"` | Optional provider-family compatibility bucket for shared request helpers.              |
 | `openAICompletions`   | `object`     | OpenAI-compatible completions request flags, currently `supportsStreamingUsage`.       |
+
+## secretProviderIntegrations reference
+
+Use `secretProviderIntegrations` when a plugin can publish a reusable SecretRef
+exec provider preset. OpenClaw reads this metadata before plugin runtime loads,
+stores plugin ownership in `secrets.providers.<alias>.pluginIntegration`, and
+leaves actual secret resolution to the SecretRef runtime.
+Presets are exposed only for bundled plugins and installed plugins discovered
+from the managed plugin install roots, such as git and ClawHub installs.
+
+```json
+{
+  "secretProviderIntegrations": {
+    "secret-store": {
+      "providerAlias": "team-secrets",
+      "displayName": "Team secrets",
+      "source": "exec",
+      "command": "${node}",
+      "args": ["./bin/resolve-secrets.mjs"]
+    }
+  }
+}
+```
+
+The map key is the integration id. If `providerAlias` is omitted, OpenClaw uses
+the integration id as the SecretRef provider alias. Provider aliases must match
+the normal SecretRef provider alias pattern, for example `team-secrets` or
+`onepassword-work`.
+
+When an operator selects the preset, OpenClaw writes a provider reference like:
+
+```json
+{
+  "secrets": {
+    "providers": {
+      "team-secrets": {
+        "source": "exec",
+        "pluginIntegration": {
+          "pluginId": "acme-secrets",
+          "integrationId": "secret-store"
+        }
+      }
+    }
+  }
+}
+```
+
+At startup/reload, OpenClaw resolves that provider by loading current plugin
+manifest metadata, checking that the owning plugin is installed and active, and
+materializing the exec command from the manifest. Disabling or removing the
+plugin revokes the provider for active SecretRefs. Operators who want standalone
+exec configuration can still write manual `command`/`args` providers directly.
+
+Only `source: "exec"` presets are currently supported. `command` must be
+`${node}`, and `args[0]` must be a `./` plugin-root-relative resolver script.
+OpenClaw materializes it at startup/reload to the current Node executable and
+the absolute in-plugin script path. Node options such as `--require`, `--import`,
+`--loader`, `--env-file`, `--eval`, and `--print` are not part of the manifest
+preset contract. Operators who need non-Node commands can configure standalone
+manual exec providers directly.
+
+OpenClaw derives `trustedDirs` for manifest presets from the plugin root and,
+for `${node}` presets, the current Node executable directory. Manifest-authored
+`trustedDirs` are ignored. Other exec provider options such as `timeoutMs`,
+`maxOutputBytes`, `jsonOnly`, `env`, `passEnv`, and `allowInsecurePath` pass
+through to the normal SecretRef exec provider config.
 
 ## modelPricing reference
 

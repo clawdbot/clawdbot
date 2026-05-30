@@ -23,7 +23,12 @@ import {
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
-import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveDefaultAgentId,
+  resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
+} from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/embedded-agent-runner/transcript-rewrite.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
@@ -64,6 +69,7 @@ import {
 import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outbound.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
+import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
@@ -131,6 +137,7 @@ import {
   resolveDeletedAgentIdFromSessionKey,
   readRecentSessionMessagesAsync,
   resolveSessionModelRef,
+  resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
@@ -163,6 +170,7 @@ type AbortOrigin = "rpc" | "stop-command";
 type AbortedPartialSnapshot = {
   runId: string;
   sessionId: string;
+  agentId?: string;
   text: string;
   abortOrigin: AbortOrigin;
 };
@@ -174,6 +182,7 @@ type ChatAbortRequester = {
 };
 
 type PreRegisteredAgentDedupePayload = {
+  agentId?: unknown;
   dedupeKeys?: unknown;
   ownerConnId?: unknown;
   ownerDeviceId?: unknown;
@@ -355,6 +364,80 @@ function buildActiveChatSendDedupeKey(params: {
   return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
 }
 
+function validateChatSelectedAgent(params: {
+  cfg: OpenClawConfig;
+  requestedSessionKey: string;
+  agentId?: string;
+}): { ok: true; agentId?: string } | { ok: false; error: string } {
+  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  if (!agentId) {
+    return { ok: true };
+  }
+  if (!listAgentIds(params.cfg).includes(agentId)) {
+    return { ok: false, error: `Unknown agent id "${params.agentId}"` };
+  }
+  const requestedSessionKey = params.requestedSessionKey.trim();
+  const parsed = parseAgentSessionKey(requestedSessionKey);
+  if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {
+    return {
+      ok: false,
+      error: `agentId "${params.agentId}" does not match session key "${params.requestedSessionKey}"`,
+    };
+  }
+  if (requestedSessionKey.toLowerCase() === "global") {
+    return { ok: true, agentId };
+  }
+  if (resolveSessionStoreKey({ cfg: params.cfg, sessionKey: requestedSessionKey }) === "global") {
+    return { ok: true, agentId };
+  }
+  if (!parsed || normalizeAgentId(parsed.agentId) !== agentId) {
+    return {
+      ok: false,
+      error: `agentId "${params.agentId}" does not match session key "${params.requestedSessionKey}"`,
+    };
+  }
+  return { ok: true, agentId };
+}
+
+function resolveRequestedChatAgentId(params: {
+  cfg?: OpenClawConfig;
+  requestedSessionKey: string;
+  agentId?: string;
+}): string | undefined {
+  const explicitAgentId = normalizeOptionalText(params.agentId);
+  if (explicitAgentId) {
+    return normalizeAgentId(explicitAgentId);
+  }
+  if (!params.cfg) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(params.requestedSessionKey.trim());
+  if (
+    !parsed?.agentId ||
+    resolveSessionStoreKey({ cfg: params.cfg, sessionKey: params.requestedSessionKey }) !== "global"
+  ) {
+    return undefined;
+  }
+  return normalizeAgentId(parsed.agentId);
+}
+
+function resolveChatSendActiveScopeKey(params: {
+  sessionKey: string;
+  agentId?: string;
+  mainKey?: string;
+}): string {
+  if (params.sessionKey !== "global" || !params.agentId) {
+    return params.sessionKey;
+  }
+  return (
+    scopeLegacySessionKeyToAgent({
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      mainKey: params.mainKey,
+    }) ?? params.sessionKey
+  );
+}
+
 type ChatSendExplicitOrigin = {
   originatingChannel?: string;
   originatingTo?: string;
@@ -390,6 +473,7 @@ type SideResultPayload = {
   kind: "btw";
   runId: string;
   sessionKey: string;
+  agentId?: string;
   question: string;
   text: string;
   isError?: boolean;
@@ -469,6 +553,7 @@ function extractAssistantDisplayTextFromContent(
 
 async function buildAssistantDisplayContentFromReplyPayloads(params: {
   sessionKey: string;
+  agentId?: string;
   payloads: ReplyPayload[];
   managedImageLocalRoots?: Parameters<typeof createManagedOutgoingImageBlocks>[0]["localRoots"];
   includeSensitiveMedia?: boolean;
@@ -516,6 +601,7 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
     );
     const imageBlocks = await createManagedOutgoingImageBlocks({
       sessionKey: params.sessionKey,
+      ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
       mediaUrls,
       localRoots: params.managedImageLocalRoots,
       continueOnPrepareError: true,
@@ -631,12 +717,20 @@ function hasManagedOutgoingAssistantContent(
 
 function scheduleChatHistoryManagedImageCleanup(params: {
   sessionKey: string;
+  agentId?: string;
   context: Pick<GatewayRequestContext, "logGateway">;
 }) {
-  if (chatHistoryManagedImageCleanupState.has(params.sessionKey)) {
+  const cleanupKey =
+    params.sessionKey === "global" && params.agentId
+      ? `agent:${params.agentId}:global`
+      : params.sessionKey;
+  if (chatHistoryManagedImageCleanupState.has(cleanupKey)) {
     return;
   }
-  const pending = cleanupManagedOutgoingImageRecords({ sessionKey: params.sessionKey })
+  const pending = cleanupManagedOutgoingImageRecords({
+    sessionKey: params.sessionKey,
+    ...(params.sessionKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
+  })
     .then(() => undefined)
     .catch((error) => {
       params.context.logGateway.debug(
@@ -644,11 +738,11 @@ function scheduleChatHistoryManagedImageCleanup(params: {
       );
     })
     .finally(() => {
-      if (chatHistoryManagedImageCleanupState.get(params.sessionKey) === pending) {
-        chatHistoryManagedImageCleanupState.delete(params.sessionKey);
+      if (chatHistoryManagedImageCleanupState.get(cleanupKey) === pending) {
+        chatHistoryManagedImageCleanupState.delete(cleanupKey);
       }
     });
-  chatHistoryManagedImageCleanupState.set(params.sessionKey, pending);
+  chatHistoryManagedImageCleanupState.set(cleanupKey, pending);
 }
 
 function resolveChatSendOriginatingRoute(params: {
@@ -1483,6 +1577,7 @@ async function findSourceReplyTranscriptMirrorByMetadata(params: {
 }
 
 async function appendAssistantTranscriptMessage(params: {
+  sessionKey: string;
   message: string;
   label?: string;
   content?: Array<Record<string, unknown>>;
@@ -1535,6 +1630,8 @@ async function appendAssistantTranscriptMessage(params: {
 
   return await appendInjectedAssistantMessageToTranscript({
     transcriptPath,
+    sessionKey: params.sessionKey,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     message: params.message,
     label: params.label,
     content: params.content,
@@ -1563,6 +1660,7 @@ function collectSessionAbortPartials(params: {
     out.push({
       runId,
       sessionId: active.sessionId,
+      agentId: active.agentId,
       text,
       abortOrigin: params.abortOrigin,
     });
@@ -1578,14 +1676,20 @@ async function persistAbortedPartials(params: {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
   for (const snapshot of params.snapshots) {
+    const sessionLoadOptions =
+      params.sessionKey === "global" && snapshot.agentId
+        ? { agentId: snapshot.agentId }
+        : undefined;
+    const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey, sessionLoadOptions);
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = await appendAssistantTranscriptMessage({
+      sessionKey: params.sessionKey,
       message: snapshot.text,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
+      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
       cfg,
@@ -1611,6 +1715,7 @@ function createChatAbortOps(context: GatewayRequestContext): ChatAbortOps {
     clearChatRunState: context.clearChatRunState,
     removeChatRun: context.removeChatRun,
     agentRunSeq: context.agentRunSeq,
+    getRuntimeConfig: context.getRuntimeConfig,
     broadcast: context.broadcast,
     nodeSendToSession: context.nodeSendToSession,
   };
@@ -1709,6 +1814,8 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
   entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
   runId: string;
   sessionKey: string;
+  agentId?: string;
+  defaultAgentId: string;
 }): PreRegisteredAgentDedupePayload | undefined {
   if (!params.entry?.ok) {
     return undefined;
@@ -1721,7 +1828,26 @@ function readPreRegisteredAgentDedupePayloadForSession(params: {
   if (payloadRunId && payloadRunId !== params.runId) {
     return undefined;
   }
-  return normalizeUnknownText(payload.sessionKey) === params.sessionKey ? payload : undefined;
+  if (normalizeUnknownText(payload.sessionKey) !== params.sessionKey) {
+    return undefined;
+  }
+  const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
+  if (agentId) {
+    const parsed = parseAgentSessionKey(params.sessionKey);
+    const sessionAgentId =
+      params.sessionKey === "global"
+        ? resolveStoredGlobalRunAgentId(
+            normalizeUnknownText(payload.agentId),
+            params.defaultAgentId,
+          )
+        : parsed?.agentId
+          ? normalizeAgentId(parsed.agentId)
+          : undefined;
+    if (sessionAgentId && sessionAgentId !== agentId) {
+      return undefined;
+    }
+  }
+  return payload;
 }
 
 function readPreRegisteredAgentRun(params: {
@@ -1777,6 +1903,13 @@ function resolvePreRegisteredAgentDedupeKeys(
   return uniqueStrings(keys);
 }
 
+function resolveStoredGlobalRunAgentId(
+  agentId: string | undefined,
+  defaultAgentId: string,
+): string {
+  return normalizeOptionalText(agentId)?.toLowerCase() ?? defaultAgentId.toLowerCase();
+}
+
 function writePreRegisteredAgentAbort(params: {
   context: GatewayRequestContext;
   runId: string;
@@ -1786,6 +1919,7 @@ function writePreRegisteredAgentAbort(params: {
   endedAt?: number;
 }) {
   const endedAt = params.endedAt ?? Date.now();
+  const payloadAgentId = normalizeUnknownText(params.payload.agentId);
   for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
     setGatewayDedupeEntry({
       dedupe: params.context.dedupe,
@@ -1796,6 +1930,7 @@ function writePreRegisteredAgentAbort(params: {
         payload: {
           runId: params.runId,
           sessionKey: params.sessionKey,
+          ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
           status: "timeout" as const,
           summary: "aborted",
           stopReason: params.stopReason,
@@ -1809,6 +1944,8 @@ function writePreRegisteredAgentAbort(params: {
 function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
   context: GatewayRequestContext;
   sessionKeys: Iterable<string>;
+  agentId?: string;
+  defaultAgentId: string;
   requester: ChatAbortRequester;
 }) {
   const sessionKeys = new Set(
@@ -1826,6 +1963,17 @@ function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
     if (params.context.chatAbortControllers.has(run.runId)) {
       continue;
     }
+    const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
+    if (
+      agentId &&
+      run.sessionKey === "global" &&
+      resolveStoredGlobalRunAgentId(
+        normalizeUnknownText(run.payload.agentId),
+        params.defaultAgentId,
+      ) !== agentId
+    ) {
+      continue;
+    }
     matchedSessionRuns += 1;
     if (canRequesterAbortPreRegisteredAgentRun(run.payload, params.requester)) {
       authorizedByRunId.set(run.runId, run);
@@ -1841,6 +1989,8 @@ function resolveAuthorizedRunsForSessionKeys(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   sessionKeys: Iterable<string>;
   sessionIds?: Iterable<string | undefined>;
+  agentId?: string;
+  defaultAgentId: string;
   requester: ChatAbortRequester;
 }) {
   const sessionKeys = new Set(
@@ -1853,10 +2003,18 @@ function resolveAuthorizedRunsForSessionKeys(params: {
       (sessionId): sessionId is string => Boolean(sessionId),
     ),
   );
+  const agentId = normalizeOptionalText(params.agentId)?.toLowerCase();
   const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
     if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
+      continue;
+    }
+    if (
+      agentId &&
+      active.sessionKey === "global" &&
+      resolveStoredGlobalRunAgentId(active.agentId, params.defaultAgentId) !== agentId
+    ) {
       continue;
     }
     matchedSessionRuns += 1;
@@ -1875,8 +2033,10 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   ops: ChatAbortOps;
   sessionKey: string;
   sessionKeyAliases?: string[];
+  agentId?: string;
   sessionId?: string;
   persistSessionKey?: string;
+  defaultAgentId: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;
@@ -1886,6 +2046,8 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     chatAbortControllers: params.context.chatAbortControllers,
     sessionKeys,
     sessionIds: [params.sessionId],
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
     requester: params.requester,
   });
   const {
@@ -1894,6 +2056,8 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   } = resolveAuthorizedPreRegisteredAgentRunsForSessionKeys({
     context: params.context,
     sessionKeys,
+    agentId: params.agentId,
+    defaultAgentId: params.defaultAgentId,
     requester: params.requester,
   });
   if (authorizedRuns.length === 0 && authorizedPendingAgentRuns.length === 0) {
@@ -1952,21 +2116,31 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
 }
 
 function broadcastChatFinal(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   runId: string;
   sessionKey: string;
+  agentId?: string;
   message?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
+  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
     state: "final" as const,
     message: projectChatDisplayMessage(params.message),
   };
   params.context.broadcast("chat", payload);
-  params.context.nodeSendToSession(params.sessionKey, "chat", payload);
+  sendGlobalAwareNodeChatPayload({
+    context: params.context,
+    sessionKey: params.sessionKey,
+    agentId: payloadAgentId,
+    event: "chat",
+    payload,
+  });
   params.context.agentRunSeq.delete(params.runId);
 }
 
@@ -1983,37 +2157,108 @@ function isBtwReplyPayload(payload: ReplyPayload | undefined): payload is ReplyP
 }
 
 function broadcastSideResult(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   payload: SideResultPayload;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.payload.runId);
-  params.context.broadcast("chat.side_result", {
+  const payloadAgentId =
+    params.payload.sessionKey === "global" ? params.payload.agentId : undefined;
+  const payload = {
     ...params.payload,
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
-  });
-  params.context.nodeSendToSession(params.payload.sessionKey, "chat.side_result", {
-    ...params.payload,
-    seq,
+  };
+  params.context.broadcast("chat.side_result", payload);
+  sendGlobalAwareNodeChatPayload({
+    context: params.context,
+    sessionKey: params.payload.sessionKey,
+    agentId: payloadAgentId,
+    event: "chat.side_result",
+    payload,
   });
 }
 
 function broadcastChatError(params: {
-  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
+  context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   runId: string;
   sessionKey: string;
+  agentId?: string;
   errorMessage?: string;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
+  const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
+  const errorText = params.errorMessage?.trim();
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
+    ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
     state: "error" as const,
     errorMessage: params.errorMessage,
+    ...(errorText
+      ? {
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "text",
+                text:
+                  errorText.startsWith("⚠️") || errorText.startsWith("Error:")
+                    ? errorText
+                    : `Error: ${errorText}`,
+              },
+            ],
+            timestamp: Date.now(),
+          },
+        }
+      : {}),
   };
   params.context.broadcast("chat", payload);
-  params.context.nodeSendToSession(params.sessionKey, "chat", payload);
+  sendGlobalAwareNodeChatPayload({
+    context: params.context,
+    sessionKey: params.sessionKey,
+    agentId: payloadAgentId,
+    event: "chat",
+    payload,
+  });
   params.context.agentRunSeq.delete(params.runId);
+}
+
+function sendGlobalAwareNodeChatPayload(params: {
+  context: Pick<GatewayRequestContext, "nodeSendToSession"> &
+    Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
+  sessionKey: string;
+  agentId?: string;
+  event: string;
+  payload: unknown;
+}) {
+  const deliveryKeys = resolveGlobalAwareNodeChatDeliveryKeys({
+    cfg: params.context.getRuntimeConfig?.() ?? ({} as OpenClawConfig),
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
+  for (const deliveryKey of deliveryKeys) {
+    params.context.nodeSendToSession(deliveryKey, params.event, params.payload);
+  }
+}
+
+function resolveGlobalAwareNodeChatDeliveryKeys(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  agentId?: string;
+}): string[] {
+  if (params.sessionKey !== "global") {
+    return [params.sessionKey];
+  }
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const scopedAgentId = params.agentId ?? defaultAgentId;
+  const keys = [`agent:${scopedAgentId}:global`];
+  if (scopedAgentId === defaultAgentId) {
+    keys.push("global");
+  }
+  return keys;
 }
 
 function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
@@ -2114,12 +2359,33 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const { sessionKey, limit, maxChars } = params as {
       sessionKey: string;
+      agentId?: string;
       limit?: number;
       maxChars?: number;
     };
-    const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+    const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
+    const requestedAgentId = resolveRequestedChatAgentId({
+      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
+      requestedSessionKey: sessionKey,
+      agentId: agentIdOverride,
+    });
+    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+    const { cfg, storePath, entry } = loadSessionEntry(sessionKey, sessionLoadOptions);
+    const selectedAgent = validateChatSelectedAgent({
+      cfg,
+      requestedSessionKey: sessionKey,
+      agentId: requestedAgentId,
+    });
+    if (!selectedAgent.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+      return;
+    }
     const sessionId = entry?.sessionId;
-    const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
+    const sessionAgentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+      agentId: selectedAgent.agentId,
+    });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const hardMax = 1000;
     const defaultLimit = 200;
@@ -2167,7 +2433,11 @@ export const chatHandlers: GatewayRequestHandlers = {
       messages: normalized,
       maxSingleMessageBytes: perMessageHardCap,
     });
-    scheduleChatHistoryManagedImageCleanup({ sessionKey, context });
+    scheduleChatHistoryManagedImageCleanup({
+      sessionKey,
+      ...(selectedAgent.agentId ? { agentId: selectedAgent.agentId } : {}),
+      context,
+    });
     const capped = capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
     const bounded = enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
     const placeholderCount = replaced.replacedCount + bounded.placeholderCount;
@@ -2218,8 +2488,40 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const { sessionKey: rawSessionKey, runId } = params as {
       sessionKey: string;
+      agentId?: string;
       runId?: string;
     };
+    const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
+    const abortCfg = context.getRuntimeConfig();
+    const defaultAgentId = resolveDefaultAgentId(abortCfg);
+    const parsedAbortSessionKey = parseAgentSessionKey(rawSessionKey);
+    const abortSessionResolvesGlobal =
+      resolveSessionStoreKey({ cfg: abortCfg, sessionKey: rawSessionKey }) === "global";
+    const inferredGlobalAgentId =
+      !agentIdOverride && parsedAbortSessionKey && abortSessionResolvesGlobal
+        ? normalizeAgentId(parsedAbortSessionKey.agentId)
+        : undefined;
+    const abortAgentId =
+      agentIdOverride ??
+      inferredGlobalAgentId ??
+      (abortSessionResolvesGlobal ? defaultAgentId : undefined);
+    if (
+      agentIdOverride &&
+      parsedAbortSessionKey &&
+      normalizeAgentId(parsedAbortSessionKey.agentId) !== normalizeAgentId(agentIdOverride)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `agentId "${agentIdOverride}" does not match session key "${rawSessionKey}"`,
+        ),
+      );
+      return;
+    }
+    const canonicalAbortSessionKey =
+      abortAgentId && abortSessionResolvesGlobal ? "global" : rawSessionKey;
 
     const ops = createChatAbortOps(context);
     const requester = resolveChatAbortRequester(client);
@@ -2228,7 +2530,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
-        sessionKey: rawSessionKey,
+        sessionKey: canonicalAbortSessionKey,
+        sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
+        agentId: abortAgentId,
+        defaultAgentId,
         abortOrigin: "rpc",
         stopReason: "rpc",
         requester,
@@ -2240,16 +2545,36 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
+    const normalizedAgentIdOverride = abortAgentId?.toLowerCase();
 
     const active = context.chatAbortControllers.get(runId);
     if (!active) {
       const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
-      const pendingAgentPayload = readPreRegisteredAgentDedupePayloadForSession({
-        entry: pendingAgentEntry,
-        runId,
-        sessionKey: rawSessionKey,
-      });
-      if (pendingAgentPayload) {
+      const pendingAgentMatch = (() => {
+        const canonicalMatch = readPreRegisteredAgentDedupePayloadForSession({
+          entry: pendingAgentEntry,
+          runId,
+          sessionKey: canonicalAbortSessionKey,
+          agentId: abortAgentId,
+          defaultAgentId,
+        });
+        if (canonicalMatch) {
+          return { sessionKey: canonicalAbortSessionKey, payload: canonicalMatch };
+        }
+        if (rawSessionKey === canonicalAbortSessionKey) {
+          return undefined;
+        }
+        const aliasMatch = readPreRegisteredAgentDedupePayloadForSession({
+          entry: pendingAgentEntry,
+          runId,
+          sessionKey: rawSessionKey,
+          agentId: abortAgentId,
+          defaultAgentId,
+        });
+        return aliasMatch ? { sessionKey: rawSessionKey, payload: aliasMatch } : undefined;
+      })();
+      if (pendingAgentMatch) {
+        const pendingAgentPayload = pendingAgentMatch.payload;
         if (!canRequesterAbortPreRegisteredAgentRun(pendingAgentPayload, requester)) {
           respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
           return;
@@ -2257,7 +2582,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         writePreRegisteredAgentAbort({
           context,
           runId,
-          sessionKey: rawSessionKey,
+          sessionKey: pendingAgentMatch.sessionKey,
           payload: pendingAgentPayload,
           stopReason: "rpc",
         });
@@ -2267,14 +2592,27 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }
+    const abortSessionKeysForRun = new Set([rawSessionKey, canonicalAbortSessionKey]);
     if (
-      active.sessionKey !== rawSessionKey &&
+      !abortSessionKeysForRun.has(active.sessionKey) &&
       !canRequesterAbortChatRunWithoutSessionMatch(active, requester)
     ) {
       respond(
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
+      );
+      return;
+    }
+    if (
+      normalizedAgentIdOverride &&
+      active.sessionKey === "global" &&
+      resolveStoredGlobalRunAgentId(active.agentId, defaultAgentId) !== normalizedAgentIdOverride
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match agentId"),
       );
       return;
     }
@@ -2297,6 +2635,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           {
             runId,
             sessionId: active.sessionId,
+            agentId: active.agentId,
             text: partialText,
             abortOrigin: "rpc",
           },
@@ -2323,6 +2662,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       sessionKey: string;
+      agentId?: string;
       sessionId?: string;
       message: string;
       thinking?: string;
@@ -2398,13 +2738,20 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     const rawSessionKey = p.sessionKey;
+    const agentIdOverride = normalizeOptionalText(p.agentId);
+    const requestedAgentId = resolveRequestedChatAgentId({
+      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
+      requestedSessionKey: rawSessionKey,
+      agentId: agentIdOverride,
+    });
+    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
     const {
       cfg,
       entry,
       canonicalKey: sessionKey,
     } = measureDiagnosticsTimelineSpanSync(
       "gateway.chat_send.load_session",
-      () => loadSessionEntry(rawSessionKey),
+      () => loadSessionEntry(rawSessionKey, sessionLoadOptions),
       {
         phase: "agent-turn",
         attributes: {
@@ -2413,6 +2760,15 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       },
     );
+    const selectedAgent = validateChatSelectedAgent({
+      cfg,
+      requestedSessionKey: rawSessionKey,
+      agentId: requestedAgentId,
+    });
+    if (!selectedAgent.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+      return;
+    }
     const requestedSessionId = normalizeOptionalText(p.sessionId);
     const backingSessionId = entry?.sessionId ?? requestedSessionId;
     const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
@@ -2430,6 +2786,12 @@ export const chatHandlers: GatewayRequestHandlers = {
     const agentId = resolveSessionAgentId({
       sessionKey,
       config: cfg,
+      agentId: selectedAgent.agentId,
+    });
+    const activeRunScopeKey = resolveChatSendActiveScopeKey({
+      sessionKey,
+      agentId: selectedAgent.agentId,
+      mainKey: cfg.session?.mainKey,
     });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
     const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
@@ -2466,13 +2828,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (stopCommand) {
+      const defaultAgentId = resolveDefaultAgentId(cfg);
+      const stopAgentId =
+        sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
         sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+        agentId: stopAgentId,
         sessionId: entry?.sessionId,
         persistSessionKey: sessionKey,
+        defaultAgentId,
         abortOrigin: "stop-command",
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
@@ -2516,7 +2883,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       explicitDeliverRoute: originatingRoute.explicitDeliverRoute,
       message: rawMessage,
       originatingChannel: originatingRoute.originatingChannel,
-      sessionKey,
+      sessionKey: activeRunScopeKey,
     });
     if (activeChatSendDedupeKey) {
       const activeRunId = resolveActiveChatSendRunId(
@@ -2614,7 +2981,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         chatAbortControllers: context.chatAbortControllers,
         runId: clientRunId,
         sessionId: backingSessionId ?? clientRunId,
-        sessionKey: rawSessionKey,
+        sessionKey,
+        agentId: selectedAgent.agentId,
         timeoutMs,
         now,
         ownerConnId: normalizeOptionalText(client?.connId),
@@ -2639,6 +3007,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       }
       context.addChatRun(clientRunId, {
         sessionKey,
+        agentId: selectedAgent.agentId,
         clientRunId,
       });
       const ackPayload = {
@@ -2712,6 +3081,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         CommandBody: commandBody,
         InputProvenance: systemInputProvenance,
         SessionKey: sessionKey,
+        AgentId: agentId,
         Provider: INTERNAL_MESSAGE_CHANNEL,
         Surface: INTERNAL_MESSAGE_CHANNEL,
         OriginatingChannel: originatingChannel,
@@ -2784,7 +3154,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
         target: () => {
-          const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+          const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
+            sessionKey,
+            sessionLoadOptions,
+          );
           const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
           if (!resolvedSessionId) {
             return undefined;
@@ -2840,7 +3213,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         if (!transcriptPayload) {
           return;
         }
-        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
+          sessionKey,
+          sessionLoadOptions,
+        );
         const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
           sessionId,
@@ -2854,6 +3230,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         );
         const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
           sessionKey,
+          agentId,
           payloads: [transcriptPayload],
           managedImageLocalRoots: mediaLocalRoots,
           includeSensitiveMedia: transcriptPayload.sensitiveMedia !== true,
@@ -2888,6 +3265,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const appended = await appendAssistantTranscriptMessage({
+          sessionKey,
           message: transcriptReply,
           ...(persistedContentForAppend?.length ? { content: persistedContentForAppend } : {}),
           sessionId,
@@ -2971,8 +3349,22 @@ export const chatHandlers: GatewayRequestHandlers = {
                   // Register for any other active runs *in the same session* so
                   // late-joining clients (e.g. page refresh mid-response) receive
                   // in-progress tool events without leaking cross-session data.
+                  const defaultAgentId = resolveDefaultAgentId(cfg);
+                  const selectedGlobalAgentId =
+                    sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : undefined;
                   for (const [activeRunId, active] of context.chatAbortControllers) {
-                    if (activeRunId !== runId && active.sessionKey === p.sessionKey) {
+                    const activeGlobalAgentId =
+                      active.sessionKey === "global"
+                        ? (active.agentId ?? defaultAgentId)
+                        : undefined;
+                    const sameSelectedGlobalAgent =
+                      sessionKey === "global" &&
+                      selectedGlobalAgentId !== undefined &&
+                      activeGlobalAgentId === selectedGlobalAgentId;
+                    const sameSession =
+                      active.sessionKey === sessionKey &&
+                      (sessionKey !== "global" || sameSelectedGlobalAgent);
+                    if (activeRunId !== runId && sameSession) {
                       context.registerToolEventRecipient(activeRunId, connId);
                     }
                   }
@@ -3055,6 +3447,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       kind: "btw",
                       runId: clientRunId,
                       sessionKey,
+                      ...(sessionKey === "global" && agentId ? { agentId } : {}),
                       question: btwReplies[0].btw.question.trim(),
                       text: btwText,
                       isError: btwReplies.some((payload) => payload.isError),
@@ -3065,6 +3458,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     context,
                     runId: clientRunId,
                     sessionKey,
+                    agentId,
                   });
                 } else {
                   await persistGatewayUserTurnTranscriptBestEffort();
@@ -3080,8 +3474,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                     accountId,
                     payloads: rawFinalPayloads,
                   });
-                  const { storePath: latestStorePath, entry: latestEntry } =
-                    loadSessionEntry(sessionKey);
+                  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
+                    sessionKey,
+                    sessionLoadOptions,
+                  );
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
                   const resolvedTranscriptPath = resolveTranscriptPath({
                     sessionId,
@@ -3095,6 +3491,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   );
                   const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
                     sessionKey,
+                    agentId,
                     payloads: finalPayloads,
                     managedImageLocalRoots: mediaLocalRoots,
                     includeSensitiveMedia: false,
@@ -3127,6 +3524,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     hasSensitiveMedia
                       ? await buildAssistantDisplayContentFromReplyPayloads({
                           sessionKey,
+                          agentId,
                           payloads: finalPayloads,
                           managedImageLocalRoots: mediaLocalRoots,
                           includeSensitiveMedia: false,
@@ -3170,6 +3568,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     assistantContent?.length
                   ) {
                     const appended = await appendAssistantTranscriptMessage({
+                      sessionKey,
                       message: transcriptReply,
                       ...(persistedContentForAppend?.length
                         ? { content: persistedContentForAppend }
@@ -3226,6 +3625,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     context,
                     runId: clientRunId,
                     sessionKey,
+                    agentId,
                     message,
                   });
                 }
@@ -3242,8 +3642,10 @@ export const chatHandlers: GatewayRequestHandlers = {
                     accountId,
                     payloads: sourceReplyPayloads,
                   });
-                  const { storePath: latestStorePath, entry: latestEntry } =
-                    loadSessionEntry(sessionKey);
+                  const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(
+                    sessionKey,
+                    sessionLoadOptions,
+                  );
                   const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
                   const resolvedTranscriptPath = resolveTranscriptPath({
                     sessionId,
@@ -3260,6 +3662,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   ): Promise<AssistantDisplayContentBlock[] | undefined> =>
                     await buildAssistantDisplayContentFromReplyPayloads({
                       sessionKey,
+                      agentId,
                       payloads,
                       managedImageLocalRoots: mediaLocalRoots,
                       includeSensitiveMedia: false,
@@ -3459,6 +3862,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                           const result = await rewriteTranscriptEntriesInSessionFile({
                             sessionFile: resolvedTranscriptPath,
                             sessionKey,
+                            agentId,
                             config: cfg,
                             request: {
                               allowedRewriteSuffixEntryIds: [...allowedSourceReplyMirrorIds],
@@ -3526,6 +3930,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       context,
                       runId: clientRunId,
                       sessionKey,
+                      agentId,
                       message,
                     });
                     broadcastedSourceReplyFinal = true;
@@ -3539,6 +3944,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   context,
                   runId: clientRunId,
                   sessionKey,
+                  agentId,
                   errorMessage: returnedAgentErrorMessage,
                 });
               }
@@ -3603,6 +4009,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             context,
             runId: clientRunId,
             sessionKey,
+            agentId,
             errorMessage: String(err),
           });
         })
@@ -3637,6 +4044,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         context,
         runId: clientRunId,
         sessionKey,
+        agentId,
         errorMessage: String(err),
       });
     }
@@ -3655,26 +4063,53 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       sessionKey: string;
+      agentId?: string;
       message: string;
       label?: string;
     };
 
     // Load session to find transcript file
     const rawSessionKey = p.sessionKey;
-    const { cfg, storePath, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const requestedAgentId = resolveRequestedChatAgentId({
+      cfg: (context as { getRuntimeConfig?: () => OpenClawConfig }).getRuntimeConfig?.(),
+      requestedSessionKey: rawSessionKey,
+      agentId: p.agentId,
+    });
+    const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+    const {
+      cfg,
+      storePath,
+      entry,
+      canonicalKey: sessionKey,
+    } = loadSessionEntry(rawSessionKey, sessionLoadOptions);
+    const selectedAgent = validateChatSelectedAgent({
+      cfg,
+      requestedSessionKey: rawSessionKey,
+      agentId: requestedAgentId,
+    });
+    if (!selectedAgent.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
+      return;
+    }
     const sessionId = entry?.sessionId;
     if (!sessionId || !storePath) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "session not found"));
       return;
     }
+    const agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+      agentId: selectedAgent.agentId,
+    });
 
     const appended = await appendAssistantTranscriptMessage({
+      sessionKey,
       message: p.message,
       label: p.label,
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
-      agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+      agentId,
       createIfMissing: true,
       cfg,
     });
@@ -3697,12 +4132,19 @@ export const chatHandlers: GatewayRequestHandlers = {
     const chatPayload = {
       runId: `inject-${appended.messageId}`,
       sessionKey,
+      ...(sessionKey === "global" && agentId ? { agentId } : {}),
       seq: 0,
       state: "final" as const,
       message,
     };
     context.broadcast("chat", chatPayload);
-    context.nodeSendToSession(sessionKey, "chat", chatPayload);
+    sendGlobalAwareNodeChatPayload({
+      context,
+      sessionKey,
+      agentId,
+      event: "chat",
+      payload: chatPayload,
+    });
 
     respond(true, { ok: true, messageId: appended.messageId });
   },

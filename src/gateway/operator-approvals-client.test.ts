@@ -195,9 +195,10 @@ describe("withOperatorApprovalsGatewayClient", () => {
     );
 
     expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
+    expect(clientState.options?.deviceIdentity).toBeNull();
   });
 
-  it("keeps device identity for loopback approval clients without shared auth", async () => {
+  it("omits stored device identity for local runtime-token approval clients without shared auth", async () => {
     bootstrapState.auth = { token: undefined, password: undefined };
 
     await withOperatorApprovalsGatewayClient(
@@ -208,7 +209,8 @@ describe("withOperatorApprovalsGatewayClient", () => {
       async () => undefined,
     );
 
-    expect(clientState.options?.deviceIdentity).toBeUndefined();
+    expect(typeof clientState.options?.approvalRuntimeToken).toBe("string");
+    expect(clientState.options?.deviceIdentity).toBeNull();
   });
 
   it("surfaces close failures before hello", async () => {

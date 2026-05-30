@@ -1,4 +1,4 @@
-import type { CompleteSimpleFn, StreamFn } from "./llm.js";
+import type { CompleteSimpleFn, StreamFn } from "../../llm-core/src/index.js";
 
 export interface AgentCoreRuntimeDeps {
   streamSimple: StreamFn;

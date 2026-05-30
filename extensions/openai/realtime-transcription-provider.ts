@@ -47,27 +47,7 @@ type RealtimeEvent = {
   error?: unknown;
 };
 
-type OpenAIRealtimeTranscriptionSessionCreate = {
-  type: "transcription";
-  audio: {
-    input: {
-      format: { type: "audio/pcmu" };
-      transcription: {
-        model: string;
-        language?: string;
-        prompt?: string;
-      };
-      turn_detection: {
-        type: "server_vad";
-        threshold: number;
-        prefix_padding_ms: number;
-        silence_duration_ms: number;
-      };
-    };
-  };
-};
-
-type OpenAIRealtimeTranscriptionSessionUpdate = {
+type OpenAIRealtimeTranscriptionSessionPayload = {
   type: "transcription";
   audio: {
     input: {
@@ -131,33 +111,9 @@ function normalizeVadThreshold(value: unknown): number | undefined {
   return number;
 }
 
-function buildOpenAIRealtimeTranscriptionSessionCreateConfig(
+function buildOpenAIRealtimeTranscriptionSessionPayload(
   config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionCreate {
-  return {
-    type: "transcription",
-    audio: {
-      input: {
-        format: { type: "audio/pcmu" },
-        transcription: {
-          model: config.model,
-          ...(config.language ? { language: config.language } : {}),
-          ...(config.prompt ? { prompt: config.prompt } : {}),
-        },
-        turn_detection: {
-          type: "server_vad",
-          threshold: config.vadThreshold,
-          prefix_padding_ms: 300,
-          silence_duration_ms: config.silenceDurationMs,
-        },
-      },
-    },
-  };
-}
-
-function buildOpenAIRealtimeTranscriptionSessionUpdateConfig(
-  config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionUpdate {
+): OpenAIRealtimeTranscriptionSessionPayload {
   return {
     type: "transcription",
     audio: {
@@ -196,7 +152,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
   const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret({
     authToken,
     auditContext: "openai-realtime-transcription-session",
-    session: buildOpenAIRealtimeTranscriptionSessionCreateConfig(config),
+    session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
   });
   return clientSecret.value;
 }
@@ -286,7 +242,7 @@ function createOpenAIRealtimeTranscriptionSession(
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
       transport.sendJson({
         type: "session.update",
-        session: buildOpenAIRealtimeTranscriptionSessionUpdateConfig(config),
+        session: buildOpenAIRealtimeTranscriptionSessionPayload(config),
       });
     },
     onMessage: handleEvent,

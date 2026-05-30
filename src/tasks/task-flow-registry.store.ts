@@ -1,5 +1,5 @@
 import {
-  closeTaskFlowRegistrySqliteStore,
+  closeTaskFlowRegistryDatabase,
   deleteTaskFlowRegistryRecordFromSqlite,
   loadTaskFlowRegistryStateFromSqlite,
   saveTaskFlowRegistryStateToSqlite,
@@ -44,7 +44,7 @@ const defaultFlowRegistryStore: TaskFlowRegistryStore = {
   saveSnapshot: saveTaskFlowRegistryStateToSqlite,
   upsertFlow: upsertTaskFlowRegistryRecordToSqlite,
   deleteFlow: deleteTaskFlowRegistryRecordFromSqlite,
-  close: closeTaskFlowRegistrySqliteStore,
+  close: closeTaskFlowRegistryDatabase,
 };
 
 let configuredFlowRegistryStore: TaskFlowRegistryStore = defaultFlowRegistryStore;

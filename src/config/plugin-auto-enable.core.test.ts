@@ -289,6 +289,23 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.allow).toBeUndefined();
   });
 
+  it("preserves an empty plugins.allow as nonrestrictive during auto-enable", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { slack: { botToken: "x" } },
+        plugins: {
+          allow: [],
+          bundledDiscovery: "compat",
+        },
+      },
+      env,
+    });
+
+    expect(result.config.channels?.slack?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual([]);
+    expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
+  });
+
   it("does not auto-enable Slack from unrelated Slack-prefixed env vars", () => {
     const result = applyPluginAutoEnable({
       config: {},

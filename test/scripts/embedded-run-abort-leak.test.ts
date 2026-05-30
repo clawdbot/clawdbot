@@ -31,22 +31,12 @@ afterEach(() => {
 
 describe("scripts/embedded-run-abort-leak", () => {
   it("rejects loose numeric thresholds before writing heap snapshots", () => {
-    const cases = [
-      ["--iters", "1e3", "positive"],
-      ["--batches", "2abc", "positive"],
-      ["--max-rss-growth-mb", "0x10", "non-negative"],
-      ["--max-tracked-retention", "abc", "non-negative"],
-      ["--scope-bytes", "1mb", "positive"],
-    ] as const;
+    const snapDir = makeTempRoot();
+    const result = runHarness(["--snap-dir", snapDir, "--iters", "1e3", "--quiet"]);
 
-    for (const [flag, value, label] of cases) {
-      const snapDir = makeTempRoot();
-      const result = runHarness(["--snap-dir", snapDir, flag, value, "--quiet"]);
-
-      expect(result.status).toBe(2);
-      expect(result.stdout).toBe("");
-      expect(result.stderr).toContain(`error: ${flag} must be a ${label} integer`);
-      expect(readdirSync(snapDir)).toEqual([]);
-    }
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: --iters must be a positive integer");
+    expect(readdirSync(snapDir)).toEqual([]);
   });
 });

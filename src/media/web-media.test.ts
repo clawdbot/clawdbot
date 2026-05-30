@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSZip from "jszip";
@@ -650,9 +651,111 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
-  it("rejects host-read HTML files without a separate security-boundary approval", async () => {
+  it("allows trusted generated host-read HTML reports under OpenClaw temp root", async () => {
     const htmlFile = path.join(fixtureRoot, "report.html");
     await fs.writeFile(htmlFile, "<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8");
+    const result = await loadWebMedia(htmlFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/html");
+  });
+
+  it("rejects host-read HTML files outside the trusted OpenClaw temp root", async () => {
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
+    const htmlFile = path.join(outsideRoot, "report.html");
+    await fs.writeFile(htmlFile, "<!doctype html><title>Report</title><h1>Report</h1>\n", "utf8");
+    try {
+      await expectLoadWebMediaErrorCode(
+        loadWebMedia(htmlFile, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        }),
+        "path-not-allowed",
+      );
+    } finally {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects trusted host-read HTML symlinks that resolve outside OpenClaw temp root", async () => {
+    const outsideRoot = await fs.mkdtemp(path.join(os.tmpdir(), "web-media-host-html-"));
+    const outsideHtml = path.join(outsideRoot, "report.html");
+    const htmlLink = path.join(fixtureRoot, "linked-report.html");
+    await fs.writeFile(
+      outsideHtml,
+      "<!doctype html><title>Outside</title><body>secret</body>\n",
+      "utf8",
+    );
+    try {
+      await fs.symlink(outsideHtml, htmlLink);
+    } catch (error) {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code === "EPERM") {
+        return;
+      }
+      throw error;
+    }
+    try {
+      await expectLoadWebMediaErrorCode(
+        loadWebMedia(htmlLink, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        }),
+        "path-not-allowed",
+      );
+    } finally {
+      await fs.rm(htmlLink, { force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects trusted host-read HTML hardlinks to files outside OpenClaw temp root", async () => {
+    const outsideRoot = await fs.mkdtemp(
+      path.join(path.dirname(resolvePreferredOpenClawTmpDir()), "web-media-host-html-"),
+    );
+    const outsideHtml = path.join(outsideRoot, "report.html");
+    const htmlLink = path.join(fixtureRoot, "hardlinked-report.html");
+    await fs.writeFile(
+      outsideHtml,
+      "<!doctype html><title>Outside</title><body>secret</body>\n",
+      "utf8",
+    );
+    try {
+      await fs.link(outsideHtml, htmlLink);
+    } catch (error) {
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+      if ((error as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw error;
+    }
+    try {
+      await expectLoadWebMediaErrorCode(
+        loadWebMedia(htmlLink, {
+          maxBytes: 1024 * 1024,
+          localRoots: "any",
+          readFile: async (filePath) => await fs.readFile(filePath),
+          hostReadCapability: true,
+        }),
+        "path-not-allowed",
+      );
+    } finally {
+      await fs.rm(htmlLink, { force: true });
+      await fs.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects trusted host-read HTML paths without HTML document shape", async () => {
+    const htmlFile = path.join(fixtureRoot, "report.html");
+    await fs.writeFile(htmlFile, "status,value\nok,1\n", "utf8");
     await expectLoadWebMediaErrorCode(
       loadWebMedia(htmlFile, {
         maxBytes: 1024 * 1024,

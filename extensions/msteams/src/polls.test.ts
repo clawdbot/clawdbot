@@ -81,6 +81,22 @@ describe("msteams polls", () => {
       ),
     ).toEqual(["0"]);
   });
+
+  it("accepts only strict decimal poll selections", () => {
+    expect(
+      normalizeMSTeamsPollSelections(
+        {
+          id: "poll-1",
+          question: "Lunch?",
+          options: ["Pizza", "Sushi"],
+          maxSelections: 2,
+          votes: {},
+          createdAt: "2026-03-22T00:00:00.000Z",
+        },
+        ["+0", "0x1", "1"],
+      ),
+    ).toEqual(["0", "1"]);
+  });
 });
 
 const createFsStore = async () => {

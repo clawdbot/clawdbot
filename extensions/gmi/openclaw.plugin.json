@@ -1,0 +1,162 @@
+{
+  "id": "gmi",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["gmi", "gmi-cloud", "gmicloud"],
+  "providerAuthAliases": {
+    "gmi-cloud": "gmi",
+    "gmicloud": "gmi"
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "gmi-native",
+      "hosts": ["api.gmi-serving.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "gmi": {
+        "family": "gmi"
+      },
+      "gmi-cloud": {
+        "family": "gmi"
+      },
+      "gmicloud": {
+        "family": "gmi"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "gmi",
+        "envVars": ["GMI_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "gmi",
+      "method": "api-key",
+      "choiceId": "gmi-api-key",
+      "choiceLabel": "GMI Cloud API key",
+      "choiceHint": "OpenAI-compatible GMI Cloud endpoint",
+      "groupId": "gmi",
+      "groupLabel": "GMI Cloud",
+      "groupHint": "OpenAI-compatible GMI Cloud endpoint",
+      "optionKey": "gmiApiKey",
+      "cliFlag": "--gmi-api-key",
+      "cliOption": "--gmi-api-key <key>",
+      "cliDescription": "GMI Cloud API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "aliases": {
+      "gmi-cloud": {
+        "provider": "gmi"
+      },
+      "gmicloud": {
+        "provider": "gmi"
+      }
+    },
+    "providers": {
+      "gmi": {
+        "baseUrl": "https://api.gmi-serving.com/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "zai-org/GLM-5.1-FP8",
+            "name": "GLM-5.1 FP8",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek-ai/DeepSeek-V3.2",
+            "name": "DeepSeek V3.2",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "moonshotai/Kimi-K2.5",
+            "name": "Kimi K2.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "google/gemini-3.1-flash-lite",
+            "name": "Gemini 3.1 Flash Lite",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 1048576,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "anthropic/claude-sonnet-4.6",
+            "name": "Claude Sonnet 4.6",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 64000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "openai/gpt-5.4",
+            "name": "GPT-5.4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    }
+  }
+}

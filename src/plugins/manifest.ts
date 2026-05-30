@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import {
@@ -35,6 +36,12 @@ export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
+const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
+const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
+const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
+const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
+const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
+const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -152,6 +159,22 @@ export type PluginManifestProviderRequestProvider = {
 
 export type PluginManifestProviderRequest = {
   providers?: Record<string, PluginManifestProviderRequestProvider>;
+};
+
+export type PluginManifestSecretProviderIntegration = {
+  providerAlias?: string;
+  displayName?: string;
+  description?: string;
+  source: "exec";
+  command: "${node}";
+  args?: string[];
+  timeoutMs?: number;
+  noOutputTimeoutMs?: number;
+  maxOutputBytes?: number;
+  jsonOnly?: boolean;
+  env?: Record<string, string>;
+  passEnv?: string[];
+  allowInsecurePath?: boolean;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
@@ -325,6 +348,8 @@ export type PluginManifest = {
   providerEndpoints?: PluginManifestProviderEndpoint[];
   /** Cheap provider request metadata used before provider runtime loads. */
   providerRequest?: PluginManifestProviderRequest;
+  /** Declarative SecretRef provider presets owned by this plugin. */
+  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /**
@@ -1211,6 +1236,111 @@ function normalizeManifestProviderRequest(
   return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
+function normalizeManifestStringArray(
+  value: unknown,
+  options?: { maxItems?: number; maxLength?: number; pattern?: RegExp },
+): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    if (options?.maxLength !== undefined && entry.length > options.maxLength) {
+      continue;
+    }
+    if (options?.pattern && !options.pattern.test(entry)) {
+      continue;
+    }
+    normalized.push(entry);
+    if (options?.maxItems !== undefined && normalized.length >= options.maxItems) {
+      break;
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestTrimmedStringArray(
+  value: unknown,
+  options?: { maxItems?: number; pattern?: RegExp },
+): string[] | undefined {
+  const normalized = normalizeTrimmedStringList(value).filter(
+    (entry) => !options?.pattern || options.pattern.test(entry),
+  );
+  const limited =
+    options?.maxItems !== undefined ? normalized.slice(0, options.maxItems) : normalized;
+  return limited.length > 0 ? limited : undefined;
+}
+
+function normalizeManifestPositiveInteger(value: unknown, max: number): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max
+    ? value
+    : undefined;
+}
+
+function normalizeManifestSecretProviderIntegrations(
+  value: unknown,
+): Record<string, PluginManifestSecretProviderIntegration> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestSecretProviderIntegration> = Object.create(null);
+  for (const [rawId, rawIntegration] of Object.entries(value)) {
+    const id = normalizeOptionalString(rawId) ?? "";
+    if (!id || isBlockedObjectKey(id) || !isRecord(rawIntegration)) {
+      continue;
+    }
+    const command = normalizeOptionalString(rawIntegration.command);
+    if (rawIntegration.source !== "exec" || command !== SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER) {
+      continue;
+    }
+    const providerAlias = normalizeOptionalString(rawIntegration.providerAlias);
+    const displayName = normalizeOptionalString(rawIntegration.displayName);
+    const description = normalizeOptionalString(rawIntegration.description);
+    const args = normalizeManifestStringArray(rawIntegration.args, {
+      maxItems: MAX_SECRET_PROVIDER_EXEC_ARGS,
+      maxLength: MAX_SECRET_PROVIDER_EXEC_ARG_BYTES,
+    });
+    const timeoutMs = normalizeManifestPositiveInteger(
+      rawIntegration.timeoutMs,
+      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+    );
+    const noOutputTimeoutMs = normalizeManifestPositiveInteger(
+      rawIntegration.noOutputTimeoutMs,
+      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+    );
+    const maxOutputBytes = normalizeManifestPositiveInteger(
+      rawIntegration.maxOutputBytes,
+      MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
+    );
+    const env = normalizeStringRecord(rawIntegration.env);
+    const passEnv = normalizeManifestTrimmedStringArray(rawIntegration.passEnv, {
+      maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
+      pattern: ENV_SECRET_REF_ID_RE,
+    });
+    normalized[id] = {
+      ...(providerAlias ? { providerAlias } : {}),
+      ...(displayName ? { displayName } : {}),
+      ...(description ? { description } : {}),
+      source: "exec",
+      command,
+      ...(args ? { args } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
+      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
+      ...(typeof rawIntegration.jsonOnly === "boolean"
+        ? { jsonOnly: rawIntegration.jsonOnly }
+        : {}),
+      ...(env ? { env } : {}),
+      ...(passEnv ? { passEnv } : {}),
+      ...(rawIntegration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -1661,6 +1791,9 @@ export function loadPluginManifest(
   const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
     ownedProviders: new Set(providers),
   });
+  const secretProviderIntegrations = normalizeManifestSecretProviderIntegrations(
+    raw.secretProviderIntegrations,
+  );
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
@@ -1716,6 +1849,7 @@ export function loadPluginManifest(
       modelIdNormalization,
       providerEndpoints,
       providerRequest,
+      secretProviderIntegrations,
       cliBackends,
       syntheticAuthRefs,
       nonSecretAuthMarkers,

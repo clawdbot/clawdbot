@@ -17,7 +17,7 @@ private func makeRealtimeAudioTapBlock(
             inputSampleRate: inputSampleRate,
             targetSampleRate: targetSampleRate)
         guard !encoded.isEmpty else { return }
-        let timestampMs = ProcessInfo.processInfo.systemUptime * 1000
+        let timestampMs = (ProcessInfo.processInfo.systemUptime * 1000).rounded()
         let rms = RealtimeTalkRelaySession.rmsLevel(buffer: buffer)
         onAudio(encoded, timestampMs, rms)
     }
@@ -125,15 +125,24 @@ final class RealtimeTalkRelaySession {
     private var eventTask: Task<Void, Never>?
     private var outputTask: Task<Void, Never>?
     private var outputContinuation: AsyncThrowingStream<Data, Error>.Continuation?
+    private var outputIdleTask: Task<Void, Never>?
+    private var outputSessionId = 0
+    private var pendingOutputChunks: [Data] = []
+    private var pendingOutputDone = false
     private var audioSender: RealtimeAudioSender?
     private var isClosed = false
     private var isOutputPlaying = false
     private var outputStartedAtMs: Double?
+    private var outputPlaybackExpectedEndMs: Double = 0
     private var lastBargeInAtMs: Double = 0
     private var micLogFrameCount = 0
     private var micLogByteCount = 0
     private var micLogMaxRms: Float = 0
     private var lastMicLogAtMs: Double = 0
+    private var suppressedEchoFrameCount = 0
+    private var suppressedEchoByteCount = 0
+    private var suppressedEchoMaxRms: Float = 0
+    private var lastSuppressedEchoLogAtMs: Double = 0
     private var outputAudioChunkCount = 0
     private var outputAudioByteCount = 0
 
@@ -168,7 +177,6 @@ final class RealtimeTalkRelaySession {
             let eventStream = await self.gateway.subscribeServerEvents(bufferingNewest: 200)
             self.startEventPump(stream: eventStream)
             self.configureAudioContract(result.audio)
-            self.startOutputPlayback()
             try self.startMicrophonePump()
             self.onStatus("Listening (Realtime)")
         } catch {
@@ -219,7 +227,6 @@ final class RealtimeTalkRelaySession {
 
     func cancelOutput(reason: String = "user") {
         self.stopOutputPlayback()
-        self.startOutputPlayback()
         guard let relaySessionId else { return }
         Task { [gateway] in
             let payload: [String: Any] = [
@@ -306,12 +313,18 @@ final class RealtimeTalkRelaySession {
                   let data = Data(base64Encoded: base64)
             else { return }
             self.recordOutputAudioChunk(byteCount: data.count)
-            self.markOutputAudioStarted(nowMs: ProcessInfo.processInfo.systemUptime * 1000)
+            self.markOutputAudioStarted(byteCount: data.count, nowMs: ProcessInfo.processInfo.systemUptime * 1000)
             self.onSpeakingChanged(true)
+            if self.outputContinuation == nil, self.outputTask != nil {
+                self.pendingOutputChunks.append(data)
+                return
+            }
+            self.ensureOutputPlaybackStarted()
             self.outputContinuation?.yield(data)
+        case "audioDone":
+            self.finishOutputPlaybackStream()
         case "clear":
             self.stopOutputPlayback()
-            self.startOutputPlayback()
         case "transcript":
             self.handleTranscriptEvent(payload)
         case "toolCall":
@@ -337,11 +350,16 @@ final class RealtimeTalkRelaySession {
             "talk realtime audio: chunks=\(self.outputAudioChunkCount) bytes=\(self.outputAudioByteCount)")
     }
 
-    private func markOutputAudioStarted(nowMs: Double) {
+    private func markOutputAudioStarted(byteCount: Int, nowMs: Double) {
         if !self.isOutputPlaying {
             self.outputStartedAtMs = nowMs
+            self.outputPlaybackExpectedEndMs = nowMs
         }
         self.isOutputPlaying = true
+        let bytesPerSecond = max(1, self.outputSampleRateHz * Double(MemoryLayout<Int16>.size))
+        let chunkDurationMs = (Double(byteCount) / bytesPerSecond) * 1000
+        self.outputPlaybackExpectedEndMs = max(nowMs, self.outputPlaybackExpectedEndMs) + chunkDurationMs
+        self.scheduleOutputPlaybackIdle(expectedEndMs: self.outputPlaybackExpectedEndMs)
     }
 
     private func handleInputLevelDuringOutput(_ rms: Float, timestampMs: Double) {
@@ -537,14 +555,25 @@ final class RealtimeTalkRelaySession {
         { [weak self, audioSender = self.audioSender] encoded, timestampMs, rms in
             guard let audioSender else { return }
             Task {
-                await MainActor.run { [weak self] in
-                    self?.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
-                }
-                if rms >= Self.bargeInRmsThreshold {
-                    await MainActor.run { [weak self] in
-                        self?.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
+                let shouldSend = await MainActor.run { [weak self] in
+                    guard let self, !self.isClosed else { return false }
+                    self.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
+                    self.refreshOutputPlaybackState(timestampMs: timestampMs)
+                    if self.isOutputPlaying {
+                        if self.shouldSuppressMicrophoneDuringOutput() {
+                            self.recordSuppressedOutputEchoFrame(
+                                byteCount: encoded.count,
+                                rms: rms,
+                                timestampMs: timestampMs)
+                            return false
+                        }
+                        if rms >= Self.bargeInRmsThreshold {
+                            self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)
+                        }
                     }
+                    return true
                 }
+                guard shouldSend else { return }
                 guard let message = await audioSender.send(encoded, timestampMs: timestampMs) else { return }
                 await MainActor.run { [weak self] in
                     guard let self, !self.isClosed else { return }
@@ -559,6 +588,13 @@ final class RealtimeTalkRelaySession {
             block: tapBlock)
         self.audioEngine.prepare()
         try self.audioEngine.start()
+    }
+
+    private func shouldSuppressMicrophoneDuringOutput() -> Bool {
+        let outputs = AVAudioSession.sharedInstance().currentRoute.outputs
+        // Built-in speaker output bleeds into the microphone even in voiceChat mode; keep the
+        // realtime provider from treating its own speech as user input. Headsets keep barge-in.
+        return outputs.contains { $0.portType == .builtInSpeaker }
     }
 
     private func recordMicrophoneFrame(byteCount: Int, rms: Float, timestampMs: Double) {
@@ -576,13 +612,31 @@ final class RealtimeTalkRelaySession {
         self.micLogMaxRms = 0
     }
 
+    private func recordSuppressedOutputEchoFrame(byteCount: Int, rms: Float, timestampMs: Double) {
+        self.suppressedEchoFrameCount += 1
+        self.suppressedEchoByteCount += byteCount
+        self.suppressedEchoMaxRms = max(self.suppressedEchoMaxRms, rms)
+        guard timestampMs - self.lastSuppressedEchoLogAtMs >= 1000 else { return }
+        self.lastSuppressedEchoLogAtMs = timestampMs
+        let maxRms = String(format: "%.4f", Double(self.suppressedEchoMaxRms))
+        GatewayDiagnostics.log(
+            "talk realtime mic suppressed during output: "
+                + "buffers=\(self.suppressedEchoFrameCount) "
+                + "bytes=\(self.suppressedEchoByteCount) maxRms=\(maxRms)")
+        self.suppressedEchoFrameCount = 0
+        self.suppressedEchoByteCount = 0
+        self.suppressedEchoMaxRms = 0
+    }
+
     private func stopMicrophonePump() {
         self.audioEngine.inputNode.removeTap(onBus: 0)
         self.audioEngine.stop()
     }
 
-    private func startOutputPlayback() {
-        self.stopOutputPlayback()
+    private func ensureOutputPlaybackStarted() {
+        guard self.outputContinuation == nil, self.outputTask == nil else { return }
+        self.outputSessionId += 1
+        let sessionId = self.outputSessionId
         let stream = AsyncThrowingStream<Data, Error> { continuation in
             self.outputContinuation = continuation
         }
@@ -590,28 +644,95 @@ final class RealtimeTalkRelaySession {
             guard let self else { return }
             let result = await self.pcmPlayer.play(stream: stream, sampleRate: self.outputSampleRateHz)
             await MainActor.run {
+                guard self.outputSessionId == sessionId else { return }
+                self.outputTask = nil
+                self.outputContinuation = nil
                 if !result.finished, let interruptedAt = result.interruptedAt {
                     self.logger.info("realtime output interrupted at \(interruptedAt, privacy: .public)s")
                 }
                 self.markOutputPlaybackFinished()
+                self.startPendingOutputPlaybackIfNeeded()
             }
         }
     }
 
-    private func markOutputPlaybackFinished() {
+    private func finishOutputPlaybackStream() {
+        guard let continuation = self.outputContinuation else {
+            if self.outputTask != nil, !self.pendingOutputChunks.isEmpty {
+                self.pendingOutputDone = true
+            }
+            return
+        }
+        continuation.finish()
+        self.outputContinuation = nil
+    }
+
+    private func startPendingOutputPlaybackIfNeeded() {
+        guard !self.pendingOutputChunks.isEmpty else {
+            self.pendingOutputDone = false
+            return
+        }
+        let chunks = self.pendingOutputChunks
+        let shouldFinish = self.pendingOutputDone
+        self.pendingOutputChunks = []
+        self.pendingOutputDone = false
+        self.ensureOutputPlaybackStarted()
+        for chunk in chunks {
+            self.markOutputAudioStarted(byteCount: chunk.count, nowMs: ProcessInfo.processInfo.systemUptime * 1000)
+            self.onSpeakingChanged(true)
+            self.outputContinuation?.yield(chunk)
+        }
+        if shouldFinish {
+            self.finishOutputPlaybackStream()
+        }
+    }
+
+    private func scheduleOutputPlaybackIdle(expectedEndMs: Double) {
+        self.outputIdleTask?.cancel()
+        let nowMs = ProcessInfo.processInfo.systemUptime * 1000
+        let idleDelayMs = max(350, expectedEndMs - nowMs + 500)
+        self.outputIdleTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(idleDelayMs * 1_000_000))
+            guard !Task.isCancelled else { return }
+            await MainActor.run { [weak self] in
+                guard let self, !self.isClosed else { return }
+                let nowMs = ProcessInfo.processInfo.systemUptime * 1000
+                self.refreshOutputPlaybackState(timestampMs: nowMs, cancelIdleTask: false)
+            }
+        }
+    }
+
+    private func refreshOutputPlaybackState(timestampMs: Double, cancelIdleTask: Bool = true) {
+        guard self.isOutputPlaying else { return }
+        guard timestampMs >= self.outputPlaybackExpectedEndMs + 500 else { return }
+        self.markOutputPlaybackFinished(cancelIdleTask: cancelIdleTask)
+    }
+
+    private func markOutputPlaybackFinished(cancelIdleTask: Bool = true) {
+        if cancelIdleTask {
+            self.outputIdleTask?.cancel()
+            self.outputIdleTask = nil
+        }
         self.isOutputPlaying = false
         self.outputStartedAtMs = nil
+        self.outputPlaybackExpectedEndMs = 0
         self.onSpeakingChanged(false)
     }
 
     private func stopOutputPlayback() {
+        self.outputSessionId += 1
         self.outputContinuation?.finish()
         self.outputContinuation = nil
         self.outputTask?.cancel()
         self.outputTask = nil
+        self.outputIdleTask?.cancel()
+        self.outputIdleTask = nil
+        self.pendingOutputChunks = []
+        self.pendingOutputDone = false
         _ = self.pcmPlayer.stop()
         self.isOutputPlaying = false
         self.outputStartedAtMs = nil
+        self.outputPlaybackExpectedEndMs = 0
         self.onSpeakingChanged(false)
     }
 
@@ -684,7 +805,7 @@ final class RealtimeTalkRelaySession {
 
 extension RealtimeTalkRelaySession {
     func _test_markOutputAudioStarted(nowMs: Double) {
-        self.markOutputAudioStarted(nowMs: nowMs)
+        self.markOutputAudioStarted(byteCount: 4800, nowMs: nowMs)
     }
 
     func _test_markOutputPlaybackFinished() {

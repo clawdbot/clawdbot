@@ -1,8 +1,10 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { applyModelDefaults } from "./defaults.js";
 import type { OpenClawConfig } from "./types.js";
+import { validateConfigObjectWithPlugins } from "./validation.js";
 
 describe("applyModelDefaults", () => {
   beforeEach(() => {
@@ -68,6 +70,36 @@ describe("applyModelDefaults", () => {
         },
       },
     } satisfies OpenClawConfig;
+  }
+
+  function buildCustomProviderManifestRegistry() {
+    return {
+      plugins: [
+        {
+          id: "custom-provider-plugin",
+          channels: [],
+          providers: ["myproxy"],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          origin: "config",
+          rootDir: "/tmp/custom-provider-plugin",
+          source: "test",
+          manifestPath: "/tmp/custom-provider-plugin/openclaw.plugin.json",
+          modelIdNormalization: {
+            providers: {
+              myproxy: {
+                aliases: {
+                  latest: "modern-model",
+                },
+                prefixWhenBare: "vendor",
+              },
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    } satisfies PluginManifestRegistry;
   }
 
   it("adds default aliases when models are present", () => {
@@ -301,6 +333,37 @@ describe("applyModelDefaults", () => {
     expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe(
       "myproxy/google/gemini-3.1-pro-preview",
     );
+  });
+
+  it("normalizes configured provider rows with explicit manifest registry policies", () => {
+    const cfg = buildProxyProviderConfig();
+    const model = cfg.models.providers.myproxy.models[0];
+    model.id = "latest";
+    model.name = "Custom latest";
+
+    const next = applyModelDefaults(cfg, {
+      manifestRegistry: buildCustomProviderManifestRegistry(),
+    });
+
+    expect(next.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
+  });
+
+  it("loads manifest policies for model defaults even when plugin validation is skipped", () => {
+    const cfg = buildProxyProviderConfig();
+    const model = cfg.models.providers.myproxy.models[0];
+    model.id = "latest";
+    model.name = "Custom latest";
+    const result = validateConfigObjectWithPlugins(cfg, {
+      pluginValidation: "skip",
+      loadPluginMetadataSnapshot: () => ({
+        manifestRegistry: buildCustomProviderManifestRegistry(),
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.myproxy?.models?.[0]?.id).toBe("vendor/modern-model");
+    }
   });
 
   it("fills missing model provider defaults", () => {

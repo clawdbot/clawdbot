@@ -1,43 +1,12 @@
 import { pathToFileURL } from "node:url";
 import { parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import {
+  budgetFloatFlag,
+  parseBudgetNumber,
+  readBudgetEnvNumber,
+} from "./lib/budget-number-args.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
 import { readJsonFile, runVitestJsonReport } from "./test-report-utils.mjs";
-
-function parseBudgetNumber(raw, label) {
-  const value = raw?.trim();
-  if (!value) {
-    return null;
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw new Error(`${label} must be a non-negative number`);
-  }
-  return parsed;
-}
-
-function readBudgetEnvNumber(name, env) {
-  return parseBudgetNumber(env[name], name);
-}
-
-function budgetFloatFlag(flag, key) {
-  return {
-    consume(argv, index) {
-      if (argv[index] !== flag) {
-        return null;
-      }
-      return {
-        nextIndex: index + 1,
-        apply(target) {
-          const parsed = parseBudgetNumber(argv[index + 1], flag);
-          if (parsed === null) {
-            throw new Error(`${flag} requires a value`);
-          }
-          target[key] = parsed;
-        },
-      };
-    },
-  };
-}
 
 function parseArgs(argv, env = process.env) {
   return parseFlagArgs(
@@ -71,7 +40,7 @@ function main() {
     config: opts.config,
     prefix: "openclaw-vitest-perf",
   });
-  const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1_000_000;
+  const elapsedMs = Number.parseFloat(String(process.hrtime.bigint() - startedAt)) / 1_000_000;
 
   let totalFileDurationMs = 0;
   let fileCount = 0;

@@ -3,14 +3,15 @@ summary: "Sign in to GitHub Copilot from OpenClaw using the device flow or non-i
 read_when:
   - You want to use GitHub Copilot as a model provider
   - You need the `openclaw models auth login-github-copilot` flow
+  - You are choosing between the built-in Copilot provider, Copilot SDK harness, and Copilot Proxy
 title: "GitHub Copilot"
 ---
 
 GitHub Copilot is GitHub's AI coding assistant. It provides access to Copilot
 models for your GitHub account and plan. OpenClaw can use Copilot as a model
-provider in two different ways.
+provider or agent runtime in three different ways.
 
-## Two ways to use Copilot in OpenClaw
+## Three ways to use Copilot in OpenClaw
 
 <Tabs>
   <Tab title="Built-in provider (github-copilot)">
@@ -43,6 +44,38 @@ provider in two different ways.
         ```
       </Step>
     </Steps>
+
+  </Tab>
+
+  <Tab title="Copilot SDK harness plugin (copilot)">
+    Install the external `@openclaw/copilot` plugin when you want GitHub's
+    Copilot CLI and SDK to own the low-level agent loop for selected
+    `github-copilot/*` models.
+
+    ```bash
+    openclaw plugins install clawhub:@openclaw/copilot
+    ```
+
+    Then opt a model or provider into the runtime:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          model: "github-copilot/gpt-5.5",
+          models: {
+            "github-copilot/gpt-5.5": {
+              agentRuntime: { id: "copilot" },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Choose this when you want native Copilot CLI sessions, SDK-managed thread
+    state, and Copilot-owned compaction for those agent turns. See
+    [Copilot SDK harness](/plugins/copilot) for the full runtime contract.
 
   </Tab>
 

@@ -1,11 +1,11 @@
-import { parse } from "yaml";
 import {
-  type ExecutionEnv,
-  type FileInfo,
-  type PromptTemplate,
-  type Result,
-  toError,
-} from "./types.js";
+  basenameEnvPath,
+  parseFrontmatter,
+  resolveFileInfoKind as resolveKind,
+} from "./file-loader-utils.js";
+export { parseCommandArgs, substituteArgs } from "./prompt-template-arguments.js";
+import { substituteArgs } from "./prompt-template-arguments.js";
+import { type ExecutionEnv, type PromptTemplate, type Result } from "./types.js";
 
 export type PromptTemplateDiagnosticCode =
   | "file_info_failed"
@@ -188,126 +188,6 @@ async function loadTemplateFromFile(
     },
     diagnostics,
   };
-}
-
-async function resolveKind(
-  env: ExecutionEnv,
-  info: FileInfo,
-  diagnostics: PromptTemplateDiagnostic[],
-): Promise<"file" | "directory" | undefined> {
-  if (info.kind === "file" || info.kind === "directory") {
-    return info.kind;
-  }
-  const canonicalPath = await env.canonicalPath(info.path);
-  if (!canonicalPath.ok) {
-    if (canonicalPath.error.code !== "not_found") {
-      diagnostics.push({
-        type: "warning",
-        code: "file_info_failed",
-        message: canonicalPath.error.message,
-        path: info.path,
-      });
-    }
-    return undefined;
-  }
-  const target = await env.fileInfo(canonicalPath.value);
-  if (!target.ok) {
-    if (target.error.code !== "not_found") {
-      diagnostics.push({
-        type: "warning",
-        code: "file_info_failed",
-        message: target.error.message,
-        path: info.path,
-      });
-    }
-    return undefined;
-  }
-  return target.value.kind === "file" || target.value.kind === "directory"
-    ? target.value.kind
-    : undefined;
-}
-
-function parseFrontmatter(
-  content: string,
-): Result<{ frontmatter: Record<string, unknown>; body: string }, Error> {
-  try {
-    const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-    if (!normalized.startsWith("---")) {
-      return { ok: true, value: { frontmatter: {}, body: normalized } };
-    }
-    const endIndex = normalized.indexOf("\n---", 3);
-    if (endIndex === -1) {
-      return { ok: true, value: { frontmatter: {}, body: normalized } };
-    }
-    const yamlString = normalized.slice(4, endIndex);
-    const body = normalized.slice(endIndex + 4).trim();
-    return {
-      ok: true,
-      value: { frontmatter: (parse(yamlString) ?? {}) as Record<string, unknown>, body },
-    };
-  } catch (error) {
-    return { ok: false, error: toError(error) };
-  }
-}
-
-function basenameEnvPath(path: string): string {
-  const normalized = path.replace(/\/+$/, "");
-  const slashIndex = normalized.lastIndexOf("/");
-  return slashIndex === -1 ? normalized : normalized.slice(slashIndex + 1);
-}
-
-/** Parse an argument string using simple shell-style single and double quotes. */
-export function parseCommandArgs(argsString: string): string[] {
-  const args: string[] = [];
-  let current = "";
-  let inQuote: string | null = null;
-
-  for (let i = 0; i < argsString.length; i++) {
-    const char = argsString[i];
-    if (inQuote) {
-      if (char === inQuote) {
-        inQuote = null;
-      } else {
-        current += char;
-      }
-    } else if (char === '"' || char === "'") {
-      inQuote = char;
-    } else if (char === " " || char === "\t") {
-      if (current) {
-        args.push(current);
-        current = "";
-      }
-    } else {
-      current += char;
-    }
-  }
-  if (current) {
-    args.push(current);
-  }
-  return args;
-}
-
-/** Substitute prompt template placeholders (`$1`, `$@`, `$ARGUMENTS`, `${@:N}`, `${@:N:L}`) with command arguments. */
-export function substituteArgs(content: string, args: string[]): string {
-  let result = content;
-  result = result.replace(/\$(\d+)/g, (_, num: string) => args[Number.parseInt(num, 10) - 1] ?? "");
-  result = result.replace(
-    /\$\{@:(\d+)(?::(\d+))?\}/g,
-    (_, startStr: string, lengthStr?: string) => {
-      let start = Number.parseInt(startStr, 10) - 1;
-      if (start < 0) {
-        start = 0;
-      }
-      if (lengthStr) {
-        return args.slice(start, start + Number.parseInt(lengthStr, 10)).join(" ");
-      }
-      return args.slice(start).join(" ");
-    },
-  );
-  const allArgs = args.join(" ");
-  result = result.replace(/\$ARGUMENTS/g, allArgs);
-  result = result.replace(/\$@/g, allArgs);
-  return result;
 }
 
 /** Format a prompt template invocation with positional arguments. */

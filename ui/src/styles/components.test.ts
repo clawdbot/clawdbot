@@ -93,6 +93,7 @@ describe("sessions table responsive styles", () => {
     );
     expect(mobileCss).toContain(".data-table.sessions-table .data-table-key-col {");
     expect(mobileCss).toContain(".sessions-table .session-status-col {");
+    expect(mobileCss).toContain(".sessions-table .session-goal-chip {");
     expect(mobileCss).not.toContain(
       ".sessions-table th:nth-child(5),\n  .sessions-table td:nth-child(5)",
     );

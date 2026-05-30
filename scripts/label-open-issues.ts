@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "../src/utils.js";
+import { readBoundedResponseText as readBoundedBodyText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 function writeStdoutLine(message = ""): void {
@@ -22,6 +23,7 @@ const WORK_BATCH_SIZE = 500;
 const STATE_VERSION = 1;
 const DEFAULT_OPENAI_TIMEOUT_MS = 60_000;
 const OPENAI_ERROR_BODY_MAX_CHARS = 4096;
+const OPENAI_RESPONSE_BODY_MAX_BYTES = 256 * 1024;
 const STATE_FILE_NAME = "issue-labeler-state.json";
 const CONFIG_BASE_DIR = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
 const STATE_FILE_PATH = join(CONFIG_BASE_DIR, "openclaw", STATE_FILE_NAME);
@@ -320,6 +322,19 @@ async function readBoundedResponseText(
   }
 
   return truncated ? `${text}\n[truncated]` : text;
+}
+
+async function readBoundedOpenAIJson(
+  response: Response,
+  maxBytes = OPENAI_RESPONSE_BODY_MAX_BYTES,
+): Promise<OpenAIResponse> {
+  const text = await readBoundedBodyText(response, "OpenAI classification", maxBytes, {
+    createTooLargeError: (message) =>
+      Object.assign(new Error(message), {
+        code: "ETOOBIG",
+      }),
+  });
+  return JSON.parse(text) as OpenAIResponse;
 }
 
 function logHeader(title: string) {
@@ -729,7 +744,7 @@ async function classifyItem(
         throw new Error(`OpenAI request failed (${response.status}): ${text}`);
       }
 
-      return (await response.json()) as OpenAIResponse;
+      return await readBoundedOpenAIJson(response);
     },
   );
   const rawText = extractResponseText(payload);
@@ -993,6 +1008,7 @@ async function main() {
 export const testing = {
   classifyItem,
   normalizeClassification,
+  readBoundedOpenAIJson,
   readBoundedResponseText,
   resolveOpenAITimeoutMs,
 };

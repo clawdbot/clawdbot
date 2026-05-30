@@ -6,6 +6,7 @@
  */
 
 import { SimplePool, verifyEvent, type Event } from "nostr-tools";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { NostrProfile } from "./config-schema.js";
 import { validateUrlSafety } from "./nostr-profile-url-safety.js";
 import { contentToProfile, type ProfileContent } from "./nostr-profile.js";
@@ -85,7 +86,8 @@ function sanitizeProfileUrls(profile: NostrProfile): NostrProfile {
 export async function importProfileFromRelays(
   opts: ProfileImportOptions,
 ): Promise<ProfileImportResult> {
-  const { pubkey, relays, timeoutMs = DEFAULT_TIMEOUT_MS } = opts;
+  const { pubkey, relays } = opts;
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS);
 
   if (!pubkey || !/^[0-9a-fA-F]{64}$/.test(pubkey)) {
     return {
@@ -105,6 +107,13 @@ export async function importProfileFromRelays(
 
   const pool = new SimplePool();
   const relaysQueried: string[] = [];
+  const timers: Array<ReturnType<typeof setTimeout>> = [];
+  const scheduleTimeout = (callback: () => void) => {
+    const timer = setTimeout(callback, timeoutMs);
+    timer.unref?.();
+    timers.push(timer);
+    return timer;
+  };
 
   try {
     // Query all relays for kind:0 events from this pubkey
@@ -112,7 +121,7 @@ export async function importProfileFromRelays(
 
     // Create timeout promise
     const timeoutPromise = new Promise<void>((resolve) => {
-      setTimeout(resolve, timeoutMs);
+      scheduleTimeout(resolve);
     });
 
     // Create subscription promise
@@ -147,14 +156,17 @@ export async function importProfileFromRelays(
         });
 
         // Clean up subscription after timeout
-        setTimeout(() => {
+        scheduleTimeout(() => {
           sub.close();
-        }, timeoutMs);
+        });
       }
     });
 
     // Wait for either all relays to respond or timeout
     await Promise.race([subscriptionPromise, timeoutPromise]);
+    for (const timer of timers.splice(0)) {
+      clearTimeout(timer);
+    }
 
     // No events found
     if (events.length === 0) {
@@ -223,6 +235,9 @@ export async function importProfileFromRelays(
       sourceRelay: bestEvent.relay,
     };
   } finally {
+    for (const timer of timers) {
+      clearTimeout(timer);
+    }
     pool.close(relays);
   }
 }

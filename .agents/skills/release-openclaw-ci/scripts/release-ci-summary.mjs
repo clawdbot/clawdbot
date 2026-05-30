@@ -21,6 +21,30 @@ function jsonGh(args) {
   return JSON.parse(gh(args));
 }
 
+function githubRestJson(pathSuffix) {
+  const result = execFileSync(
+    "bash",
+    [
+      "-lc",
+      [
+        "set -euo pipefail",
+        'token="$(gh auth token)"',
+        'curl -fsS -H "Authorization: Bearer ${token}" -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" "${OPENCLAW_GITHUB_REST_URL}"',
+      ].join("\n"),
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_GITHUB_REST_URL: `https://api.github.com/repos/${repo}/${pathSuffix}`,
+      },
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  return JSON.parse(result);
+}
+
 function rate() {
   try {
     return jsonGh(["api", "rate_limit"]).resources.core;
@@ -59,12 +83,30 @@ for (const job of parent.jobs ?? []) {
 }
 
 const since = parent.createdAt;
-const runList = gh([
-  "api",
-  `repos/${repo}/actions/runs?per_page=100`,
-  "--jq",
-  `.workflow_runs[] | select(.created_at >= "${since}") | select(.name=="CI" or .name=="OpenClaw Release Checks" or .name=="Plugin Prerelease" or .name=="NPM Telegram Beta E2E" or .name=="Full Release Validation") | [.id,.name,.status,.conclusion,.head_sha,.html_url] | @tsv`,
-]).trim();
+const runsQuery = new URLSearchParams({
+  per_page: "100",
+  created: `>=${since}`,
+  exclude_pull_requests: "true",
+});
+const childWorkflowNames = new Set([
+  "CI",
+  "OpenClaw Release Checks",
+  "Plugin Prerelease",
+  "NPM Telegram Beta E2E",
+  "Full Release Validation",
+]);
+const runs = githubRestJson(`actions/runs?${runsQuery.toString()}`).workflow_runs ?? [];
+const runList = runs
+  .filter(
+    (run) =>
+      run.created_at >= since &&
+      run.head_sha === parent.headSha &&
+      childWorkflowNames.has(run.name),
+  )
+  .map((run) =>
+    [run.id, run.name, run.status, run.conclusion ?? "", run.head_sha, run.html_url].join("\t"),
+  )
+  .join("\n");
 
 if (!runList) {
   console.log("children: none found yet");

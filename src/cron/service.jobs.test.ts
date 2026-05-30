@@ -822,6 +822,36 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(now);
   });
 
+  it("keeps recovered recurring error retries behind run-end backoff", () => {
+    const startedAt = Date.parse("2026-03-01T12:00:00.000Z");
+    const durationMs = 90_000;
+    const now = startedAt + 31_000;
+    const job: CronJob = {
+      id: "failed-every-long-run",
+      name: "failed every long run",
+      enabled: true,
+      createdAtMs: startedAt - 60_000,
+      updatedAtMs: startedAt,
+      schedule: { kind: "every", everyMs: 1_000, anchorMs: startedAt - 60_000 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: {
+        lastRunAtMs: startedAt,
+        lastDurationMs: durationMs,
+        lastStatus: "error",
+        consecutiveErrors: 1,
+      },
+    };
+    const state = {
+      ...createMockState(now),
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRuns(state)).toBe(true);
+    expect(job.state.nextRunAtMs).toBe(startedAt + durationMs + 30_000);
+  });
+
   it("repairs future cron nextRunAtMs values that are not schedule slots", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const badFuture = Date.parse("2026-05-12T16:00:00.000Z");

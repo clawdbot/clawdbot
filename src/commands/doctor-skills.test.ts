@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
-import type { GhConfigDiscoveryInput } from "../agents/skills/gh-config-discovery.js";
 import { createEmptyInstallChecks } from "../cli/requirements-test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
+import type { GhConfigDiscoveryInput } from "../skills/lifecycle/gh-config-discovery.js";
 import {
   collectUnavailableAgentSkills,
   describeGhConfigDirHintFromDiscovery,

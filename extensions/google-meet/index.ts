@@ -20,6 +20,7 @@ import {
 } from "./src/calendar.js";
 import {
   resolveGoogleMeetConfig,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
   type GoogleMeetConfig,
   type GoogleMeetMode,
   type GoogleMeetTransport,
@@ -384,6 +385,7 @@ export const testing = {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
 };
 
 /** @deprecated Use `testing`. */
@@ -455,14 +457,6 @@ function assertGoogleMeetAgentToolActionSupported(params: {
   );
 }
 
-function resolveGoogleMeetToolGatewayTimeoutMs(config: GoogleMeetConfig): number {
-  return Math.max(
-    60_000,
-    config.chrome.joinTimeoutMs + 30_000,
-    config.voiceCall.requestTimeoutMs + 10_000,
-  );
-}
-
 function readGatewayErrorDetails(err: unknown): unknown {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
@@ -480,7 +474,7 @@ async function callGoogleMeetGatewayFromTool(params: {
       googleMeetGatewayMethodForToolAction(params.action),
       {
         json: true,
-        timeout: String(resolveGoogleMeetToolGatewayTimeoutMs(params.config)),
+        timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
       },
       params.raw,
       { progress: false },

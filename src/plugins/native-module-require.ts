@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import Module from "node:module";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const nodeRequire = createRequire(import.meta.url);
 type ResolveFilename = (
@@ -12,6 +13,18 @@ type ResolveFilename = (
 ) => string;
 const moduleWithResolver = Module as typeof Module & {
   _resolveFilename?: ResolveFilename;
+  registerHooks?: (options: {
+    resolve?: (
+      specifier: string,
+      context: { parentURL?: string | undefined },
+      nextResolve: (
+        specifier: string,
+        context?: { parentURL?: string | undefined },
+      ) => {
+        url: string;
+      },
+    ) => { shortCircuit?: boolean; url: string };
+  }) => { deregister: () => void };
 };
 
 export function isJavaScriptModulePath(modulePath: string): boolean {
@@ -141,6 +154,18 @@ export function withNativeRequireAliases<T>(
     return run();
   }
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
+  const esmHooks = moduleWithResolver.registerHooks?.({
+    resolve(specifier, context, nextResolve) {
+      const aliasTarget = aliasMap[specifier];
+      if (aliasTarget) {
+        return {
+          shortCircuit: true,
+          url: pathToFileURL(aliasTarget).href,
+        };
+      }
+      return nextResolve(specifier, context);
+    },
+  });
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = aliasMap[request];
     if (aliasTarget) {
@@ -152,5 +177,6 @@ export function withNativeRequireAliases<T>(
     return run();
   } finally {
     moduleWithResolver["_resolveFilename"] = originalResolveFilename;
+    esmHooks?.deregister();
   }
 }

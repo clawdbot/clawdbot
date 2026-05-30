@@ -1,5 +1,6 @@
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
   logProviderToolSchemaDiagnostics,
@@ -18,6 +19,7 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   modelId?: string;
   modelApi?: string | null;
   model?: ProviderRuntimeModel;
+  runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
 };
 
@@ -49,6 +51,7 @@ export function normalizeAgentRuntimeTools<
       modelId: params.modelId,
       modelApi: params.modelApi,
       model: params.model,
+      runtimeHandle: params.runtimeHandle,
       allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
     })
   );
@@ -69,5 +72,6 @@ export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyPar
     modelId: params.modelId,
     modelApi: params.modelApi,
     model: params.model,
+    runtimeHandle: params.runtimeHandle,
   });
 }

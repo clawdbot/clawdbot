@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import { testing } from "./cli.js";
 
@@ -33,5 +34,40 @@ describe("parseVoiceCallIntOption", () => {
     expect(() =>
       testing.parseVoiceCallIntOption("65536", "--port", { min: 1, max: 65535 }),
     ).toThrow("Invalid numeric value for --port: 65536");
+  });
+});
+
+describe("voice-call CLI timeout helpers", () => {
+  it("caps gateway operation timeout grace", () => {
+    expect(testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: 10_000 } as never)).toBe(
+      30_000,
+    );
+    expect(testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: 60_000 } as never)).toBe(
+      65_000,
+    );
+    expect(
+      testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: Number.MAX_SAFE_INTEGER } as never),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(
+      testing.resolveGatewayOperationTimeoutMs({ ringTimeoutMs: Number.MAX_VALUE } as never),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("caps gateway continue timeout totals", () => {
+    expect(testing.resolveGatewayContinueTimeoutMs({ transcriptTimeoutMs: 180_000 } as never)).toBe(
+      220_000,
+    );
+    expect(
+      testing.resolveGatewayContinueTimeoutMs({
+        transcriptTimeoutMs: Number.MAX_SAFE_INTEGER,
+      } as never),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("caps gateway polling deadlines", () => {
+    expect(testing.resolveVoiceCallDeadlineMs(5_000, 10_000)).toBe(15_000);
+    expect(testing.resolveVoiceCallDeadlineMs(Number.MAX_SAFE_INTEGER, 10_000)).toBe(
+      10_000 + MAX_TIMER_TIMEOUT_MS,
+    );
   });
 });

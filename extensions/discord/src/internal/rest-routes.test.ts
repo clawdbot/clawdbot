@@ -14,6 +14,14 @@ describe("Discord REST rate limit header parsing", () => {
     expect(readHeaderNumber(headers, "X-RateLimit-Reset-After")).toBeUndefined();
   });
 
+  it("rejects unsafe finite numeric header magnitudes", () => {
+    const headers = new Headers({
+      "X-RateLimit-Reset-After": "9007199254740993",
+    });
+
+    expect(readHeaderNumber(headers, "X-RateLimit-Reset-After")).toBeUndefined();
+  });
+
   it("keeps decimal reset headers working", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));

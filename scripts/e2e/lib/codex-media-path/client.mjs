@@ -3,9 +3,9 @@ import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
 import { renderBitmapTextPngBase64 } from "../../../../test/helpers/live-image-probe.ts";
+import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { createJsonlRequestTailer } from "./jsonl-request-tail.mjs";
 import { readPositiveIntEnv } from "./limits.mjs";
-import { waitForWebSocketOpen } from "./open-websocket.mjs";
 
 const port = process.env.PORT;
 const token = process.env.OPENCLAW_GATEWAY_TOKEN;

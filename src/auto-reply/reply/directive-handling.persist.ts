@@ -396,6 +396,7 @@ export async function persistInlineDirectives(params: {
           agentId: activeAgentId,
           sessionKey,
         }).runtime,
+        config: cfg,
       }),
       model,
     }),

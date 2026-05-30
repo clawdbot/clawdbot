@@ -11,6 +11,11 @@ import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
@@ -89,6 +94,41 @@ function resolveGatewayInflightMap(params: { context: GatewayRequestContext; ded
   return { kind: "ready", inflightMap };
 }
 
+function resolveGatewayInflightStart(params: {
+  context: GatewayRequestContext;
+  dedupeKey: string;
+  respond: RespondFn;
+}):
+  | {
+      kind: "ready";
+      inflightMap: Map<string, Promise<InflightResult>>;
+    }
+  | {
+      kind: "handled";
+      done: Promise<void>;
+    } {
+  const inflight = resolveGatewayInflightMap({
+    context: params.context,
+    dedupeKey: params.dedupeKey,
+  });
+  if (inflight.kind === "cached") {
+    params.respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
+      cached: true,
+    });
+    return { kind: "handled", done: Promise.resolve() };
+  }
+  if (inflight.kind === "inflight") {
+    return {
+      kind: "handled",
+      done: inflight.inflight.then((result) => {
+        const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
+        params.respond(result.ok, result.payload, result.error, meta);
+      }),
+    };
+  }
+  return { kind: "ready", inflightMap: inflight.inflightMap };
+}
+
 async function runGatewayInflightWork(params: {
   inflightMap: Map<string, Promise<InflightResult>>;
   dedupeKey: string;
@@ -112,6 +152,7 @@ async function resolveRequestedChannel(params: {
 }): Promise<
   | {
       cfg: OpenClawConfig;
+      sourceCfg: OpenClawConfig;
       channel: string;
     }
   | {
@@ -134,9 +175,9 @@ async function resolveRequestedChannel(params: {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
   }
-  const runtimeConfig = params.context.getRuntimeConfig();
+  const sourceCfg = params.context.getRuntimeConfig();
   const cfg = resolveGatewayPluginConfig({
-    config: runtimeConfig,
+    config: sourceCfg,
   });
   let channel = normalizedChannel;
   if (!channel) {
@@ -146,7 +187,7 @@ async function resolveRequestedChannel(params: {
       return { error: errorShape(ErrorCodes.INVALID_REQUEST, String(err)) };
     }
   }
-  return { cfg, channel };
+  return { cfg, sourceCfg, channel };
 }
 
 function resolveGatewayOutboundTarget(params: {
@@ -177,6 +218,26 @@ function resolveGatewayOutboundTarget(params: {
     };
   }
   return { ok: true, to: resolved.to };
+}
+
+function resolveMessageActionRuntimeConfig(params: {
+  cfg: OpenClawConfig;
+  sourceCfg: OpenClawConfig;
+}): OpenClawConfig {
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  if (!runtimeConfig || !runtimeSourceConfig) {
+    return params.cfg;
+  }
+  const selected = selectApplicableRuntimeConfig({
+    inputConfig: params.sourceCfg,
+    runtimeConfig,
+    runtimeSourceConfig,
+  });
+  if (selected === runtimeConfig && selected !== params.cfg) {
+    return resolveGatewayPluginConfig({ config: selected });
+  }
+  return params.cfg;
 }
 
 function buildGatewayDeliveryPayload(params: {
@@ -349,23 +410,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `message.action:${idem}`;
-    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
-    if (inflight.kind === "cached") {
-      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
-        cached: true,
-      });
+    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
+    if (inflightStart.kind === "handled") {
+      await inflightStart.done;
       return;
     }
-    if (inflight.kind === "inflight") {
-      const result = await inflight.inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
-      return;
-    }
-    if (inflight.kind !== "ready") {
-      return;
-    }
-    const inflightMap = inflight.inflightMap;
+    const inflightMap = inflightStart.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,
@@ -376,7 +426,8 @@ export const sendHandlers: GatewayRequestHandlers = {
       if ("error" in resolvedChannel) {
         return { ok: false, error: resolvedChannel.error };
       }
-      const { cfg, channel } = resolvedChannel;
+      const { cfg: selectedCfg, sourceCfg, channel } = resolvedChannel;
+      const cfg = resolveMessageActionRuntimeConfig({ cfg: selectedCfg, sourceCfg });
       const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       if (!plugin?.actions?.handleAction) {
         return {
@@ -480,20 +531,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `send:${idem}`;
-    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
-    if (inflight.kind === "cached") {
-      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
-        cached: true,
-      });
+    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
+    if (inflightStart.kind === "handled") {
+      await inflightStart.done;
       return;
     }
-    if (inflight.kind === "inflight") {
-      const result = await inflight.inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
-      return;
-    }
-    const inflightMap = inflight.inflightMap;
+    const inflightMap = inflightStart.inflightMap;
     const to = normalizeOptionalString(request.to) ?? "";
     const message = normalizeOptionalString(request.message) ?? "";
     const mediaUrl = normalizeOptionalString(request.mediaUrl);
@@ -700,23 +743,12 @@ export const sendHandlers: GatewayRequestHandlers = {
     };
     const idem = request.idempotencyKey;
     const dedupeKey = `poll:${idem}`;
-    const inflight = resolveGatewayInflightMap({ context, dedupeKey });
-    if (inflight.kind === "cached") {
-      respond(inflight.cached.ok, inflight.cached.payload, inflight.cached.error, {
-        cached: true,
-      });
+    const inflightStart = resolveGatewayInflightStart({ context, dedupeKey, respond });
+    if (inflightStart.kind === "handled") {
+      await inflightStart.done;
       return;
     }
-    if (inflight.kind === "inflight") {
-      const result = await inflight.inflight;
-      const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
-      respond(result.ok, result.payload, result.error, meta);
-      return;
-    }
-    if (inflight.kind !== "ready") {
-      return;
-    }
-    const inflightMap = inflight.inflightMap;
+    const inflightMap = inflightStart.inflightMap;
     const work = (async (): Promise<InflightResult> => {
       const resolvedChannel = await resolveRequestedChannel({
         requestChannel: request.channel,

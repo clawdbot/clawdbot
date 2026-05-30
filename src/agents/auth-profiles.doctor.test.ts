@@ -8,14 +8,35 @@ const EMPTY_STORE: AuthProfileStore = {
 };
 
 describe("formatAuthDoctorHint", () => {
-  it("guides removed qwen portal users to model studio onboarding", async () => {
+  it("does not report restored qwen portal auth as removed", async () => {
     const hint = await formatAuthDoctorHint({
       store: EMPTY_STORE,
       provider: "qwen-portal",
     });
 
+    expect(hint).toBe("");
+  });
+
+  it("guides legacy qwen portal oauth profiles to re-authenticate", async () => {
+    const hint = await formatAuthDoctorHint({
+      store: {
+        version: 1,
+        profiles: {
+          "qwen-portal-auth": {
+            type: "oauth",
+            provider: "qwen-portal",
+            access: "old-access",
+            refresh: "old-refresh",
+            expires: 0,
+          },
+        },
+      },
+      provider: "qwen-portal",
+      profileId: "qwen-portal-auth",
+    });
+
     expect(hint).toBe(
-      "Qwen OAuth via portal.qwen.ai has been deprecated. Please migrate to Qwen Cloud Coding Plan. Run: openclaw onboard --auth-choice qwen-api-key (or qwen-api-key-cn for the China endpoint). Legacy modelstudio auth-choice ids still work.",
+      "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.",
     );
   });
 });

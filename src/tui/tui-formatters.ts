@@ -1,4 +1,5 @@
 import { stripLeadingInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
+import type { SessionGoal } from "../config/sessions/types.js";
 import { formatRawAssistantErrorForUi } from "../shared/assistant-error-format.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { stripAnsi } from "../terminal/ansi.js";
@@ -439,6 +440,36 @@ export function formatTokens(total?: number | null, context?: number | null) {
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
+}
+
+function formatGoalUsage(goal: SessionGoal): string | null {
+  if (goal.tokenBudget === undefined) {
+    return goal.tokensUsed > 0 ? formatTokenCount(goal.tokensUsed) : null;
+  }
+  return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
+}
+
+export function formatGoalFooter(goal?: SessionGoal): string | null {
+  if (!goal) {
+    return null;
+  }
+  const usage = formatGoalUsage(goal);
+  const suffix = usage ? ` (${usage})` : "";
+  switch (goal.status) {
+    case "active":
+      return `Pursuing goal${suffix}`;
+    case "paused":
+      return "Goal paused (/goal resume)";
+    case "blocked":
+      return "Goal blocked (/goal resume)";
+    case "usage_limited":
+      return "Goal hit usage limits (/goal resume)";
+    case "budget_limited":
+      return `Goal unmet${suffix}`;
+    case "complete":
+      return `Goal achieved${suffix}`;
+  }
+  return null;
 }
 
 export function formatContextUsageLine(params: {

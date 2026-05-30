@@ -4,7 +4,7 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordAccountAllowFrom, resolveDiscordAccountDmPolicy } from "../accounts.js";
-import type { AutocompleteInteraction } from "../internal/discord.js";
+import type { AutocompleteInteraction, Guild } from "../internal/discord.js";
 import {
   normalizeDiscordAllowList,
   resolveDiscordAllowListMatch,
@@ -61,6 +61,56 @@ export function resolveDiscordNativeCommandAllowlistAccess(params: {
     allowNameMatching: false,
   });
   return { configured: true, allowed: match.allowed } as const;
+}
+
+export function resolveDiscordNativeCommandChannelAccessContext(params: {
+  cfg: OpenClawConfig;
+  discordConfig: DiscordConfig;
+  accountId: string;
+  sender: { id: string; name?: string; tag?: string };
+  isDirectMessage: boolean;
+  isThreadChannel: boolean;
+  guild?: Guild<true> | Guild | null;
+  rawChannelId: string;
+  channelName?: string;
+  channelSlug: string;
+  threadParentId?: string;
+  threadParentName?: string;
+  threadParentSlug?: string;
+}) {
+  const guild = params.guild ?? null;
+  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
+    cfg: params.cfg,
+    accountId: params.accountId,
+    sender: params.sender,
+    chatType: params.isDirectMessage
+      ? "direct"
+      : params.isThreadChannel
+        ? "thread"
+        : guild
+          ? "channel"
+          : "group",
+    conversationId: params.rawChannelId || undefined,
+    guildId: guild?.id,
+  });
+  const guildInfo = resolveDiscordGuildEntry({
+    guild: guild ?? undefined,
+    guildId: guild?.id ?? undefined,
+    guildEntries: params.discordConfig?.guilds,
+  });
+  const channelConfig = guild
+    ? resolveDiscordChannelConfigWithFallback({
+        guildInfo,
+        channelId: params.rawChannelId,
+        channelName: params.channelName,
+        channelSlug: params.channelSlug,
+        parentId: params.threadParentId,
+        parentName: params.threadParentName,
+        parentSlug: params.threadParentSlug,
+        scope: params.isThreadChannel ? "thread" : "channel",
+      })
+    : null;
+  return { commandsAllowFromAccess, guildInfo, channelConfig } as const;
 }
 
 export function resolveDiscordCommandOwnerAllowFrom(cfg: OpenClawConfig): string[] | undefined {
@@ -230,41 +280,22 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     },
     allowNameMatching,
   });
-  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
-    cfg,
-    accountId,
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
-    chatType: isDirectMessage
-      ? "direct"
-      : isThreadChannel
-        ? "thread"
-        : interaction.guild
-          ? "channel"
-          : "group",
-    conversationId: rawChannelId || undefined,
-    guildId: interaction.guild?.id,
-  });
-  const guildInfo = resolveDiscordGuildEntry({
-    guild: interaction.guild ?? undefined,
-    guildId: interaction.guild?.id ?? undefined,
-    guildEntries: discordConfig?.guilds,
-  });
-  const channelConfig = interaction.guild
-    ? resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId: rawChannelId,
-        channelName,
-        channelSlug,
-        parentId: threadParentId,
-        parentName: threadParentName,
-        parentSlug: threadParentSlug,
-        scope: isThreadChannel ? "thread" : "channel",
-      })
-    : null;
+  const { commandsAllowFromAccess, guildInfo, channelConfig } =
+    resolveDiscordNativeCommandChannelAccessContext({
+      cfg,
+      discordConfig,
+      accountId,
+      sender,
+      isDirectMessage,
+      isThreadChannel,
+      guild: interaction.guild ?? null,
+      rawChannelId,
+      channelName,
+      channelSlug,
+      threadParentId,
+      threadParentName,
+      threadParentSlug,
+    });
   if (channelConfig?.enabled === false) {
     return false;
   }

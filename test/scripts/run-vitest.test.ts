@@ -8,6 +8,8 @@ import {
   resolveMissingVitestDependencyMessage,
   resolveMissingExplicitTestFiles,
   resolveRunVitestSpawnEnv,
+  resolveTestProjectsDelegationArgs,
+  resolveTestProjectsRunnerEnv,
   resolveVitestCliEntry,
   resolveVitestNodeArgs,
   resolveVitestNoOutputTimeoutMs,
@@ -87,6 +89,25 @@ describe("scripts/run-vitest", () => {
     expect(resolveImplicitVitestArgs(argv)).toBe(argv);
   });
 
+  it("routes explicit tooling tests through the tooling config", () => {
+    expect(resolveImplicitVitestArgs(["run", "test/scripts/run-vitest.test.ts"])).toEqual([
+      "run",
+      "--config",
+      "test/vitest/vitest.tooling.config.ts",
+      "test/scripts/run-vitest.test.ts",
+    ]);
+  });
+
+  it("keeps tooling-excluded explicit tests on existing routing", () => {
+    const argv = ["run", "test/scripts/openclaw-e2e-instance.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
+  it("keeps boundary tests on existing routing", () => {
+    const argv = ["run", "test/web-provider-boundary.test.ts"];
+    expect(resolveImplicitVitestArgs(argv)).toBe(argv);
+  });
+
   it("fails explicit test-file runs when scoped configs would otherwise pass with no tests", () => {
     expect(
       resolveExplicitTestFileNoPassArgs([
@@ -113,6 +134,56 @@ describe("scripts/run-vitest", () => {
   it("does not force no-test failure for globs or basename filters", () => {
     const argv = ["run", "run-vitest.test.ts", "test/**/*.test.ts"];
     expect(resolveExplicitTestFileNoPassArgs(argv)).toBe(argv);
+  });
+
+  it("delegates bare explicit test files to the project router", () => {
+    const file = "test/scripts/run-vitest.test.ts";
+    for (const [argv, expected] of [
+      [[file], [file]],
+      [["run", file], [file]],
+      [
+        ["run", file, "--reporter=verbose"],
+        [file, "--reporter=verbose"],
+      ],
+      [
+        ["--reporter=verbose", "run", file],
+        ["--reporter=verbose", file],
+      ],
+      [
+        ["run", file, "--", "--watch"],
+        [file, "--", "--watch"],
+      ],
+      [
+        ["run", file, "--", "--reporter=verbose"],
+        [file, "--", "--reporter=verbose"],
+      ],
+    ] as const) {
+      expect(resolveTestProjectsDelegationArgs([...argv])).toEqual(expected);
+    }
+  });
+
+  it("keeps direct Vitest runs when project routing could change option semantics", () => {
+    const directArgvCases = [
+      [
+        "run",
+        "--config",
+        "test/vitest/vitest.tooling.config.ts",
+        "test/scripts/run-vitest.test.ts",
+      ],
+      ["--root", "packages/example", "src/example.test.ts"],
+      ["--project", "tooling", "test/scripts/run-vitest.test.ts"],
+      ["watch", "test/scripts/run-vitest.test.ts"],
+      ["dev", "test/scripts/run-vitest.test.ts"],
+      ["--watch", "test/scripts/run-vitest.test.ts"],
+      ["--run=false", "test/scripts/run-vitest.test.ts"],
+      ["--no-run", "test/scripts/run-vitest.test.ts"],
+      ["--run", "false", "test/scripts/run-vitest.test.ts"],
+      ["--testNamePattern", "run", "test/scripts/run-vitest.test.ts"],
+      ["run", "test/scripts/run-vitest.test.ts", "-t", "src"],
+    ];
+    for (const argv of directArgvCases) {
+      expect(resolveTestProjectsDelegationArgs(argv)).toBeNull();
+    }
   });
 
   it("reports missing explicit test files before Vitest can silently ignore them", () => {
@@ -301,6 +372,21 @@ describe("scripts/run-vitest", () => {
       PATH: "/usr/bin",
     });
     expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["dev"])).toEqual({
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("does not force the stall watchdog into delegated runner environments", () => {
+    expect(resolveTestProjectsRunnerEnv({ PATH: "/usr/bin" })).toEqual({
+      PATH: "/usr/bin",
+    });
+    expect(
+      resolveTestProjectsRunnerEnv({
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
+        PATH: "/usr/bin",
+      }),
+    ).toEqual({
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "2500",
       PATH: "/usr/bin",
     });
   });

@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
 import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
+import { readBoundedResponseText } from "./bounded-response.ts";
 import {
   collectExtensionPackageJsonCandidates,
   collectChangedPathsFromGitRange,
@@ -80,6 +81,7 @@ const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
   "package.json",
   "pnpm-lock.yaml",
   "packages/plugin-package-contract/src/index.ts",
+  "scripts/lib/bounded-response.ts",
   "scripts/lib/npm-publish-plan.mjs",
   "scripts/lib/plugin-npm-release.ts",
   "scripts/lib/plugin-clawhub-release.ts",
@@ -99,60 +101,16 @@ function getRegistryBaseUrl(explicit?: string) {
   );
 }
 
-async function readBoundedResponseText(
-  response: Response,
-  label: string,
-  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
-): Promise<string> {
-  const contentLength = Number.parseInt(response.headers.get("content-length") ?? "", 10);
-  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
-    throw new Error(`${label} response body exceeded ${maxBytes} bytes.`);
-  }
-
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  const chunks: string[] = [];
-  let totalBytes = 0;
-  let canceled = false;
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        const tail = decoder.decode();
-        if (tail) {
-          chunks.push(tail);
-        }
-        break;
-      }
-
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        canceled = true;
-        await reader.cancel().catch(() => undefined);
-        throw new Error(`${label} response body exceeded ${maxBytes} bytes.`);
-      }
-      chunks.push(decoder.decode(value, { stream: true }));
-    }
-  } finally {
-    if (!canceled) {
-      reader.releaseLock();
-    }
-  }
-
-  return chunks.join("");
-}
-
 async function readClawHubPackageOwnerDetail(
   response: Response,
   packageName: string,
 ): Promise<ClawHubPackageOwnerDetail> {
   return JSON.parse(
-    await readBoundedResponseText(response, `ClawHub package owner response for ${packageName}`),
+    await readBoundedResponseText(
+      response,
+      `ClawHub package owner response for ${packageName}`,
+      CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+    ),
   ) as ClawHubPackageOwnerDetail;
 }
 

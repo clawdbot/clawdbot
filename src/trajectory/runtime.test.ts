@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
   createTrajectoryRuntimeRecorder,
@@ -22,6 +22,7 @@ function makeTempDir(): string {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -132,42 +133,129 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("stops runtime capture at the file budget and records a truncation event", async () => {
-    const writes: string[] = [];
-    const recorder = createTrajectoryRuntimeRecorder({
+  it("rotates runtime capture at the file budget and keeps newer events", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const maxRuntimeFileBytes = 1_600;
+    const firstRecorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      sessionFile: "/tmp/session.jsonl",
-      maxRuntimeFileBytes: 900,
-      writer: {
-        filePath: "/tmp/session.trajectory.jsonl",
-        write: (line) => {
-          writes.push(line);
-        },
-        flush: async () => undefined,
-      },
+      sessionFile,
+      maxRuntimeFileBytes,
     });
 
-    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
-    runtimeRecorder.recordEvent("context.compiled", {
-      prompt: "x".repeat(180),
-    });
-    runtimeRecorder.recordEvent("prompt.submitted", {
-      prompt: "y".repeat(180),
-    });
-    runtimeRecorder.recordEvent("model.completed", {
-      get prompt() {
-        throw new Error("stopped recorder should not read dropped payloads");
-      },
-    });
-    await runtimeRecorder.flush();
+    const firstRuntimeRecorder = expectTrajectoryRuntimeRecorder(firstRecorder);
+    for (const marker of ["old-1", "old-2", "old-3"]) {
+      firstRuntimeRecorder.recordEvent("prompt.submitted", {
+        marker,
+        prompt: "x".repeat(260),
+      });
+    }
+    await firstRuntimeRecorder.flush();
 
-    const parsed = writes.map((line) => JSON.parse(line));
-    expect(parsed.map((event) => event.type)).toContain("trace.truncated");
-    const truncated = parsed.find((event) => event.type === "trace.truncated");
-    expect(truncated?.data.reason).toBe("trajectory-runtime-file-size-limit");
-    expect(truncated?.data.limitBytes).toBe(900);
-    expect(truncated?.data.droppedEvents).toBeGreaterThan(0);
+    const secondRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile,
+      maxRuntimeFileBytes,
+    });
+    const secondRuntimeRecorder = expectTrajectoryRuntimeRecorder(secondRecorder);
+    for (const marker of ["new-1", "new-2", "new-3"]) {
+      secondRuntimeRecorder.recordEvent("prompt.submitted", {
+        marker,
+        prompt: "y".repeat(260),
+      });
+    }
+    await secondRuntimeRecorder.flush();
+
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" });
+    const raw = fs.readFileSync(runtimeFile, "utf8");
+    expect(Buffer.byteLength(raw, "utf8")).toBeLessThanOrEqual(maxRuntimeFileBytes);
+    expect(raw).not.toContain("old-1");
+    expect(raw).toContain("new-3");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves existing trajectory directory permissions",
+    async () => {
+      const tmpDir = makeTempDir();
+      fs.chmodSync(tmpDir, 0o755);
+      const sessionFile = path.join(tmpDir, "session.jsonl");
+      const recorder = createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionFile,
+        maxRuntimeFileBytes: 1_600,
+      });
+
+      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+      runtimeRecorder.recordEvent("prompt.submitted", {
+        prompt: "hello",
+      });
+      await runtimeRecorder.flush();
+
+      expect(fs.statSync(tmpDir).mode & 0o777).toBe(0o755);
+    },
+  );
+
+  it("merges stale recorder flushes with newer runtime events", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const staleRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+
+    const staleRuntimeRecorder = expectTrajectoryRuntimeRecorder(staleRecorder);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    staleRuntimeRecorder.recordEvent("prompt.submitted", {
+      marker: "old-recorder",
+      prompt: "x".repeat(260),
+    });
+
+    const newerRecorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile,
+      maxRuntimeFileBytes: 2_400,
+    });
+    const newerRuntimeRecorder = expectTrajectoryRuntimeRecorder(newerRecorder);
+    newerRuntimeRecorder.recordEvent("prompt.submitted", {
+      marker: "new-recorder",
+      prompt: "y".repeat(260),
+    });
+    vi.useRealTimers();
+    await newerRuntimeRecorder.flush();
+    await staleRuntimeRecorder.flush();
+
+    const runtimeFile = resolveTrajectoryFilePath({ sessionFile, sessionId: "session-1" });
+    const raw = fs.readFileSync(runtimeFile, "utf8");
+    expect(raw).toContain("old-recorder");
+    expect(raw).toContain("new-recorder");
+    expect(raw.indexOf("old-recorder")).toBeLessThan(raw.indexOf("new-recorder"));
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses runtime capture through symlinked parent directories",
+    async () => {
+      const tmpDir = makeTempDir();
+      const targetDir = path.join(tmpDir, "target");
+      const linkDir = path.join(tmpDir, "link");
+      fs.mkdirSync(targetDir);
+      fs.symlinkSync(targetDir, linkDir);
+      const recorder = createTrajectoryRuntimeRecorder({
+        sessionId: "session-1",
+        sessionFile: path.join(linkDir, "session.jsonl"),
+        maxRuntimeFileBytes: 2_400,
+      });
+
+      const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+      runtimeRecorder.recordEvent("prompt.submitted", {
+        prompt: "hello",
+      });
+      await runtimeRecorder.flush();
+
+      expect(fs.existsSync(path.join(targetDir, "session.trajectory.jsonl"))).toBe(false);
+    },
+  );
 
   it("describes queued writer state for cleanup timeout logs", () => {
     const recorder = createTrajectoryRuntimeRecorder({

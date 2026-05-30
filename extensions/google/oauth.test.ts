@@ -950,4 +950,34 @@ describe("loginGeminiCliOAuth", () => {
     expect(Number.isFinite(result.expires)).toBe(true);
     expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
   });
+
+  it("keeps unsafe token expiry values out of refreshed Gemini CLI credentials", async () => {
+    mockSettingsExistsSync.mockReturnValue(true);
+    mockSettingsReadFileSync.mockReturnValue(
+      JSON.stringify({
+        security: {
+          auth: {
+            selectedType: "oauth-personal",
+          },
+        },
+      }),
+    );
+
+    const beforeRefresh = Date.now();
+    installGeminiOAuthFetchMock(() => undefined, {
+      tokenResponse: () =>
+        responseJson({
+          access_token: "access-token",
+          expires_in: Number.MAX_SAFE_INTEGER,
+        }),
+    });
+    const { refreshTokensForGeminiCli } = await import("./oauth.token.js");
+    const result = await refreshTokensForGeminiCli({
+      refresh: "refresh-token",
+      email: "lobster@openclaw.ai",
+    });
+
+    expect(Number.isSafeInteger(result.expires)).toBe(true);
+    expect(result.expires).toBeLessThanOrEqual(beforeRefresh);
+  });
 });

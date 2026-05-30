@@ -420,16 +420,19 @@ export async function stopGateway(child) {
   }
 }
 
-async function waitForReady(params) {
+export async function waitForReady(params) {
   const started = Date.now();
   let lastError = "";
   const readyLogSeen = createReadyLogScanner(params.logPath);
   while (Date.now() - started < READY_TIMEOUT_MS) {
+    const remainingMs = Math.max(1, READY_TIMEOUT_MS - (Date.now() - started));
     if (hasChildExited(params.child)) {
       throw new Error(`gateway exited before ready\n${tailFile(params.logPath)}`);
     }
     try {
-      const res = await fetchHttpProbeStatus(params.port, "/readyz");
+      const res = await fetchHttpProbeStatus(params.port, "/readyz", {
+        timeoutMs: Math.min(HTTP_PROBE_TIMEOUT_MS, remainingMs),
+      });
       if (res.ok) {
         return;
       }
@@ -437,10 +440,16 @@ async function waitForReady(params) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
-    if (readyLogSeen() && (await httpOk(params.port, "/healthz"))) {
+    const healthRemainingMs = Math.max(1, READY_TIMEOUT_MS - (Date.now() - started));
+    if (
+      readyLogSeen() &&
+      (await httpOk(params.port, "/healthz", {
+        timeoutMs: Math.min(HTTP_PROBE_TIMEOUT_MS, healthRemainingMs),
+      }))
+    ) {
       return;
     }
-    await delay(250);
+    await delay(Math.min(250, Math.max(1, READY_TIMEOUT_MS - (Date.now() - started))));
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(params.logPath)}`);
 }

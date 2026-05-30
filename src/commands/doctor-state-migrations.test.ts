@@ -3,14 +3,19 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
   createPluginStateKeyedStore,
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
+import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
+import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
 import {
   autoMigrateLegacyStateDir,
   autoMigrateLegacyState,
+  autoMigrateLegacyTaskStateSidecars,
   detectLegacyStateMigrations,
   resetAutoMigrateLegacyStateDirForTest,
   resetAutoMigrateLegacyStateForTest,
@@ -256,6 +261,154 @@ function writeLegacySessionsFixture(params: {
     fs.writeFileSync(path.join(legacySessionsDir, fileName), content, "utf-8");
   }
   return legacySessionsDir;
+}
+
+function writeLegacyPluginStateSidecar(root: string): string {
+  const sourcePath = path.join(root, "plugin-state", "state.sqlite");
+  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+  const sqlite = requireNodeSqlite();
+  const db = new sqlite.DatabaseSync(sourcePath);
+  try {
+    db.exec(`
+      CREATE TABLE plugin_state_entries (
+        plugin_id TEXT NOT NULL,
+        namespace TEXT NOT NULL,
+        entry_key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        PRIMARY KEY (plugin_id, namespace, entry_key)
+      );
+    `);
+    db.prepare(`
+      INSERT INTO plugin_state_entries (
+        plugin_id, namespace, entry_key, value_json, created_at, expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+    `).run("discord", "components", "interaction:1", '{"ok":true}', 1000, null);
+  } finally {
+    db.close();
+  }
+  return sourcePath;
+}
+
+function writeLegacyTaskStateSidecars(root: string): {
+  taskRunsPath: string;
+  flowRunsPath: string;
+} {
+  const taskRunsPath = path.join(root, "tasks", "runs.sqlite");
+  fs.mkdirSync(path.dirname(taskRunsPath), { recursive: true });
+  const sqlite = requireNodeSqlite();
+  const tasksDb = new sqlite.DatabaseSync(taskRunsPath);
+  try {
+    tasksDb.exec(`
+      CREATE TABLE task_runs (
+        task_id TEXT PRIMARY KEY,
+        runtime TEXT NOT NULL,
+        source_id TEXT,
+        requester_session_key TEXT NOT NULL,
+        child_session_key TEXT,
+        parent_task_id TEXT,
+        agent_id TEXT,
+        run_id TEXT,
+        label TEXT,
+        task TEXT NOT NULL,
+        status TEXT NOT NULL,
+        delivery_status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        ended_at INTEGER,
+        last_event_at INTEGER,
+        cleanup_after INTEGER,
+        error TEXT,
+        progress_summary TEXT,
+        terminal_summary TEXT,
+        terminal_outcome TEXT
+      );
+      CREATE TABLE task_delivery_state (
+        task_id TEXT PRIMARY KEY,
+        requester_origin_json TEXT,
+        last_notified_event_at INTEGER
+      );
+    `);
+    tasksDb
+      .prepare(
+        `
+          INSERT INTO task_runs (
+            task_id, runtime, source_id, requester_session_key, child_session_key, run_id, task,
+            status, delivery_status, notify_policy, created_at, last_event_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        "legacy-task",
+        "cron",
+        "nightly",
+        "",
+        "agent:main:cron:nightly",
+        "legacy-task-run",
+        "Legacy cron task",
+        "running",
+        "not_applicable",
+        "silent",
+        100,
+        110,
+      );
+    tasksDb
+      .prepare(
+        `
+          INSERT INTO task_delivery_state (
+            task_id, requester_origin_json, last_notified_event_at
+          ) VALUES (?, ?, ?)
+        `,
+      )
+      .run("legacy-task", '{"channel":"test","to":"target"}', 120);
+  } finally {
+    tasksDb.close();
+  }
+
+  const flowRunsPath = path.join(root, "flows", "registry.sqlite");
+  fs.mkdirSync(path.dirname(flowRunsPath), { recursive: true });
+  const flowsDb = new sqlite.DatabaseSync(flowRunsPath);
+  try {
+    flowsDb.exec(`
+      CREATE TABLE flow_runs (
+        flow_id TEXT PRIMARY KEY,
+        owner_session_key TEXT NOT NULL,
+        requester_origin_json TEXT,
+        status TEXT NOT NULL,
+        notify_policy TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        current_step TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        ended_at INTEGER
+      );
+    `);
+    flowsDb
+      .prepare(
+        `
+          INSERT INTO flow_runs (
+            flow_id, owner_session_key, status, notify_policy, goal, current_step, created_at,
+            updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+      )
+      .run(
+        "legacy-flow",
+        "agent:main:legacy-flow",
+        "running",
+        "done_only",
+        "Legacy flow",
+        "spawn_task",
+        200,
+        210,
+      );
+  } finally {
+    flowsDb.close();
+  }
+
+  return { taskRunsPath, flowRunsPath };
 }
 
 async function detectAndRunMigrations(params: {
@@ -650,7 +803,7 @@ describe("doctor legacy state migrations", () => {
         maxEntries: 4,
         scopeKey: "",
         cleanupSource: "rename",
-        readEntries: () => [{ key: "default", value: { body: "global" } }],
+        readEntries: () => [{ key: "default", value: { body: "global" }, ttlMs: 60_000 }],
       },
     ];
 
@@ -709,6 +862,8 @@ describe("doctor legacy state migrations", () => {
       expect(Object.fromEntries(globalValuesByKey)).toEqual({
         default: "global",
       });
+      const globalEntries = await globalStore.entries();
+      expect(globalEntries[0]?.expiresAt).toBeGreaterThan(Date.now());
     });
   });
 
@@ -724,7 +879,7 @@ describe("doctor legacy state migrations", () => {
         targetPath: "plugin state:test.capped-cache",
         pluginId: "telegram",
         namespace: "test.capped-cache",
-        maxEntries: 6_000,
+        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
         scopeKey: "scope",
         cleanupSource: "rename",
         readEntries: () => [
@@ -736,7 +891,7 @@ describe("doctor legacy state migrations", () => {
 
     await withStateDir(root, async () => {
       seedPluginStateEntriesForTests(
-        Array.from({ length: 5_999 }, (_, index) => ({
+        Array.from({ length: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN - 1 }, (_, index) => ({
           pluginId: "telegram",
           namespace: "test.sibling-cache",
           key: `sibling-${index}`,
@@ -765,7 +920,7 @@ describe("doctor legacy state migrations", () => {
     await withStateDir(root, async () => {
       const store = createPluginStateKeyedStore<{ body: string }>("telegram", {
         namespace: "test.capped-cache",
-        maxEntries: 6_000,
+        maxEntries: MAX_PLUGIN_STATE_ENTRIES_PER_PLUGIN,
       });
       const valuesByKey = new Map(
         (await store.entries()).map(({ key, value }) => [key, value.body]),
@@ -773,6 +928,376 @@ describe("doctor legacy state migrations", () => {
       expect(valuesByKey.has("scope:first")).toBe(false);
       expect(valuesByKey.has("scope:second")).toBe(false);
     });
+  });
+
+  it("imports the shipped plugin-state SQLite sidecar into shared state", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = writeLegacyPluginStateSidecar(root);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    expect(detected.pluginStateSidecar).toEqual({ sourcePath, hasLegacy: true });
+    expect(detected.preview).toContain(
+      `- Plugin state sidecar: ${sourcePath} → shared SQLite state`,
+    );
+
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 plugin-state sidecar entry → shared SQLite state");
+    expect(result.changes).toContain(
+      `Archived plugin-state sidecar legacy source → ${sourcePath}.migrated`,
+    );
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: true });
+    });
+  });
+
+  it("auto-migrates the shipped plugin-state SQLite sidecar by itself", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = writeLegacyPluginStateSidecar(root);
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(result.skipped).toBe(false);
+    expect(result.changes).toContain("Migrated 1 plugin-state sidecar entry → shared SQLite state");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: true });
+    });
+  });
+
+  it("auto-migrates the plugin-state sidecar when custom agent dirs skip session migration", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = writeLegacyPluginStateSidecar(root);
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env: {
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_AGENT_DIR: path.join(root, "custom-agent"),
+      } as NodeJS.ProcessEnv,
+      log: { info: vi.fn(), warn: vi.fn() },
+    });
+
+    expect(result.skipped).toBe(true);
+    expect(result.changes).toContain("Migrated 1 plugin-state sidecar entry → shared SQLite state");
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: true });
+    });
+  });
+
+  it("keeps the plugin-state sidecar when shared state already has a conflicting row", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = writeLegacyPluginStateSidecar(root);
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await store.register("interaction:1", { ok: false });
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([
+      "Left plugin-state sidecar in place because 1 row already existed in shared state: discord/components/interaction:1",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: false });
+    });
+  });
+
+  it("archives the plugin-state sidecar when conflicting rows already match", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = writeLegacyPluginStateSidecar(root);
+    await withStateDir(root, async () => {
+      seedPluginStateEntriesForTests([
+        {
+          pluginId: "discord",
+          namespace: "components",
+          key: "interaction:1",
+          value: { ok: true },
+          createdAt: 1000,
+          expiresAt: null,
+        },
+      ]);
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+  });
+
+  it("lets live sidecar rows replace expired shared plugin state during migration", async () => {
+    const root = await makeTempRoot();
+    const sourcePath = writeLegacyPluginStateSidecar(root);
+    await withStateDir(root, async () => {
+      seedPluginStateEntriesForTests([
+        {
+          pluginId: "discord",
+          namespace: "components",
+          key: "interaction:1",
+          value: { ok: false },
+          expiresAt: 1,
+        },
+      ]);
+    });
+    resetPluginStateStoreForTests();
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const store = createPluginStateKeyedStore<{ ok: boolean }>("discord", {
+        namespace: "components",
+        maxEntries: 10,
+      });
+      await expect(store.lookup("interaction:1")).resolves.toEqual({ ok: true });
+    });
+  });
+
+  it("imports shipped task registry and flow SQLite sidecars into shared state", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath, flowRunsPath } = writeLegacyTaskStateSidecars(root);
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(detected.taskStateSidecars).toEqual({
+      taskRunsPath,
+      flowRunsPath,
+      hasLegacy: true,
+    });
+    expect(detected.preview).toContain(
+      `- Task registry sidecar: ${taskRunsPath} → shared SQLite state`,
+    );
+    expect(detected.preview).toContain(
+      `- Task flow sidecar: ${flowRunsPath} → shared SQLite state`,
+    );
+
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 task registry sidecar row → shared SQLite state");
+    expect(result.changes).toContain("Migrated 1 task delivery sidecar row → shared SQLite state");
+    expect(result.changes).toContain("Migrated 1 task flow sidecar row → shared SQLite state");
+    expect(fs.existsSync(taskRunsPath)).toBe(false);
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(true);
+    expect(fs.existsSync(flowRunsPath)).toBe(false);
+    expect(fs.existsSync(`${flowRunsPath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const taskState = loadTaskRegistryStateFromSqlite();
+      const task = taskState.tasks.get("legacy-task");
+      expect(task).toMatchObject({
+        taskId: "legacy-task",
+        ownerKey: "system:cron:nightly",
+        scopeKind: "system",
+        requesterSessionKey: "",
+        runId: "legacy-task-run",
+      });
+      expect(taskState.deliveryStates.get("legacy-task")).toMatchObject({
+        taskId: "legacy-task",
+        lastNotifiedEventAt: 120,
+      });
+
+      const flowState = loadTaskFlowRegistryStateFromSqlite();
+      expect(flowState.flows.get("legacy-flow")).toMatchObject({
+        flowId: "legacy-flow",
+        ownerKey: "agent:main:legacy-flow",
+        syncMode: "managed",
+        controllerId: "core/legacy-restored",
+        revision: 0,
+      });
+    });
+  });
+
+  it("skips orphan task delivery sidecar rows while importing valid task rows", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath } = writeLegacyTaskStateSidecars(root);
+    const sqlite = requireNodeSqlite();
+    const db = new sqlite.DatabaseSync(taskRunsPath);
+    try {
+      db.prepare(
+        `
+          INSERT INTO task_delivery_state (
+            task_id, requester_origin_json, last_notified_event_at
+          ) VALUES (?, ?, ?)
+        `,
+      ).run("missing-task", '{"channel":"stale","to":"target"}', 130);
+    } finally {
+      db.close();
+    }
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.changes).toContain("Migrated 1 task registry sidecar row → shared SQLite state");
+    expect(result.changes).toContain("Migrated 1 task delivery sidecar row → shared SQLite state");
+    expect(result.warnings).toContain(
+      "Skipped 1 orphan task delivery sidecar row with no task run",
+    );
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      const taskState = loadTaskRegistryStateFromSqlite();
+      expect(taskState.tasks.has("legacy-task")).toBe(true);
+      expect(taskState.deliveryStates.has("legacy-task")).toBe(true);
+      expect(taskState.deliveryStates.has("missing-task")).toBe(false);
+    });
+  });
+
+  it("auto-migrates task sidecars without config-dependent state moves", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath, flowRunsPath } = writeLegacyTaskStateSidecars(root);
+
+    const result = await autoMigrateLegacyTaskStateSidecars({
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain("Migrated 1 task registry sidecar row → shared SQLite state");
+    expect(result.changes).toContain("Migrated 1 task flow sidecar row → shared SQLite state");
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(true);
+    expect(fs.existsSync(`${flowRunsPath}.migrated`)).toBe(true);
+
+    await withStateDir(root, async () => {
+      expect(loadTaskRegistryStateFromSqlite().tasks.has("legacy-task")).toBe(true);
+      expect(loadTaskFlowRegistryStateFromSqlite().flows.has("legacy-flow")).toBe(true);
+    });
+  });
+
+  it("keeps task sidecars when shared state already has conflicting task rows", async () => {
+    const root = await makeTempRoot();
+    const { taskRunsPath, flowRunsPath } = writeLegacyTaskStateSidecars(root);
+
+    await withStateDir(root, async () => {
+      const sqlite = requireNodeSqlite();
+      const sharedPath = path.join(root, "state", "openclaw.sqlite");
+      fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
+      const db = new sqlite.DatabaseSync(sharedPath);
+      try {
+        db.exec(`
+          CREATE TABLE IF NOT EXISTS task_runs (
+            task_id TEXT NOT NULL PRIMARY KEY,
+            runtime TEXT NOT NULL,
+            task_kind TEXT,
+            source_id TEXT,
+            requester_session_key TEXT,
+            owner_key TEXT NOT NULL,
+            scope_kind TEXT NOT NULL,
+            child_session_key TEXT,
+            parent_flow_id TEXT,
+            parent_task_id TEXT,
+            agent_id TEXT,
+            run_id TEXT,
+            label TEXT,
+            task TEXT NOT NULL,
+            status TEXT NOT NULL,
+            delivery_status TEXT NOT NULL,
+            notify_policy TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            started_at INTEGER,
+            ended_at INTEGER,
+            last_event_at INTEGER,
+            cleanup_after INTEGER,
+            error TEXT,
+            progress_summary TEXT,
+            terminal_summary TEXT,
+            terminal_outcome TEXT
+          );
+        `);
+        db.prepare(`
+          INSERT INTO task_runs (
+            task_id, runtime, requester_session_key, owner_key, scope_kind, task, status,
+            delivery_status, notify_policy, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          "legacy-task",
+          "cron",
+          "",
+          "system:cron:nightly",
+          "system",
+          "Different task",
+          "running",
+          "not_applicable",
+          "silent",
+          100,
+        );
+      } finally {
+        db.close();
+      }
+    });
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
+    });
+    const result = await runLegacyStateMigrations({ detected });
+
+    expect(result.warnings).toStrictEqual([
+      "Left task registry sidecar in place because 1 row already existed in shared state: legacy-task",
+    ]);
+    expect(fs.existsSync(taskRunsPath)).toBe(true);
+    expect(fs.existsSync(`${taskRunsPath}.migrated`)).toBe(false);
+    expect(fs.existsSync(flowRunsPath)).toBe(false);
+    expect(fs.existsSync(`${flowRunsPath}.migrated`)).toBe(true);
   });
 
   it("routes legacy state to the default agent entry", async () => {

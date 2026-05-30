@@ -1,6 +1,10 @@
 import { TerminalStates, type CallId } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { persistCallRecord } from "./store.js";
+import {
+  resolveVoiceCallSecondsTimerDelayMs,
+  resolveVoiceCallTimerDelayMs,
+} from "./timer-delays.js";
 
 type TimerContext = Pick<
   CallManagerContext,
@@ -31,7 +35,10 @@ export function startMaxDurationTimer(params: {
 }): void {
   clearMaxDurationTimer(params.ctx, params.callId);
 
-  const maxDurationMs = params.timeoutMs ?? params.ctx.config.maxDurationSeconds * 1000;
+  const maxDurationMs =
+    params.timeoutMs === undefined
+      ? resolveVoiceCallSecondsTimerDelayMs(params.ctx.config.maxDurationSeconds)
+      : resolveVoiceCallTimerDelayMs(params.timeoutMs);
   console.log(
     `[voice-call] Starting max duration timer (${Math.ceil(maxDurationMs / 1000)}s) for call ${params.callId}`,
   );
@@ -101,7 +108,7 @@ export function waitForFinalTranscript(
     return Promise.reject(new Error("Already waiting for transcript"));
   }
 
-  const timeoutMs = ctx.config.transcriptTimeoutMs;
+  const timeoutMs = resolveVoiceCallTimerDelayMs(ctx.config.transcriptTimeoutMs);
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       ctx.transcriptWaiters.delete(callId);

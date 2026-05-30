@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageProviderId } from "./provider-usage.types.js";
@@ -8,8 +9,9 @@ export async function fetchJson(
   timeoutMs: number,
   fetchFn: typeof fetch,
 ): Promise<Response> {
+  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
   const controller = new AbortController();
-  const timer = setTimeout(controller.abort.bind(controller), timeoutMs);
+  const timer = setTimeout(controller.abort.bind(controller), safeTimeoutMs);
   try {
     return await fetchFn(url, { ...init, signal: controller.signal });
   } finally {

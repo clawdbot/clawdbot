@@ -4,6 +4,7 @@ import {
   listOpenAIAuthProfileProvidersForAgentRuntime,
   modelSelectionShouldEnsureCodexPlugin,
   openAIProviderUsesCodexRuntimeByDefault,
+  resolveContextConfigProviderForRuntime,
   resolveOpenAIRuntimeProvider,
   resolveSelectedOpenAIRuntimeProvider,
 } from "./openai-codex-routing.js";
@@ -33,6 +34,22 @@ describe("OpenAI Codex routing policy", () => {
 
     expect(openAIProviderUsesCodexRuntimeByDefault({ provider: "openai", config })).toBe(false);
     expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(false);
+    expect(
+      resolveContextConfigProviderForRuntime({
+        provider: "openai",
+        runtimeId: "codex",
+        config,
+      }),
+    ).toBe("openai");
+  });
+
+  it("uses Codex context config for official OpenAI under the Codex runtime", () => {
+    expect(
+      resolveContextConfigProviderForRuntime({
+        provider: "openai",
+        runtimeId: "codex",
+      }),
+    ).toBe("openai-codex");
   });
 
   it("maps explicit OpenClaw plus Codex auth profile to the OpenClaw Codex-auth transport", () => {

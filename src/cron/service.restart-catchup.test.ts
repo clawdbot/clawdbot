@@ -398,6 +398,78 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("keeps missed cron slots paused until run-end error backoff expires after restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:01:59.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-long-run-backoff-pending",
+          name: "long run backoff pending",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:01:30.000Z"),
+          schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "do not replay long failed run" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:10:00.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T04:00:00.000Z"),
+            lastDurationMs: 90_000,
+            lastStatus: "error",
+            consecutiveErrors: 1,
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-long-run-backoff-pending");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+      },
+    );
+  });
+
+  it("keeps past-due retries paused until run-end error backoff expires after restart", async () => {
+    vi.setSystemTime(new Date("2025-12-13T04:01:59.000Z"));
+    await withRestartedCron(
+      [
+        {
+          id: "restart-long-run-due-retry",
+          name: "long run due retry",
+          enabled: true,
+          createdAtMs: Date.parse("2025-12-10T12:00:00.000Z"),
+          updatedAtMs: Date.parse("2025-12-13T04:00:30.000Z"),
+          schedule: {
+            kind: "every",
+            everyMs: 60_000,
+            anchorMs: Date.parse("2025-12-13T04:00:00.000Z"),
+          },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "do not run early retry" },
+          state: {
+            nextRunAtMs: Date.parse("2025-12-13T04:00:30.000Z"),
+            lastRunAtMs: Date.parse("2025-12-13T04:00:00.000Z"),
+            lastDurationMs: 90_000,
+            lastStatus: "error",
+            consecutiveErrors: 1,
+          },
+        },
+      ],
+      async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
+        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(requestHeartbeat).not.toHaveBeenCalled();
+
+        const listedJobs = await cron.list({ includeDisabled: true });
+        const updated = listedJobs.find((job) => job.id === "restart-long-run-due-retry");
+        expect(updated?.state.nextRunAtMs).toBe(Date.parse("2025-12-13T04:02:00.000Z"));
+      },
+    );
+  });
+
   it("replays missed cron slot after restart when error backoff has already elapsed", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(

@@ -44,7 +44,6 @@ export {
   resolveSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 export { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
-export { createPersistentDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 export { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 export {

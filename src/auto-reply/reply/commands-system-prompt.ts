@@ -9,13 +9,12 @@ import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import type { AgentTool } from "../../agents/runtime/index.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import { getSkillsSnapshotVersion } from "../../agents/skills/refresh-state.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
 import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
-import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
+import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
@@ -60,7 +59,8 @@ export async function resolveCommandsSystemPromptBundle(
   });
   const skillsSnapshot = (() => {
     try {
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
+      return resolveReusableWorkspaceSkillSnapshot({
+        workspaceDir,
         config: params.cfg,
         agentId: sessionAgentId,
         eligibility: {
@@ -73,13 +73,13 @@ export async function resolveCommandsSystemPromptBundle(
             }),
           }),
         },
-        snapshotVersion: getSkillsSnapshotVersion(workspaceDir),
+        watch: false,
       });
     } catch {
-      return { prompt: "", skills: [], resolvedSkills: [] };
+      return { snapshot: { prompt: "", skills: [], resolvedSkills: [] } };
     }
   })();
-  const skillsPrompt = skillsSnapshot.prompt ?? "";
+  const skillsPrompt = skillsSnapshot.snapshot.prompt ?? "";
   const tools = (() => {
     try {
       return createOpenClawCodingTools({

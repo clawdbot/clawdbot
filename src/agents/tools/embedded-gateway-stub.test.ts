@@ -25,6 +25,11 @@ const runtime = vi.hoisted(() => ({
   })),
   capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
   enforceChatHistoryFinalBudget: vi.fn(({ messages }: { messages: unknown[] }) => ({ messages })),
+  loadCombinedSessionStoreForGateway: vi.fn(() => ({
+    storePath: "/tmp/openclaw-sessions.json",
+    store: {},
+  })),
+  listSessionsFromStoreAsync: vi.fn(async () => ({ sessions: [] })),
 }));
 
 vi.mock("./embedded-gateway-stub.runtime.js", () => runtime);
@@ -35,6 +40,29 @@ describe("embedded gateway stub", () => {
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.projectRecentChatDisplayMessages.mockClear();
     runtime.readSessionMessagesAsync.mockClear();
+    runtime.loadSessionEntry.mockClear();
+    runtime.resolveSessionAgentId.mockClear();
+    runtime.loadCombinedSessionStoreForGateway.mockClear();
+    runtime.listSessionsFromStoreAsync.mockClear();
+  });
+
+  it("scopes embedded session lists to the requested agent", async () => {
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway({
+      method: "sessions.list",
+      params: { agentId: "work", includeGlobal: true, search: "global" },
+    });
+
+    expect(runtime.loadCombinedSessionStoreForGateway).toHaveBeenCalledWith(
+      { agents: { list: [{ id: "main", default: true }] } },
+      { agentId: "work" },
+    );
+    expect(runtime.listSessionsFromStoreAsync).toHaveBeenCalledWith({
+      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      storePath: "/tmp/openclaw-sessions.json",
+      store: {},
+      opts: { agentId: "work", includeGlobal: true, search: "global" },
+    });
   });
 
   it("resolves sessions through the gateway session resolver", async () => {
@@ -102,6 +130,36 @@ describe("embedded gateway stub", () => {
       },
     );
     expect(result.messages).toEqual(projectedMessages);
+  });
+
+  it("scopes embedded global chat history to the requested agent", async () => {
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway<{ messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "global", agentId: "work" },
+    });
+
+    expect(runtime.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "global",
+      config: {},
+      agentId: "work",
+    });
+  });
+
+  it("infers embedded global chat history scope from agent-prefixed aliases", async () => {
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway<{ messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:work:main" },
+    });
+
+    expect(runtime.loadSessionEntry).toHaveBeenCalledWith("agent:work:main", { agentId: "work" });
+    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "agent:work:main",
+      config: {},
+      agentId: "work",
+    });
   });
 
   it("passes the requested recent history window to projection", async () => {

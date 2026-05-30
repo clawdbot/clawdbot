@@ -1,8 +1,8 @@
+import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
-import type { InlineCodeState } from "../markdown/code-spans.js";
-import type { FenceScanState } from "../markdown/fences.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";

@@ -10,7 +10,7 @@ import {
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { ensureOutputRootDir, resolveWritableOutputPathOrRespond } from "./output-paths.js";
 import { DEFAULT_DOWNLOAD_DIR } from "./path-output.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
@@ -34,7 +34,7 @@ export function registerBrowserAgentActDownloadRoutes(
       const out = toStringOrEmpty(body.path) || "";
       let timeoutMs: number | undefined;
       try {
-        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }
@@ -87,7 +87,7 @@ export function registerBrowserAgentActDownloadRoutes(
       const out = toStringOrEmpty(body.path);
       let timeoutMs: number | undefined;
       try {
-        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }

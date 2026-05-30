@@ -72,6 +72,7 @@ import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prep
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -969,7 +970,7 @@ export async function prepareSlackMessage(params: {
             client: ctx.app.client,
           })
         : null;
-    const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
+    const timestamp = resolveSlackTimestampMs(message.ts);
     const senderName = pendingBody ? await resolveSenderName() : undefined;
     await recordDroppedChannelInboundHistory({
       input: {
@@ -1145,7 +1146,7 @@ export async function prepareSlackMessage(params: {
   const body = formatInboundEnvelope({
     channel: "Slack",
     from: envelopeFrom,
-    timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+    timestamp: resolveSlackTimestampMs(message.ts),
     body: textWithId,
     chatType,
     sender: { name: senderName, id: senderId },
@@ -1238,7 +1239,7 @@ export async function prepareSlackMessage(params: {
     channel: "slack",
     accountId: route.accountId,
     messageId: message.ts,
-    timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+    timestamp: resolveSlackTimestampMs(message.ts),
     from: slackFrom,
     sender: {
       id: senderId,
@@ -1335,7 +1336,7 @@ export async function prepareSlackMessage(params: {
       entry: {
         sender: senderName,
         body: rawBody,
-        timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
+        timestamp: resolveSlackTimestampMs(message.ts),
         messageId: message.ts,
       },
     });

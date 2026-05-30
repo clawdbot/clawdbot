@@ -1,4 +1,7 @@
+import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
@@ -96,17 +99,25 @@ function extractRetryAfterMs(err: unknown): number | null {
   }
 
   const direct = err.retryAfterMs ?? err.retry_after_ms;
-  if (typeof direct === "number" && Number.isFinite(direct) && direct >= 0) {
-    return direct;
+  const directMs = asFiniteNumberInRange(direct, {
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (directMs !== undefined) {
+    return directMs;
   }
 
   const retryAfter = err.retryAfter ?? err.retry_after;
-  if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-    return retryAfter >= 0 ? retryAfter * 1000 : null;
+  const retryAfterSeconds = asFiniteNumberInRange(retryAfter, {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds * 1000;
   }
   if (typeof retryAfter === "string") {
     const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
-    if (Number.isFinite(parsed) && parsed >= 0) {
+    if (parsed !== undefined) {
       return parsed * 1000;
     }
   }
@@ -125,7 +136,7 @@ function extractRetryAfterMs(err: unknown): number | null {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
       const parsed = parseNonNegativeRetryAfterSeconds(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
@@ -141,7 +152,7 @@ function extractRetryAfterMs(err: unknown): number | null {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
       const parsed = parseNonNegativeRetryAfterSeconds(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
@@ -150,12 +161,15 @@ function extractRetryAfterMs(err: unknown): number | null {
   return null;
 }
 
-function parseNonNegativeRetryAfterSeconds(raw: string): number {
+function parseNonNegativeRetryAfterSeconds(raw: string): number | undefined {
   const trimmed = raw.trim();
   if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
-    return Number.NaN;
+    return undefined;
   }
-  return Number(trimmed);
+  return asFiniteNumberInRange(parseStrictFiniteNumber(trimmed), {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
 }
 
 type MSTeamsSendErrorKind =

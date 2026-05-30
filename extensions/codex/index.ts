@@ -25,11 +25,11 @@ export default definePluginEntry({
   name: "Codex",
   description: "Codex app-server harness and Codex-managed GPT model catalog.",
   register(api) {
+    const resolveCurrentConfig = () =>
+      api.runtime.config?.current ? (api.runtime.config.current() as OpenClawConfig) : undefined;
     const resolveCurrentPluginConfig = () =>
       resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        resolveCurrentConfig,
         "codex",
         api.pluginConfig as Record<string, unknown>,
       ) ?? api.pluginConfig;
@@ -114,8 +114,8 @@ export default definePluginEntry({
     );
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {
-        config: api.runtime.config?.current?.() as OpenClawConfig | undefined,
         pluginConfig: resolveCurrentPluginConfig(),
+        config: resolveCurrentConfig(),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
       }),

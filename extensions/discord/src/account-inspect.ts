@@ -1,9 +1,7 @@
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import {
-  hasConfiguredSecretInput,
-  normalizeSecretInputString,
-} from "openclaw/plugin-sdk/secret-input";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { inspectDiscordConfiguredToken } from "./account-token-inspect.js";
 import {
   mergeDiscordAccountConfig,
   resolveDefaultDiscordAccountId,
@@ -23,29 +21,6 @@ export type InspectedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-function inspectDiscordTokenValue(value: unknown): {
-  token: string;
-  tokenSource: "config";
-  tokenStatus: Exclude<DiscordCredentialStatus, "missing">;
-} | null {
-  const normalized = normalizeSecretInputString(value);
-  if (normalized) {
-    return {
-      token: normalized.replace(/^Bot\s+/i, ""),
-      tokenSource: "config",
-      tokenStatus: "available",
-    };
-  }
-  if (hasConfiguredSecretInput(value)) {
-    return {
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-    };
-  }
-  return null;
-}
-
 export function inspectDiscordAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -61,7 +36,7 @@ export function inspectDiscordAccount(params: {
     accountConfig &&
     Object.prototype.hasOwnProperty.call(accountConfig as Record<string, unknown>, "token"),
   );
-  const accountToken = inspectDiscordTokenValue(accountConfig?.token);
+  const accountToken = inspectDiscordConfiguredToken(accountConfig?.token);
   if (accountToken) {
     return {
       accountId,
@@ -87,7 +62,7 @@ export function inspectDiscordAccount(params: {
     };
   }
 
-  const channelToken = inspectDiscordTokenValue(params.cfg.channels?.discord?.token);
+  const channelToken = inspectDiscordConfiguredToken(params.cfg.channels?.discord?.token);
   if (channelToken) {
     return {
       accountId,

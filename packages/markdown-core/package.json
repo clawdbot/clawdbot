@@ -1,0 +1,62 @@
+{
+  "name": "@openclaw/markdown-core",
+  "version": "0.0.0-private",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./code-spans": {
+      "types": "./dist/code-spans.d.mts",
+      "import": "./dist/code-spans.mjs",
+      "default": "./dist/code-spans.mjs"
+    },
+    "./fences": {
+      "types": "./dist/fences.d.mts",
+      "import": "./dist/fences.mjs",
+      "default": "./dist/fences.mjs"
+    },
+    "./frontmatter": {
+      "types": "./dist/frontmatter.d.mts",
+      "import": "./dist/frontmatter.mjs",
+      "default": "./dist/frontmatter.mjs"
+    },
+    "./ir": {
+      "types": "./dist/ir.d.mts",
+      "import": "./dist/ir.mjs",
+      "default": "./dist/ir.mjs"
+    },
+    "./render": {
+      "types": "./dist/render.d.mts",
+      "import": "./dist/render.mjs",
+      "default": "./dist/render.mjs"
+    },
+    "./render-aware-chunking": {
+      "types": "./dist/render-aware-chunking.d.mts",
+      "import": "./dist/render-aware-chunking.mjs",
+      "default": "./dist/render-aware-chunking.mjs"
+    },
+    "./tables": {
+      "types": "./dist/tables.d.mts",
+      "import": "./dist/tables.mjs",
+      "default": "./dist/tables.mjs"
+    },
+    "./types": {
+      "types": "./dist/types.d.mts",
+      "import": "./dist/types.mjs",
+      "default": "./dist/types.mjs"
+    }
+  },
+  "dependencies": {
+    "markdown-it": "14.2.0",
+    "yaml": "2.9.0"
+  }
+}

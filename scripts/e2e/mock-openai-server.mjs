@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import http from "node:http";
 import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { readBody, writeJson, writeSse } from "./lib/mock-openai-http.mjs";
 
 const port =
   process.env.MOCK_PORT != null
@@ -8,23 +9,6 @@ const port =
     : readPositiveIntEnv("OPENCLAW_MOCK_OPENAI_PORT");
 const successMarker = process.env.SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const requestLog = process.env.MOCK_REQUEST_LOG;
-
-function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = "";
-    req.setEncoding("utf8");
-    req.on("data", (chunk) => {
-      body += chunk;
-    });
-    req.on("end", () => resolve(body));
-    req.on("error", reject);
-  });
-}
-
-function writeJson(res, status, body) {
-  res.writeHead(status, { "content-type": "application/json" });
-  res.end(JSON.stringify(body));
-}
 
 function responseEvents(text) {
   const itemId = "msg_e2e_1";
@@ -86,19 +70,6 @@ function responseEvents(text) {
       },
     },
   ];
-}
-
-function writeSse(res, events) {
-  res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-store",
-    connection: "keep-alive",
-  });
-  for (const event of events) {
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
-  }
-  res.write("data: [DONE]\n\n");
-  res.end();
 }
 
 function writeChatCompletion(res, stream, text = successMarker) {

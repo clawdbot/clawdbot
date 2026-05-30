@@ -36,21 +36,27 @@ function makeMinimalResponse(threadOverrides: Record<string, unknown> = {}) {
   };
 }
 
+describe("Codex thread response validators", () => {
+  it("normalizes missing sessionId from id for start and resume responses", () => {
+    for (const assertResponse of [
+      assertCodexThreadStartResponse,
+      assertCodexThreadResumeResponse,
+    ]) {
+      const response = makeMinimalResponse({ sessionId: undefined });
+      delete (response.thread as Record<string, unknown>).sessionId;
+      const result = assertResponse(response);
+      expect(result.thread.id).toBe("thread-1");
+      expect(result.thread.sessionId).toBe("thread-1");
+    }
+  });
+});
+
 describe("assertCodexThreadStartResponse", () => {
   it("accepts response with both id and sessionId", () => {
     const response = makeMinimalResponse();
     const result = assertCodexThreadStartResponse(response);
     expect(result.thread.id).toBe("thread-1");
     expect(result.thread.sessionId).toBe("session-1");
-  });
-
-  it("normalizes missing sessionId from id", () => {
-    const response = makeMinimalResponse({ sessionId: undefined });
-    // Remove the sessionId key entirely
-    delete (response.thread as Record<string, unknown>).sessionId;
-    const result = assertCodexThreadStartResponse(response);
-    expect(result.thread.id).toBe("thread-1");
-    expect(result.thread.sessionId).toBe("thread-1");
   });
 
   it("normalizes missing id from sessionId", () => {
@@ -63,16 +69,6 @@ describe("assertCodexThreadStartResponse", () => {
 
   it("throws on invalid response", () => {
     expect(() => assertCodexThreadStartResponse({})).toThrow("Invalid Codex app-server");
-  });
-});
-
-describe("assertCodexThreadResumeResponse", () => {
-  it("normalizes missing sessionId from id", () => {
-    const response = makeMinimalResponse({ sessionId: undefined });
-    delete (response.thread as Record<string, unknown>).sessionId;
-    const result = assertCodexThreadResumeResponse(response);
-    expect(result.thread.id).toBe("thread-1");
-    expect(result.thread.sessionId).toBe("thread-1");
   });
 });
 

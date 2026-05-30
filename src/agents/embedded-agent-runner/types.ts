@@ -22,6 +22,7 @@ export type EmbeddedAgentMeta = {
   agentHarnessId?: string;
   fallbackAttempts?: FallbackAttempt[];
   cliSessionBinding?: CliSessionBinding;
+  clearCliSessionBinding?: boolean;
   compactionCount?: number;
   /**
    * Token count estimate after the most recent successful auto-compaction.

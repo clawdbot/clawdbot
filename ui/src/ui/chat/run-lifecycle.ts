@@ -13,7 +13,7 @@ export type ChatRunUiStatus = {
 
 type TimerHandle = ReturnType<typeof globalThis.setTimeout>;
 
-type RunLifecycleHost = Partial<Parameters<typeof resetToolStream>[0]> & {
+type RunLifecycleHost = Omit<Partial<Parameters<typeof resetToolStream>[0]>, "hello"> & {
   sessionKey: string;
   chatRunId?: string | null;
   chatStream?: string | null;

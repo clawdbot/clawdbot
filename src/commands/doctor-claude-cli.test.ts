@@ -4,10 +4,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  noteClaudeCliHealth,
-  resolveClaudeCliProjectDirForWorkspace,
-} from "./doctor-claude-cli.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
+import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
   return {

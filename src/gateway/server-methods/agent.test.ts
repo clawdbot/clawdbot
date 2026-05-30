@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
@@ -99,7 +100,10 @@ vi.mock("../../config/config.js", async () => {
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
-  resolveDefaultAgentId: () => "main",
+  resolveDefaultAgentId: (cfg?: {
+    agents?: { list?: Array<{ id?: string; default?: boolean }> };
+  }) =>
+    cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
   resolveSessionAgentId: ({
     sessionKey,
   }: {
@@ -111,8 +115,18 @@ vi.mock("../../agents/agent-scope.js", () => ({
   },
   resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
     cfg.agents?.list?.find((agent) => agent.id === agentId),
-  resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
-    cfg?.agents?.defaults?.workspace ?? "/tmp/workspace",
+  resolveAgentWorkspaceDir: (
+    cfg: {
+      agents?: {
+        defaults?: { workspace?: string };
+        list?: Array<{ id?: string; workspace?: string }>;
+      };
+    },
+    agentId?: string,
+  ) =>
+    cfg?.agents?.list?.find((agent) => agent.id === agentId)?.workspace ??
+    cfg?.agents?.defaults?.workspace ??
+    "/tmp/workspace",
   resolveAgentEffectiveModelPrimary: () => undefined,
 }));
 
@@ -524,6 +538,86 @@ describe("gateway agent handler", () => {
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
     resetExecApprovalFollowupRuntimeHandoffsForTests();
+  });
+
+  it("passes resolved maintenance config to the gateway admission store write", async () => {
+    primeMainAgentRun({
+      cfg: {
+        session: {
+          maintenance: {
+            mode: "enforce",
+            maxEntries: 42,
+          },
+        },
+      },
+    });
+
+    await runMainAgent("hi", "idem-maintenance-config");
+
+    const updateOptions = mocks.updateSessionStore.mock.calls.at(-1)?.[2];
+    expect(updateOptions).toMatchObject({
+      takeCacheOwnership: true,
+      maintenanceConfig: {
+        mode: "enforce",
+        maxEntries: 42,
+      },
+    });
+  });
+
+  it("uses single-entry persistence for ordinary gateway admission touches", async () => {
+    mockMainSessionEntry({});
+    let capturedOptions:
+      | {
+          resolveSingleEntryPersistence?: (result: unknown) => unknown;
+        }
+      | undefined;
+    let persistedResult: unknown;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater, opts) => {
+      const store: Record<string, Record<string, unknown>> = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      persistedResult = await updater(store);
+      capturedOptions = opts;
+      return persistedResult;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await runMainAgent("hi", "idem-single-entry-persist");
+
+    expect(capturedOptions?.resolveSingleEntryPersistence?.(persistedResult)).toMatchObject({
+      sessionKey: "agent:main:main",
+      entry: persistedResult,
+    });
+  });
+
+  it("disables single-entry persistence when admission prunes legacy store keys", async () => {
+    mockMainSessionEntry({});
+    let capturedOptions:
+      | {
+          resolveSingleEntryPersistence?: (result: unknown) => unknown;
+        }
+      | undefined;
+    let persistedResult: unknown;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater, opts) => {
+      const store: Record<string, Record<string, unknown>> = {
+        "agent:main:main": buildExistingMainStoreEntry({ updatedAt: 100 }),
+        "Agent:main:main": buildExistingMainStoreEntry({ updatedAt: 50 }),
+      };
+      persistedResult = await updater(store);
+      capturedOptions = opts;
+      return persistedResult;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await runMainAgent("hi", "idem-single-entry-legacy-prune");
+
+    expect(capturedOptions?.resolveSingleEntryPersistence?.(persistedResult)).toBeUndefined();
   });
 
   it("preserves ACP metadata from the current stored session entry", async () => {
@@ -968,6 +1062,72 @@ describe("gateway agent handler", () => {
     expectRecordFields(await waitForAgentCommandCall(), {
       acpTurnSource: "manual_spawn",
     });
+  });
+
+  it("does not bypass image support check for non-ACP sessions with acpTurnSource", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "describe this image",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        acpTurnSource: "manual_spawn",
+        idempotencyKey: "test-acp-image-bypass-guard",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "test.png",
+            content: Buffer.from("fake-png-data").toString("base64"),
+          },
+        ],
+      },
+      { respond, reqId: "test-acp-image-bypass-guard" },
+    );
+
+    // Non-ACP session (agent:main:main) with acpTurnSource="manual_spawn" must
+    // NOT bypass resolveGatewayModelSupportsImages. The image should be rejected
+    // by the normal image-support check since this is not an ACP session.
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const error = expectRespondError(respond, {});
+    expectStringFieldContains(error, "message", "does not accept image inputs");
+  });
+
+  it("does not bypass image support check for ACP-shaped sessions without ACP metadata", async () => {
+    mockMainSessionEntry({ sessionId: "existing-acp-shaped-session" });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    mocks.agentCommand.mockClear();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "describe this image",
+        agentId: "main",
+        sessionKey: "agent:main:acp:missing-meta",
+        acpTurnSource: "manual_spawn",
+        idempotencyKey: "test-acp-image-metadata-bypass-guard",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "test.png",
+            content: Buffer.from("fake-png-data").toString("base64"),
+          },
+        ],
+      },
+      { respond, reqId: "test-acp-image-metadata-bypass-guard" },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    const error = expectRespondError(respond, {});
+    expectStringFieldContains(error, "message", "does not accept image inputs");
   });
 
   it("rejects provider and model overrides for write-scoped callers", async () => {
@@ -3389,7 +3549,7 @@ describe("gateway agent handler", () => {
     }
   });
 
-  it("does not forward a non-main agent id with canonical global session keys", async () => {
+  it("forwards the selected agent id with canonical global session keys", async () => {
     mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:ops:main");
     mocks.loadSessionEntry.mockReturnValue({
@@ -3425,8 +3585,292 @@ describe("gateway agent handler", () => {
       agentId?: string;
       sessionKey?: string;
     }>();
-    expect(call.agentId).toBeUndefined();
+    expect(call.agentId).toBe("ops");
     expect(call.sessionKey).toBe("global");
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:ops:main", {
+      agentId: "ops",
+      clone: false,
+    });
+  });
+
+  it("accepts an explicit global session key with a selected agent id", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: { session: { scope: "global" } },
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-work-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "global session",
+        sessionKey: "global",
+        agentId: "work",
+        idempotencyKey: "explicit-global-session-agent-id",
+      },
+      { reqId: "explicit-global-session-agent-id", respond },
+    );
+
+    expect(respond).not.toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: ErrorCodes.INVALID_REQUEST }),
+    );
+    const call = await waitForAgentCommandCall<{
+      agentId?: string;
+      sessionKey?: string;
+    }>();
+    expect(call.agentId).toBe("work");
+    expect(call.sessionKey).toBe("global");
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
+      agentId: "work",
+      clone: false,
+    });
+  });
+
+  it("routes bare global session keys to the configured default agent", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+      session: { scope: "global" },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-ops-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        global: { sessionId: "global-ops-session-id", updatedAt: Date.now() },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "bare global session",
+        sessionKey: "global",
+        idempotencyKey: "bare-global-default-agent-id",
+      },
+      { reqId: "bare-global-default-agent-id" },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      agentId?: string;
+      sessionKey?: string;
+    }>();
+    expect(call.agentId).toBe("ops");
+    expect(call.sessionKey).toBe("global");
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
+      clone: false,
+    });
+  });
+
+  it("infers selected-global agent id from agent-prefixed session aliases", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-work-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "global alias session",
+        sessionKey: "agent:work:main",
+        idempotencyKey: "alias-global-session-agent-id",
+      },
+      { reqId: "alias-global-session-agent-id" },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      agentId?: string;
+      sessionKey?: string;
+    }>();
+    expect(call.agentId).toBe("work");
+    expect(call.sessionKey).toBe("global");
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("agent:work:main", {
+      agentId: "work",
+      clone: false,
+    });
+  });
+
+  it("registers tool event recipients for active selected-global alias runs", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-work-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    const context = makeContext();
+    const registerToolEventRecipient = vi.fn();
+    context.registerToolEventRecipient = registerToolEventRecipient;
+    context.chatAbortControllers.set("run-existing", {
+      controller: new AbortController(),
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "run-existing",
+    } as never);
+
+    await invokeAgent(
+      {
+        message: "global alias session",
+        sessionKey: "agent:work:main",
+        idempotencyKey: "alias-global-tool-events",
+      },
+      {
+        reqId: "alias-global-tool-events",
+        context,
+        client: {
+          connId: "conn-1",
+          connect: { caps: ["tool-events"] },
+        } as never,
+      },
+    );
+
+    expect(registerToolEventRecipient).toHaveBeenCalledWith("alias-global-tool-events", "conn-1");
+    expect(registerToolEventRecipient).toHaveBeenCalledWith("run-existing", "conn-1");
+  });
+
+  it("honors selected-global agent id when the request uses the main alias", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-work-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {
+        global: { sessionId: "global-work-session-id", updatedAt: Date.now() },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "global main alias",
+        agentId: "work",
+        sessionKey: "main",
+        idempotencyKey: "selected-global-main-alias-agent-id",
+      },
+      { reqId: "selected-global-main-alias-agent-id" },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      agentId?: string;
+      sessionKey?: string;
+    }>();
+    expect(call.agentId).toBe("work");
+    expect(call.sessionKey).toBe("global");
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("main", {
+      agentId: "work",
+      clone: false,
+    });
+  });
+
+  it("preserves selected-global agent id on cached accepted responses", async () => {
+    const context = makeContext();
+    mocks.agentCommand.mockClear();
+    context.dedupe.set("agent:cached-global-work", {
+      ts: Date.now(),
+      ok: true,
+      payload: {
+        runId: "cached-global-work",
+        sessionKey: "global",
+        agentId: "work",
+        status: "accepted",
+      },
+    });
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "global session retry",
+        sessionKey: "global",
+        agentId: "work",
+        idempotencyKey: "cached-global-work",
+      },
+      { context, respond, reqId: "cached-global-work" },
+    );
+
+    expectRecordFields(mockCallArg(respond, 0, 1), {
+      runId: "cached-global-work",
+      sessionKey: "global",
+      agentId: "work",
+      status: "in_flight",
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
 
   it("dispatches async gateway agent task creation through the detached task runtime seam", async () => {
@@ -3507,10 +3951,7 @@ describe("gateway agent handler", () => {
       canonicalKey: "agent:main:voice",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
     const respond = vi.fn();
     await invokeAgent(
       {
@@ -3549,10 +3990,7 @@ describe("gateway agent handler", () => {
       canonicalKey: "agent:main:main",
     });
     mocks.updateSessionStore.mockResolvedValue(undefined);
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
 
     const respond = vi.fn();
     await invokeAgent(
@@ -4185,6 +4623,130 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
+  it("resets the selected global agent session from agent commands", async () => {
+    setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mocks.performGatewaySessionReset.mockClear();
+    mocks.performGatewaySessionReset.mockImplementation(
+      async (opts: { key: string; agentId?: string; reason: string; commandSource: string }) => {
+        expect(opts).toMatchObject({
+          key: "global",
+          agentId: "work",
+          reason: "reset",
+          commandSource: "gateway:agent",
+        });
+        return {
+          ok: true,
+          key: "global",
+          entry: { sessionId: "global-work-reset-session" },
+        };
+      },
+    );
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-work-reset-session",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "/reset check status",
+        sessionKey: "global",
+        agentId: "work",
+        idempotencyKey: "test-idem-reset-selected-global",
+      },
+      {
+        reqId: "4c",
+        client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+      },
+    );
+
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
+    const call = await waitForAgentCommandCall<{ agentId?: string; sessionKey?: string }>();
+    expect(call.agentId).toBe("work");
+    expect(call.sessionKey).toBe("global");
+
+    resetTimeConfig();
+  });
+
+  it("loads selected global reset startup context from the selected agent workspace", async () => {
+    await withTempDir({ prefix: "openclaw-gateway-selected-global-startup-" }, async (rootDir) => {
+      const mainWorkspace = `${rootDir}/main`;
+      const workWorkspace = `${rootDir}/work`;
+      await fs.mkdir(`${mainWorkspace}/memory`, { recursive: true });
+      await fs.mkdir(`${workWorkspace}/memory`, { recursive: true });
+      await fs.writeFile(`${mainWorkspace}/memory/2026-01-29.md`, "main workspace note", "utf-8");
+      await fs.writeFile(`${workWorkspace}/memory/2026-01-29.md`, "work workspace note", "utf-8");
+      setupNewYorkTimeConfig("2026-01-29T01:30:00.000Z");
+      mocks.listAgentIds.mockReturnValue(["main", "work"]);
+      mocks.loadConfigReturn = {
+        agents: {
+          list: [
+            { id: "main", default: true, workspace: mainWorkspace },
+            { id: "work", workspace: workWorkspace },
+          ],
+        },
+        session: { scope: "global" },
+      };
+      mocks.performGatewaySessionReset.mockImplementation(
+        async (opts: { key: string; agentId?: string; reason: string; commandSource: string }) => {
+          expect(opts).toMatchObject({
+            key: "global",
+            agentId: "work",
+            reason: "new",
+            commandSource: "gateway:agent",
+          });
+          return {
+            ok: true,
+            key: "global",
+            entry: { sessionId: "global-work-reset-session" },
+          };
+        },
+      );
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: mocks.loadConfigReturn,
+        storePath: "/tmp/sessions.json",
+        entry: {
+          sessionId: "global-work-reset-session",
+          updatedAt: Date.now(),
+        },
+        canonicalKey: "global",
+      });
+
+      await invokeAgent(
+        {
+          message: "/new",
+          sessionKey: "global",
+          agentId: "work",
+          idempotencyKey: "test-idem-new-selected-global-startup",
+        },
+        {
+          reqId: "4c-startup",
+          client: { connect: { scopes: ["operator.admin"] } } as AgentHandlerArgs["client"],
+        },
+      );
+
+      const call = await waitForAgentCommandCall<{ agentId?: string; message?: string }>();
+      expect(call.agentId).toBe("work");
+      expect(call.message).toContain("work workspace note");
+      expect(call.message).not.toContain("main workspace note");
+      resetTimeConfig();
+    });
+  });
+
   it("uses request model override when resolving bare /new bootstrap file access", async () => {
     await withTempDir(
       { prefix: "openclaw-gateway-reset-model-override-" },
@@ -4484,6 +5046,71 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(abortEntry.expiresAtMs - abortEntry.startedAtMs).toBeGreaterThan(24 * 60 * 60_000);
   });
 
+  it("keeps selected-global goals on agent session change events", async () => {
+    const goal = {
+      schemaVersion: 1,
+      id: "goal-work-global",
+      objective: "Finish work global task",
+      status: "active",
+      createdAt: 1,
+      updatedAt: 2,
+      tokenStart: 0,
+      tokensUsed: 5,
+      continuationTurns: 0,
+    };
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.resolveExplicitAgentSessionKey.mockReturnValue("global");
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: { agents: { list: [{ id: "main" }, { id: "work" }] }, session: { scope: "global" } },
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    mocks.loadGatewaySessionRow.mockReturnValue({
+      key: "global",
+      sessionId: "global-session-id",
+      kind: "global",
+      updatedAt: Date.now(),
+      goal,
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockReturnValue(new Promise(() => {}));
+
+    const context = makeContext();
+    context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
+    const runId = "idem-agent-global-goal-event";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "work",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+
+    await waitForAssertion(() => {
+      expect(mocks.loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "work" });
+      expect(context.addChatRun).toHaveBeenCalledWith(
+        runId,
+        expect.objectContaining({ sessionKey: "global", agentId: "work" }),
+      );
+      expect(context.chatAbortControllers.get(runId)?.agentId).toBe("work");
+      expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({
+          sessionKey: "global",
+          agentId: "work",
+          goal: expect.objectContaining({ id: "goal-work-global" }),
+        }),
+        new Set(["conn-1"]),
+        { dropIfSlow: true },
+      );
+    });
+  });
+
   it("yields after the accepted ack before dispatching heavy agent work", async () => {
     prime();
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
@@ -4732,6 +5359,101 @@ describe("gateway agent handler chat.abort integration", () => {
     });
   });
 
+  it("keeps selected-global alias scope when aborting during pre-accept setup", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadConfigReturn = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: mocks.loadConfigReturn,
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "global-work-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "global",
+    });
+    const requestedSessionKey = "agent:work:main";
+    let releaseSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseSessionWrite = resolve;
+        });
+      }
+      const store = {
+        global: {
+          sessionId: "global-work-session-id",
+          updatedAt: Date.now(),
+        },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-selected-global-alias-abort-before-registration";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "work",
+        sessionKey: requestedSessionKey,
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "global",
+      agentId: "work",
+      status: "accepted",
+    });
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "global", agentId: "work", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-selected-global-alias-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "global",
+      agentId: "work",
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "rpc",
+    });
+
+    releaseSessionWrite?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+  });
+
   it("does not dispatch when a stop command lands during pre-accept setup", async () => {
     prime();
     const requestedSessionKey = "agent:main:legacy-main";
@@ -4957,6 +5679,114 @@ describe("gateway agent handler chat.abort integration", () => {
     expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
       runId,
       sessionKey: "agent:main:main",
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "rpc",
+    });
+
+    releaseCatalog?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+  });
+
+  it("keeps selected-global agent scope while aborting during attachment setup", async () => {
+    mocks.listAgentIds.mockReturnValue(["main", "work"]);
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "work-global-session-id",
+        updatedAt: Date.now(),
+        modelProvider: "test",
+        model: "vision-model",
+      },
+      canonicalKey: "global",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    let releaseCatalog: (() => void) | undefined;
+    const context = {
+      ...makeContext(),
+      loadGatewayModelCatalog: vi.fn(
+        async () =>
+          await new Promise((resolve) => {
+            releaseCatalog = () =>
+              resolve([
+                {
+                  id: "vision-model",
+                  name: "vision-model",
+                  provider: "test",
+                  input: ["image"],
+                },
+              ]);
+          }),
+      ),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    const runId = "idem-selected-global-abort-during-attachment-setup";
+    const pending = invokeAgent(
+      {
+        message: "inspect this",
+        agentId: "work",
+        sessionKey: "global",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "pixel.png",
+            content: Buffer.from("not really a png").toString("base64"),
+          },
+        ],
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    await waitForAssertion(() =>
+      expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+        runId,
+        sessionKey: "global",
+        agentId: "work",
+        status: "accepted",
+      }),
+    );
+    await waitForAssertion(() => expect(context.loadGatewayModelCatalog).toHaveBeenCalled());
+    expect(mocks.loadSessionEntry).toHaveBeenCalledWith("global", {
+      agentId: "work",
+      clone: false,
+    });
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "global", agentId: "work", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-selected-global-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "global",
+      agentId: "work",
       status: "timeout",
       summary: "aborted",
       stopReason: "rpc",

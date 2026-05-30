@@ -16,9 +16,24 @@ function readLowerString(value: unknown): string | undefined {
   return readString(value)?.toLowerCase();
 }
 
+function hasHardTimeoutMetadata(data: JsonObject, statusAlreadyTimeoutAttributed = false): boolean {
+  const timeoutPhase = readLowerString(data.timeoutPhase);
+  return (
+    (statusAlreadyTimeoutAttributed && data.providerStarted === true) ||
+    timeoutPhase === "preflight" ||
+    timeoutPhase === "provider" ||
+    timeoutPhase === "post_turn"
+  );
+}
+
 function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
   const status = readLowerString(data.status);
   const stopReason = readLowerString(data.stopReason);
+  const statusAlreadyTimeoutAttributed =
+    status === "timeout" || status === "timed_out" || data.aborted === true;
+  if (hasHardTimeoutMetadata(data, statusAlreadyTimeoutAttributed)) {
+    return "run.timed_out";
+  }
   if (
     status === "aborted" ||
     status === "cancelled" ||
@@ -71,6 +86,9 @@ function normalizeAgentEventType(payload: JsonObject): OpenClawEventType {
       return normalizeLifecycleEndEventType(data);
     }
     if (phase === "error") {
+      if (hasHardTimeoutMetadata(data, false)) {
+        return "run.timed_out";
+      }
       return "run.failed";
     }
   }

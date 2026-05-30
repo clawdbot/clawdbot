@@ -2408,6 +2408,7 @@ describe("runPreparedReply media-only handling", () => {
           ChatType: "group",
           OriginatingChannel: "discord",
           OriginatingTo: "channel:24680",
+          ReplyToId: "reply-24680",
           AccountId: "work",
         },
       }),
@@ -2415,6 +2416,7 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.originatingAccountId).toBe("work");
+    expect(call?.followupRun.originatingReplyToId).toBe("reply-24680");
   });
 
   it("uses transport thread metadata for followup originatingThreadId", async () => {

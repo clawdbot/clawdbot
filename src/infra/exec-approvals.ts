@@ -10,7 +10,7 @@ import {
 } from "../shared/string-coerce.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
-import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
+import { analyzeShellCommand, type ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { assertNoSymlinkParentsSync } from "./fs-safe-advanced.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
@@ -23,6 +23,7 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
+export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 
 export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
@@ -83,6 +84,81 @@ export function normalizeExecAsk(value?: string | null): ExecAsk | null {
     return normalized;
   }
   return null;
+}
+
+export function normalizeExecMode(value?: string | null): ExecMode | null {
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (
+    normalized === "deny" ||
+    normalized === "allowlist" ||
+    normalized === "ask" ||
+    normalized === "auto" ||
+    normalized === "full"
+  ) {
+    return normalized;
+  }
+  return null;
+}
+
+export function resolveExecModeFromPolicy(params: {
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): ExecMode {
+  if (params.security === "deny") {
+    return "deny";
+  }
+  if (params.security === "allowlist" && params.ask === "off") {
+    return "allowlist";
+  }
+  if (params.security === "full" && params.ask !== "always") {
+    return "full";
+  }
+  return "ask";
+}
+
+export function resolveExecPolicyForMode(mode: ExecMode): {
+  security: ExecSecurity;
+  ask: ExecAsk;
+  autoReview: boolean;
+} {
+  switch (mode) {
+    case "deny":
+      return { security: "deny", ask: "off", autoReview: false };
+    case "allowlist":
+      return { security: "allowlist", ask: "off", autoReview: false };
+    case "ask":
+      return { security: "allowlist", ask: "on-miss", autoReview: false };
+    case "auto":
+      return { security: "allowlist", ask: "on-miss", autoReview: true };
+    case "full":
+      return { security: "full", ask: "off", autoReview: false };
+  }
+  const exhaustiveMode: never = mode;
+  throw new Error(`Unsupported exec mode: ${String(exhaustiveMode)}`);
+}
+
+export function resolveExecModePolicy(params: {
+  mode?: ExecMode | null;
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): {
+  mode: ExecMode;
+  security: ExecSecurity;
+  ask: ExecAsk;
+  autoReview: boolean;
+} {
+  if (!params.mode) {
+    return {
+      mode: resolveExecModeFromPolicy({ security: params.security, ask: params.ask }),
+      security: params.security,
+      ask: params.ask,
+      autoReview: false,
+    };
+  }
+  return {
+    mode: params.mode,
+    ...resolveExecPolicyForMode(params.mode),
+  };
 }
 
 export type SystemRunApprovalBinding = {
@@ -1057,6 +1133,111 @@ export function requiresExecApproval(params: {
     params.security === "allowlist" &&
     (!params.analysisOk || !params.allowlistSatisfied)
   );
+}
+
+function normalizeCommandName(value: string | undefined): string {
+  return (value ?? "").split(/[\\/]/).pop()?.toLowerCase() ?? "";
+}
+
+function textMentionsSecurityAuditSuppressions(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("security.audit.suppressions") ||
+    /["']?security["']?[\s\S]{0,200}["']?audit["']?[\s\S]{0,200}["']?suppressions["']?/.test(
+      normalized,
+    )
+  );
+}
+
+function isReadOnlySecurityAuditSuppressionInspection(argv: string[]): boolean {
+  const command = normalizeCommandName(argv[0]);
+  let offset = command === "pnpm" && argv[1] === "openclaw" ? 1 : 0;
+  if (normalizeCommandName(argv[offset]) !== "openclaw") {
+    return false;
+  }
+  offset += 1;
+  while (offset < argv.length) {
+    const arg = argv[offset];
+    if (["--dev", "--no-color"].includes(arg ?? "")) {
+      offset += 1;
+      continue;
+    }
+    if (["--profile", "--container", "--log-level"].includes(arg ?? "")) {
+      offset += 2;
+      continue;
+    }
+    if (
+      arg?.startsWith("--profile=") ||
+      arg?.startsWith("--container=") ||
+      arg?.startsWith("--log-level=")
+    ) {
+      offset += 1;
+      continue;
+    }
+    break;
+  }
+  return (
+    argv[offset] === "config" && ["get", "schema", "validate"].includes(argv[offset + 1] ?? "")
+  );
+}
+
+function removeParsedSegmentText(command: string, segments: Array<{ raw?: string }>): string {
+  let remaining = command;
+  for (const segment of segments) {
+    const raw = segment.raw?.trim();
+    if (!raw) {
+      continue;
+    }
+    remaining = remaining.replace(raw, " ");
+  }
+  return remaining;
+}
+
+export function commandRequiresSecurityAuditSuppressionApproval(params: {
+  command: string;
+  cwd?: string;
+  env?: NodeJS.ProcessEnv;
+  segments: Array<{ argv: string[]; raw?: string }>;
+}): boolean {
+  let sawSegmentMention = false;
+  for (const segment of params.segments) {
+    const segmentText = `${segment.raw ?? ""} ${segment.argv.join(" ")}`;
+    if (!textMentionsSecurityAuditSuppressions(segmentText)) {
+      continue;
+    }
+    sawSegmentMention = true;
+    if (!isReadOnlySecurityAuditSuppressionInspection(segment.argv)) {
+      return true;
+    }
+  }
+  if (sawSegmentMention) {
+    const rawAnalysis = analyzeShellCommand({
+      command: params.command,
+      cwd: params.cwd,
+      env: params.env,
+      platform: process.platform,
+    });
+    if (!rawAnalysis.ok) {
+      return textMentionsSecurityAuditSuppressions(params.command);
+    }
+    for (const segment of rawAnalysis.segments) {
+      if (
+        textMentionsSecurityAuditSuppressions(`${segment.raw} ${segment.argv.join(" ")}`) &&
+        !isReadOnlySecurityAuditSuppressionInspection(segment.argv)
+      ) {
+        return true;
+      }
+    }
+    if (
+      textMentionsSecurityAuditSuppressions(
+        removeParsedSegmentText(params.command, rawAnalysis.segments),
+      )
+    ) {
+      return true;
+    }
+    return false;
+  }
+  return textMentionsSecurityAuditSuppressions(params.command);
 }
 
 export function hasDurableExecApproval(params: {

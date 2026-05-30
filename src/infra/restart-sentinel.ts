@@ -65,9 +65,6 @@ export type RestartSentinel = {
   payload: RestartSentinelPayload;
 };
 
-export const DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE =
-  "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.";
-
 const SENTINEL_FILENAME = "restart-sentinel.json";
 
 export function formatDoctorNonInteractiveHint(
@@ -170,9 +167,7 @@ export function buildRestartSuccessContinuation(params: {
   if (message) {
     return { kind: "agentTurn", message };
   }
-  return params.sessionKey?.trim()
-    ? { kind: "agentTurn", message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE }
-    : null;
+  return null;
 }
 
 export async function readRestartSentinel(

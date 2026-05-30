@@ -5,6 +5,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  MAX_SAFE_TIMEOUT_DELAY_MS,
   MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
 } from "./timeouts.js";
@@ -415,6 +416,33 @@ describe("GatewayClient", () => {
       await expect(requestPromise).rejects.toThrow("gateway client stopped");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized stopAndWait timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({});
+      const ws = {
+        readyState: WebSocket.OPEN,
+        close: vi.fn(),
+        terminate: vi.fn(),
+      };
+      (client as unknown as { ws: unknown }).ws = ws;
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ws.terminate).not.toHaveBeenCalled();
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(249);
+      await expect(stopPromise).resolves.toBeUndefined();
+      expect(ws.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
     }
   });
 

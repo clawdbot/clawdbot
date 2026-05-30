@@ -186,7 +186,7 @@
     "node_modules/",
     "patches/",
     "pnpm-lock.yaml",
-    "skills/",
+    "skills/**",
     "src/auto-reply/reply/export-html/template.js",
     "src/canvas-host/a2ui/a2ui.bundle.js",
     "vendor/",

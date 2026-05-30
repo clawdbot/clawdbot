@@ -174,8 +174,8 @@ export type ChannelLegacyStateMigrationPlan =
       cleanupSource?: "rename";
       preview?: string;
       readEntries: () =>
-        | Array<{ key: string; value: unknown }>
-        | Promise<Array<{ key: string; value: unknown }>>;
+        | Array<{ key: string; value: unknown; ttlMs?: number }>
+        | Promise<Array<{ key: string; value: unknown; ttlMs?: number }>>;
     };
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */

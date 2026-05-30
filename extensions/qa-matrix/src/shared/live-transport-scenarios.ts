@@ -5,4 +5,4 @@ export {
   selectLiveTransportScenarios,
   type LiveTransportScenarioDefinition,
   type LiveTransportStandardScenarioId,
-} from "openclaw/plugin-sdk/qa-runtime";
+} from "openclaw/plugin-sdk/qa-live-transport-scenarios";

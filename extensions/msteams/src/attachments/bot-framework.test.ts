@@ -185,6 +185,49 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
     expect(runtime.saveCalls[0].buffer.toString("utf-8")).toBe("PDFBYTES");
   });
 
+  it("skips malformed attachment view content-length before saving media", async () => {
+    const info = {
+      name: "report.pdf",
+      type: "application/pdf",
+      views: [{ viewId: "original", size: 3 }],
+    };
+    const warn = vi.fn();
+    const fetchFn = createMockFetch([
+      {
+        match: /\/v3\/attachments\/att-1$/,
+        response: new Response(JSON.stringify(info), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      },
+      {
+        match: /\/v3\/attachments\/att-1\/views\/original$/,
+        response: new Response("PDFBYTES", {
+          status: 200,
+          headers: { "content-length": "0x3" },
+        }),
+      },
+    ]);
+
+    const media = await downloadMSTeamsBotFrameworkAttachment({
+      serviceUrl: "https://smba.trafficmanager.net/amer/",
+      attachmentId: "att-1",
+      tokenProvider: buildTokenProvider(),
+      maxBytes: 10_000_000,
+      fetchFn,
+      fetchFnSupportsDispatcher: true,
+      resolveFn: resolvePublicHost,
+      logger: { warn },
+    });
+
+    expect(media).toBeUndefined();
+    expect(runtime.saveCalls).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith(
+      "msteams botFramework attachmentView invalid content-length",
+      { error: "invalid content-length header: 0x3" },
+    );
+  });
+
   it("returns undefined when attachment info fetch fails", async () => {
     const fetchFn = createMockFetch([
       {

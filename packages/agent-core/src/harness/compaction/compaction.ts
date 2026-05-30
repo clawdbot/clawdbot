@@ -5,7 +5,7 @@ import type {
   SimpleStreamOptions,
   StreamFn,
   Usage,
-} from "../../llm.js";
+} from "../../../../llm-core/src/index.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,

@@ -1,4 +1,5 @@
 import { readSnakeCaseParamRaw } from "./param-key.js";
+import { parseStrictFiniteNumber } from "./shared/number-coercion.js";
 import { normalizeLowercaseStringOrEmpty } from "./shared/string-coerce.js";
 
 type PollCreationParamKind = "string" | "stringArray" | "positiveInteger" | "boolean";
@@ -61,7 +62,7 @@ function hasExplicitUnknownPollValue(key: string, value: unknown): boolean {
       return false;
     }
     if (normalizePollParamKey(key).includes("duration")) {
-      const parsed = Number(trimmed);
+      const parsed = parseStrictFiniteNumber(trimmed);
       return Number.isFinite(parsed) && parsed !== 0;
     }
     const normalized = normalizeLowercaseStringOrEmpty(trimmed);
@@ -100,8 +101,8 @@ export function hasPollCreationParams(params: Record<string, unknown>): boolean 
       }
       if (typeof value === "string") {
         const trimmed = value.trim();
-        const parsed = Number(trimmed);
-        if (trimmed.length > 0 && Number.isFinite(parsed) && parsed !== 0) {
+        const parsed = parseStrictFiniteNumber(trimmed);
+        if (parsed !== undefined && parsed !== 0) {
           return true;
         }
       }

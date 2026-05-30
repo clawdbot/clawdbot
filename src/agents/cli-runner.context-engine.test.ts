@@ -1,5 +1,5 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../context-engine/types.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 
@@ -122,7 +122,7 @@ function expectMessageText(message: AgentMessage | undefined, expected: string):
 }
 
 describe("runPreparedCliAgent context engine lifecycle", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     executePreparedCliRunMock.mockReset();
     executePreparedCliRunMock.mockResolvedValue({
       text: " final answer ",
@@ -140,6 +140,16 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     loadCliSessionHistoryMessagesMock.mockResolvedValue([]);
     getGlobalHookRunnerMock.mockReset();
     getGlobalHookRunnerMock.mockReturnValue(null);
+    const { restoreCliRunnerTestDeps, setCliRunnerTestDeps } = await import("./cli-runner.js");
+    restoreCliRunnerTestDeps();
+    setCliRunnerTestDeps({
+      claudeCliSessionTranscriptHasContent: vi.fn(async () => true),
+    });
+  });
+
+  afterEach(async () => {
+    const { restoreCliRunnerTestDeps } = await import("./cli-runner.js");
+    restoreCliRunnerTestDeps();
   });
 
   it("finalizes successful CLI turns with the active context engine", async () => {

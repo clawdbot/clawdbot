@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -14,6 +15,7 @@ import {
   type ApnsRelayConfig,
   type ApnsRelayPushResponse,
   type ApnsRelayRequestSender,
+  normalizeApnsRelayBaseUrl,
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
@@ -40,6 +42,7 @@ type RelayApnsRegistration = {
   environment: "production";
   distribution: "official";
   updatedAtMs: number;
+  relayOrigin?: string;
   tokenDebugSuffix?: string;
 };
 
@@ -109,6 +112,7 @@ type RegisterRelayApnsParams = {
   topic: string;
   environment?: unknown;
   distribution?: unknown;
+  relayOrigin?: unknown;
   tokenDebugSuffix?: unknown;
   baseDir?: string;
 };
@@ -263,6 +267,18 @@ function normalizeDistribution(value: unknown): "official" | null {
   return normalized === "official" ? "official" : null;
 }
 
+function normalizeRelayOrigin(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = normalizeApnsRelayBaseUrl(trimmed, process.env);
+  return normalized.ok ? normalized.value : undefined;
+}
+
 function normalizeDirectRegistration(
   record: Partial<DirectApnsRegistration> & { nodeId?: unknown; token?: unknown },
 ): DirectApnsRegistration | null {
@@ -312,6 +328,7 @@ function normalizeRelayRegistration(
   const topic = normalizeTopic(typeof record.topic === "string" ? record.topic : "");
   const environment = normalizeApnsEnvironment(record.environment);
   const distribution = normalizeDistribution(record.distribution);
+  const relayOrigin = normalizeRelayOrigin(record.relayOrigin);
   const updatedAtMs =
     typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
       ? Math.trunc(record.updatedAtMs)
@@ -337,6 +354,7 @@ function normalizeRelayRegistration(
     environment,
     distribution,
     updatedAtMs,
+    ...(relayOrigin ? { relayOrigin } : {}),
     tokenDebugSuffix: normalizeTokenDebugSuffix(record.tokenDebugSuffix),
   };
 }
@@ -433,6 +451,7 @@ export async function registerApnsRegistration(
       );
       const environment = normalizeApnsEnvironment(params.environment);
       const distribution = normalizeDistribution(params.distribution);
+      const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
       if (environment !== "production") {
         throw new Error("relay registrations must use production environment");
       }
@@ -449,6 +468,7 @@ export async function registerApnsRegistration(
         environment,
         distribution,
         updatedAtMs,
+        ...(relayOrigin ? { relayOrigin } : {}),
         tokenDebugSuffix: normalizeTokenDebugSuffix(params.tokenDebugSuffix),
       };
     } else {
@@ -747,9 +767,7 @@ async function sendApnsRequest(params: {
 }
 
 function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? Math.max(1000, Math.trunc(timeoutMs))
-    : DEFAULT_APNS_TIMEOUT_MS;
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_APNS_TIMEOUT_MS, 1000);
 }
 
 function resolveDirectSendContext(params: {

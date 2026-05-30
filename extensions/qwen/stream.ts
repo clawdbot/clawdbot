@@ -13,10 +13,58 @@ function isQwenProviderId(providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   return (
     normalized === "qwen" ||
+    normalized === "qwen-oauth" ||
+    normalized === "qwen-portal" ||
+    normalized === "qwen-cli" ||
     normalized === "modelstudio" ||
     normalized === "qwencloud" ||
     normalized === "dashscope"
   );
+}
+
+function isQwenOAuthProviderId(providerId: string): boolean {
+  const normalized = normalizeProviderId(providerId);
+  return normalized === "qwen-oauth" || normalized === "qwen-portal" || normalized === "qwen-cli";
+}
+
+function normalizeQwenOAuthContent(content: unknown): unknown {
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  const normalized = content
+    .map((part) => {
+      if (typeof part === "string") {
+        return { type: "text", text: part };
+      }
+      return part && typeof part === "object" ? part : undefined;
+    })
+    .filter((part): part is Record<string, unknown> => Boolean(part));
+  return normalized.length > 0 ? normalized : content;
+}
+
+function patchQwenOAuthPayload(payload: Record<string, unknown>): void {
+  const messages = payload.messages;
+  if (!Array.isArray(messages)) {
+    return;
+  }
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    record.content = normalizeQwenOAuthContent(record.content);
+    if (record.role !== "system" || !Array.isArray(record.content) || record.content.length === 0) {
+      continue;
+    }
+    const last = record.content[record.content.length - 1];
+    if (last && typeof last === "object") {
+      (last as Record<string, unknown>).cache_control = { type: "ephemeral" };
+    }
+  }
+  payload.vl_high_resolution_images = true;
 }
 
 function setQwenChatTemplateThinking(payload: Record<string, unknown>, enabled: boolean): void {
@@ -79,9 +127,17 @@ export function wrapQwenProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   if (!isQwenProviderId(ctx.provider) || (ctx.model && ctx.model.api !== "openai-completions")) {
     return undefined;
   }
-  return createQwenThinkingWrapper(
+  const streamFn = createQwenThinkingWrapper(
     ctx.streamFn,
     ctx.thinkingLevel,
     ctx.model ? readQwenThinkingFormatFromModel(ctx.model) : undefined,
   );
+  if (!isQwenOAuthProviderId(ctx.provider)) {
+    return streamFn;
+  }
+  return createPayloadPatchStreamWrapper(streamFn, ({ payload, model }) => {
+    if (model.api === "openai-completions") {
+      patchQwenOAuthPayload(payload);
+    }
+  });
 }

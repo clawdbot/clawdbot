@@ -6,7 +6,7 @@ import { getChromeWebSocketUrl } from "../chrome.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
@@ -163,7 +163,7 @@ export function registerBrowserPermissionRoutes(
       const targetId = toStringOrEmpty(body.targetId) || undefined;
       let timeoutMs: number;
       try {
-        timeoutMs = Math.max(1_000, readRoutePositiveInteger(body.timeoutMs, "timeoutMs") ?? 5_000);
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs, "timeoutMs", { minMs: 1_000 }) ?? 5_000;
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }

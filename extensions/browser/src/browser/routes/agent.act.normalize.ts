@@ -16,7 +16,7 @@ import {
 import {
   readRouteInteger,
   readRouteNonNegativeInteger,
-  readRoutePositiveInteger,
+  readRouteTimerTimeoutMs,
 } from "./route-numeric.js";
 import { toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
@@ -76,10 +76,6 @@ function normalizeBatchAction(value: unknown): BrowserActRequest {
   return normalizeActRequest(value as Record<string, unknown>, { source: "batch" });
 }
 
-function readActionPositiveInteger(body: Record<string, unknown>, key: string): number | undefined {
-  return readRoutePositiveInteger(body[key], key);
-}
-
 function readActionNonNegativeInteger(
   body: Record<string, unknown>,
   key: string,
@@ -88,7 +84,7 @@ function readActionNonNegativeInteger(
 }
 
 function readActionTimeoutMs(body: Record<string, unknown>): number | undefined {
-  return readActionPositiveInteger(body, "timeoutMs");
+  return readRouteTimerTimeoutMs(body.timeoutMs);
 }
 
 function readBoundedActionDurationMs(

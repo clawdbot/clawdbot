@@ -37,6 +37,13 @@ describe("gateway handshake timeouts", () => {
         VITEST: "1",
       }),
     ).toBe(20);
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: " +75 ",
+        OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS: "20",
+        VITEST: "1",
+      }),
+    ).toBe(75);
   });
 
   test("resolves preauth handshake timeout with env over config over default", () => {
@@ -125,6 +132,9 @@ describe("gateway handshake timeouts", () => {
     expect(getConnectChallengeTimeoutMsFromEnv({})).toBeUndefined();
     expect(
       getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "15000" }),
+    ).toBe(15_000);
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: " 015000 " }),
     ).toBe(15_000);
     expect(
       getConnectChallengeTimeoutMsFromEnv({ OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "garbage" }),

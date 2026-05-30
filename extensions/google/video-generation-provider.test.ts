@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -174,6 +172,38 @@ describe("google video generation provider", () => {
     expect(httpOptions).not.toHaveProperty("apiVersion");
   });
 
+  it("rejects inline video bytes that exceed the configured media cap", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              videoBytes: Buffer.from("too-large").toString("base64"),
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+  });
+
   it("strips /v1beta suffix from configured baseUrl before passing to GoogleGenAI SDK", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
@@ -256,7 +286,7 @@ describe("google video generation provider", () => {
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
   });
 
-  it("stages SDK file downloads before finalizing generated video bytes", async () => {
+  it("rejects direct video uri downloads that exceed the configured media cap", async () => {
     vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "google-key",
       source: "env",
@@ -268,16 +298,64 @@ describe("google video generation provider", () => {
         generatedVideos: [
           {
             video: {
-              name: "files/generated-video",
+              uri: "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media",
               mimeType: "video/mp4",
             },
           },
         ],
       },
     });
-    downloadMock.mockImplementation(async ({ downloadPath }: { downloadPath: string }) => {
-      await writeFile(downloadPath, "sdk-video");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("too-large", {
+            status: 200,
+            statusText: "OK",
+            headers: { "content-type": "video/mp4" },
+          }),
+      ),
+    );
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+  });
+
+  it("downloads SDK file handles through the bounded REST media endpoint", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
     });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "files/generated-video",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    const fetchMock = vi.fn(async () => {
+      return new Response("sdk-video", {
+        status: 200,
+        statusText: "OK",
+        headers: { "content-type": "video/mp4" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
 
     const provider = buildGoogleVideoGenerationProvider();
     const result = await provider.generateVideo({
@@ -288,12 +366,56 @@ describe("google video generation provider", () => {
       durationSeconds: 3,
     });
 
-    const [{ downloadPath }] = downloadMock.mock.calls[0] ?? [{}];
-    const downloadBaseName = path.basename(String(downloadPath));
-    expect(downloadBaseName).toContain("video-1.mp4");
-    expect(downloadBaseName).toMatch(/\.part$/);
+    expect(fetchInputUrl(fetchMock, 0)).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/files/generated-video:download?alt=media&key=google-key",
+    );
+    expect(downloadMock).not.toHaveBeenCalled();
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("sdk-video"));
     expect(result.videos[0]?.fileName).toBe("video-1.mp4");
+  });
+
+  it("rejects SDK file-handle downloads that exceed the configured media cap", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              uri: "files/generated-video",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("too-large", {
+            status: 200,
+            statusText: "OK",
+            headers: { "content-type": "video/mp4" },
+          }),
+      ),
+    );
+
+    const provider = buildGoogleVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "google",
+        model: "veo-3.1-fast-generate-preview",
+        prompt: "A tiny robot watering a windowsill garden",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+        durationSeconds: 3,
+      }),
+    ).rejects.toThrow("Google generated video download exceeds 1 bytes");
+    expect(downloadMock).not.toHaveBeenCalled();
   });
 
   it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {

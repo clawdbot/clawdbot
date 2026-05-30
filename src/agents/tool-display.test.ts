@@ -31,6 +31,19 @@ describe("tool display details", () => {
     });
   });
 
+  it("preserves JS numeric literals in tool-search call args", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("web_search", { query: "OpenClaw", count: 1e3, limit: +3, threshold: .5 });',
+      })?.displayArgs,
+    ).toEqual({
+      query: "OpenClaw",
+      count: 1000,
+      limit: 3,
+      threshold: 0.5,
+    });
+  });
+
   it("skips zero/false values for optional detail fields", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({

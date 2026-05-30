@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveCronRunTimeoutOverrideMs } from "./isolated-agent/run-timeout.js";
 
 describe("resolveCronRunTimeoutOverrideMs", () => {
@@ -13,6 +14,10 @@ describe("resolveCronRunTimeoutOverrideMs", () => {
 
   it("preserves explicit payload timeoutSeconds when it differs from the agent default", () => {
     expect(resolveCronRunTimeoutOverrideMs(600)).toBe(600_000);
+  });
+
+  it("caps oversized explicit payload timeoutSeconds at the timer-safe ceiling", () => {
+    expect(resolveCronRunTimeoutOverrideMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("omits the signal when the cron payload has no positive numeric timeout", () => {

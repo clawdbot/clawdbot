@@ -156,4 +156,38 @@ describe("provider auth profile helpers", () => {
       { externalCli },
     );
   });
+
+  it("accepts plus-signed Copilot token expiry strings", async () => {
+    vi.resetModules();
+
+    const saved: unknown[] = [];
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+            expires_at: "+2000000000",
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+
+    const { resolveCopilotApiToken } = await import("./provider-auth.js");
+
+    const result = await resolveCopilotApiToken({
+      githubToken: "github-token",
+      fetchImpl,
+      cachePath: "/tmp/copilot-token.json",
+      loadJsonFileImpl: () => undefined,
+      saveJsonFileImpl: (_path, value) => saved.push(value),
+    });
+
+    expect(result.expiresAt).toBe(2_000_000_000_000);
+    expect(saved).toEqual([
+      expect.objectContaining({
+        expiresAt: 2_000_000_000_000,
+        token: "token;proxy-ep=proxy.individual.githubcopilot.com",
+      }),
+    ]);
+  });
 });

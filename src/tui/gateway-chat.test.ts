@@ -615,6 +615,45 @@ describe("GatewayChatClient", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it("passes selected-agent global scope through chat methods", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await client.sendChat({
+      sessionKey: "global",
+      agentId: "work",
+      message: "hello",
+      runId: "run-global-work",
+    });
+    await client.loadHistory({ sessionKey: "global", agentId: "work", limit: 50 });
+    await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
+      sessionKey: "global",
+      agentId: "work",
+      message: "hello",
+      thinking: undefined,
+      deliver: undefined,
+      timeoutMs: undefined,
+      idempotencyKey: "run-global-work",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
+      sessionKey: "global",
+      agentId: "work",
+      limit: 50,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
+      sessionKey: "global",
+      agentId: "work",
+      runId: "run-global-work",
+    });
+  });
+
   it("lists gateway commands through commands.list", async () => {
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",

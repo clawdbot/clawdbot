@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   ZAI_CN_BASE_URL,
   ZAI_CODING_CN_BASE_URL,
@@ -113,7 +114,7 @@ export async function detectZaiEndpoint(params: {
     return null;
   }
 
-  const timeoutMs = params.timeoutMs ?? 5_000;
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 5_000);
   const probeCandidates = (() => {
     const general = [
       {

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "../service.test-harness.js";
+import { resolveCronQuarantinePath } from "../store.js";
 import { assertSupportedJobSpec, findJobOrThrow } from "./jobs.js";
 import { createCronServiceState } from "./state.js";
 import { ensureLoaded } from "./store.js";
@@ -16,7 +17,7 @@ async function writeSingleJobStore(storePath: string, job: Record<string, unknow
   await writeJobStore(storePath, [job]);
 }
 
-async function writeJobStore(storePath: string, jobs: Array<Record<string, unknown>>) {
+async function writeJobStore(storePath: string, jobs: unknown[]) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf8");
 }
@@ -122,7 +123,7 @@ describe("cron service store load: missing sessionTarget", () => {
     expect(() => assertSupportedJobSpec(bogus)).toThrow(/missing sessionTarget/);
   });
 
-  it("skips malformed persisted schedule and payload shapes without rewriting the store", async () => {
+  it("quarantines malformed persisted schedule and payload shapes while sanitizing the store", async () => {
     const { storePath } = await makeStorePath();
 
     await writeJobStore(storePath, [
@@ -199,7 +200,6 @@ describe("cron service store load: missing sessionTarget", () => {
         state: {},
       },
     ]);
-    const beforeRaw = await fs.readFile(storePath, "utf-8");
     const warnSpy = vi.spyOn(logger, "warn");
 
     const state = createStoreTestState(storePath);
@@ -208,11 +208,24 @@ describe("cron service store load: missing sessionTarget", () => {
 
     expect(state.store?.jobs.map((job) => job.id)).toEqual(["valid-job"]);
     expect(findJobOrThrow(state, "valid-job").state.nextRunAtMs).toBe(STORE_TEST_NOW);
-    await expect(fs.readFile(storePath, "utf-8")).resolves.toBe(beforeRaw);
+    const sanitized = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(sanitized.jobs.map((job) => job.id)).toEqual(["valid-job"]);
+    const quarantine = JSON.parse(
+      await fs.readFile(resolveCronQuarantinePath(storePath), "utf-8"),
+    ) as { jobs: Array<{ job?: Record<string, unknown> }> };
+    expect(quarantine.jobs.map((entry) => entry.job?.id)).toEqual([
+      "bad-schedule",
+      "bad-payload",
+      "bad-cron-expr",
+      "bad-system-event-text",
+      "bad-agent-turn-message",
+    ]);
 
     const invalidShapeWarns = warnSpy.mock.calls.filter((call) => {
       const msg = typeof call[1] === "string" ? call[1] : "";
-      return msg.includes("skipped invalid persisted job");
+      return msg.includes("quarantined invalid persisted job");
     });
     expect(invalidShapeWarns).toHaveLength(5);
     expect(invalidShapeWarns.map((call) => (call[0] as { reason?: string }).reason)).toEqual([

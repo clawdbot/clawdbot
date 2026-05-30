@@ -143,6 +143,20 @@ describe("Mattermost model picker", () => {
         action: "list",
         ownerUserId: "user-1",
         provider: "openai",
+        page: "+02",
+      }),
+    ).toEqual({
+      action: "list",
+      ownerUserId: "user-1",
+      provider: "openai",
+      page: 2,
+    });
+    expect(
+      parseMattermostModelPickerContext({
+        oc_model_picker: true,
+        action: "list",
+        ownerUserId: "user-1",
+        provider: "openai",
         page: "2next",
       }),
     ).toEqual({

@@ -1,18 +1,18 @@
 {
   "name": "@openclaw/nostr",
-  "version": "2026.5.28",
+  "version": "2026.5.30",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/nostr",
-      "version": "2026.5.28",
+      "version": "2026.5.30",
       "dependencies": {
         "nostr-tools": "2.23.5",
         "zod": "4.4.3"
       },
       "peerDependencies": {
-        "openclaw": ">=2026.5.28"
+        "openclaw": ">=2026.5.30"
       },
       "peerDependenciesMeta": {
         "openclaw": {

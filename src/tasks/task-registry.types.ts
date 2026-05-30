@@ -27,6 +27,66 @@ export type TaskScopeKind = "session" | "system";
 export type TaskStatusCounts = Record<TaskStatus, number>;
 export type TaskRuntimeCounts = Record<TaskRuntime, number>;
 
+const TASK_RUNTIMES = new Set<TaskRuntime>(["subagent", "acp", "cli", "cron"]);
+const TASK_STATUSES = new Set<TaskStatus>([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "timed_out",
+  "cancelled",
+  "lost",
+]);
+const TASK_DELIVERY_STATUSES = new Set<TaskDeliveryStatus>([
+  "pending",
+  "delivered",
+  "session_queued",
+  "failed",
+  "parent_missing",
+  "not_applicable",
+]);
+const TASK_NOTIFY_POLICIES = new Set<TaskNotifyPolicy>(["done_only", "state_changes", "silent"]);
+const TASK_TERMINAL_OUTCOMES = new Set<TaskTerminalOutcome>(["succeeded", "blocked"]);
+const TASK_SCOPE_KINDS = new Set<TaskScopeKind>(["session", "system"]);
+
+function parsePersistedTaskValue<T extends string>(
+  value: unknown,
+  values: ReadonlySet<T>,
+  label: string,
+): T {
+  if (typeof value === "string" && values.has(value as T)) {
+    return value as T;
+  }
+  throw new Error(`Invalid persisted task ${label}: ${JSON.stringify(value)}`);
+}
+
+export function parseTaskRuntime(value: unknown): TaskRuntime {
+  return parsePersistedTaskValue(value, TASK_RUNTIMES, "runtime");
+}
+
+export function parseTaskStatus(value: unknown): TaskStatus {
+  return parsePersistedTaskValue(value, TASK_STATUSES, "status");
+}
+
+export function parseTaskDeliveryStatus(value: unknown): TaskDeliveryStatus {
+  return parsePersistedTaskValue(value, TASK_DELIVERY_STATUSES, "delivery status");
+}
+
+export function parseTaskNotifyPolicy(value: unknown): TaskNotifyPolicy {
+  return parsePersistedTaskValue(value, TASK_NOTIFY_POLICIES, "notify policy");
+}
+
+export function parseTaskScopeKind(value: unknown): TaskScopeKind {
+  return parsePersistedTaskValue(value, TASK_SCOPE_KINDS, "scope kind");
+}
+
+export function parseOptionalTaskTerminalOutcome(value: unknown): TaskTerminalOutcome | undefined {
+  if (value == null || value === "") {
+    return undefined;
+  }
+  return parsePersistedTaskValue(value, TASK_TERMINAL_OUTCOMES, "terminal outcome");
+}
+
 export type TaskRegistrySummary = {
   total: number;
   active: number;

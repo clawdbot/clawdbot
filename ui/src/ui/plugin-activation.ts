@@ -12,7 +12,7 @@ export function isPluginEnabledInConfigSnapshot(
   const enabledByDefault = options?.enabledByDefault ?? true;
   const config = configSnapshot?.config;
   if (!config || typeof config !== "object" || Array.isArray(config)) {
-    return true;
+    return enabledByDefault;
   }
 
   const plugins =

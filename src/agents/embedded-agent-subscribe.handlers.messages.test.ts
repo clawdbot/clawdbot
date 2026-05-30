@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
-import { createInlineCodeState } from "../markdown/code-spans.js";
 import {
   buildAssistantStreamData,
   consumePendingAssistantReplyDirectivesIntoReply,

@@ -1,7 +1,7 @@
 import { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../dist/gateway/protocol/index.js";
+import { waitForWebSocketOpen } from "../websocket-open.mjs";
 import { readGatewayNetworkClientConnectTimeoutMs } from "./limits.mjs";
-import { waitForWebSocketOpen } from "./open-websocket.mjs";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;

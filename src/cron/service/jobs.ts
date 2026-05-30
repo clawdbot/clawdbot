@@ -62,6 +62,26 @@ export function errorBackoffMs(
   return scheduleMs[Math.max(0, idx)] ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS[0];
 }
 
+export function resolveJobErrorBackoffUntilMs(
+  job: CronJob,
+  scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+): number | undefined {
+  if (job.state.lastStatus !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
+    return undefined;
+  }
+  const consecutiveErrorsRaw = job.state.consecutiveErrors;
+  const consecutiveErrors =
+    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
+      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
+      : 1;
+  const lastDurationMs =
+    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
+      ? Math.max(0, Math.floor(job.state.lastDurationMs))
+      : 0;
+  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
+  return lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs);
+}
+
 function resolveStableCronOffsetMs(jobId: string, staggerMs: number) {
   if (staggerMs <= 1) {
     return 0;
@@ -154,26 +174,11 @@ function isPendingErrorBackoffSlot(params: {
   nowMs: number;
 }): boolean {
   const { state, job, nextRunAtMs, nowMs } = params;
-  if (job.state.lastStatus !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
-    return false;
-  }
-  const consecutiveErrorsRaw = job.state.consecutiveErrors;
-  const consecutiveErrors =
-    typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-      ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-      : 1;
-  const lastDurationMs =
-    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
-      ? Math.max(0, Math.floor(job.state.lastDurationMs))
-      : 0;
-  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
-  const backoffFloor =
-    lastEndedAtMs +
-    errorBackoffMs(
-      consecutiveErrors,
-      state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-    );
-  return nowMs < backoffFloor && nextRunAtMs <= backoffFloor;
+  const backoffUntilMs = resolveJobErrorBackoffUntilMs(
+    job,
+    state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+  );
+  return backoffUntilMs !== undefined && nowMs < backoffUntilMs && nextRunAtMs <= backoffUntilMs;
 }
 
 function shouldRepairFutureCronNextRunAtMs(params: {
@@ -552,19 +557,12 @@ function recomputeJobNextRunAtMs(params: { state: CronServiceState; job: CronJob
       params.job.state.lastStatus === "error" &&
       isFiniteTimestamp(params.job.state.lastRunAtMs)
     ) {
-      const consecutiveErrorsRaw = params.job.state.consecutiveErrors;
-      const consecutiveErrors =
-        typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
-          ? Math.max(1, Math.floor(consecutiveErrorsRaw))
-          : 1;
-      const backoffFloor =
-        params.job.state.lastRunAtMs +
-        errorBackoffMs(
-          consecutiveErrors,
-          params.state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
-        );
+      const backoffFloor = resolveJobErrorBackoffUntilMs(
+        params.job,
+        params.state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+      );
       if (newNext !== undefined) {
-        newNext = Math.max(newNext, backoffFloor);
+        newNext = backoffFloor !== undefined ? Math.max(newNext, backoffFloor) : newNext;
       }
     }
     if (params.job.state.nextRunAtMs !== newNext) {
@@ -634,11 +632,20 @@ export function recomputeNextRunsForMaintenance(
         now >= job.state.nextRunAtMs &&
         typeof job.state.runningAtMs !== "number"
       ) {
-        // Only advance when the expired slot was already executed.
-        // If not, preserve the past-due value so the job can still run.
+        // Only advance when the expired slot was already executed, or when
+        // old start-based retry state predates the active run-end backoff.
+        // Otherwise preserve the past-due value so the job can still run.
         const lastRun = job.state.lastRunAtMs;
         const alreadyExecutedSlot = isFiniteTimestamp(lastRun) && lastRun >= job.state.nextRunAtMs;
-        if (alreadyExecutedSlot) {
+        const backoffUntilMs = resolveJobErrorBackoffUntilMs(
+          job,
+          state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+        );
+        const isStaleBackoffSlot =
+          backoffUntilMs !== undefined &&
+          now < backoffUntilMs &&
+          job.state.nextRunAtMs < backoffUntilMs;
+        if (alreadyExecutedSlot || isStaleBackoffSlot) {
           if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
             changed = true;
           }

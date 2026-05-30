@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { runtimeRegistry } = vi.hoisted(() => ({
@@ -90,7 +91,7 @@ vi.mock("./process-reaper.js", () => ({
 
 import { getAcpRuntimeBackend } from "../runtime-api.js";
 import type { OpenClawPluginServiceContext } from "../runtime-api.js";
-import { createAcpxRuntimeService } from "./service.js";
+import { createAcpxRuntimeService, resolveAcpxTimerTimeoutMs } from "./service.js";
 
 const tempDirs: string[] = [];
 const previousEnv = {
@@ -196,6 +197,11 @@ function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Arr
 }
 
 describe("createAcpxRuntimeService", () => {
+  it("caps configured timeout seconds to timer-safe milliseconds", () => {
+    expect(resolveAcpxTimerTimeoutMs(0.001)).toBe(1);
+    expect(resolveAcpxTimerTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
   it("registers and unregisters the embedded backend", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
@@ -576,6 +582,36 @@ describe("createAcpxRuntimeService", () => {
 
     const [options] = acpxRuntimeConstructorMock.mock.calls[0] ?? [];
     expect(options).toHaveProperty("timeoutMs", 1);
+
+    await service.stop?.(ctx);
+  });
+
+  it("caps oversized plugin timeouts before constructing the default acpx runtime", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const service = createAcpxRuntimeService({
+      pluginConfig: { timeoutSeconds: Number.MAX_SAFE_INTEGER },
+    });
+
+    await service.start(ctx);
+
+    const backend = getAcpRuntimeBackend("acpx");
+    if (!backend) {
+      throw new Error("expected ACPX runtime backend");
+    }
+    const backendRuntime = backend.runtime as {
+      ensureSession(input: { agent: string; mode: string; sessionKey: string }): Promise<unknown>;
+    };
+
+    await backendRuntime.ensureSession({
+      agent: "codex",
+      mode: "oneshot",
+      sessionKey: "agent:codex:acp:test",
+    });
+
+    const [options] = acpxRuntimeConstructorMock.mock.calls[0] ?? [];
+    expect(options).toHaveProperty("timeoutMs", MAX_TIMER_TIMEOUT_MS);
 
     await service.stop?.(ctx);
   });

@@ -184,6 +184,10 @@ describe("exa web search provider", () => {
     ]);
     expect(testing.resolveExaSearchCount(80, 10)).toBe(80);
     expect(testing.resolveExaSearchCount(120, 10)).toBe(100);
+    expect(testing.resolveExaSearchCount("+05", 10)).toBe(5);
+    expect(testing.resolveExaSearchCount("0x10", 10)).toBe(10);
+    expect(testing.resolveExaSearchCount("1e2", 10)).toBe(10);
+    expect(testing.resolveExaSearchCount(1.5, 10)).toBe(10);
   });
 
   it("returns validation errors for conflicting time filters", async () => {

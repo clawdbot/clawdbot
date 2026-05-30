@@ -59,6 +59,39 @@ describe("msteams errors", () => {
     ).toBeUndefined();
   });
 
+  it("ignores unsafe retry-after magnitudes", () => {
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfterMs: Number.MAX_SAFE_INTEGER + 1,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: Number.MAX_SAFE_INTEGER,
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        retryAfter: "9007199254741",
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: { "retry-after": "9007199254741" } },
+      }).retryAfterMs,
+    ).toBeUndefined();
+    expect(
+      classifyMSTeamsSendError({
+        statusCode: 429,
+        response: { headers: new Headers({ "retry-after": "9007199254741" }) },
+      }).retryAfterMs,
+    ).toBeUndefined();
+  });
+
   it("does not parse partial or fractional status codes", () => {
     expect(classifyMSTeamsSendError({ statusCode: "429oops" }).kind).toBe("unknown");
     expect(classifyMSTeamsSendError({ statusCode: 429.5 }).kind).toBe("unknown");

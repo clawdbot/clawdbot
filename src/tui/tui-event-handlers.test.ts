@@ -559,6 +559,54 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.updateAssistant).not.toHaveBeenCalled();
   });
 
+  it("ignores selected-global chat events from other agents", () => {
+    const { chatLog, handleChatEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "global",
+        activeChatRunId: null,
+      },
+    });
+
+    handleChatEvent({
+      runId: "run-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      state: "delta",
+      message: { content: "wrong agent" },
+    });
+    handleChatEvent({
+      runId: "run-legacy-default-global",
+      sessionKey: "global",
+      state: "delta",
+      message: { content: "legacy default" },
+    });
+
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
+  it("ignores selected-global BTW events from other agents", () => {
+    const { btw, handleBtwEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "global",
+      },
+    });
+
+    handleBtwEvent({
+      kind: "btw",
+      runId: "btw-main-global",
+      sessionKey: "global",
+      agentId: "main",
+      question: "status?",
+      text: "wrong agent",
+    });
+
+    expect(btw.showResult).not.toHaveBeenCalled();
+  });
+
   it("clears run mapping when the session changes", () => {
     const { state, chatLog, tui, handleChatEvent, handleAgentEvent } = createHandlersHarness({
       state: { activeChatRunId: null },

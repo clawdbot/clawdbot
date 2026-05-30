@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as fences from "../markdown/fences.js";
+import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -416,6 +417,55 @@ function collectExtensionSourceFiles(): string[] {
   return extensionSourceFilesCache;
 }
 
+function isGuardedExtensionSourceFile(relativePath: string): boolean {
+  if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(relativePath) || relativePath.endsWith(".d.ts")) {
+    return false;
+  }
+  if (relativePath.split("/").some((part) => part === "node_modules" || part === "dist")) {
+    return false;
+  }
+  const entryName = basename(relativePath);
+  return !(
+    classifyBundledExtensionSourcePath(resolve(REPO_ROOT, relativePath)).isTestLike ||
+    entryName === "api.ts" ||
+    entryName === "runtime-api.ts"
+  );
+}
+
+function collectExtensionForbiddenImportMatches(literals: readonly string[]): string[] {
+  const result = spawnSync(
+    "git",
+    [
+      "grep",
+      "-n",
+      "-F",
+      ...literals.flatMap((literal) => ["-e", literal]),
+      "--",
+      BUNDLED_PLUGIN_ROOT_DIR,
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status === 1) {
+    return [];
+  }
+  if (result.status !== 0) {
+    throw new Error("git grep failed while checking extension import guardrails");
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => {
+      const file = line.split(":", 1)[0];
+      return file ? isGuardedExtensionSourceFile(file) : false;
+    })
+    .toSorted();
+}
+
 function collectCoreSourceFiles(): string[] {
   const srcDir = resolve(ROOT_DIR, "..", "src");
   const normalizedPluginSdkDir = normalizePath(resolve(ROOT_DIR, "plugin-sdk"));
@@ -588,11 +638,9 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
 describe("channel import guardrails", () => {
   it("lists channel import guardrail sources from git without walking roots", () => {
     expectNoReaddirSyncDuring(() => {
-      const extensionSources = collectExtensionSourceFiles();
       const coreSources = collectCoreSourceFiles();
       const telegramSources = collectExtensionFiles("telegram");
 
-      expect(extensionSources.length).toBeGreaterThan(0);
       expect(coreSources.length).toBeGreaterThan(0);
       expect(telegramSources.length).toBeGreaterThan(0);
     });
@@ -628,25 +676,18 @@ describe("channel import guardrails", () => {
   });
 
   it("keeps bundled extension source files off root and compat plugin-sdk imports", () => {
-    for (const file of collectExtensionSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import openclaw/plugin-sdk root`).not.toMatch(
-        /["']openclaw\/plugin-sdk["']/,
-      );
-      expect(text, `${file} should not import openclaw/plugin-sdk/compat`).not.toMatch(
-        /["']openclaw\/plugin-sdk\/compat["']/,
-      );
-    }
+    expect(
+      collectExtensionForbiddenImportMatches([
+        `"openclaw/plugin-sdk"`,
+        `'openclaw/plugin-sdk'`,
+        `"openclaw/plugin-sdk/compat"`,
+        `'openclaw/plugin-sdk/compat'`,
+      ]),
+    ).toEqual([]);
   });
 
   it("keeps bundled extension source files off legacy core send-deps src imports", () => {
-    const legacyCoreSendDepsImport = /["'][^"']*src\/infra\/outbound\/send-deps\.[cm]?[jt]s["']/;
-    for (const file of collectExtensionSourceFiles()) {
-      const text = readSource(file);
-      expect(text, `${file} should not import src/infra/outbound/send-deps.*`).not.toMatch(
-        legacyCoreSendDepsImport,
-      );
-    }
+    expect(collectExtensionForbiddenImportMatches(["src/infra/outbound/send-deps"])).toEqual([]);
   });
 
   it("keeps core production files off plugin-private src imports", () => {
@@ -658,9 +699,18 @@ describe("channel import guardrails", () => {
     }
   });
 
-  it("keeps extension production files off other extensions' private src imports", () => {
-    for (const file of collectExtensionSourceFiles()) {
-      expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
+  describe("extension private src import guardrails", () => {
+    for (const extensionId of BUNDLED_EXTENSION_IDS.toSorted((left, right) =>
+      left.localeCompare(right),
+    )) {
+      it(`${extensionId} stays off other extensions' private src imports`, () => {
+        for (const file of collectExtensionFiles(extensionId)) {
+          if (basename(file) === "api.ts") {
+            continue;
+          }
+          expectNoSiblingExtensionPrivateSrcImports(file, getSourceAnalysis(file).importSpecifiers);
+        }
+      });
     }
   });
 

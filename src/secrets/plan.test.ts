@@ -94,6 +94,26 @@ describe("secrets plan validation", () => {
     expect(isValid).toBe(true);
   });
 
+  it("accepts plugin-managed exec provider upserts in plan files", () => {
+    const isValid = isSecretsApplyPlan({
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: "2026-02-28T00:00:00.000Z",
+      generatedBy: "manual",
+      providerUpserts: {
+        "team-secrets": {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "acme-secrets",
+            integrationId: "secret-store",
+          },
+        },
+      },
+      targets: [],
+    });
+    expect(isValid).toBe(true);
+  });
+
   it("requires agentId for auth-profiles plan targets", () => {
     const withoutAgent = isSecretsApplyPlan({
       version: 1,

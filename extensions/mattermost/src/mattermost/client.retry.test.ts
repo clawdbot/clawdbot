@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMattermostClient, createMattermostDirectChannelWithRetry } from "./client.js";
 
@@ -348,6 +349,28 @@ describe("createMattermostDirectChannelWithRetry", () => {
     expect(abortSignal).toBeInstanceOf(AbortSignal);
     expect(abortSignal?.aborted).toBe(true);
     expect(abortListenerCalled).toBe(true);
+  });
+
+  it("caps oversized request timeouts before scheduling aborts", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      headers: new Headers({ "content-type": "application/json" }),
+      json: async () => ({ id: "dm-channel-capped" }),
+    } as Response);
+
+    const client = createMockClient();
+
+    await createMattermostDirectChannelWithRetry(client, ["user-1", "user-2"], {
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+      maxRetries: 0,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses exponential backoff with jitter between retries", async () => {

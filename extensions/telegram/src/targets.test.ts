@@ -88,6 +88,17 @@ describe("parseTelegramTarget", () => {
     });
   });
 
+  it("does not route unsafe topic suffixes", () => {
+    expect(parseTelegramTarget("-1001234567890:9007199254740992")).toEqual({
+      chatId: "-1001234567890:9007199254740992",
+      chatType: "unknown",
+    });
+    expect(parseTelegramTarget("-1001234567890:topic:9007199254740992")).toEqual({
+      chatId: "-1001234567890:topic:9007199254740992",
+      chatType: "unknown",
+    });
+  });
+
   it("strips internal prefixes before parsing", () => {
     expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual({
       chatId: "-1001234567890",

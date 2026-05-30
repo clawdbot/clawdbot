@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserNonNegativeIntegerValue,
+  parseBrowserPositiveIntegerValue,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -18,9 +23,11 @@ function parseOptionalIntegerOption(
   if (value === undefined) {
     return undefined;
   }
-  const raw = value.trim();
-  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < opts.min) {
+  const parsed =
+    opts.min === 0
+      ? parseBrowserNonNegativeIntegerValue(value)
+      : parseBrowserPositiveIntegerValue(value);
+  if (parsed === undefined || parsed < opts.min) {
     defaultRuntime.error(danger(`Invalid ${label}: must be an integer >= ${opts.min}`));
     defaultRuntime.exit(1);
     return undefined;

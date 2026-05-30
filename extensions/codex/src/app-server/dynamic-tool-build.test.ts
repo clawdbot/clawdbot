@@ -469,6 +469,41 @@ describe("Codex app-server dynamic tool build", () => {
     );
   });
 
+  it("passes runtime config into Codex exec dynamic tool construction", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    const runtimeConfig = {
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            timeoutMs: 1234,
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    params.disableTools = false;
+    params.config = runtimeConfig;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    const factoryOptions: unknown[] = [];
+    setOpenClawCodingToolsFactoryForTests((options) => {
+      factoryOptions.push(options);
+      return [];
+    });
+
+    await buildDynamicToolsForTest(params, workspaceDir, { sandbox: null as never });
+
+    const toolOptions = factoryOptions[0] as {
+      config?: unknown;
+      exec?: { config?: unknown; mode?: unknown };
+    };
+    expect(factoryOptions).toHaveLength(1);
+    expect(toolOptions.config).toBe(runtimeConfig);
+    expect(toolOptions.exec?.config).toBe(runtimeConfig);
+    expect(toolOptions.exec?.mode).toBeUndefined();
+  });
+
   it("uses the tool auth profile store for Codex dynamic tool construction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

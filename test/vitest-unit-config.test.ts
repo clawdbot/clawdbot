@@ -175,7 +175,7 @@ describe("unit vitest config", () => {
     expect(coverageInclude).toContain("src/commitments/runtime.ts");
     expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
-    expect(coverageInclude).not.toContain("src/markdown/render.ts");
+    expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");
     expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
   });
 

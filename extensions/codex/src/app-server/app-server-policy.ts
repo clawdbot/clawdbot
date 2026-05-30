@@ -1,4 +1,8 @@
-import type { CodexAppServerRuntimeOptions, CodexPluginConfig } from "./config.js";
+import type {
+  CodexAppServerRuntimeOptions,
+  CodexPluginConfig,
+  OpenClawExecPolicyForCodexAppServer,
+} from "./config.js";
 
 export function resolveCodexAppServerForOpenClawToolPolicy(params: {
   appServer: CodexAppServerRuntimeOptions;
@@ -6,6 +10,7 @@ export function resolveCodexAppServerForOpenClawToolPolicy(params: {
   env: NodeJS.ProcessEnv;
   shouldPromote: boolean;
   canUseUntrustedApprovalPolicy: boolean;
+  execPolicy?: OpenClawExecPolicyForCodexAppServer;
 }): CodexAppServerRuntimeOptions {
   if (
     !params.shouldPromote ||
@@ -15,6 +20,7 @@ export function resolveCodexAppServerForOpenClawToolPolicy(params: {
     return params.appServer;
   }
   const explicitMode =
+    params.execPolicy?.mode === "full" ||
     params.pluginConfig.appServer?.mode !== undefined ||
     isCodexAppServerPolicyMode(params.env.OPENCLAW_CODEX_APP_SERVER_MODE);
   const explicitApprovalPolicy =

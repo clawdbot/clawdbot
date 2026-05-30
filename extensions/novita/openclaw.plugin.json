@@ -1,0 +1,162 @@
+{
+  "id": "novita",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["novita", "novita-ai", "novitaai"],
+  "providerAuthAliases": {
+    "novita-ai": "novita",
+    "novitaai": "novita"
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "novita-native",
+      "hosts": ["api.novita.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "novita": {
+        "family": "novita"
+      },
+      "novita-ai": {
+        "family": "novita"
+      },
+      "novitaai": {
+        "family": "novita"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "novita",
+        "envVars": ["NOVITA_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "novita",
+      "method": "api-key",
+      "choiceId": "novita-api-key",
+      "choiceLabel": "NovitaAI API key",
+      "choiceHint": "OpenAI-compatible NovitaAI endpoint",
+      "groupId": "novita",
+      "groupLabel": "NovitaAI",
+      "groupHint": "OpenAI-compatible NovitaAI endpoint",
+      "optionKey": "novitaApiKey",
+      "cliFlag": "--novita-api-key",
+      "cliOption": "--novita-api-key <key>",
+      "cliDescription": "NovitaAI API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  },
+  "modelCatalog": {
+    "aliases": {
+      "novita-ai": {
+        "provider": "novita"
+      },
+      "novitaai": {
+        "provider": "novita"
+      }
+    },
+    "providers": {
+      "novita": {
+        "baseUrl": "https://api.novita.ai/openai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "moonshotai/kimi-k2.5",
+            "name": "Kimi K2.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "minimax/minimax-m2.7",
+            "name": "MiniMax M2.7",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zai-org/glm-5",
+            "name": "GLM-5",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek/deepseek-v3-0324",
+            "name": "DeepSeek V3 0324",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "deepseek/deepseek-r1-0528",
+            "name": "DeepSeek R1 0528",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 163840,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "qwen/qwen3-235b-a22b-fp8",
+            "name": "Qwen3 235B A22B FP8",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 262144,
+            "maxTokens": 65536,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    }
+  }
+}

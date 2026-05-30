@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 import {
   joinQaCredentialEndpoint,
@@ -371,6 +372,7 @@ async function postJson<T>(params: {
   responseSchema: z.ZodType<T>;
   url: string;
 }) {
+  const httpTimeoutMs = resolveTimerTimeoutMs(params.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   let response: Response;
   try {
     response = await params.fetchImpl(params.url, {
@@ -380,7 +382,7 @@ async function postJson<T>(params: {
         "content-type": "application/json",
       },
       body: JSON.stringify(params.body),
-      signal: AbortSignal.timeout(params.httpTimeoutMs),
+      signal: AbortSignal.timeout(httpTimeoutMs),
     });
   } catch (error) {
     throw new QaCredentialAdminError({

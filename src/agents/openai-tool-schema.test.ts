@@ -1,11 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearOpenAIToolSchemaCacheForTest,
   isStrictOpenAIJsonSchemaCompatible,
   normalizeStrictOpenAIJsonSchema,
   resolveOpenAIStrictToolFlagForInventory,
 } from "./openai-tool-schema.js";
 
 describe("OpenAI strict tool schema normalization", () => {
+  beforeEach(() => {
+    clearOpenAIToolSchemaCacheForTest();
+  });
+
   it("repairs top-level object schemas with missing or invalid properties", () => {
     const schemas = [
       { type: "object" },
@@ -61,5 +66,29 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(normalized.required).toStrictEqual([]);
     expect(normalized.additionalProperties).toBe(false);
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+  });
+
+  it("reuses normalized strict schemas for stable tool schema objects", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+      },
+      required: ["path"],
+    };
+
+    const first = normalizeStrictOpenAIJsonSchema(schema);
+    const second = normalizeStrictOpenAIJsonSchema(schema);
+    const third = normalizeStrictOpenAIJsonSchema(schema, {
+      unsupportedToolSchemaKeywords: ["minimum"],
+    });
+
+    expect(second).toBe(first);
+    expect(third).not.toBe(first);
+    expect(
+      normalizeStrictOpenAIJsonSchema(schema, {
+        unsupportedToolSchemaKeywords: ["minimum"],
+      }),
+    ).toBe(third);
   });
 });

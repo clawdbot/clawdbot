@@ -1,14 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
-import { getQueuedFileWriter, type QueuedFileWriter } from "../agents/queued-file-writer.js";
+import type {
+  QueuedFileWriter,
+  QueuedFileWriterDiagnostics,
+} from "../agents/queued-file-writer.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assertNoSymlinkParents, writeSiblingTempFile } from "../infra/fs-safe-advanced.js";
+import { readRegularFileSync } from "../infra/fs-safe.js";
 import { redactSecrets } from "../logging/redact.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
 import {
   TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
   TRAJECTORY_RUNTIME_EVENT_MAX_BYTES,
+  TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
   resolveTrajectoryFilePath,
   resolveTrajectoryPointerFilePath,
   resolveTrajectoryPointerOpenFlags,
@@ -37,7 +43,7 @@ type TrajectoryRuntimeInit = {
   modelId?: string;
   modelApi?: string | null;
   workspaceDir?: string;
-  writer?: QueuedFileWriter;
+  writer?: TrajectoryRuntimeWriter;
 };
 
 type TrajectoryRuntimeRecorder = {
@@ -48,13 +54,22 @@ type TrajectoryRuntimeRecorder = {
   describeFlushState: () => string | undefined;
 };
 
-const writers = new Map<string, QueuedFileWriter>();
+const writers = new Map<string, TrajectoryRuntimeWriter>();
+const windowFlushes = new Map<string, Promise<void>>();
 const MAX_TRAJECTORY_WRITERS = 100;
-const TRAJECTORY_RUNTIME_TRUNCATION_SENTINEL_RESERVE_BYTES = 2048;
 const TRAJECTORY_RUNTIME_DATA_STRING_MAX_CHARS = 32_768;
 const TRAJECTORY_RUNTIME_DATA_ARRAY_MAX_ITEMS = 64;
 const TRAJECTORY_RUNTIME_DATA_OBJECT_MAX_KEYS = 64;
 const TRAJECTORY_RUNTIME_DATA_MAX_DEPTH = 6;
+
+type TrajectoryRuntimeWriterDiagnostics = Omit<QueuedFileWriterDiagnostics, "activeOperation"> & {
+  activeOperation: QueuedFileWriterDiagnostics["activeOperation"] | "file-replace";
+};
+
+type TrajectoryRuntimeWriter = Omit<QueuedFileWriter, "describeQueue"> & {
+  describeQueue?: () => TrajectoryRuntimeWriterDiagnostics;
+  nextSourceSeq?: () => number;
+};
 
 function writeTrajectoryPointerBestEffort(params: {
   filePath: string;
@@ -209,7 +224,7 @@ function sanitizeTrajectoryPayload(data: Record<string, unknown>): Record<string
   >;
 }
 
-function describeTrajectoryWriterFlushState(writer: QueuedFileWriter): string | undefined {
+function describeTrajectoryWriterFlushState(writer: TrajectoryRuntimeWriter): string | undefined {
   const diagnostics = writer.describeQueue?.();
   if (!diagnostics) {
     return undefined;
@@ -230,6 +245,213 @@ function describeTrajectoryWriterFlushState(writer: QueuedFileWriter): string | 
     parts.push(`maxFileBytes=${diagnostics.maxFileBytes}`);
   }
   return parts.join(" ");
+}
+
+function trimJsonlWindow(lines: string[], maxBytes: number): number {
+  let bytes = 0;
+  for (const line of lines) {
+    bytes += Buffer.byteLength(line, "utf8");
+  }
+  while (bytes > maxBytes && lines.length > 0) {
+    const line = lines.shift();
+    if (line !== undefined) {
+      bytes -= Buffer.byteLength(line, "utf8");
+    }
+  }
+  return bytes;
+}
+
+function compareTrajectoryWindowLines(left: string, right: string): number {
+  const leftEvent = parseTrajectoryWindowLine(left);
+  const rightEvent = parseTrajectoryWindowLine(right);
+  const byTs = leftEvent.ts - rightEvent.ts;
+  if (byTs !== 0) {
+    return byTs;
+  }
+  return leftEvent.seq - rightEvent.seq;
+}
+
+function parseTrajectoryWindowLine(line: string): { ts: number; seq: number } {
+  try {
+    const parsed = JSON.parse(line) as { ts?: unknown; sourceSeq?: unknown; seq?: unknown };
+    const ts = typeof parsed.ts === "string" ? Date.parse(parsed.ts) : Number.POSITIVE_INFINITY;
+    const sourceSeq = typeof parsed.sourceSeq === "number" ? parsed.sourceSeq : undefined;
+    const seq = typeof parsed.seq === "number" ? parsed.seq : undefined;
+    return {
+      ts: Number.isFinite(ts) ? ts : Number.POSITIVE_INFINITY,
+      seq: sourceSeq ?? seq ?? Number.POSITIVE_INFINITY,
+    };
+  } catch {
+    return { ts: Number.POSITIVE_INFINITY, seq: Number.POSITIVE_INFINITY };
+  }
+}
+
+function readMaxTrajectorySourceSeq(filePath: string): number {
+  return readTrajectoryWindowLines(filePath, TRAJECTORY_RUNTIME_FILE_MAX_BYTES).reduce(
+    (max, line) => {
+      try {
+        const parsed = JSON.parse(line) as { sourceSeq?: unknown; seq?: unknown };
+        const seq =
+          typeof parsed.sourceSeq === "number"
+            ? parsed.sourceSeq
+            : typeof parsed.seq === "number"
+              ? parsed.seq
+              : 0;
+        return Math.max(max, seq);
+      } catch {
+        return max;
+      }
+    },
+    0,
+  );
+}
+
+function readTrajectoryWindowLines(filePath: string, maxBytes: number): string[] {
+  try {
+    const raw = readRegularFileSync({
+      filePath,
+      maxBytes: TRAJECTORY_RUNTIME_FILE_MAX_BYTES,
+    }).buffer.toString("utf8");
+    const lines = raw
+      .split(/\r?\n/u)
+      .filter((line) => line.length > 0)
+      .map((line) => `${line}\n`);
+    trimJsonlWindow(lines, maxBytes);
+    return lines;
+  } catch {
+    return [];
+  }
+}
+
+async function replaceTrajectoryWindow(params: {
+  filePath: string;
+  maxFileBytes: number;
+  appendedLines: string[];
+}): Promise<void> {
+  const dir = path.dirname(params.filePath);
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  await assertNoSymlinkParents({
+    rootDir: path.parse(path.resolve(dir)).root,
+    targetPath: path.resolve(dir),
+    allowMissing: false,
+    allowRootChildSymlink: true,
+    requireDirectories: true,
+    messagePrefix: "Refusing to write trajectory under",
+  });
+  const lines = readTrajectoryWindowLines(params.filePath, params.maxFileBytes);
+  lines.push(...params.appendedLines);
+  lines.sort(compareTrajectoryWindowLines);
+  trimJsonlWindow(lines, params.maxFileBytes);
+  await writeSiblingTempFile({
+    dir,
+    chmodDir: false,
+    mode: 0o600,
+    tempPrefix: ".openclaw-trajectory-",
+    writeTemp: async (tempPath) => {
+      await fs.promises.writeFile(tempPath, lines.join(""), {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+    },
+    resolveFinalPath: () => params.filePath,
+  });
+}
+
+async function queueTrajectoryWindowFlush(params: {
+  filePath: string;
+  maxFileBytes: number;
+  appendedLines: string[];
+}): Promise<void> {
+  const previous = windowFlushes.get(params.filePath) ?? Promise.resolve();
+  const current = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await replaceTrajectoryWindow(params);
+    })
+    .finally(() => {
+      if (windowFlushes.get(params.filePath) === current) {
+        windowFlushes.delete(params.filePath);
+      }
+    });
+  windowFlushes.set(params.filePath, current);
+  await current;
+}
+
+function createTrajectoryWindowWriter(
+  filePath: string,
+  maxFileBytes: number,
+): TrajectoryRuntimeWriter {
+  let pendingLines: string[] = [];
+  let queuedBytes = 0;
+  let pendingWrites = 0;
+  let activeOperation: TrajectoryRuntimeWriterDiagnostics["activeOperation"] = "idle";
+  let queue: Promise<unknown> = Promise.resolve();
+  let sourceSeq = readMaxTrajectorySourceSeq(filePath);
+
+  return {
+    filePath,
+    write: (line) => {
+      const lineBytes = Buffer.byteLength(line, "utf8");
+      if (lineBytes > maxFileBytes) {
+        return "dropped";
+      }
+      pendingLines.push(line);
+      queuedBytes += lineBytes;
+      queuedBytes = trimJsonlWindow(pendingLines, maxFileBytes);
+      pendingWrites = 1;
+      return "queued";
+    },
+    flush: async () => {
+      if (pendingLines.length === 0) {
+        await queue;
+        return;
+      }
+      const appendedLines = pendingLines;
+      pendingLines = [];
+      queuedBytes = 0;
+      queue = queue
+        .then(async () => {
+          activeOperation = "file-replace";
+          await queueTrajectoryWindowFlush({
+            filePath,
+            maxFileBytes,
+            appendedLines,
+          });
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          pendingWrites = pendingLines.length > 0 ? 1 : 0;
+          activeOperation = "idle";
+        });
+      await queue;
+    },
+    describeQueue: () => ({
+      pendingWrites,
+      queuedBytes,
+      activeOperation,
+      maxFileBytes,
+      maxQueuedBytes: maxFileBytes,
+      yieldBeforeWrite: false,
+    }),
+    nextSourceSeq: () => {
+      sourceSeq += 1;
+      return sourceSeq;
+    },
+  };
+}
+
+function getTrajectoryWindowWriter(
+  filePath: string,
+  maxFileBytes: number,
+): TrajectoryRuntimeWriter {
+  const existing = writers.get(filePath);
+  if (existing) {
+    return existing;
+  }
+  trimTrajectoryWriterCache();
+  const writer = createTrajectoryWindowWriter(filePath, maxFileBytes);
+  writers.set(filePath, writer);
+  return writer;
 }
 
 export function toTrajectoryToolDefinitions(
@@ -268,20 +490,11 @@ export function createTrajectoryRuntimeRecorder(
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
   });
-  if (!params.writer) {
-    trimTrajectoryWriterCache();
-  }
   const maxRuntimeFileBytes = Math.max(
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
-  const writer =
-    params.writer ??
-    getQueuedFileWriter(writers, filePath, {
-      maxFileBytes: maxRuntimeFileBytes,
-      maxQueuedBytes: maxRuntimeFileBytes,
-      yieldBeforeWrite: true,
-    });
+  const writer = params.writer ?? getTrajectoryWindowWriter(filePath, maxRuntimeFileBytes);
   writeTrajectoryPointerBestEffort({
     filePath,
     sessionFile: params.sessionFile,
@@ -289,39 +502,15 @@ export function createTrajectoryRuntimeRecorder(
   });
   let seq = 0;
   const traceId = params.sessionId;
-  const sentinelReserveBytes = Math.min(
-    TRAJECTORY_RUNTIME_TRUNCATION_SENTINEL_RESERVE_BYTES,
-    Math.floor(maxRuntimeFileBytes / 2),
-  );
-  const normalEventLimitBytes = Math.max(1, maxRuntimeFileBytes - sentinelReserveBytes);
-  let acceptedRuntimeBytes = 0;
-  let droppedEvents = 0;
-  let droppedEventBytes = 0;
-  let captureStopped = false;
 
-  const writeBoundedLine = (line: string, options: { reserveSentinel: boolean }): boolean => {
+  const writeBoundedLine = (line: string): void => {
     const jsonlLine = `${line}\n`;
-    const lineBytes = Buffer.byteLength(jsonlLine, "utf8");
-    const limitBytes = options.reserveSentinel ? normalEventLimitBytes : maxRuntimeFileBytes;
-    if (acceptedRuntimeBytes + lineBytes > limitBytes) {
-      captureStopped = true;
-      droppedEvents += 1;
-      droppedEventBytes += lineBytes;
-      return false;
-    }
-    const result = writer.write(jsonlLine);
-    if (result === "dropped") {
-      captureStopped = true;
-      droppedEvents += 1;
-      droppedEventBytes += lineBytes;
-      return false;
-    }
-    acceptedRuntimeBytes += lineBytes;
-    return true;
+    writer.write(jsonlLine);
   };
 
   const buildEventLine = (type: string, data?: Record<string, unknown>): string | undefined => {
     const nextSeq = seq + 1;
+    const sourceSeq = writer.nextSourceSeq?.() ?? nextSeq;
     const event: TrajectoryEvent = {
       traceSchema: "openclaw-trajectory",
       schemaVersion: 1,
@@ -330,7 +519,7 @@ export function createTrajectoryRuntimeRecorder(
       type,
       ts: new Date().toISOString(),
       seq: nextSeq,
-      sourceSeq: nextSeq,
+      sourceSeq,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       runId: params.runId,
@@ -356,34 +545,14 @@ export function createTrajectoryRuntimeRecorder(
     enabled: true,
     filePath,
     recordEvent: (type, data) => {
-      if (captureStopped) {
-        droppedEvents += 1;
-        return;
-      }
       const line = buildEventLine(type, data);
       if (!line) {
         return;
       }
-      writeBoundedLine(line, { reserveSentinel: true });
+      writeBoundedLine(line);
     },
     flush: async () => {
-      if (droppedEvents > 0) {
-        const line = buildEventLine("trace.truncated", {
-          reason: "trajectory-runtime-file-size-limit",
-          droppedEvents,
-          droppedEventBytes,
-          limitBytes: maxRuntimeFileBytes,
-        });
-        if (line) {
-          writeBoundedLine(line, { reserveSentinel: false });
-        }
-        droppedEvents = 0;
-        droppedEventBytes = 0;
-      }
       await writer.flush();
-      if (!params.writer) {
-        writers.delete(filePath);
-      }
     },
     describeFlushState: () => describeTrajectoryWriterFlushState(writer),
   };

@@ -1,4 +1,4 @@
-import { parseGenerationModelRef } from "../media-generation/model-ref.js";
+import { parseGenerationModelRef } from "../../packages/media-generation-core/src/model-ref.js";
 
 export function parseImageGenerationModelRef(
   raw: string | undefined,

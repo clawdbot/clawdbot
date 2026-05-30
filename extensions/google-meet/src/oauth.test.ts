@@ -8,6 +8,7 @@ import {
 describe("Google Meet OAuth", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("builds auth URLs and prefers fresh cached access tokens", async () => {
@@ -69,5 +70,49 @@ describe("Google Meet OAuth", () => {
     const params = body as URLSearchParams;
     expect(params.get("grant_type")).toBe("refresh_token");
     expect(params.get("refresh_token")).toBe("refresh-token");
+  });
+
+  it("falls back when refreshed token lifetimes overflow safe milliseconds", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response(
+        JSON.stringify({
+          access_token: "new-access-token",
+          expires_in: Number.MAX_SAFE_INTEGER,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tokens = await refreshGoogleMeetAccessToken({
+      clientId: "client-id",
+      refreshToken: "refresh-token",
+    });
+
+    expect(tokens.expiresAt).toBe(Date.now() + 3600 * 1000);
+  });
+
+  it("keeps explicit zero-second token lifetimes immediately stale", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      return new Response(
+        JSON.stringify({
+          access_token: "new-access-token",
+          expires_in: 0,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tokens = await refreshGoogleMeetAccessToken({
+      clientId: "client-id",
+      refreshToken: "refresh-token",
+    });
+
+    expect(tokens.expiresAt).toBe(Date.now());
   });
 });

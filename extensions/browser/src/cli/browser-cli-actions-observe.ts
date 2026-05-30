@@ -1,7 +1,11 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runCommandWithRuntime } from "../core-api.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
 
 function runBrowserObserve(action: () => Promise<void>) {
@@ -9,15 +13,6 @@ function runBrowserObserve(action: () => Promise<void>) {
     defaultRuntime.error(danger(String(err)));
     defaultRuntime.exit(1);
   });
-}
-
-function parsePositiveIntegerOption(value: string, flag: string): number {
-  const trimmed = value.trim();
-  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  return parsed;
 }
 
 export function registerBrowserActionObserveCommands(
@@ -88,10 +83,10 @@ export function registerBrowserActionObserveCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the response (default: 20000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .option("--max-chars <n>", "Max body chars to return (default: 200000)", (v: string) =>
-      parsePositiveIntegerOption(v, "--max-chars"),
+      parseBrowserPositiveIntegerOption(v, "--max-chars"),
     )
     .action(async (url: string, opts, cmd) => {
       const parent = parentOpts(cmd);

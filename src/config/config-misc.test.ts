@@ -161,34 +161,22 @@ describe("model provider localService config", () => {
   });
 
   it("accepts bundled provider timeout overlays without custom provider fields", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            timeoutSeconds: 600,
+    for (const provider of ["openai", "zai"] as const) {
+      const result = validateConfigObjectRaw({
+        models: {
+          providers: {
+            [provider]: {
+              timeoutSeconds: 600,
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(result.ok).toBe(true);
-  });
-
-  it("accepts bundled provider timeout overlays without custom provider fields", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          zai: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.models?.providers?.zai?.models).toEqual([]);
-      expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
+      expect(result.ok).toBe(true);
+      if (provider === "zai" && result.ok) {
+        expect(result.config.models?.providers?.zai?.models).toEqual([]);
+        expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
+      }
     }
   });
 

@@ -2,6 +2,7 @@
  * Tests for Nostr Profile Import
  */
 
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
 import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
@@ -62,6 +63,27 @@ describe("nostr-profile-import", () => {
         authors: [pubkey],
         limit: 1,
       });
+    });
+
+    it("caps oversized relay timeouts and clears pending timeout handles", async () => {
+      vi.useFakeTimers();
+      try {
+        const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+
+        await importProfileFromRelays({
+          pubkey: "a".repeat(64),
+          relays: ["wss://relay.example"],
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+        });
+
+        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+        expect(timeoutSpy).toHaveBeenCalledTimes(2);
+        expect(clearSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      }
     });
   });
 

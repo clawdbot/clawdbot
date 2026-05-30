@@ -1027,7 +1027,7 @@ function validateConfigObjectWithPluginsBase(
   let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
     ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
     : null;
-  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "skip") {
+  if (opts.applyDefaults && !registryInfo) {
     const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(base.config);
     if (pluginMetadataSnapshot) {
       registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };

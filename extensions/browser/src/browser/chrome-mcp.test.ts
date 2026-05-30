@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpCoords,
@@ -12,6 +13,7 @@ import {
   listChromeMcpTabs,
   navigateChromeMcpPage,
   openChromeMcpTab,
+  resolveChromeMcpNavigateCallTimeoutMs,
   resetChromeMcpSessionsForTest,
   setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
@@ -920,6 +922,11 @@ describe("chrome MCP page parsing", () => {
       ([call]) => call.name === "navigate_page",
     )?.[0];
     expect(navigateCall?.arguments?.timeout).toBe(20_000);
+  });
+
+  it("caps the navigate_page safety-net timeout", () => {
+    expect(resolveChromeMcpNavigateCallTimeoutMs(10_000)).toBe(15_000);
+    expect(resolveChromeMcpNavigateCallTimeoutMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {

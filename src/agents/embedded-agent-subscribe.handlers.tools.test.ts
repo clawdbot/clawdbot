@@ -1087,6 +1087,138 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
 });
 
 describe("handleToolExecutionEnd derived tool events", () => {
+  it("surfaces typed public tool progress for any non-exec tool", () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "custom_fetcher",
+        toolCallId: "tool-custom-progress",
+        partialResult: {
+          content: [],
+          details: undefined,
+          progress: {
+            text: "Loading remote resource...",
+            visibility: "channel",
+            privacy: "public",
+          },
+        },
+      } as never,
+    );
+
+    expect(
+      events.filter(
+        (event) =>
+          event.stream === "tool" &&
+          (event.data as { phase?: string } | undefined)?.phase === "update",
+      ),
+    ).toHaveLength(0);
+    const itemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "item"),
+      "progress item event",
+    );
+    expectRecordFields(itemEvent.data, "progress item event data", {
+      itemId: "tool:tool-custom-progress",
+      phase: "update",
+      kind: "tool",
+      name: "custom_fetcher",
+      progressText: "Loading remote resource...",
+      status: "running",
+    });
+    expect(requireRecord(itemEvent.data, "progress item event data").meta).toBeUndefined();
+
+    resetAgentEventsForTest();
+  });
+
+  it("does not promote untyped non-exec content into channel progress", () => {
+    resetAgentEventsForTest();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    registerAgentEventListener((evt) => {
+      events.push(evt as never);
+    });
+    const { ctx, onAgentEvent } = createTestContext();
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "web_fetch",
+        toolCallId: "tool-web-fetch-untyped",
+        partialResult: {
+          content: [{ type: "text", text: "Fetching page content..." }],
+          details: undefined,
+        },
+      } as never,
+    );
+
+    expect(
+      events.filter(
+        (event) =>
+          event.stream === "tool" &&
+          (event.data as { phase?: string } | undefined)?.phase === "update",
+      ),
+    ).toHaveLength(1);
+    const itemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "item"),
+      "tool item event",
+    );
+    expect(requireRecord(itemEvent.data, "tool item event data").progressText).toBeUndefined();
+    expect(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .filter((event) => (event as { stream?: string })?.stream === "tool"),
+    ).toHaveLength(1);
+
+    resetAgentEventsForTest();
+  });
+
+  it("caps typed public tool progress before channel item events", () => {
+    const { ctx, onAgentEvent } = createTestContext();
+    const largeProgress = "x".repeat(9000);
+
+    handleToolExecutionUpdate(
+      ctx as never,
+      {
+        type: "tool_execution_update",
+        toolName: "custom_fetcher",
+        toolCallId: "tool-large-progress",
+        partialResult: {
+          content: [],
+          details: undefined,
+          progress: {
+            text: largeProgress,
+            visibility: "channel",
+            privacy: "public",
+          },
+        },
+      } as never,
+    );
+
+    const itemEvent = requireRecord(
+      onAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find((event) => (event as { stream?: string })?.stream === "item"),
+      "large progress item event",
+    );
+    const progressText = requireString(
+      requireRecord(itemEvent.data, "large progress item event data").progressText,
+      "progress text",
+    );
+    expect(progressText).toContain("...(live output truncated)...");
+    expect(progressText.length).toBeLessThan(largeProgress.length);
+  });
+
   it("emits command output deltas for exec update results", async () => {
     const { ctx, onAgentEvent } = createTestContext();
 

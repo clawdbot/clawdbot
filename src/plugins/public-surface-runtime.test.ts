@@ -70,6 +70,31 @@ describe("bundled plugin public surface runtime", () => {
     ).toBe(sourceModulePath);
   });
 
+  it("prefers package-local dist artifacts before source artifacts in source plugin trees", () => {
+    const packageRoot = createTempDir();
+    const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");
+    const packageLocalDistModulePath = path.join(
+      packageRoot,
+      "extensions",
+      "demo",
+      "dist",
+      "api.js",
+    );
+    fs.mkdirSync(path.dirname(sourceModulePath), { recursive: true });
+    fs.mkdirSync(path.dirname(packageLocalDistModulePath), { recursive: true });
+    fs.writeFileSync(sourceModulePath, "export const marker = 'source';\n", "utf8");
+    fs.writeFileSync(packageLocalDistModulePath, "export const marker = 'local-dist';\n", "utf8");
+
+    expect(
+      resolveBundledPluginPublicSurfacePath({
+        rootDir: packageRoot,
+        bundledPluginsDir: path.join(packageRoot, "extensions"),
+        dirName: "demo",
+        artifactBasename: "api.js",
+      }),
+    ).toBe(packageLocalDistModulePath);
+  });
+
   it("prefers source public surfaces over stale auto-resolved dist artifacts in source checkouts", () => {
     const packageRoot = createTempDir();
     const sourceModulePath = path.join(packageRoot, "extensions", "demo", "api.ts");

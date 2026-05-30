@@ -42,6 +42,19 @@ describe("getVisibleCronJobs", () => {
     expect(visible.map((entry) => entry.id)).toEqual(["c"]);
   });
 
+  it("drops jobs with unsupported schedules before rendering", () => {
+    const jobs = [
+      job("valid", { schedule: { kind: "cron", expr: "0 9 * * *" } }),
+      job("invalid", { schedule: {} as CronJob["schedule"] }),
+    ];
+    const visible = getVisibleCronJobs({
+      cronJobs: jobs,
+      cronJobsScheduleKindFilter: "all",
+      cronJobsLastStatusFilter: "all",
+    });
+    expect(visible.map((entry) => entry.id)).toEqual(["valid"]);
+  });
+
   it("filters by last status", () => {
     const jobs = [
       job("ok", { state: { lastStatus: "ok", lastRunAtMs: 1 } }),

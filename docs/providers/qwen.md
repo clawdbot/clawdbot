@@ -6,21 +6,13 @@ read_when:
 title: "Qwen"
 ---
 
-<Warning>
-
-**Qwen OAuth has been removed.** The free-tier OAuth integration
-(`qwen-portal`) that used `portal.qwen.ai` endpoints is no longer available.
-See [Issue #49557](https://github.com/openclaw/openclaw/issues/49557) for
-background.
-
-</Warning>
-
 OpenClaw now treats Qwen as a first-class bundled provider with canonical id
 `qwen`. The bundled provider targets the Qwen Cloud / Alibaba DashScope and
-Coding Plan endpoints and keeps legacy `modelstudio` ids working as a
-compatibility alias.
+Coding Plan endpoints, keeps legacy `modelstudio` ids working as a compatibility
+alias, and also exposes the Qwen Portal token flow as provider `qwen-oauth`.
 
 - Provider: `qwen`
+- Portal provider: [`qwen-oauth`](/providers/qwen-oauth)
 - Preferred env var: `QWEN_API_KEY`
 - Also accepted for compatibility: `MODELSTUDIO_API_KEY`, `DASHSCOPE_API_KEY`
 - API style: OpenAI-compatible
@@ -132,6 +124,44 @@ Choose your plan type and follow the setup steps.
     </Note>
 
   </Tab>
+
+  <Tab title="Qwen OAuth / Portal">
+    **Best for:** a Qwen Portal token against `https://portal.qwen.ai/v1`.
+
+    See [Qwen OAuth / Portal](/providers/qwen-oauth) for the dedicated provider
+    page and migration notes.
+
+    <Steps>
+      <Step title="Provide your portal token">
+        ```bash
+        openclaw onboard --auth-choice qwen-oauth
+        ```
+      </Step>
+      <Step title="Set a default model">
+        ```json5
+        {
+          agents: {
+            defaults: {
+              model: { primary: "qwen-oauth/qwen3.5-plus" },
+            },
+          },
+        }
+        ```
+      </Step>
+      <Step title="Verify the model is available">
+        ```bash
+        openclaw models list --provider qwen-oauth
+        ```
+      </Step>
+    </Steps>
+
+    <Note>
+    `qwen-oauth` uses the same `QWEN_API_KEY` env var name as the DashScope
+    provider, but stores auth under the `qwen-oauth` provider id when configured
+    through OpenClaw onboarding.
+    </Note>
+
+  </Tab>
 </Tabs>
 
 ## Plan types and endpoints
@@ -142,6 +172,7 @@ Choose your plan type and follow the setup steps.
 | Standard (pay-as-you-go)   | Global | `qwen-standard-api-key`    | `dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 | Coding Plan (subscription) | China  | `qwen-api-key-cn`          | `coding.dashscope.aliyuncs.com/v1`               |
 | Coding Plan (subscription) | Global | `qwen-api-key`             | `coding-intl.dashscope.aliyuncs.com/v1`          |
+| Qwen Portal                | Global | `qwen-oauth`               | `portal.qwen.ai/v1`                              |
 
 The provider auto-selects the endpoint based on your auth choice. Canonical
 choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
@@ -169,6 +200,7 @@ the Standard endpoint.
 | `qwen/glm-5`                | text        | 202,752   | GLM                                                |
 | `qwen/glm-4.7`              | text        | 202,752   | GLM                                                |
 | `qwen/kimi-k2.5`            | text, image | 262,144   | Moonshot AI via Alibaba                            |
+| `qwen-oauth/qwen3.5-plus`   | text, image | 1,000,000 | Qwen Portal default                                |
 
 <Note>
 Availability can still vary by endpoint and billing plan even when a model is

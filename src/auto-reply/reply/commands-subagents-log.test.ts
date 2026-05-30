@@ -71,4 +71,22 @@ describe("subagents log", () => {
       params: { sessionKey: "agent:main:subagent:log", limit: 5 },
     });
   });
+
+  it("clamps a zero history limit to one", async () => {
+    await handleSubagentsLogAction(buildLogContext(["1", "0"], [makeRun()]));
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:subagent:log", limit: 1 },
+    });
+  });
+
+  it("ignores unsafe history limit tokens", async () => {
+    await handleSubagentsLogAction(buildLogContext(["1", "9007199254740992"], [makeRun()]));
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:subagent:log", limit: 20 },
+    });
+  });
 });

@@ -17,7 +17,7 @@ vi.mock("./runtime-api.js", () => ({
 
 import plugin from "./index.js";
 
-describe("tokenjuice bundled plugin", () => {
+describe("tokenjuice plugin", () => {
   beforeEach(() => {
     createTokenjuiceOpenClawEmbeddedExtension.mockClear();
     tokenjuiceFactory.mockClear();

@@ -23,41 +23,34 @@ describe("discovery threading", () => {
     discoverOpenClawPluginsMock.mockReturnValue(emptyDiscovery);
   });
 
-  describe("loadPluginManifestRegistry", () => {
-    it("skips internal discoverOpenClawPlugins when discovery is supplied", () => {
-      loadPluginManifestRegistry({ discovery: emptyDiscovery });
-      expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
-    });
+  it("skips internal discoverOpenClawPlugins when discovery is supplied", () => {
+    loadPluginManifestRegistry({ discovery: emptyDiscovery });
+    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
 
-    it("calls discoverOpenClawPlugins when neither discovery nor candidates supplied", () => {
-      loadPluginManifestRegistry({});
-      expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
-    });
-
-    it("prefers explicit candidates over discovery when both are supplied", () => {
-      loadPluginManifestRegistry({ candidates: [], diagnostics: [], discovery: emptyDiscovery });
-      expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
-    });
+    discoverOpenClawPluginsMock.mockClear();
+    resolveInstalledPluginIndexRegistry({ discovery: emptyDiscovery, installRecords: {} });
+    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  describe("resolveInstalledPluginIndexRegistry", () => {
-    it("skips internal discoverOpenClawPlugins when discovery is supplied", () => {
-      resolveInstalledPluginIndexRegistry({ discovery: emptyDiscovery, installRecords: {} });
-      expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
-    });
+  it("calls discoverOpenClawPlugins when neither discovery nor candidates supplied", () => {
+    loadPluginManifestRegistry({});
+    expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
 
-    it("calls discoverOpenClawPlugins when neither discovery nor candidates supplied", () => {
-      resolveInstalledPluginIndexRegistry({ installRecords: {} });
-      expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
-    });
+    discoverOpenClawPluginsMock.mockClear();
+    resolveInstalledPluginIndexRegistry({ installRecords: {} });
+    expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+  });
 
-    it("prefers explicit candidates over discovery when both are supplied", () => {
-      resolveInstalledPluginIndexRegistry({
-        candidates: [],
-        discovery: emptyDiscovery,
-        installRecords: {},
-      });
-      expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
+  it("prefers explicit candidates over discovery when both are supplied", () => {
+    loadPluginManifestRegistry({ candidates: [], diagnostics: [], discovery: emptyDiscovery });
+    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
+
+    discoverOpenClawPluginsMock.mockClear();
+    resolveInstalledPluginIndexRegistry({
+      candidates: [],
+      discovery: emptyDiscovery,
+      installRecords: {},
     });
+    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 });

@@ -253,6 +253,9 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
       openKeyedStore: () => {
         throw new Error("openKeyedStore is only available through the plugin runtime proxy.");
       },
+      openSyncKeyedStore: () => {
+        throw new Error("openSyncKeyedStore is only available through the plugin runtime proxy.");
+      },
     },
     tasks,
     taskFlow,

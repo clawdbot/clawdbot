@@ -50,6 +50,7 @@ let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
+let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -63,6 +64,7 @@ async function loadChatHelpers(): Promise<void> {
     clearPendingQueueItemsForRun,
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
+    retryReconnectableQueuedChatSends,
   } = await import("./app-chat.ts"));
 }
 
@@ -243,6 +245,92 @@ describe("refreshChat", () => {
       scope: "text",
     });
     expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("scopes global chat refresh session rows to the selected agent", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "global",
+      agentId: "work",
+      limit: 100,
+      maxChars: 4000,
+    });
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "global sessions list payload",
+    );
+    expect(sessionsListPayload.agentId).toBe("work");
+    expect(sessionsListPayload.includeGlobal).toBe(true);
+  });
+
+  it("scopes agent main aliases as selected global chat refreshes", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:work:main",
+      agentsList: { defaultId: "main", mainKey: "main" },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "agent:work:main",
+      agentId: "work",
+      limit: 100,
+      maxChars: 4000,
+    });
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "global alias sessions list payload",
+    );
+    expect(sessionsListPayload.agentId).toBe("work");
+    expect(sessionsListPayload.includeGlobal).toBe(true);
+  });
+
+  it("uses hello default for global chat refresh before agents list loads", async () => {
+    const request = vi.fn(() => new Promise<unknown>(() => undefined));
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "global",
+      hello: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        snapshot: { sessionDefaults: { defaultAgentId: "ops" } },
+      },
+    });
+
+    const refresh = refreshChat(host);
+    const outcome = await raceWithMacrotask(refresh);
+
+    expect(outcome).toBe("resolved");
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "global",
+      agentId: "ops",
+      limit: 100,
+      maxChars: 4000,
+    });
+    const sessionsListPayload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "sessions.list",
+      "hello-default global sessions list payload",
+    );
+    expect(sessionsListPayload.agentId).toBe("ops");
   });
 
   it("can wait for history without waiting for secondary metadata refreshes", async () => {
@@ -1376,6 +1464,48 @@ describe("handleSendChat", () => {
     expect(host.chatQueue[0]?.sendRunId).toEqual(expect.any(String));
   });
 
+  it("replays queued global sends under the originally selected agent", async () => {
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return Promise.resolve({ runId: "run-work", status: "started" });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: null,
+      connected: false,
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessage: "send to work later",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "send to work later",
+      sessionKey: "global",
+      agentId: "work",
+      sendState: "waiting-reconnect",
+    });
+
+    host.assistantAgentId = "main";
+    host.client = { request } as unknown as ChatHost["client"];
+    host.connected = true;
+    await retryReconnectableQueuedChatSends(host);
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "queued global send payload",
+    );
+    expect(payload.sessionKey).toBe("global");
+    expect(payload.agentId).toBe("work");
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+  });
+
   it("marks saved session queued sends waiting after a disconnect", () => {
     const host = makeHost({
       chatQueue: [],
@@ -1484,6 +1614,40 @@ describe("handleSendChat", () => {
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
+  });
+
+  it("scopes /clear resets for selected-agent global sessions", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.reset") {
+        return { ok: true };
+      }
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      chatMessage: "/clear",
+      chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith("sessions.reset", {
+      key: "global",
+      agentId: "work",
+    });
+    expect(request).toHaveBeenCalledWith("chat.history", {
+      sessionKey: "global",
+      agentId: "work",
+      limit: 100,
+      maxChars: 4000,
+    });
+    expect(host.chatMessages).toStrictEqual([]);
   });
 
   it("shows a visible pending item for /steer on the active run", async () => {
@@ -1748,6 +1912,29 @@ describe("handleAbortChat", () => {
     await handleAbortChat(host);
 
     expect(host.pendingAbort).toEqual({ runId: null, sessionKey: "agent:main" });
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("queues selected-agent global aborts with agent scope while disconnected", async () => {
+    const host = makeHost({
+      connected: false,
+      chatRunId: null,
+      chatMessage: "draft",
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+      sessionsResult: createSessionsResult([
+        row("global", { hasActiveRun: true, agentId: "work" } as Partial<GatewaySessionRow>),
+      ]),
+    });
+
+    await handleAbortChat(host);
+
+    expect(host.pendingAbort).toEqual({
+      runId: null,
+      sessionKey: "global",
+      agentId: "work",
+    });
     expect(host.chatMessage).toBe("");
   });
 

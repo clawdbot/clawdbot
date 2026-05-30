@@ -29,6 +29,13 @@
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "@openclaw/agent-core": ["./packages/agent-core/src/index.ts"],
       "@openclaw/agent-core/*": ["./packages/agent-core/src/*"],
+      "@openclaw/llm-core": ["./packages/llm-core/src/index.ts"],
+      "@openclaw/llm-core/diagnostics": ["./packages/llm-core/src/utils/diagnostics.ts"],
+      "@openclaw/llm-core/event-stream": ["./packages/llm-core/src/utils/event-stream.ts"],
+      "@openclaw/llm-core/validation": ["./packages/llm-core/src/validation.ts"],
+      "@openclaw/llm-core/*": ["./packages/llm-core/src/*"],
+      "@openclaw/llm-runtime": ["./packages/llm-runtime/src/index.ts"],
+      "@openclaw/llm-runtime/*": ["./packages/llm-runtime/src/*"],
       "@openclaw/gateway-client": ["./packages/gateway-client/src/index.ts"],
       "@openclaw/gateway-client/*": ["./packages/gateway-client/src/*"],
       "@openclaw/gateway-protocol": ["./packages/gateway-protocol/src/index.ts"],
@@ -44,6 +51,32 @@
       ],
       "@openclaw/gateway-protocol/version": ["./packages/gateway-protocol/src/version.ts"],
       "@openclaw/gateway-protocol/*": ["./packages/gateway-protocol/src/*"],
+      "@openclaw/media-generation-core": ["./packages/media-generation-core/src/index.ts"],
+      "@openclaw/media-generation-core/capability-model-ref": [
+        "./packages/media-generation-core/src/capability-model-ref.ts"
+      ],
+      "@openclaw/media-generation-core/catalog": [
+        "./packages/media-generation-core/src/catalog.ts"
+      ],
+      "@openclaw/media-generation-core/model-ref": [
+        "./packages/media-generation-core/src/model-ref.ts"
+      ],
+      "@openclaw/media-generation-core/normalization": [
+        "./packages/media-generation-core/src/normalization.ts"
+      ],
+      "@openclaw/media-generation-core/*": ["./packages/media-generation-core/src/*"],
+      "@openclaw/markdown-core": ["./packages/markdown-core/src/index.ts"],
+      "@openclaw/markdown-core/code-spans": ["./packages/markdown-core/src/code-spans.ts"],
+      "@openclaw/markdown-core/fences": ["./packages/markdown-core/src/fences.ts"],
+      "@openclaw/markdown-core/frontmatter": ["./packages/markdown-core/src/frontmatter.ts"],
+      "@openclaw/markdown-core/ir": ["./packages/markdown-core/src/ir.ts"],
+      "@openclaw/markdown-core/render": ["./packages/markdown-core/src/render.ts"],
+      "@openclaw/markdown-core/render-aware-chunking": [
+        "./packages/markdown-core/src/render-aware-chunking.ts"
+      ],
+      "@openclaw/markdown-core/tables": ["./packages/markdown-core/src/tables.ts"],
+      "@openclaw/markdown-core/types": ["./packages/markdown-core/src/types.ts"],
+      "@openclaw/markdown-core/*": ["./packages/markdown-core/src/*"],
       "@openclaw/net-policy": ["./packages/net-policy/src/index.ts"],
       "@openclaw/net-policy/ip": ["./packages/net-policy/src/ip.ts"],
       "@openclaw/net-policy/ipv4": ["./packages/net-policy/src/ipv4.ts"],

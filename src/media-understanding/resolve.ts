@@ -6,6 +6,7 @@ import type {
   MediaUnderstandingScopeConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_CHARS_BY_CAPABILITY,
@@ -17,9 +18,24 @@ import { normalizeMediaProviderId } from "./provider-id.js";
 import { normalizeMediaUnderstandingChatType, resolveMediaUnderstandingScope } from "./scope.js";
 import type { MediaUnderstandingCapability } from "./types.js";
 
+export const DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS = 30_000;
+const MIN_MEDIA_TIMEOUT_MS = 1000;
+
 export function resolveTimeoutMs(seconds: number | undefined, fallbackSeconds: number): number {
   const value = typeof seconds === "number" && Number.isFinite(seconds) ? seconds : fallbackSeconds;
-  return Math.max(1000, Math.floor(value * 1000));
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return MIN_MEDIA_TIMEOUT_MS;
+  }
+  const timeoutMs = Math.floor(value * 1000);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(timeoutMs) ? timeoutMs : MAX_TIMER_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+    MIN_MEDIA_TIMEOUT_MS,
+  );
+}
+
+export function resolveMediaRuntimeTimeoutMs(timeoutMs: number | undefined): number {
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_MEDIA_RUNTIME_TIMEOUT_MS);
 }
 
 export function resolvePrompt(

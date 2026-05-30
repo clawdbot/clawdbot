@@ -23,6 +23,7 @@ for env_name in \
   OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS \
   OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS \
   OPENCLAW_BUNDLED_PLUGIN_TTS_LIVE_PROVIDER \
+  OPENCLAW_PLUGIN_LIFECYCLE_TRACE \
   OPENAI_API_KEY; do
   env_value="${!env_name:-}"
   if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then

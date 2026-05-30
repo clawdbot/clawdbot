@@ -493,6 +493,69 @@ describe("config schema", () => {
     expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
   });
 
+  it("accepts exec reviewer model config in global and agent scopes", () => {
+    const tools = ToolsSchema.parse({
+      exec: {
+        reviewer: {
+          model: {
+            primary: "openrouter/anthropic/claude-sonnet-4-6",
+          },
+          timeoutMs: 15_000,
+        },
+      },
+    });
+    expect(tools?.exec?.reviewer?.model).toEqual({
+      primary: "openrouter/anthropic/claude-sonnet-4-6",
+    });
+
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                reviewer: {
+                  model: "openai/gpt-5.5",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(config.agents?.list?.[0]?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("rejects mixed normalized and legacy exec policy config", () => {
+    expect(
+      ToolsSchema.safeParse({
+        exec: {
+          mode: "auto",
+          ask: "always",
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      OpenClawSchema.safeParse({
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: {
+                exec: {
+                  mode: "full",
+                  security: "deny",
+                },
+              },
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts experimental tool flags in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       experimental: {

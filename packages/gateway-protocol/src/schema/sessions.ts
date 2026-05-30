@@ -15,6 +15,7 @@ export const SessionOperationEventSchema = Type.Object(
     operation: Type.Literal("compact"),
     phase: Type.Union([Type.Literal("start"), Type.Literal("end")]),
     sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     ts: Type.Integer({ minimum: 0 }),
     completed: Type.Optional(Type.Boolean()),
     reason: Type.Optional(Type.String()),
@@ -143,6 +144,7 @@ export const SessionsCreateParamsSchema = Type.Object(
 export const SessionsSendParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
     attachments: Type.Optional(Type.Array(Type.Unknown())),
@@ -155,6 +157,7 @@ export const SessionsSendParamsSchema = Type.Object(
 export const SessionsMessagesSubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -162,6 +165,7 @@ export const SessionsMessagesSubscribeParamsSchema = Type.Object(
 export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -178,6 +182,7 @@ export const SessionsAbortParamsSchema = Type.Object(
 export const SessionsPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
@@ -245,6 +250,7 @@ export const SessionsPluginPatchResultSchema = Type.Object(
 export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     reason: Type.Optional(Type.Union([Type.Literal("new"), Type.Literal("reset")])),
   },
   { additionalProperties: false },
@@ -253,6 +259,7 @@ export const SessionsResetParamsSchema = Type.Object(
 export const SessionsDeleteParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     deleteTranscript: Type.Optional(Type.Boolean()),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
@@ -263,6 +270,7 @@ export const SessionsDeleteParamsSchema = Type.Object(
 export const SessionsCompactParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     maxLines: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
@@ -271,6 +279,7 @@ export const SessionsCompactParamsSchema = Type.Object(
 export const SessionsCompactionListParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -278,6 +287,7 @@ export const SessionsCompactionListParamsSchema = Type.Object(
 export const SessionsCompactionGetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     checkpointId: NonEmptyString,
   },
   { additionalProperties: false },
@@ -286,6 +296,7 @@ export const SessionsCompactionGetParamsSchema = Type.Object(
 export const SessionsCompactionBranchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     checkpointId: NonEmptyString,
   },
   { additionalProperties: false },
@@ -294,6 +305,7 @@ export const SessionsCompactionBranchParamsSchema = Type.Object(
 export const SessionsCompactionRestoreParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     checkpointId: NonEmptyString,
   },
   { additionalProperties: false },

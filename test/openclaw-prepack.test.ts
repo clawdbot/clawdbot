@@ -53,21 +53,15 @@ describe("runPrepackCommand", () => {
 });
 
 describe("resolvePrepackCommandTimeoutMs", () => {
-  it("uses a positive environment timeout", () => {
-    expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: "1234" })).toBe(
-      1234,
-    );
-  });
-
-  it("falls back when the environment timeout is invalid", () => {
-    expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: "nope" })).toBe(
-      30 * 60 * 1000,
-    );
-  });
-
-  it("falls back when the environment timeout has a numeric prefix", () => {
-    expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: "10m" })).toBe(
-      30 * 60 * 1000,
-    );
+  it("parses only positive integer environment timeouts", () => {
+    for (const [raw, expected] of [
+      ["1234", 1234],
+      ["nope", 30 * 60 * 1000],
+      ["10m", 30 * 60 * 1000],
+    ] as const) {
+      expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: raw })).toBe(
+        expected,
+      );
+    }
   });
 });

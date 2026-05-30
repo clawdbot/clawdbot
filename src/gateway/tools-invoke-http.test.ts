@@ -861,6 +861,26 @@ describe("POST /tools/invoke", () => {
 
     const body = await expectOkInvokeResponse(res);
     expect(body.result).toEqual({ ok: true, result: [] });
+
+    setMainAllowedTools({ allow: ["write_scoped_test"] });
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "token",
+    });
+
+    const writeScopedRes = await invokeTool({
+      port: sharedPort,
+      headers: {
+        authorization: "Bearer secret",
+        "x-openclaw-scopes": "operator.approvals",
+      },
+      tool: "write_scoped_test",
+      sessionKey: "main",
+    });
+
+    const writeScopedBody = await expectOkInvokeResponse(writeScopedRes);
+    expect(writeScopedBody.result).toEqual({ ok: true, result: "write-scoped" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
 
   it("executes tools for write-scoped callers on the HTTP path", async () => {
@@ -896,28 +916,6 @@ describe("POST /tools/invoke", () => {
       sessionKey: "main",
     });
     expect(adminRes.status).toBe(200);
-    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
-  });
-
-  it("treats shared-secret bearer auth as full operator access on /tools/invoke", async () => {
-    setMainAllowedTools({ allow: ["write_scoped_test"] });
-    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
-      ok: true,
-      method: "token",
-    });
-
-    const res = await invokeTool({
-      port: sharedPort,
-      headers: {
-        authorization: "Bearer secret",
-        "x-openclaw-scopes": "operator.approvals",
-      },
-      tool: "write_scoped_test",
-      sessionKey: "main",
-    });
-
-    const body = await expectOkInvokeResponse(res);
-    expect(body.result).toEqual({ ok: true, result: "write-scoped" });
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
 

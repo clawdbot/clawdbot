@@ -27,6 +27,7 @@ describe("transcript events", () => {
     emitSessionTranscriptUpdate({
       sessionFile: "  /tmp/session.jsonl  ",
       sessionKey: "  agent:main:main  ",
+      agentId: "  main  ",
       message: { role: "assistant", content: "hi" },
       messageId: "  msg-1  ",
       messageSeq: 2,
@@ -35,6 +36,7 @@ describe("transcript events", () => {
     expect(listener).toHaveBeenCalledWith({
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:main:main",
+      agentId: "main",
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,

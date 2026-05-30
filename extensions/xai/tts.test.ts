@@ -2,6 +2,31 @@ import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { isValidXaiTtsVoice, XAI_BASE_URL, XAI_TTS_VOICES, xaiTTS } from "./tts.js";
 
+function createStreamingAudioResponse(params: {
+  chunkCount: number;
+  chunkSize: number;
+  byte: number;
+}): { response: Response; getReadCount: () => number } {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "audio/mpeg" },
+    }),
+    getReadCount: () => reads,
+  };
+}
+
 describe("xai tts", () => {
   const originalFetch = globalThis.fetch;
   let ssrfMock: { mockRestore: () => void } | undefined;
@@ -101,6 +126,31 @@ describe("xai tts", () => {
       expect(headers.get("user-agent")).toBe("openclaw/2026.3.22");
       expect(headers.get("authorization")).toBe("Bearer ok-key");
       vi.unstubAllEnvs();
+    });
+
+    it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
+      const streamed = createStreamingAudioResponse({
+        chunkCount: 20,
+        chunkSize: 1024,
+        byte: 121,
+      });
+      const fetchMock = vi.fn(async () => streamed.response);
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        xaiTTS({
+          text: "hello",
+          apiKey: "ok-key",
+          baseUrl: XAI_BASE_URL,
+          voiceId: "eve",
+          language: "en",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+          maxBytes: 2048,
+        }),
+      ).rejects.toThrow("xAI TTS audio response exceeds 2048 bytes");
+
+      expect(streamed.getReadCount()).toBeLessThan(20);
     });
 
     it("falls back to raw body text when the error body is non-JSON", async () => {

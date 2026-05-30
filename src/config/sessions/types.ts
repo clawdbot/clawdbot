@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
-import type { Skill } from "../../agents/skills/skill-contract.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { TtsAutoMode } from "../types.tts.js";
 
@@ -201,6 +201,34 @@ export interface QuotaSuspension {
   state: LaneExecutionState; // State machine check for hot-path
 }
 
+export type SessionGoalStatus =
+  | "active"
+  | "paused"
+  | "blocked"
+  | "usage_limited"
+  | "budget_limited"
+  | "complete";
+
+export type SessionGoal = {
+  schemaVersion: 1;
+  id: string;
+  objective: string;
+  status: SessionGoalStatus;
+  createdAt: number;
+  updatedAt: number;
+  tokenStart: number;
+  tokenStartFresh?: boolean;
+  tokensUsed: number;
+  tokenBudget?: number;
+  continuationTurns: number;
+  lastStatusNote?: string;
+  pausedAt?: number;
+  blockedAt?: number;
+  completedAt?: number;
+  usageLimitedAt?: number;
+  budgetLimitedAt?: number;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -254,6 +282,8 @@ export type SessionEntry = {
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
   quotaSuspension?: QuotaSuspension;
+  /** Core-owned durable goal state for this thread/session. */
+  goal?: SessionGoal;
   /** Timestamp (ms) when the current sessionId first became active. */
   sessionStartedAt?: number;
   /** Stable usage lineage key for transcript-backed rollups across sessionId rotations. */
@@ -628,7 +658,7 @@ export type SessionSkillSnapshot = {
    * each SKILL.md body) so the embedded runner can skip a workspace skill
    * scan within a turn. Stripped from sessions.json on every read and write
    * via normalizeSessionStore — see store-load.ts. On a cold session resume
-   * this is undefined and src/agents/embedded-agent-runner/skills-runtime.ts
+   * this is undefined and src/skills/runtime/embedded-run-entries.ts
    * rebuilds it by reloading skill entries from disk.
    */
   resolvedSkills?: Skill[];

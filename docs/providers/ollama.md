@@ -9,6 +9,12 @@ title: "Ollama"
 
 OpenClaw integrates with Ollama's native API (`/api/chat`) for hosted cloud models and local/self-hosted Ollama servers. You can use Ollama in three modes: `Cloud + Local` through a reachable Ollama host, `Cloud only` against `https://ollama.com`, or `Local only` against a reachable Ollama host.
 
+OpenClaw also registers `ollama-cloud` as a first-class hosted provider id for
+direct Ollama Cloud use. Use refs like `ollama-cloud/kimi-k2.5:cloud` when you
+want cloud-only routing without sharing the local `ollama` provider id.
+
+For the dedicated cloud-only setup page, see [Ollama Cloud](/providers/ollama-cloud).
+
 <Warning>
 **Remote Ollama users**: Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`) with OpenClaw. This breaks tool calling and models may output raw tool JSON as plain text. Use the native Ollama API URL instead: `baseUrl: "http://host:11434"` (no `/v1`).
 </Warning>
@@ -22,7 +28,7 @@ Ollama provider config uses `baseUrl` as the canonical key. OpenClaw also accept
     Local and LAN Ollama hosts do not need a real bearer token. OpenClaw uses the local `ollama-local` marker only for loopback, private-network, `.local`, and bare-hostname Ollama base URLs.
   </Accordion>
   <Accordion title="Remote and Ollama Cloud hosts">
-    Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`.
+    Remote public hosts and Ollama Cloud (`https://ollama.com`) require a real credential through `OLLAMA_API_KEY`, an auth profile, or the provider's `apiKey`. For direct hosted use, prefer provider `ollama-cloud`.
   </Accordion>
   <Accordion title="Custom provider ids">
     Custom provider ids that set `api: "ollama"` follow the same rules. For example, an `ollama-remote` provider that points at a private LAN Ollama host can use `apiKey: "ollama-local"` and sub-agents will resolve that marker through the Ollama provider hook instead of treating it as a missing credential. Memory search can also set `agents.defaults.memorySearch.provider` to that custom provider id so embeddings use the matching Ollama endpoint.
@@ -166,6 +172,13 @@ Choose your preferred setup method and mode.
     Use **Cloud only** during setup. OpenClaw prompts for `OLLAMA_API_KEY`, sets `baseUrl: "https://ollama.com"`, and seeds the hosted cloud model list. This path does **not** require a local Ollama server or `ollama signin`.
 
     The cloud model list shown during `openclaw onboard` is populated live from `https://ollama.com/api/tags`, capped at 500 entries, so the picker reflects the current hosted catalog rather than a static seed. If `ollama.com` is unreachable or returns no models at setup time, OpenClaw falls back to the previous hardcoded suggestions so onboarding still completes.
+
+    You can also configure the first-class cloud provider directly:
+
+    ```bash
+    openclaw onboard --auth-choice ollama-cloud
+    openclaw models set ollama-cloud/kimi-k2.5:cloud
+    ```
 
   </Tab>
 

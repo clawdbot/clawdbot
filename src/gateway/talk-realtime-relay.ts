@@ -55,7 +55,14 @@ const FORCED_CONSULT_RESULT_MAX_CHARS = 1_800;
 type TalkRealtimeRelayEventPayload =
   | { relaySessionId: string; type: "ready" }
   | { relaySessionId: string; type: "inputAudio"; byteLength: number }
-  | { relaySessionId: string; type: "audio"; audioBase64: string }
+  | {
+      relaySessionId: string;
+      type: "audio";
+      audioBase64: string;
+      itemId?: string;
+      responseId?: string;
+    }
+  | { relaySessionId: string; type: "audioDone"; itemId?: string; responseId?: string }
   | { relaySessionId: string; type: "clear" }
   | { relaySessionId: string; type: "mark"; markName: string }
   | {
@@ -318,6 +325,8 @@ export function createTalkRealtimeRelaySession(
       ...event,
       ...(talkEvent ? { talkEvent: talk.emit(talkEvent) } : {}),
     });
+  let currentOutputItemId: string | undefined;
+  let currentOutputResponseId: string | undefined;
   const bridge = createRealtimeVoiceBridgeSession({
     provider: params.provider,
     cfg: params.cfg,
@@ -337,6 +346,8 @@ export function createTalkRealtimeRelaySession(
             relaySessionId,
             type: "audio",
             audioBase64: audio.toString("base64"),
+            ...(currentOutputItemId ? { itemId: currentOutputItemId } : {}),
+            ...(currentOutputResponseId ? { responseId: currentOutputResponseId } : {}),
           },
           {
             type: "output.audio.delta",
@@ -369,6 +380,40 @@ export function createTalkRealtimeRelaySession(
           },
         );
       },
+    },
+    onEvent: (event) => {
+      if (event.direction !== "server") {
+        return;
+      }
+      if (
+        event.type === "conversation.output_audio.delta" ||
+        event.type === "response.audio.delta" ||
+        event.type === "response.output_audio.delta"
+      ) {
+        currentOutputItemId = event.itemId ?? currentOutputItemId;
+        currentOutputResponseId = event.responseId ?? currentOutputResponseId;
+        return;
+      }
+      if (
+        event.type === "response.audio.done" ||
+        event.type === "response.output_audio.done" ||
+        event.type === "conversation.output_audio.done" ||
+        event.type === "response.done" ||
+        event.type === "response.cancelled"
+      ) {
+        emit({
+          relaySessionId,
+          type: "audioDone",
+          ...((event.itemId ?? currentOutputItemId)
+            ? { itemId: event.itemId ?? currentOutputItemId }
+            : {}),
+          ...((event.responseId ?? currentOutputResponseId)
+            ? { responseId: event.responseId ?? currentOutputResponseId }
+            : {}),
+        });
+        currentOutputItemId = undefined;
+        currentOutputResponseId = undefined;
+      }
     },
     onTranscript: (role, text, final) => {
       const turnId = relay ? ensureRelayTurn(relay) : undefined;

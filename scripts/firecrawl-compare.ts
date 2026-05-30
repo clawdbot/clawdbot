@@ -1,6 +1,8 @@
+import { pathToFileURL } from "node:url";
 import { fetchFirecrawlContent } from "../extensions/firecrawl/api.ts";
 import { extractReadableContent } from "../src/agents/tools/web-tools.js";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
 
 const DEFAULT_URLS = [
   "https://en.wikipedia.org/wiki/Web_scraping",
@@ -18,6 +20,12 @@ const baseUrl = process.env.FIRECRAWL_BASE_URL ?? "https://api.firecrawl.dev";
 const userAgent =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
 const timeoutMs = 30_000;
+const FETCH_HTML_MAX_BYTES = 5 * 1024 * 1024;
+
+type FetchHtmlOptions = {
+  fetchImpl?: typeof fetch;
+  maxBytes?: number;
+};
 
 function truncate(value: string, max = 180): string {
   if (!value) {
@@ -26,7 +34,22 @@ function truncate(value: string, max = 180): string {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
-async function fetchHtml(url: string): Promise<{
+function readBoundedResponseText(
+  response: Response,
+  label: string,
+  signal: AbortSignal,
+  maxBytes = FETCH_HTML_MAX_BYTES,
+): Promise<string> {
+  return readBoundedResponseTextWithLimit(response, label, maxBytes, {
+    createTooLargeError: (message) => new Error(message),
+    signal,
+  });
+}
+
+async function fetchHtml(
+  url: string,
+  options: FetchHtmlOptions = {},
+): Promise<{
   ok: boolean;
   status: number;
   contentType: string;
@@ -35,14 +58,20 @@ async function fetchHtml(url: string): Promise<{
 }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const fetchImpl = options.fetchImpl ?? fetch;
   try {
-    const res = await fetch(url, {
+    const res = await fetchImpl(url, {
       method: "GET",
       headers: { Accept: "*/*", "User-Agent": userAgent },
       signal: controller.signal,
     });
     const contentType = res.headers.get("content-type") ?? "application/octet-stream";
-    const body = await res.text();
+    const body = await readBoundedResponseText(
+      res,
+      "local HTML fetch",
+      controller.signal,
+      options.maxBytes ?? FETCH_HTML_MAX_BYTES,
+    );
     return {
       ok: res.ok,
       status: res.status,
@@ -135,7 +164,15 @@ async function run() {
   process.exit(0);
 }
 
-run().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  run().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
+
+export const testing = {
+  FETCH_HTML_MAX_BYTES,
+  fetchHtml,
+  readBoundedResponseText,
+};

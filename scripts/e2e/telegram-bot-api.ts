@@ -1,3 +1,5 @@
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
+
 type JsonObject = Record<string, unknown>;
 
 type TelegramBotApiOptions = {
@@ -30,46 +32,6 @@ function optionalString(source: JsonObject, key: string) {
 
 function taggedError(message: string, code: string) {
   return Object.assign(new Error(message), { code });
-}
-
-async function readBoundedResponseText(
-  response: Response,
-  label: string,
-  byteLimit: number,
-  timeoutPromise: Promise<never>,
-) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw taggedError(`${label} response body exceeded ${byteLimit} bytes`, "ETOOBIG");
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 function parseJsonPayload(rawPayload: string, label: string) {
@@ -111,7 +73,12 @@ export async function telegramBotApi(
       }),
       timeoutPromise,
     ]);
-    const rawPayload = await readBoundedResponseText(response, label, maxBodyBytes, timeoutPromise);
+    const rawPayload = await readBoundedResponseText(response, label, maxBodyBytes, {
+      createTooLargeError(message) {
+        return taggedError(message, "ETOOBIG");
+      },
+      timeoutPromise,
+    });
     const payload = parseJsonPayload(rawPayload, label);
     if (!response.ok || payload.ok !== true) {
       throw new Error(

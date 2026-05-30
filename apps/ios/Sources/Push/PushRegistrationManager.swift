@@ -17,6 +17,7 @@ private struct RelayGatewayPushRegistrationPayload: Encodable {
     var topic: String
     var environment: String
     var distribution: String
+    var relayOrigin: String
     var tokenDebugSuffix: String?
 }
 
@@ -107,6 +108,7 @@ actor PushRegistrationManager {
                     topic: topic,
                     environment: self.buildConfig.apnsEnvironment.rawValue,
                     distribution: self.buildConfig.distribution.rawValue,
+                    relayOrigin: relayOrigin,
                     tokenDebugSuffix: stored.tokenDebugSuffix))
         }
 
@@ -138,6 +140,7 @@ actor PushRegistrationManager {
                 topic: topic,
                 environment: self.buildConfig.apnsEnvironment.rawValue,
                 distribution: self.buildConfig.distribution.rawValue,
+                relayOrigin: relayOrigin,
                 tokenDebugSuffix: registrationState.tokenDebugSuffix))
     }
 

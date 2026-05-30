@@ -38,7 +38,7 @@ export {
   type TransportSetting,
   type WarningSettings,
 } from "./settings-manager.js";
-export type { Skill } from "./skills.js";
+export type { Skill } from "../../skills/loading/session.js";
 export * from "./source-info.js";
 export * from "./tools/index.js";
 export type * from "./extensions/types.js";

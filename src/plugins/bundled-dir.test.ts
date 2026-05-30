@@ -302,6 +302,21 @@ describe("resolveBundledPluginsDir", () => {
     });
   });
 
+  it("uses source extensions in pnpm workspace mirrors without git metadata", () => {
+    const repoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-source-mirror-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasPnpmWorkspace: true,
+    });
+    seedBundledPluginTree(repoRoot, "extensions", "memory-core");
+
+    expectResolvedBundledDirFromRoot({
+      repoRoot,
+      expectedRelativeDir: "extensions",
+    });
+  });
+
   it("keeps built bundled plugins for git-looking trees without pnpm workspace metadata", () => {
     const repoRoot = createOpenClawRoot({
       prefix: "openclaw-bundled-dir-git-no-pnpm-",

@@ -4,7 +4,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { createServer as createTcpServer, type Server, type Socket } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { verifyCliCronMcpLoopbackPreflight } from "./gateway-cli-backend.live-probe-helpers.js";
 import {
   clearActiveMcpLoopbackRuntimeByOwnerToken,
@@ -58,11 +58,16 @@ function preflightParams(env: NodeJS.ProcessEnv = {}) {
   };
 }
 
-afterEach(() => {
-  clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
-});
-
 describe("gateway CLI backend live probe helpers", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearActiveMcpLoopbackRuntimeByOwnerToken(ownerToken);
+  });
+
   it("reads loopback JSON-RPC responses without invoking cron verification when cron is absent", async () => {
     const methods: string[] = [];
     const server = createHttpServer((request, response) => {

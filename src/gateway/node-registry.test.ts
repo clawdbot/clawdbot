@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { NodeRegistry, serializeEventPayload } from "./node-registry.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -246,6 +247,43 @@ describe("gateway/node-registry", () => {
           terminal: true,
         }),
       ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps oversized invoke and system.run authorization timers", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const registry = new NodeRegistry();
+    const frames: string[] = [];
+    try {
+      registry.register(makeClient("conn-1", "node-1", frames), {});
+      const invoke = registry.invoke({
+        nodeId: "node-1",
+        command: "system.run",
+        params: {
+          runId: "run-oversized",
+          sessionKey: "agent:main:main",
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+        },
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await expect(invoke).resolves.toEqual({
+        ok: false,
+        error: { code: "TIMEOUT", message: "node invoke timed out" },
+      });
+      expect(
+        registry.authorizeSystemRunEvent({
+          nodeId: "node-1",
+          connId: "conn-1",
+          runId: "run-oversized",
+          sessionKey: "agent:main:main",
+          terminal: true,
+        }),
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }

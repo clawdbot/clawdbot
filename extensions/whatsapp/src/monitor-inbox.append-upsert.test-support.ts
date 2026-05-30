@@ -81,6 +81,29 @@ describe("append upsert handling (#20952)", () => {
     await listener.close();
   });
 
+  it("skips append messages with non-decimal string timestamps", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    const recentTs = Math.floor(Date.now() / 1000) - 5;
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "hex-1", fromMe: false, remoteJid: "120363@g.us" },
+          message: { conversation: "hex timestamp" },
+          messageTimestamp: `0x${recentTs.toString(16)}`,
+          pushName: "HexTs",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
   it("handles Long-like protobuf timestamps correctly", async () => {
     const onMessage = vi.fn(async () => {});
     const { listener, sock } = await startInboxMonitor(onMessage);

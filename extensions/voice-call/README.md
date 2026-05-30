@@ -10,11 +10,9 @@ Providers:
 - **Mock** (dev/no network)
 
 Docs: `https://docs.openclaw.ai/plugins/voice-call`
-Plugin system: `https://docs.openclaw.ai/plugin`
+Plugin system: `https://docs.openclaw.ai/tools/plugin`
 
-## Install (local dev)
-
-### Option A: install via OpenClaw (recommended)
+## Install
 
 ```bash
 openclaw plugins install @openclaw/voice-call
@@ -22,7 +20,7 @@ openclaw plugins install @openclaw/voice-call
 
 Restart the Gateway afterwards.
 
-### Option B: copy into your global extensions folder (dev)
+## Local dev install
 
 ```bash
 PLUGIN_HOME=~/.openclaw/extensions

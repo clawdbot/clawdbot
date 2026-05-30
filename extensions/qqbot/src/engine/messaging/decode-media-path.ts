@@ -10,6 +10,13 @@
 
 import type { EngineLogger } from "../types.js";
 
+function getHomeForTildePath(windowsStyle: boolean): string | undefined {
+  if (windowsStyle && process.env.USERPROFILE) {
+    return process.env.USERPROFILE;
+  }
+  return process.env.HOME ?? process.env.USERPROFILE;
+}
+
 /**
  * Normalize a file path by expanding `~` to the home directory and trimming.
  *
@@ -18,9 +25,18 @@ import type { EngineLogger } from "../types.js";
  */
 function normalizePath(p: string): string {
   let result = p.trim();
-  if (result.startsWith("~/") || result === "~") {
+  if (result.startsWith("file://")) {
+    result = result.slice("file://".length);
+    try {
+      result = decodeURIComponent(result);
+    } catch {
+      // Keep the raw string if decoding fails.
+    }
+  }
+  const windowsStyleHomePath = result.startsWith("~\\");
+  if (result === "~" || result.startsWith("~/") || windowsStyleHomePath) {
     const home =
-      typeof process !== "undefined" ? (process.env.HOME ?? process.env.USERPROFILE) : undefined;
+      typeof process !== "undefined" ? getHomeForTildePath(windowsStyleHomePath) : undefined;
     if (home) {
       result = result === "~" ? home : `${home}${result.slice(1)}`;
     }

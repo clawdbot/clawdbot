@@ -4,7 +4,7 @@ import { startMatrixQaFaultProxy, type MatrixQaFaultProxy } from "./fault-proxy.
 
 const servers: Array<{ close(): Promise<void> }> = [];
 
-async function startTargetServer() {
+async function startTargetServer(params?: { responseBody?: string }) {
   const requests: Array<{
     authorization?: string;
     body: string;
@@ -23,7 +23,7 @@ async function startTargetServer() {
       url: req.url ?? "/",
     });
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ forwarded: true }));
+    res.end(params?.responseBody ?? JSON.stringify({ forwarded: true }));
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -166,6 +166,49 @@ describe("Matrix QA fault proxy", () => {
         body: "",
         method: "GET",
         url: "/_matrix/client/v3/sync?timeout=0&org.matrix.msc4222.use_state_after=true",
+      },
+    ]);
+  });
+
+  it("rejects oversized forwarded request bodies before contacting the target", async () => {
+    const target = await startTargetServer();
+    proxy = await startMatrixQaFaultProxy({
+      maxRequestBytes: 4,
+      targetBaseUrl: target.baseUrl,
+      rules: [],
+    });
+
+    const rejected = await fetch(`${proxy.baseUrl}/_matrix/client/v3/send`, {
+      body: "12345",
+      method: "POST",
+    });
+
+    expect(rejected.status).toBe(413);
+    await expect(rejected.json()).resolves.toMatchObject({
+      errcode: "MATRIX_QA_FAULT_PROXY_REQUEST_TOO_LARGE",
+    });
+    expect(target.requests).toEqual([]);
+  });
+
+  it("rejects oversized forwarded Matrix responses without buffering the full body", async () => {
+    const target = await startTargetServer({ responseBody: JSON.stringify({ payload: "large" }) });
+    proxy = await startMatrixQaFaultProxy({
+      maxResponseBytes: 8,
+      targetBaseUrl: target.baseUrl,
+      rules: [],
+    });
+
+    const rejected = await fetch(`${proxy.baseUrl}/_matrix/client/v3/sync`);
+
+    expect(rejected.status).toBe(502);
+    await expect(rejected.json()).resolves.toMatchObject({
+      errcode: "MATRIX_QA_FAULT_PROXY_RESPONSE_TOO_LARGE",
+    });
+    expect(target.requests).toEqual([
+      {
+        body: "",
+        method: "GET",
+        url: "/_matrix/client/v3/sync",
       },
     ]);
   });

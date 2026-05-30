@@ -1,6 +1,24 @@
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerProxyCli } from "./proxy-cli.js";
+
+const { runDebugProxySessionsCommand, runDebugProxyStartCommand, runProxyValidateCommand } =
+  vi.hoisted(() => ({
+    runDebugProxySessionsCommand: vi.fn(),
+    runDebugProxyStartCommand: vi.fn(),
+    runProxyValidateCommand: vi.fn(),
+  }));
+
+vi.mock("./proxy-cli.runtime.js", () => ({
+  runDebugProxyCoverageCommand: vi.fn(),
+  runDebugProxyPurgeCommand: vi.fn(),
+  runDebugProxyQueryCommand: vi.fn(),
+  runDebugProxyRunCommand: vi.fn(),
+  runDebugProxySessionsCommand,
+  runDebugProxyStartCommand,
+  runProxyValidateCommand,
+  readDebugProxyBlobCommand: vi.fn(),
+}));
 
 describe("proxy cli", () => {
   function createProgram() {
@@ -13,6 +31,12 @@ describe("proxy cli", () => {
     registerProxyCli(program);
     return program;
   }
+
+  beforeEach(() => {
+    runDebugProxySessionsCommand.mockReset();
+    runDebugProxyStartCommand.mockReset();
+    runProxyValidateCommand.mockReset();
+  });
 
   it("registers the debug proxy subcommands", () => {
     const program = new Command();
@@ -50,10 +74,35 @@ describe("proxy cli", () => {
     [["proxy", "validate", "--timeout-ms", "1.5"], /--timeout-ms must be an integer/],
     [["proxy", "validate", "--timeout-ms", "0"], /--timeout-ms must be a positive integer/],
     [["proxy", "start", "--port", "abc"], /--port must be an integer/],
+    [["proxy", "start", "--port", "-1"], /--port must be between 0 and 65535/],
     [["proxy", "run", "--port", "65536"], /--port must be between 0 and 65535/],
   ])("rejects invalid numeric option %s", (args, expected) => {
     const program = createProgram();
 
     expect(() => program.parse(["node", "openclaw", ...args])).toThrow(expected);
+  });
+
+  it("normalizes signed decimal numeric options through the shared parser", async () => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "openclaw", "proxy", "start", "--port", "+08080"]);
+    await program.parseAsync(["node", "openclaw", "proxy", "validate", "--timeout-ms", "+01000"]);
+    await program.parseAsync(["node", "openclaw", "proxy", "sessions", "--limit", "+05"]);
+
+    expect(runDebugProxyStartCommand).toHaveBeenCalledWith({
+      host: "127.0.0.1",
+      port: 8080,
+    });
+    expect(runProxyValidateCommand).toHaveBeenCalledWith({
+      allowedUrls: undefined,
+      apnsAuthority: undefined,
+      apnsReachability: undefined,
+      deniedUrls: undefined,
+      json: undefined,
+      proxyCaFile: undefined,
+      proxyUrl: undefined,
+      timeoutMs: 1000,
+    });
+    expect(runDebugProxySessionsCommand).toHaveBeenCalledWith({ limit: 5 });
   });
 });

@@ -85,10 +85,8 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: (configForTest: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
   // Required by src/agents/model-runtime-policy.ts, which is transitively
-  // imported through provider-auth-choice -> copilot-sdk-install ->
-  // copilot-routing -> model-runtime-policy. Without these stubs the mock
-  // surface is incomplete and the dynamic import of copilot-sdk-install
-  // explodes inside applyAuthChoice.
+  // imported through provider-auth-choice -> copilot-runtime-plugin-install ->
+  // copilot-routing -> model-runtime-policy.
   resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
   listAgentEntries: () => [],
 }));

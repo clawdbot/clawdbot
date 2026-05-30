@@ -159,10 +159,12 @@ export function registerCodexSupervisorMcpTools(
     "List Codex sessions visible to the OpenClaw supervisor.",
     {
       include_stored: z.boolean().optional(),
+      max_stored_sessions: z.number().int().min(1).max(1000).optional(),
     },
-    async ({ include_stored }) => {
+    async ({ include_stored, max_stored_sessions }) => {
       const result = await supervisor.listSessionSnapshot({
         includeStored: include_stored ?? false,
+        maxStoredSessions: max_stored_sessions,
       });
       return textResult(
         `codex sessions: ${result.sessions.length}`,

@@ -2,6 +2,14 @@
 
 Read-only diff viewer plugin for **OpenClaw** agents.
 
+## Install
+
+```bash
+openclaw plugins install @openclaw/diffs
+```
+
+Restart the Gateway after installing or updating the plugin.
+
 It gives agents one tool, `diffs`, that can:
 
 - render a gateway-hosted diff viewer for canvas use
@@ -117,6 +125,16 @@ Set plugin-wide defaults in `~/.openclaw/openclaw.json`:
 ```
 
 Explicit tool parameters still win over these defaults.
+
+## Docs
+
+- https://docs.openclaw.ai/tools/diffs
+
+## Package
+
+- Plugin id: `diffs`
+- Package: `@openclaw/diffs`
+- Minimum OpenClaw host: `2026.4.30`
 
 Security options:
 

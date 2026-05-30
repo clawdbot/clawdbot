@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, Credentials, LoginQRCallbackEvent } from "./zca-client.js";
@@ -154,6 +155,30 @@ describe("zalouser credential persistence", () => {
       });
     } finally {
       await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("caps oversized QR start timeout before computing the polling deadline", async () => {
+    createZaloMock.mockResolvedValueOnce({
+      loginQR: async () => new Promise(() => undefined),
+    });
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(MAX_TIMER_TIMEOUT_MS + 1);
+    try {
+      const result = await startZaloQrLogin({
+        profile: "qr-timeout-cap",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(result.message).toBe(
+        "Still preparing QR. Call wait to continue checking login status.",
+      );
+      expect(nowSpy).toHaveBeenCalledTimes(3);
+    } finally {
+      nowSpy.mockRestore();
     }
   });
 

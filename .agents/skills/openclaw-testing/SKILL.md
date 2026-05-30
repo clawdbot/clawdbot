@@ -75,7 +75,9 @@ OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test <path-or-filter>
 ```
 
 Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
-`pnpm test` wrapper so project routing, workers, and setup stay correct.
+`pnpm test` wrapper so project routing, workers, and setup stay correct. If raw
+Vitest is unavoidable, use `vitest run ...`; bare `vitest ...` starts local watch
+mode and will not exit on its own.
 When the checkout is a Codex worktree, prefer the direct node harness instead:
 
 ```bash

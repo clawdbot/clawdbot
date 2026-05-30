@@ -348,6 +348,33 @@ describe("googlechat google auth runtime", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("rejects malformed auth content-length before reading the body", async () => {
+    const release = vi.fn();
+    const arrayBuffer = vi.fn(async () => new ArrayBuffer(16));
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: {
+        arrayBuffer,
+        body: null,
+        headers: new Headers({
+          "content-length": "0x3",
+        }),
+        status: 200,
+        statusText: "OK",
+      } as unknown as Response,
+      release,
+    });
+
+    const guardedFetch = createGoogleAuthFetch();
+
+    await expect(
+      guardedFetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+      } as RequestInit),
+    ).rejects.toThrow("invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("builds a scoped Gaxios transport without mutating global window", async () => {
     const originalWindowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
     Reflect.deleteProperty(globalThis as object, "window");

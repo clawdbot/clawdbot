@@ -189,13 +189,14 @@ async function applyDefaultModelFromAuthChoice(params: {
       });
       nextConfig = migrationResult.config;
     }
-    const { ensureCopilotSdkForModelSelection } =
-      await import("../commands/copilot-sdk-install.js");
-    const copilotInstall = await ensureCopilotSdkForModelSelection({
+    const { ensureCopilotRuntimePluginForModelSelection } =
+      await import("../commands/copilot-runtime-plugin-install.js");
+    const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
       cfg: nextConfig,
       model: params.selectedModel,
       prompter: params.prompter,
       runtime: params.runtime,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     });
     nextConfig = copilotInstall.cfg;
   }

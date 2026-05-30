@@ -291,6 +291,33 @@ describe("buildOpenAISpeechProvider", () => {
     expect(result.voiceCompatible).toBe(false);
   });
 
+  it("applies the configured media byte cap to synthesized audio", async () => {
+    const provider = buildOpenAISpeechProvider();
+    globalThis.fetch = vi.fn(
+      async () => new Response(new Uint8Array(2048), { status: 200 }),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      provider.synthesize({
+        text: "hello",
+        cfg: {
+          agents: {
+            defaults: {
+              mediaMaxMb: 0.001,
+            },
+          },
+        } as never,
+        providerConfig: {
+          apiKey: "sk-test",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+        },
+        target: "audio-file",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("OpenAI TTS audio response exceeds");
+  });
+
   it("applies provider overrides to telephony synthesis", async () => {
     const provider = buildOpenAISpeechProvider();
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {

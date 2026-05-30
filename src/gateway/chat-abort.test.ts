@@ -11,6 +11,7 @@ import {
 type ChatAbortPayload = {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   seq: number;
   state: "aborted";
   stopReason?: string;
@@ -188,6 +189,39 @@ describe("abortChatRunById", () => {
     expect(result).toEqual({ aborted: true });
     const payload = firstBroadcastPayload(ops) as Record<string, unknown>;
     expect(payload.message).toBeUndefined();
+  });
+
+  it("fans out default-agent global aborts to scoped and legacy global subscribers", () => {
+    const runId = "run-main-global";
+    const entry = {
+      ...createActiveEntry("global"),
+      agentId: "main",
+    };
+    const ops = createOps({ runId, entry });
+    ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
+
+    const result = abortChatRunById(ops, { runId, sessionKey: "global" });
+
+    expect(result).toEqual({ aborted: true });
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    expect(payload.agentId).toBe("main");
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
+  });
+
+  it("resolves unscoped global aborts to the default agent subscribers", () => {
+    const runId = "run-unscoped-global";
+    const entry = createActiveEntry("global");
+    const ops = createOps({ runId, entry });
+    ops.getRuntimeConfig = () => ({ agents: { list: [{ id: "main", default: true }] } });
+
+    const result = abortChatRunById(ops, { runId, sessionKey: "global" });
+
+    expect(result).toEqual({ aborted: true });
+    const payload = firstBroadcastPayload(ops) as ChatAbortPayload;
+    expect(payload.agentId).toBe("main");
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("agent:main:global", "chat", payload);
+    expect(ops.nodeSendToSession).toHaveBeenCalledWith("global", "chat", payload);
   });
 
   it("tags maintenance timeouts as timeout abort reasons", () => {

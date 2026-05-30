@@ -1,6 +1,5 @@
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -12,11 +11,12 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import {
   listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
-} from "../skill-commands-base.js";
+} from "../../skills/discovery/chat-commands.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -29,21 +29,22 @@ import { getAbortMemory, isAbortRequestText } from "./abort-primitives.js";
 import type { buildStatusReply, handleCommands } from "./commands.runtime.js";
 import { isDirectiveOnly } from "./directive-handling.directive-only.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
+import { extractExplicitGroupId } from "./group-id.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import type { createModelSelectionState } from "./model-selection.js";
 import { extractInlineSimpleCommand } from "./reply-inline.js";
 import type { TypingController } from "./typing.js";
 
-type SkillCommandsRuntime = typeof import("../skill-commands.runtime.js");
-type SkillToolDispatchRuntime = typeof import("./skill-tool-dispatch.runtime.js");
+type SkillCommandsRuntime = typeof import("../../skills/discovery/chat-commands.runtime.js");
+type SkillToolDispatchRuntime = typeof import("../../skills/runtime/tool-dispatch.js");
 type AbortCutoffRuntime = typeof import("./abort-cutoff.runtime.js");
 type CommandsRuntime = typeof import("./commands.runtime.js");
 
 const skillCommandsRuntimeLoader = createLazyImportLoader<SkillCommandsRuntime>(
-  () => import("../skill-commands.runtime.js"),
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
 );
 const skillToolDispatchRuntimeLoader = createLazyImportLoader<SkillToolDispatchRuntime>(
-  () => import("./skill-tool-dispatch.runtime.js"),
+  () => import("../../skills/runtime/tool-dispatch.js"),
 );
 const abortCutoffRuntimeLoader = createLazyImportLoader<AbortCutoffRuntime>(
   () => import("./abort-cutoff.runtime.js"),
@@ -301,7 +302,19 @@ export async function handleInlineActions(params: {
       const rawArgs = (skillInvocation.args ?? "").trim();
       const { resolveSkillDispatchTools } = await loadSkillToolDispatchRuntime();
       const authorizedTools = resolveSkillDispatchTools({
-        ctx,
+        message: {
+          surface: ctx.Surface,
+          provider: ctx.Provider,
+          accountId: ctx.AccountId,
+          senderId: ctx.SenderId,
+          senderName: ctx.SenderName,
+          senderUsername: ctx.SenderUsername,
+          senderE164: ctx.SenderE164,
+          originatingTo: ctx.OriginatingTo,
+          to: ctx.To,
+          messageThreadId: ctx.MessageThreadId,
+          memberRoleIds: ctx.MemberRoleIds,
+        },
         cfg,
         agentId,
         agentDir,
@@ -312,6 +325,7 @@ export async function handleInlineActions(params: {
         model,
         senderId: command.senderId,
         currentChannelId: command.channelId,
+        groupId: extractExplicitGroupId(ctx.From),
         skillCommand: {
           name: skillInvocation.command.name,
           skillName: skillInvocation.command.skillName,

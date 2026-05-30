@@ -243,4 +243,77 @@ describe("googlechat monitor direct messages", () => {
     });
     expect(runTurn).toHaveBeenCalledOnce();
   });
+
+  it("drops invalid event timestamps from inbound runtime payloads", async () => {
+    const runTurn = vi.fn();
+    const buildContext = vi.fn((payload: unknown) => payload);
+    const formatAgentEnvelope = vi.fn(({ body }: { body: string }) => body);
+    const core = {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent-1",
+            accountId: "work",
+            sessionKey: "session-1",
+          }),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-googlechat-test",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope,
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
+        },
+        inbound: { buildContext, run: runTurn },
+      },
+    } as unknown as GoogleChatCoreRuntime;
+    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
+    const account = {
+      accountId: "work",
+      config: {
+        typingIndicator: "message",
+      },
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    const event = {
+      type: "MESSAGE",
+      eventTime: "not-a-timestamp",
+      space: { name: "spaces/DM", type: "DM" },
+      message: {
+        name: "spaces/DM/messages/2",
+        text: "hello",
+        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+      },
+    } satisfies GoogleChatEvent;
+
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+
+    await testing.processMessageWithPipeline({
+      event,
+      account,
+      config: {},
+      runtime,
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(formatAgentEnvelope).toHaveBeenCalledWith(
+      expect.objectContaining({ timestamp: undefined }),
+    );
+    expect(buildContext).toHaveBeenCalledWith(expect.objectContaining({ timestamp: undefined }));
+    const runArg = runTurn.mock.calls[0]?.[0] as
+      | { adapter?: { ingest?: () => { timestamp?: number } } }
+      | undefined;
+    expect(runArg?.adapter?.ingest?.().timestamp).toBeUndefined();
+  });
 });

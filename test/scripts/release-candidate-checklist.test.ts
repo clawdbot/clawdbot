@@ -61,6 +61,19 @@ describe("release candidate checklist", () => {
     ).toThrow("--plugin-publish-scope selected requires --plugins");
   });
 
+  it("rejects selected plugin publish scope for release candidates", () => {
+    expect(() =>
+      parseArgs([
+        "--tag",
+        "v2026.5.14-beta.3",
+        "--plugin-publish-scope",
+        "selected",
+        "--plugins",
+        "@openclaw/diffs",
+      ]),
+    ).toThrow("release candidates publish OpenClaw with --plugin-publish-scope all-publishable");
+  });
+
   it("extracts a workflow run id from gh dispatch output", () => {
     expect(
       parseRunIdFromDispatchOutput(

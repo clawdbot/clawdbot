@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
@@ -14,6 +15,10 @@ function createFetchFixture(payload: unknown): typeof fetch {
 }
 
 describe("scanOpenRouterModels", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("lists free models without probing", async () => {
     const fetchImpl = createFetchFixture({
       data: [
@@ -100,6 +105,22 @@ describe("scanOpenRouterModels", () => {
         timeoutMs: 1,
       }),
     ).rejects.toThrow(/catalog aborted/);
+  });
+
+  it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const fetchImpl = createFetchFixture({ data: [] });
+
+    await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 
   it("does not match provider filters across provider id variants", async () => {

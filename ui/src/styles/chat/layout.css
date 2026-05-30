@@ -248,6 +248,58 @@
   animation: compaction-spin 1s linear infinite;
 }
 
+.agent-chat__goal {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  max-width: calc(100% - 20px);
+  gap: 8px;
+  margin: 0 auto 8px;
+  padding: 7px 12px;
+  color: color-mix(in srgb, var(--text) 82%, var(--muted));
+  background: color-mix(in srgb, var(--bg-elevated) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.agent-chat__goal-label,
+.agent-chat__goal-objective {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-chat__goal-label {
+  flex: 0 1 auto;
+  font-weight: 700;
+}
+
+.agent-chat__goal-objective {
+  flex: 1 1 auto;
+  color: var(--muted);
+}
+
+.agent-chat__goal--active {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 9%, var(--card));
+  border-color: color-mix(in srgb, var(--success) 28%, var(--border));
+}
+
+.agent-chat__goal--blocked,
+.agent-chat__goal--budget_limited,
+.agent-chat__goal--usage_limited {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
+}
+
+.agent-chat__goal--complete {
+  color: color-mix(in srgb, var(--success) 72%, var(--text));
+}
+
 /* Chat compose - sticky at bottom */
 .chat-compose {
   position: sticky;

@@ -4,9 +4,9 @@ import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "../security/scan-paths.js";
-import { scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList, uniqueStrings } from "../shared/string-normalization.js";
+import { scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import {
   findBlockedPackageDirectoryInPath,
   findBlockedPackageFileAliasInPath,

@@ -3,12 +3,16 @@ import type {
   MusicGenerationRequest,
   MusicGenerationSourceImage,
 } from "openclaw/plugin-sdk/music-generation";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
   postJsonRequest,
   resolveProviderHttpRequestConfig,
+  resolveProviderOperationTimeoutMs,
+  type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
@@ -24,11 +28,6 @@ const OPENROUTER_MUSIC_MODELS = [
 type OpenRouterAudioStreamResult = {
   audioBuffer: Buffer;
   transcript: string;
-};
-
-type OpenRouterStreamDeadline = {
-  deadlineAtMs: number;
-  timeoutMs: number;
 };
 
 function resolveOpenRouterMusicModel(model: string | undefined): string {
@@ -135,24 +134,16 @@ function processOpenRouterSseLine(
   return false;
 }
 
-function createOpenRouterStreamDeadline(timeoutMs: number): OpenRouterStreamDeadline {
-  return {
-    deadlineAtMs: Date.now() + Math.max(1, Math.floor(timeoutMs)),
-    timeoutMs,
-  };
-}
-
-function resolveOpenRouterStreamRemainingMs(deadline: OpenRouterStreamDeadline): number {
-  const remainingMs = deadline.deadlineAtMs - Date.now();
-  if (remainingMs <= 0) {
-    throw new Error(`OpenRouter music generation timed out after ${deadline.timeoutMs}ms`);
-  }
-  return Math.max(1, remainingMs);
+function resolveOpenRouterStreamRemainingMs(deadline: ProviderOperationDeadline): number {
+  return resolveProviderOperationTimeoutMs({
+    deadline,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
+  });
 }
 
 async function readOpenRouterStreamChunk(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  deadline: OpenRouterStreamDeadline,
+  deadline: ProviderOperationDeadline,
 ): Promise<ReadableStreamReadResult<Uint8Array>> {
   const timeoutMs = resolveOpenRouterStreamRemainingMs(deadline);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -161,7 +152,7 @@ async function readOpenRouterStreamChunk(
       reader.read(),
       new Promise<never>((_, reject) => {
         timeoutId = setTimeout(() => {
-          reject(new Error(`OpenRouter music generation timed out after ${deadline.timeoutMs}ms`));
+          reject(new Error(`${deadline.label} timed out after ${deadline.timeoutMs}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -177,7 +168,7 @@ async function readOpenRouterStreamChunk(
 
 async function readOpenRouterAudioStream(
   response: Response,
-  deadline: OpenRouterStreamDeadline,
+  deadline: ProviderOperationDeadline,
 ): Promise<OpenRouterAudioStreamResult> {
   if (!response.body) {
     throw new Error("OpenRouter music generation response missing stream body");
@@ -288,8 +279,12 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         });
       const model = resolveOpenRouterMusicModel(req.model);
       const format = req.format ?? "wav";
-      const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-      const streamDeadline = createOpenRouterStreamDeadline(timeoutMs);
+      const requestedTimeoutMs = resolvePositiveTimerTimeoutMs(req.timeoutMs, DEFAULT_TIMEOUT_MS);
+      const streamDeadline = createProviderOperationDeadline({
+        timeoutMs: requestedTimeoutMs,
+        label: "OpenRouter music generation",
+      });
+      const timeoutMs = resolveOpenRouterStreamRemainingMs(streamDeadline);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
         headers,

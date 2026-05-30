@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
   type NativeApprovalTarget,
   nativeApprovalTargetsMatch,
@@ -14,6 +15,215 @@ const EMPTY_SESSION_CFG = {
     store: ".artifacts/test/approval-native-helpers-empty-sessions.json",
   },
 } satisfies OpenClawConfig;
+
+function createMatrixRouteGates(options?: {
+  enabledAccounts?: readonly string[];
+  accountIds?: readonly string[];
+  defaultAccountId?: string;
+}) {
+  const enabledAccounts = new Set(options?.enabledAccounts ?? ["default"]);
+  return createNativeApprovalChannelRouteGates<NativeApprovalTarget>({
+    channel: "matrix",
+    defaultForwardingMode: "session",
+    isTransportEnabled: ({ accountId }) => enabledAccounts.has(accountId ?? "default"),
+    listAccountIds: () => options?.accountIds ?? ["default"],
+    resolveDefaultAccountId: () => options?.defaultAccountId ?? "default",
+    normalizeForwardTarget: (target) =>
+      target.channel === "matrix"
+        ? {
+            to: target.to,
+            accountId: target.accountId ?? undefined,
+            threadId: target.threadId ?? undefined,
+          }
+        : null,
+    resolveTurnSourceTarget: (request) =>
+      request.request.turnSourceChannel === "matrix" && request.request.turnSourceTo
+        ? {
+            to: request.request.turnSourceTo,
+            accountId: request.request.turnSourceAccountId ?? undefined,
+            threadId: request.request.turnSourceThreadId ?? undefined,
+          }
+        : null,
+  });
+}
+
+const matrixExecRequest = {
+  id: "req-1",
+  request: {
+    agentId: "agent-a",
+    command: "echo hi",
+    sessionKey: "agent:agent-a:matrix:room-1",
+    turnSourceAccountId: "default",
+    turnSourceChannel: "matrix",
+    turnSourceTo: "room-1",
+  },
+  createdAtMs: 0,
+  expiresAtMs: 1000,
+} as const;
+
+const matrixPluginRequest = {
+  id: "plugin:req-1",
+  request: {
+    agentId: "agent-a",
+    description: "Allow access",
+    sessionKey: "agent:agent-a:matrix:room-1",
+    title: "Plugin approval",
+    turnSourceAccountId: "default",
+    turnSourceChannel: "matrix",
+    turnSourceTo: "room-1",
+  },
+  createdAtMs: 0,
+  expiresAtMs: 1000,
+} as const;
+
+describe("createNativeApprovalChannelRouteGates", () => {
+  it("separates session-native and explicit target routing by approval family", () => {
+    const gates = createMatrixRouteGates();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "matrix", to: "room-1" }],
+        },
+        plugin: {
+          enabled: true,
+          mode: "session",
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      gates.canApprovalPotentiallyRouteToChannel({
+        cfg,
+        approvalKind: "exec",
+      }),
+    ).toBe(true);
+    expect(
+      gates.canApprovalPotentiallyRouteToChannel({
+        cfg,
+        approvalKind: "exec",
+        nativeSessionOnly: true,
+      }),
+    ).toBe(false);
+    expect(
+      gates.canApprovalPotentiallyRouteToChannel({
+        cfg,
+        approvalKind: "plugin",
+        nativeSessionOnly: true,
+      }),
+    ).toBe(true);
+    expect(gates.isNativeApprovalHandlerConfigured({ cfg })).toBe(true);
+
+    expect(
+      gates.shouldHandleApprovalRequest({
+        cfg,
+        request: matrixExecRequest,
+      }),
+    ).toBe(false);
+    expect(
+      gates.shouldHandleApprovalRequest({
+        cfg,
+        request: matrixPluginRequest,
+      }),
+    ).toBe(true);
+    expect(
+      gates.isExplicitTargetEligible({
+        cfg,
+        approvalKind: "exec",
+        request: matrixExecRequest,
+        target: { channel: "matrix", to: "room-1", source: "target" },
+      }),
+    ).toBe(true);
+  });
+
+  it("applies forwarding filters before accepting a session route", () => {
+    const gates = createMatrixRouteGates();
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          agentFilter: ["agent-a"],
+          sessionFilter: ["matrix:room"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      gates.isSessionApprovalEligible({
+        cfg,
+        approvalKind: "exec",
+        request: matrixExecRequest,
+      }),
+    ).toBe(true);
+    expect(
+      gates.isSessionApprovalEligible({
+        cfg,
+        approvalKind: "exec",
+        request: {
+          ...matrixExecRequest,
+          request: {
+            ...matrixExecRequest.request,
+            agentId: "agent-b",
+            sessionKey: "agent:agent-b:matrix:room-1",
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("uses default and single-enabled account fallback for unscoped targets", () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "matrix", to: "room-1" }],
+        },
+      },
+    } satisfies OpenClawConfig;
+    const target = { channel: "matrix", to: "room-1", source: "target" } as const;
+
+    expect(
+      createMatrixRouteGates({
+        accountIds: ["default", "work"],
+        enabledAccounts: ["default", "work"],
+      }).isExplicitTargetEligible({
+        cfg,
+        accountId: "default",
+        approvalKind: "exec",
+        request: matrixExecRequest,
+        target,
+      }),
+    ).toBe(true);
+
+    expect(
+      createMatrixRouteGates({
+        accountIds: ["default", "work"],
+        enabledAccounts: ["work"],
+      }).isExplicitTargetEligible({
+        cfg,
+        accountId: "work",
+        approvalKind: "exec",
+        request: matrixExecRequest,
+        target,
+      }),
+    ).toBe(true);
+
+    expect(
+      createMatrixRouteGates({
+        accountIds: ["default", "work"],
+        enabledAccounts: ["default", "work"],
+      }).isExplicitTargetEligible({
+        cfg,
+        accountId: "work",
+        approvalKind: "exec",
+        request: matrixExecRequest,
+        target,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("createChannelNativeOriginTargetResolver", () => {
   it("reuses shared turn-source routing and respects shouldHandle gating", () => {

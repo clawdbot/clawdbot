@@ -1,5 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createCopilotAgentHarness } from "./harness.js";
+import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -29,7 +29,17 @@ export default definePluginEntry({
   description: "Registers the GitHub Copilot agent runtime.",
   register(api) {
     const poolOptions = readPoolOptions(api.pluginConfig);
+    const sessionStore = api.runtime.state.openSyncKeyedStore<CopilotSessionBinding>({
+      namespace: "sdk-sessions",
+      maxEntries: 5000,
+      defaultTtlMs: 90 * 24 * 60 * 60 * 1000,
+    });
 
-    api.registerAgentHarness(createCopilotAgentHarness(poolOptions ? { poolOptions } : undefined));
+    api.registerAgentHarness(
+      createCopilotAgentHarness({
+        ...(poolOptions ? { poolOptions } : {}),
+        sessionStore,
+      }),
+    );
   },
 });

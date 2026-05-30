@@ -1,6 +1,10 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserPositiveIntegerOption,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
 import {
   danger,
   DEFAULT_UPLOAD_DIR,
@@ -11,15 +15,6 @@ import {
 import { resolveBrowserActionContext, withBrowserActionTimeoutSlack } from "./shared.js";
 
 const DEFAULT_BROWSER_HOOK_TIMEOUT_MS = 120000;
-
-function parsePositiveIntegerOption(value: string, flag: string): number {
-  const trimmed = value.trim();
-  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
 
 async function normalizeUploadPaths(paths: string[]): Promise<string[]> {
   const result = await resolveExistingPathsWithinRoot({
@@ -109,7 +104,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next file chooser (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (paths: string[], opts, cmd) => {
       try {
@@ -148,7 +143,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next download (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (outPath: string | undefined, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -171,7 +166,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the download to start (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (ref: string, outPath: string, opts, cmd) => {
       await runDownloadCommand(cmd, opts, {
@@ -194,7 +189,7 @@ export function registerBrowserFilesAndDownloadsCommands(
     .option(
       "--timeout-ms <ms>",
       "How long to wait for the next dialog (default: 120000)",
-      (v: string) => parsePositiveIntegerOption(v, "--timeout-ms"),
+      (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);

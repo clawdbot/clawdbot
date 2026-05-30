@@ -21,6 +21,7 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { uniqueStrings } from "../../shared/string-normalization.js";
+import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
@@ -39,7 +40,10 @@ import {
 import { CLI_AUTH_EPOCH_VERSION, resolveCliAuthEpoch } from "../cli-auth-epoch.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
-import { claudeCliSessionTranscriptHasContent } from "../command/attempt-execution.helpers.js";
+import {
+  claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
+} from "../command/attempt-execution.helpers.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { resolveContextTokensForModel } from "../context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -54,7 +58,6 @@ import { composeSystemPromptWithHookContext } from "../embedded-agent-runner/run
 import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { resolveSkillsPromptForRun } from "../skills.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
@@ -83,9 +86,8 @@ const prepareDeps = {
     params: Parameters<typeof import("../docs-path.js").resolveOpenClawReferencePaths>[0],
   ) => (await import("../docs-path.js")).resolveOpenClawReferencePaths(params),
   prepareClaudeCliSkillsPlugin,
-  // Surfaced as a dep so tests can stub the on-disk Claude CLI transcript probe
-  // without touching ~/.claude/projects.
   claudeCliSessionTranscriptHasContent,
+  claudeCliSessionTranscriptHasOrphanedToolUse,
 };
 
 const CLAUDE_CLI_CONTEXT_MODEL_ALIASES: Record<string, string> = {
@@ -277,6 +279,10 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+          OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
+          OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
+          OPENCLAW_MCP_CURRENT_MESSAGE_ID:
+            params.currentMessageId != null ? String(params.currentMessageId) : "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
           OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
         }
@@ -351,6 +357,9 @@ export async function prepareCliRunContext(
           cfg: params.config ?? getRuntimeConfig(),
           sessionKey: params.sessionKey ?? "",
           messageProvider: params.messageChannel ?? params.messageProvider,
+          currentChannelId: params.currentChannelId,
+          currentThreadTs: params.currentThreadTs,
+          currentMessageId: params.currentMessageId,
           accountId: params.agentAccountId,
           inboundEventKind: params.currentInboundEventKind,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -361,38 +370,46 @@ export async function prepareCliRunContext(
     bundleMcpEnabled && mcpLoopbackRuntime
       ? hashCliSessionText(JSON.stringify(promptTools.map((tool) => tool.name).toSorted()))
       : undefined;
-  // Pre-flight: if a saved Claude CLI sessionId points at a transcript that no
-  // longer exists on disk (e.g. update.run aborted mid-swap, Claude CLI was
-  // reinstalled, or the projects tree was manually pruned), `claude --resume`
-  // hangs or fails outside the cli-runner session_expired path. The persisted
-  // binding then never gets refreshed, causing every subsequent turn to retry
-  // the same dead sessionId. Drop the binding here so this turn starts fresh
-  // and the post-run flow writes the new sessionId back via setCliSessionBinding.
-  const candidateClaudeCliSessionId =
-    params.cliSessionBinding?.sessionId?.trim() || params.cliSessionId?.trim() || undefined;
+  const reusableCliSessionCandidate: CliReusableSession = params.cliSessionBinding
+    ? resolveCliSessionReuse({
+        binding: params.cliSessionBinding,
+        authProfileId: effectiveAuthProfileId,
+        authEpoch,
+        authEpochVersion: CLI_AUTH_EPOCH_VERSION,
+        extraSystemPromptHash,
+        promptToolNamesHash,
+        cwdHash,
+        mcpConfigHash: preparedBackendFinal.mcpConfigHash,
+        mcpResumeHash: preparedBackendFinal.mcpResumeHash,
+      })
+    : params.cliSessionId
+      ? { sessionId: params.cliSessionId }
+      : {};
+  const candidateClaudeCliSessionId = reusableCliSessionCandidate.sessionId?.trim() || undefined;
+  const hasClaudeCliCandidate =
+    candidateClaudeCliSessionId !== undefined && isClaudeCliProvider(params.provider);
   const claudeCliTranscriptMissing =
-    candidateClaudeCliSessionId !== undefined &&
-    isClaudeCliProvider(params.provider) &&
+    hasClaudeCliCandidate &&
     !(await prepareDeps.claudeCliSessionTranscriptHasContent({
       sessionId: candidateClaudeCliSessionId,
+      workspaceDir: cwd,
     }));
-  const reusableCliSession: CliReusableSession = claudeCliTranscriptMissing
-    ? { invalidatedReason: "missing-transcript" }
-    : params.cliSessionBinding
-      ? resolveCliSessionReuse({
-          binding: params.cliSessionBinding,
-          authProfileId: effectiveAuthProfileId,
-          authEpoch,
-          authEpochVersion: CLI_AUTH_EPOCH_VERSION,
-          extraSystemPromptHash,
-          promptToolNamesHash,
-          cwdHash,
-          mcpConfigHash: preparedBackendFinal.mcpConfigHash,
-          mcpResumeHash: preparedBackendFinal.mcpResumeHash,
-        })
-      : params.cliSessionId
-        ? { sessionId: params.cliSessionId }
-        : {};
+  const claudeCliTranscriptOrphanedToolUse =
+    hasClaudeCliCandidate &&
+    !claudeCliTranscriptMissing &&
+    (await prepareDeps.claudeCliSessionTranscriptHasOrphanedToolUse({
+      sessionId: candidateClaudeCliSessionId,
+      workspaceDir: cwd,
+    }));
+  const claudeCliInvalidatedReason: CliReusableSession["invalidatedReason"] | undefined =
+    claudeCliTranscriptMissing
+      ? "missing-transcript"
+      : claudeCliTranscriptOrphanedToolUse
+        ? "orphaned-tool-use"
+        : undefined;
+  const reusableCliSession: CliReusableSession = claudeCliInvalidatedReason
+    ? { invalidatedReason: claudeCliInvalidatedReason }
+    : reusableCliSessionCandidate;
   if (reusableCliSession.invalidatedReason) {
     cliBackendLog.info(
       `cli session reset: provider=${params.provider} reason=${reusableCliSession.invalidatedReason}`,

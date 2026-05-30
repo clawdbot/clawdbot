@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { SELF_HOSTED_DEFAULT_COST } from "openclaw/plugin-sdk/provider-setup";
@@ -44,11 +45,12 @@ async function fetchLmstudioEndpoint(params: {
   ssrfPolicy?: SsrFPolicy;
   auditContext: string;
 }): Promise<{ response: Response; release: () => Promise<void> }> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   if (params.ssrfPolicy) {
     return await fetchWithSsrFGuard({
       url: params.url,
       init: params.init,
-      timeoutMs: params.timeoutMs,
+      timeoutMs,
       fetchImpl: params.fetchImpl,
       policy: params.ssrfPolicy,
       auditContext: params.auditContext,
@@ -58,7 +60,7 @@ async function fetchLmstudioEndpoint(params: {
   return {
     response: await fetchFn(params.url, {
       ...params.init,
-      signal: AbortSignal.timeout(params.timeoutMs),
+      signal: AbortSignal.timeout(timeoutMs),
     }),
     release: async () => {},
   };

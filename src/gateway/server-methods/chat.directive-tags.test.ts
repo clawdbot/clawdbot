@@ -54,6 +54,7 @@ const mockState = vi.hoisted(() => ({
     };
   }>,
   dispatchError: null as Error | null,
+  dispatchWait: null as Promise<void> | null,
   dispatchErrorAfterAgentRunStart: null as Error | null,
   dispatchErrorAfterDelivery: null as Error | null,
   triggerAgentRunStart: false,
@@ -62,6 +63,7 @@ const mockState = vi.hoisted(() => ({
   onAfterAgentRunStart: null as (() => void) | null,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
+  loadSessionEntryCalls: [] as Array<{ rawKey: string; opts?: { agentId?: string } }>,
   lastDispatchCtx: undefined as MsgContext | undefined,
   lastDispatchImages: undefined as Array<{ mimeType: string; data: string }> | undefined,
   lastDispatchImageOrder: undefined as string[] | undefined,
@@ -129,28 +131,31 @@ vi.mock("../session-utils.js", async () => {
     await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...original,
-    loadSessionEntry: (rawKey: string) => ({
-      ...(typeof mockState.sessionEntry.canonicalKey === "string"
-        ? { canonicalKey: mockState.sessionEntry.canonicalKey }
-        : {}),
-      cfg: {
-        ...mockState.config,
-        session: {
-          ...(mockState.config.session as Record<string, unknown> | undefined),
-          mainKey: mockState.mainSessionKey,
+    loadSessionEntry: (rawKey: string, opts?: { agentId?: string }) => {
+      mockState.loadSessionEntryCalls.push({ rawKey, opts });
+      return {
+        ...(typeof mockState.sessionEntry.canonicalKey === "string"
+          ? { canonicalKey: mockState.sessionEntry.canonicalKey }
+          : {}),
+        cfg: {
+          ...mockState.config,
+          session: {
+            ...(mockState.config.session as Record<string, unknown> | undefined),
+            mainKey: mockState.mainSessionKey,
+          },
         },
-      },
-      storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
-      entry: {
-        sessionId: mockState.sessionId,
-        sessionFile: mockState.transcriptPath,
-        ...mockState.sessionEntry,
-      },
-      canonicalKey:
-        typeof mockState.sessionEntry.canonicalKey === "string"
-          ? mockState.sessionEntry.canonicalKey
-          : rawKey || "main",
-    }),
+        storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+        entry: {
+          sessionId: mockState.sessionId,
+          sessionFile: mockState.transcriptPath,
+          ...mockState.sessionEntry,
+        },
+        canonicalKey:
+          typeof mockState.sessionEntry.canonicalKey === "string"
+            ? mockState.sessionEntry.canonicalKey
+            : rawKey || "main",
+      };
+    },
   };
 });
 
@@ -220,6 +225,9 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
         : recorder?.message;
       if (mockState.dispatchError) {
         throw mockState.dispatchError;
+      }
+      if (mockState.dispatchWait) {
+        await mockState.dispatchWait;
       }
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
@@ -638,6 +646,7 @@ function createChatContext(): Pick<
   | "dedupe"
   | "loadGatewayModelCatalog"
   | "registerToolEventRecipient"
+  | "getRuntimeConfig"
   | "logGateway"
 > {
   return {
@@ -671,6 +680,14 @@ function createChatContext(): Pick<
           input: ["text", "image"],
         },
       ],
+    getRuntimeConfig: () =>
+      ({
+        ...mockState.config,
+        session: {
+          ...(mockState.config.session as Record<string, unknown> | undefined),
+          mainKey: mockState.mainSessionKey,
+        },
+      }) as never,
     registerToolEventRecipient: vi.fn(),
     logGateway: {
       warn: vi.fn(),
@@ -759,6 +776,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalPayload = null;
     mockState.dispatchedReplies = [];
     mockState.dispatchError = null;
+    mockState.dispatchWait = null;
     mockState.dispatchErrorAfterAgentRunStart = null;
     mockState.dispatchErrorAfterDelivery = null;
     mockState.mainSessionKey = "main";
@@ -768,6 +786,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.onAfterAgentRunStart = null;
     mockState.agentRunId = "run-agent-1";
     mockState.sessionEntry = {};
+    mockState.loadSessionEntryCalls = [];
     mockState.lastDispatchCtx = undefined;
     mockState.lastDispatchImages = undefined;
     mockState.lastDispatchImageOrder = undefined;
@@ -855,6 +874,210 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(register).toHaveBeenCalledWith("run-current", "conn-1");
     expect(register).toHaveBeenCalledWith("run-same-session", "conn-1");
     expect(register).not.toHaveBeenCalledWith("run-other-session", "conn-1");
+  });
+
+  it("registers default global tool-event recipients for unscoped global sends", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-tool-events-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-current-global";
+    const respond = vi.fn();
+    const context = createChatContext();
+    context.chatAbortControllers.set("run-default-global", {
+      controller: new AbortController(),
+      sessionId: "sess-default-global",
+      sessionKey: "global",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+    context.chatAbortControllers.set("run-work-global", {
+      controller: new AbortController(),
+      sessionId: "sess-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "global",
+      idempotencyKey: "idem-global-tool-events",
+      client: {
+        connId: "conn-global",
+        connect: { caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] },
+      },
+      expectBroadcast: false,
+    });
+
+    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(register).toHaveBeenCalledWith("run-current-global", "conn-global");
+    expect(register).toHaveBeenCalledWith("run-default-global", "conn-global");
+    expect(register).not.toHaveBeenCalledWith("run-work-global", "conn-global");
+  });
+
+  it("registers selected global alias tool-event recipients against the canonical run key", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-alias-tool-events-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    mockState.finalText = "ok";
+    mockState.triggerAgentRunStart = true;
+    mockState.agentRunId = "run-current-work-global";
+    const respond = vi.fn();
+    const context = createChatContext();
+    context.chatAbortControllers.set("run-default-global", {
+      controller: new AbortController(),
+      sessionId: "sess-default-global",
+      sessionKey: "global",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+    context.chatAbortControllers.set("run-work-global", {
+      controller: new AbortController(),
+      sessionId: "sess-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      startedAtMs: Date.now(),
+      expiresAtMs: Date.now() + 10_000,
+    });
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-global-alias-tool-events",
+      client: {
+        connId: "conn-work",
+        connect: { caps: [GATEWAY_CLIENT_CAPS.TOOL_EVENTS] },
+      },
+      expectBroadcast: false,
+    });
+
+    const register = context.registerToolEventRecipient as unknown as ReturnType<typeof vi.fn>;
+    expect(register).toHaveBeenCalledWith("run-current-work-global", "conn-work");
+    expect(register).toHaveBeenCalledWith("run-work-global", "conn-work");
+    expect(register).not.toHaveBeenCalledWith("run-default-global", "conn-work");
+  });
+
+  it("scopes selected-agent global aliases before loading chat session state", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-alias-load-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-global-alias-load",
+      expectBroadcast: false,
+    });
+
+    expect(mockState.loadSessionEntryCalls[0]).toEqual({
+      rawKey: "agent:work:main",
+      opts: { agentId: "work" },
+    });
+  });
+
+  it("accepts selected-agent global main aliases before loading chat session state", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-main-alias-load-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "main",
+      requestParams: { agentId: "work" },
+      idempotencyKey: "idem-global-main-alias-load",
+      expectBroadcast: false,
+    });
+
+    const [ok] = lastRespondCall(respond) ?? [];
+    expect(ok).toBe(true);
+    expect(mockState.lastDispatchCtx).toMatchObject({
+      SessionKey: "global",
+      AgentId: "work",
+    });
+    expect(mockState.loadSessionEntryCalls[0]).toEqual({
+      rawKey: "main",
+      opts: { agentId: "work" },
+    });
+  });
+
+  it("registers selected-agent global aliases under the canonical abort key", async () => {
+    createTranscriptFixture("openclaw-chat-send-global-alias-abort-key-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    let releaseDispatch: (() => void) | undefined;
+    mockState.dispatchWait = new Promise((resolve) => {
+      releaseDispatch = resolve;
+    });
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const pending = runNonStreamingChatSend({
+      context,
+      respond,
+      sessionKey: "agent:work:main",
+      idempotencyKey: "idem-global-alias-abort-key",
+      waitFor: "none",
+    });
+
+    await waitForAssertion(() => {
+      expect(context.chatAbortControllers.get("idem-global-alias-abort-key")).toMatchObject({
+        sessionKey: "global",
+        agentId: "work",
+      });
+    });
+    releaseDispatch?.();
+    await pending;
+  });
+
+  it("scopes chat history global aliases before loading session state", async () => {
+    createTranscriptFixture("openclaw-chat-history-global-alias-load-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+    mockState.loadSessionEntryCalls = [];
+
+    await chatHandlers["chat.history"]({
+      params: { sessionKey: "agent:work:main" },
+      respond: respond as never,
+      req: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    expect(mockState.loadSessionEntryCalls).toContainEqual({
+      rawKey: "agent:work:main",
+      opts: { agentId: "work" },
+    });
   });
 
   it("does not register tool-event recipients without tool-events capability", async () => {
@@ -2146,6 +2369,46 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(nodeSend?.[0]).toBe("agent:main:canon");
     expect(nodeSend?.[1]).toBe("chat");
     expect(nodeSend?.[2].sessionKey).toBe("agent:main:canon");
+  });
+
+  it("chat.inject scopes selected-agent global sessions before appending", async () => {
+    createTranscriptFixture("openclaw-chat-inject-selected-global-");
+    mockState.config = {
+      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      session: { scope: "global" },
+    };
+    mockState.sessionEntry = { canonicalKey: "global" };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await chatHandlers["chat.inject"]({
+      params: {
+        sessionKey: "main",
+        agentId: "work",
+        message: "hello selected global",
+      },
+      respond,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+      context: context as GatewayRequestContext,
+    });
+
+    const response = lastRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+    expect(mockState.loadSessionEntryCalls[0]).toEqual({
+      rawKey: "main",
+      opts: { agentId: "work" },
+    });
+    const broadcastPayload = lastBroadcastPayload(context);
+    expect(broadcastPayload).toMatchObject({
+      sessionKey: "global",
+      agentId: "work",
+      state: "final",
+    });
+    const nodeSend = lastNodeSendCall(context);
+    expect(nodeSend?.[0]).toBe("agent:work:global");
+    expect(nodeSend?.[2]).toMatchObject({ sessionKey: "global", agentId: "work" });
   });
 
   it("chat.send non-streaming final strips external untrusted wrapper metadata from final payload text", async () => {

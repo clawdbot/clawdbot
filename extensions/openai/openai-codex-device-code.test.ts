@@ -171,6 +171,60 @@ describe("loginOpenAICodexDeviceCode", () => {
     expect(credentials.expires).toBe(expectedExpiry);
   });
 
+  it("falls back when device-code intervals and token lifetimes overflow safe milliseconds", async () => {
+    vi.useFakeTimers();
+    try {
+      const accessToken = createJwt({
+        exp: Math.floor(Date.now() / 1000) + 600,
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct_123",
+        },
+      });
+      const expectedExpiry = resolveCodexAccessTokenExpiry(accessToken);
+      const fetchMock = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            device_auth_id: "device-auth-123",
+            user_code: "CODE-12345",
+            interval: Number.MAX_SAFE_INTEGER,
+          }),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 404 }))
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            authorization_code: "authorization-code-123",
+            code_verifier: "code-verifier-123",
+          }),
+        )
+        .mockResolvedValueOnce(
+          createJsonResponse({
+            access_token: accessToken,
+            refresh_token: "refresh-token-123",
+            expires_in: Number.MAX_SAFE_INTEGER,
+          }),
+        );
+
+      const credentialsPromise = loginOpenAICodexDeviceCode({
+        fetchFn: fetchMock as typeof fetch,
+        onVerification: async () => {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      const credentials = await credentialsPromise;
+
+      if (expectedExpiry === undefined) {
+        throw new Error("expected device-code expiry to be calculated");
+      }
+      expect(credentials.expires).toBe(expectedExpiry);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("surfaces user-code request failures", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       new Response(`down\r\n\u001B[31mnow\u001B[0m`, {

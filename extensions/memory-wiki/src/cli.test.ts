@@ -238,6 +238,23 @@ describe("memory-wiki cli", () => {
     ).rejects.toThrow("--lines must be a positive integer.");
   });
 
+  it("accepts signed and zero-padded wiki get line options", async () => {
+    const { rootDir, config } = await createCliVault();
+    const targetPath = path.join(rootDir, "syntheses", "cli-lines.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "# CLI Lines\n\nfirst\nsecond\n", "utf8");
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, config);
+
+    await program.parseAsync(
+      ["wiki", "get", "syntheses/cli-lines.md", "--from", "+01", "--lines", "02"],
+      {
+        from: "user",
+      },
+    );
+  });
+
   it("registers apply metadata and preserves the page body", async () => {
     const { rootDir, config } = await createCliVault();
     const targetPath = path.join(rootDir, "entities", "alpha.md");

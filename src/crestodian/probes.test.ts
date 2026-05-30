@@ -1,7 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { probeLocalCommand } from "./probes.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
+import { probeGatewayUrl, probeLocalCommand } from "./probes.js";
 
 describe("crestodian probes", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("bounds noisy local command probe output", async () => {
     const result = await probeLocalCommand(
       process.execPath,
@@ -31,4 +36,21 @@ describe("crestodian probes", () => {
       expect(Date.now() - startedAt).toBeLessThan(2_000);
     },
   );
+
+  it("caps oversized gateway probe timeouts before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("ok", { status: 200 })),
+    );
+
+    await expect(
+      probeGatewayUrl("ws://127.0.0.1:1234", { timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000 }),
+    ).resolves.toMatchObject({ reachable: true });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
 });

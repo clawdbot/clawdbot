@@ -45,6 +45,29 @@ export type SnapshotSelection = {
   source: "pre-compaction" | "current";
 };
 
+function canContinueFromMessage(message: AgentMessage | undefined): boolean {
+  switch (message?.role) {
+    case "user":
+    case "toolResult":
+    case "branchSummary":
+    case "compactionSummary":
+    case "custom":
+      return true;
+    case "bashExecution":
+      return message.excludeFromContext !== true;
+    default:
+      return false;
+  }
+}
+
+function trimToContinuableTail(messages: AgentMessage[]): AgentMessage[] | null {
+  let end = messages.length;
+  while (end > 0 && !canContinueFromMessage(messages[end - 1])) {
+    end -= 1;
+  }
+  return end > 0 ? messages.slice(0, end) : null;
+}
+
 export function selectCompactionTimeoutSnapshot(
   params: SnapshotSelectionParams,
 ): SnapshotSelection {
@@ -57,15 +80,27 @@ export function selectCompactionTimeoutSnapshot(
   }
 
   if (params.preCompactionSnapshot) {
+    const continuablePreCompactionSnapshot = trimToContinuableTail(params.preCompactionSnapshot);
+    if (continuablePreCompactionSnapshot) {
+      return {
+        messagesSnapshot: continuablePreCompactionSnapshot,
+        sessionIdUsed: params.preCompactionSessionId,
+        source: "pre-compaction",
+      };
+    }
+  }
+
+  const continuableCurrentSnapshot = trimToContinuableTail(params.currentSnapshot);
+  if (continuableCurrentSnapshot) {
     return {
-      messagesSnapshot: params.preCompactionSnapshot,
-      sessionIdUsed: params.preCompactionSessionId,
-      source: "pre-compaction",
+      messagesSnapshot: continuableCurrentSnapshot,
+      sessionIdUsed: params.currentSessionId,
+      source: "current",
     };
   }
 
   return {
-    messagesSnapshot: params.currentSnapshot,
+    messagesSnapshot: [],
     sessionIdUsed: params.currentSessionId,
     source: "current",
   };

@@ -14,7 +14,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { setGitHubCopilotDeviceFlowFetchGuardForTesting } from "./login.js";
+import {
+  runGitHubCopilotDeviceFlow,
+  setGitHubCopilotDeviceFlowFetchGuardForTesting,
+} from "./login.js";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
@@ -411,6 +414,25 @@ describe("github-copilot plugin", () => {
         delete (process.stdin as { isTTY?: boolean }).isTTY;
       }
     }
+  });
+
+  it("rejects unsafe GitHub device code lifetimes before polling", async () => {
+    const release = vi.fn(async () => {});
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async () => ({
+      response: new Response(
+        '{"device_code":"device-code-stub","user_code":"ABCD-1234","verification_uri":"https://github.com/login/device","expires_in":1e309,"interval":0}',
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl: "https://github.com/login/device/code",
+      release,
+    }));
+
+    const showCode = vi.fn();
+    await expect(runGitHubCopilotDeviceFlow({ showCode })).rejects.toThrow(
+      "GitHub device code response missing fields",
+    );
+    expect(showCode).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("stores GitHub Copilot token from non-interactive onboarding", async () => {

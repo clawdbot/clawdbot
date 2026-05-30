@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/novita-provider",
+  "version": "2026.5.28",
+  "private": true,
+  "description": "OpenClaw NovitaAI provider plugin",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}

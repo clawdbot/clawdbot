@@ -160,6 +160,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
   const embeddedAgentMcp = loadEmbeddedAgentMcpConfig({
     workspaceDir,
     cfg: config,
+    manifestRegistry: metadataSnapshot.manifestRegistry,
   });
   for (const diagnostic of embeddedAgentMcp.diagnostics) {
     log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);

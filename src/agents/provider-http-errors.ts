@@ -1,10 +1,12 @@
 export { asFiniteNumber } from "../shared/number-coercion.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
 export { asBoolean } from "../utils/boolean.js";
 export { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
 
 const ERROR_BODY_METADATA_LIMIT = 500;
+const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 export function asObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -321,9 +323,15 @@ export async function readProviderBinaryResponse(
   response: Response,
   label: string,
   kind = "binary",
+  opts?: {
+    maxBytes?: number;
+  },
 ): Promise<Uint8Array> {
   assertProviderBinaryResponseContent(response, label, kind);
-  const bytes = new Uint8Array(await response.arrayBuffer());
+  const maxBytes = opts?.maxBytes ?? PROVIDER_BINARY_RESPONSE_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes }) => new Error(`${label}: ${kind} response exceeds ${maxBytes} bytes`),
+  });
   if (bytes.byteLength === 0) {
     throw new Error(`${label}: malformed ${kind} response`);
   }

@@ -97,7 +97,7 @@ describe("compaction-timeout helpers", () => {
   });
 
   it("uses pre-compaction snapshot when compaction timeout occurs", () => {
-    const pre = [castAgentMessage({ role: "assistant", content: "pre" })] as const;
+    const pre = [castAgentMessage({ role: "user", content: "pre" })] as const;
     const current = [castAgentMessage({ role: "assistant", content: "current" })] as const;
     expectSelectedSnapshot({
       timedOutDuringCompaction: true,
@@ -111,8 +111,100 @@ describe("compaction-timeout helpers", () => {
     });
   });
 
+  it("trims assistant-tailed pre-compaction snapshots after compaction timeout", () => {
+    const user = castAgentMessage({ role: "user", content: "pre-user" });
+    const pre = [user, castAgentMessage({ role: "assistant", content: "pre-assistant" })] as const;
+    const current = [
+      castAgentMessage({ role: "user", content: "current-user" }),
+      castAgentMessage({ role: "assistant", content: "current-assistant" }),
+    ] as const;
+    expectSelectedSnapshot({
+      timedOutDuringCompaction: true,
+      preCompactionSnapshot: [...pre],
+      preCompactionSessionId: "session-pre",
+      currentSnapshot: [...current],
+      currentSessionId: "session-current",
+      expectedSource: "pre-compaction",
+      expectedSessionIdUsed: "session-pre",
+      expectedSnapshot: [user],
+    });
+  });
+
+  it("keeps tool-result tails continuable after compaction timeout", () => {
+    const toolResult = castAgentMessage({
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "lookup",
+      content: [{ type: "text", text: "result" }],
+      isError: false,
+      timestamp: 1,
+    });
+    const pre = [
+      castAgentMessage({ role: "user", content: "pre-user" }),
+      castAgentMessage({ role: "assistant", content: "tool call" }),
+      toolResult,
+      castAgentMessage({ role: "assistant", content: "pre-assistant" }),
+    ] as const;
+    expectSelectedSnapshot({
+      timedOutDuringCompaction: true,
+      preCompactionSnapshot: [...pre],
+      preCompactionSessionId: "session-pre",
+      currentSnapshot: [castAgentMessage({ role: "user", content: "current-user" })],
+      currentSessionId: "session-current",
+      expectedSource: "pre-compaction",
+      expectedSessionIdUsed: "session-pre",
+      expectedSnapshot: pre.slice(0, 3),
+    });
+  });
+
+  it("keeps replay-normalized summary tails continuable after compaction timeout", () => {
+    const summary = castAgentMessage({
+      role: "compactionSummary",
+      summary: "older work was summarized",
+      tokensBefore: 120_000,
+      timestamp: 1,
+    });
+    expectSelectedSnapshot({
+      timedOutDuringCompaction: true,
+      preCompactionSnapshot: null,
+      preCompactionSessionId: "session-pre",
+      currentSnapshot: [summary],
+      currentSessionId: "session-current",
+      expectedSource: "current",
+      expectedSessionIdUsed: "session-current",
+      expectedSnapshot: [summary],
+    });
+  });
+
+  it("falls back to current snapshot when the pre-compaction timeout snapshot has no continuable tail", () => {
+    const current = [castAgentMessage({ role: "user", content: "current" })] as const;
+    expectSelectedSnapshot({
+      timedOutDuringCompaction: true,
+      preCompactionSnapshot: [castAgentMessage({ role: "assistant", content: "pre" })],
+      preCompactionSessionId: "session-pre",
+      currentSnapshot: [...current],
+      currentSessionId: "session-current",
+      expectedSource: "current",
+      expectedSessionIdUsed: "session-current",
+      expectedSnapshot: current,
+    });
+  });
+
+  it("returns an empty snapshot when compaction timeout leaves only assistant-tailed snapshots", () => {
+    expectSelectedSnapshot({
+      timedOutDuringCompaction: true,
+      preCompactionSnapshot: [castAgentMessage({ role: "assistant", content: "pre" })],
+      preCompactionSessionId: "session-pre",
+      currentSnapshot: [castAgentMessage({ role: "assistant", content: "current" })],
+      currentSessionId: "session-current",
+      expectedSource: "current",
+      expectedSessionIdUsed: "session-current",
+      expectedSnapshot: [],
+    });
+  });
+
   it("falls back to current snapshot when pre-compaction snapshot is unavailable", () => {
-    const current = [castAgentMessage({ role: "assistant", content: "current" })] as const;
+    const current = [castAgentMessage({ role: "user", content: "current" })] as const;
     expectSelectedSnapshot({
       timedOutDuringCompaction: true,
       preCompactionSnapshot: null,

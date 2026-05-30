@@ -286,6 +286,21 @@ describe("gateway tool defaults", () => {
     expect(call.approvalRuntimeToken).toEqual(expect.any(String));
   });
 
+  it("marks local approval resolve calls as approval runtime calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "exec.approval.resolve",
+      {},
+      { id: "approval-id", decision: "allow-once" },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("exec.approval.resolve");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
   it("does not send the local approval runtime token to gatewayUrl overrides", async () => {
     mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
 

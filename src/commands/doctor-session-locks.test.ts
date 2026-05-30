@@ -104,7 +104,7 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
   });
 
-  it("uses configured stale threshold when repairing lock files", async () => {
+  it("uses configured stale threshold without removing live OpenClaw lock files", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });
 
@@ -124,8 +124,8 @@ describe("noteSessionLockHealth", () => {
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = firstNoteCall();
     expect(message).toContain("stale=yes (too-old)");
-    expect(message).toContain("[removed]");
-    await expectPathMissing(configuredStaleLock);
+    expect(message).not.toContain("[removed]");
+    await expect(fs.access(configuredStaleLock)).resolves.toBeUndefined();
   });
 
   it("removes fresh live locks when the owner is not an OpenClaw process", async () => {

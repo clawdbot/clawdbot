@@ -134,6 +134,7 @@ function resolveManualCompactContextTokenBudget(params: {
   const contextConfigProvider = resolveContextConfigProviderForRuntime({
     provider,
     runtimeId: harnessPolicy.runtime,
+    config: params.cfg,
   });
   const configuredContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,

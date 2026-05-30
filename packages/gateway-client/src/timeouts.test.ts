@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  addSafeTimeoutDelayGraceMs,
   getConnectChallengeTimeoutMsFromEnv,
   getPreauthHandshakeTimeoutMsFromEnv,
   MAX_SAFE_TIMEOUT_DELAY_MS,
@@ -22,6 +23,19 @@ describe("resolveSafeTimeoutDelayMs", () => {
   it("preserves callers that intentionally allow zero-delay timers", () => {
     expect(resolveSafeTimeoutDelayMs(Number.NaN, { minMs: 0 })).toBe(0);
     expect(resolveSafeTimeoutDelayMs(-5, { minMs: 0 })).toBe(0);
+  });
+});
+
+describe("addSafeTimeoutDelayGraceMs", () => {
+  it("adds grace before applying Node timer bounds", () => {
+    expect(addSafeTimeoutDelayGraceMs(10_000, 5_000)).toBe(15_000);
+    expect(addSafeTimeoutDelayGraceMs(MAX_SAFE_TIMEOUT_DELAY_MS - 100, 500)).toBe(
+      MAX_SAFE_TIMEOUT_DELAY_MS,
+    );
+  });
+
+  it("caps overflowed finite sums instead of falling back to the minimum", () => {
+    expect(addSafeTimeoutDelayGraceMs(Number.MAX_VALUE, 5_000)).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
   });
 });
 
@@ -53,6 +67,19 @@ describe("gateway client handshake timeouts", () => {
         configuredTimeoutMs: 3_000_000_000,
       }),
     ).toBe(MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
+  it("accepts existing strict timeout env integer forms", () => {
+    expect(
+      getPreauthHandshakeTimeoutMsFromEnv({
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: " +75000 ",
+      }),
+    ).toBe(75_000);
+    expect(
+      getConnectChallengeTimeoutMsFromEnv({
+        OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: " 015000 ",
+      }),
+    ).toBe(15_000);
   });
 
   it("caps connect challenge timeout env and explicit values to the safe timer range", () => {

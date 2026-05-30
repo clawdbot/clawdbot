@@ -157,19 +157,30 @@ async function resolveDeliveryPlan(params: {
     }
   }
 
-  let relayConfig: ApnsRelayConfig | undefined;
+  const relayConfigByNodeId = new Map<string, ApnsRelayConfig>();
   if (needsRelay) {
-    const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway);
-    if (relay.ok) {
-      relayConfig = relay.value;
-    } else {
-      params.log.warn?.(`exec approvals: iOS relay APNs config unavailable: ${relay.error}`);
+    for (const target of targets) {
+      if (target.registration.transport !== "relay") {
+        continue;
+      }
+      const relay = resolveApnsRelayConfigFromEnv(process.env, getRuntimeConfig().gateway, {
+        registrationRelayOrigin: target.registration.relayOrigin,
+      });
+      if (relay.ok) {
+        relayConfigByNodeId.set(target.nodeId, relay.value);
+      } else {
+        params.log.warn?.(`exec approvals: iOS relay APNs config unavailable: ${relay.error}`);
+      }
     }
   }
+  const relayConfig = relayConfigByNodeId.values().next().value;
 
   return {
     targets: targets.filter((target) =>
-      target.registration.transport === "direct" ? Boolean(directAuth) : Boolean(relayConfig),
+      target.registration.transport === "direct"
+        ? Boolean(directAuth)
+        : relayConfigByNodeId.has(target.nodeId) &&
+          relayConfigByNodeId.get(target.nodeId)?.baseUrl === relayConfig?.baseUrl,
     ),
     directAuth,
     relayConfig,

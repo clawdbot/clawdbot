@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type {
-  AgentMessage,
-  EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
   buildCodexWorkspaceBootstrapContext,
@@ -12,7 +9,6 @@ import {
   readContextEngineThreadBootstrapProjection,
   remapCodexContextFilePath,
   resolveContextEngineBootstrapProjectionDecision,
-  shouldProjectMirroredHistoryForCodexStart,
 } from "./attempt-context.js";
 import type { CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
@@ -138,44 +134,6 @@ describe("Codex app-server attempt context", () => {
       path: "/outside/SOUL.md",
       content: "outside",
     });
-  });
-
-  it("projects mirrored history for transient native-disabled Codex threads", () => {
-    expect(
-      shouldProjectMirroredHistoryForCodexStart({
-        startupBinding: {
-          threadId: "thread-existing",
-          dynamicToolsFingerprint: "same-tools",
-        } as never,
-        dynamicToolsFingerprint: "same-tools",
-        historyMessages: [
-          {
-            role: "user",
-            content: "earlier request",
-            timestamp: Date.now(),
-          } as AgentMessage,
-        ],
-        forceProject: true,
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldProjectMirroredHistoryForCodexStart({
-        startupBinding: {
-          threadId: "thread-existing",
-          dynamicToolsFingerprint: "same-tools",
-        } as never,
-        dynamicToolsFingerprint: "same-tools",
-        historyMessages: [
-          {
-            role: "assistant",
-            content: "earlier response",
-            timestamp: Date.now(),
-          } as unknown as AgentMessage,
-        ],
-        forceProject: true,
-      }),
-    ).toBe(false);
   });
 
   it("reads and compares thread-bootstrap context-engine projections", () => {

@@ -1412,6 +1412,8 @@ describe("classifyFailoverReason provider messages", () => {
     // Auth errors
     expect(classifyFailoverReason("无权访问该模型")).toBe("auth");
     expect(classifyFailoverReason("403 您无权访问glm-5.1。")).toBe("auth");
+    expect(classifyFailoverReason("当前ak因违规请求被禁止访问该模型")).toBe("auth");
+    expect(classifyFailoverReason('{"success":false,"code":"CE-011"}')).toBe("auth");
     expect(classifyFailoverReason("认证失败")).toBe("auth");
     expect(classifyFailoverReason("鉴权失败，请检查API Key")).toBe("auth");
     expect(classifyFailoverReason("密钥无效")).toBe("auth");

@@ -16,6 +16,10 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import {
+  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
+  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
+} from "../infra/plugin-approvals.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -31,6 +35,12 @@ import {
   type PluginHookToolKind,
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
+import { addTimerTimeoutGraceMs } from "../shared/number-coercion.js";
+import {
+  resolveSkillTelemetrySource,
+  resolveSkillTelemetrySourceValue,
+} from "../skills/loading/source.js";
+import type { SkillSnapshot, SkillTelemetrySource } from "../skills/types.js";
 import { isPlainObject } from "../utils.js";
 import { adjustedParamsByToolCallId } from "./agent-tools.before-tool-call.state.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
@@ -42,8 +52,6 @@ import {
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { resolveSkillTelemetrySource, resolveSkillTelemetrySourceValue } from "./skills/source.js";
-import type { SkillSnapshot, SkillTelemetrySource } from "./skills/types.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -111,6 +119,22 @@ type HookOutcome =
       deferredApproval?: DeferredPluginToolApproval;
     };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
+
+function resolvePluginToolApprovalTimeoutMs(approval: PluginApprovalRequest): number {
+  if (
+    typeof approval.timeoutMs !== "number" ||
+    !Number.isFinite(approval.timeoutMs) ||
+    approval.timeoutMs <= 0
+  ) {
+    return DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+  }
+  return Math.min(Math.floor(approval.timeoutMs), MAX_PLUGIN_APPROVAL_TIMEOUT_MS);
+}
+
+function resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs: number): number {
+  return addTimerTimeoutGraceMs(timeoutMs, 10_000) ?? DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS + 10_000;
+}
+
 export type DeferredPluginToolApproval = {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -402,6 +426,8 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
+  const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
+  const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
   try {
     const requestResult: {
       id?: string;
@@ -411,7 +437,7 @@ async function requestPluginToolApproval(params: {
       "plugin.approval.request",
       // Buffer beyond the approval timeout so the gateway can clean up
       // and respond before the client-side RPC timeout fires.
-      { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+      { timeoutMs: gatewayTimeoutMs },
       {
         pluginId: approval.pluginId,
         title: approval.title,
@@ -422,7 +448,7 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
-        timeoutMs: approval.timeoutMs ?? 120_000,
+        timeoutMs,
         twoPhase: true,
       },
       { expectFinal: false },
@@ -465,7 +491,7 @@ async function requestPluginToolApproval(params: {
         "plugin.approval.waitDecision",
         // Buffer beyond the approval timeout so the gateway can clean up
         // and respond before the client-side RPC timeout fires.
-        { timeoutMs: (approval.timeoutMs ?? 120_000) + 10_000 },
+        { timeoutMs: gatewayTimeoutMs },
         { id },
       );
       let waitResult: { id?: string; decision?: string | null } | undefined;

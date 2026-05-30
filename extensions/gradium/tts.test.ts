@@ -28,6 +28,14 @@ describe("gradium tts diagnostics", () => {
     };
   }
 
+  function createStreamingAudioResponse(params: {
+    chunkCount: number;
+    chunkSize: number;
+    byte: number;
+  }): { response: Response; getReadCount: () => number } {
+    return createStreamingErrorResponse({ ...params, status: 200 });
+  }
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -133,5 +141,28 @@ describe("gradium tts diagnostics", () => {
       json_config: '{"padding_bonus":0}',
     });
     expect(result).toEqual(audioData);
+  });
+
+  it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
+    const streamed = createStreamingAudioResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+      byte: 121,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed.response));
+
+    await expect(
+      gradiumTTS({
+        text: "hello",
+        apiKey: "test-key",
+        baseUrl: "https://api.gradium.ai",
+        voiceId: "YTpq7expH9539ERJ",
+        outputFormat: "wav",
+        timeoutMs: 5_000,
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Gradium TTS audio response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 });

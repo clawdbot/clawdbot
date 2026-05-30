@@ -1216,6 +1216,7 @@ export async function runPreparedReply(
     originatingTo: ctx.OriginatingTo,
     originatingAccountId: sessionCtx.AccountId,
     originatingThreadId,
+    originatingReplyToId: sessionCtx.ReplyToId,
     originatingChatType: ctx.ChatType,
     run: {
       agentId,

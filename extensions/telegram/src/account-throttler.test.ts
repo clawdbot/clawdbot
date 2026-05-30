@@ -6,6 +6,21 @@ import {
 } from "./account-throttler.js";
 
 type TelegramPreviousCall = Parameters<ReturnType<typeof createTelegramAccountThrottler>>[0];
+type TelegramTransform = ReturnType<typeof createTelegramAccountThrottler>;
+
+function callLooseSendMessage(
+  throttler: TelegramTransform,
+  prev: TelegramPreviousCall,
+  payload: Record<string, unknown>,
+) {
+  const loose = throttler as (
+    prev: TelegramPreviousCall,
+    method: "sendMessage",
+    payload: unknown,
+    signal: undefined,
+  ) => ReturnType<TelegramTransform>;
+  return loose(prev, "sendMessage", payload, undefined);
+}
 
 function deferred<T>() {
   let resolve: (value: T) => void;
@@ -152,5 +167,46 @@ describe("getOrCreateAccountThrottler", () => {
 
     firstGate.resolve();
     await Promise.all([first, second]);
+  });
+
+  it("uses strict decimal string ids for fair group lanes", async () => {
+    const firstGate = deferred<void>();
+    const entered: string[] = [];
+    const throttler = createTelegramAccountThrottler(
+      () => async (prev, method, payload, signal) => prev(method, payload, signal),
+    );
+    const prev = vi.fn(async (_method: string, payload: unknown) => {
+      const request = payload as { message_thread_id?: string; text?: string };
+      entered.push(`${request.message_thread_id}:${request.text}`);
+      if (entered.length === 1) {
+        await firstGate.promise;
+      }
+      return { ok: true, result: request.text ?? "" };
+    }) as unknown as TelegramPreviousCall;
+
+    const first = callLooseSendMessage(throttler, prev, {
+      chat_id: "-100123",
+      message_thread_id: "+10",
+      text: "first",
+    });
+    await vi.waitFor(() => expect(entered).toEqual(["+10:first"]));
+
+    const sameTopic = callLooseSendMessage(throttler, prev, {
+      chat_id: "-100123",
+      message_thread_id: "+10",
+      text: "second",
+    });
+    const otherTopic = callLooseSendMessage(throttler, prev, {
+      chat_id: "-100123",
+      message_thread_id: "0x20",
+      text: "hex",
+    });
+
+    firstGate.resolve();
+    await vi.waitFor(() => expect(entered.length).toBeGreaterThanOrEqual(2));
+    expect(entered[1]).toBe("0x20:hex");
+    await Promise.all([first, sameTopic, otherTopic]);
+
+    expect(entered).toEqual(["+10:first", "0x20:hex", "+10:second"]);
   });
 });

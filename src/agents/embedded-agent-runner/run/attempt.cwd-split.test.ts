@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   cleanupTempPaths,
@@ -22,13 +25,15 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
 
   it("uses workspace for bootstrap and cwd for runtime tools", async () => {
     const bootstrap = createContextEngineBootstrapAndAssemble();
+    const taskRepo = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-task-repo-"));
+    tempPaths.push(taskRepo);
 
     await createContextEngineAttemptRunner({
       contextEngine: bootstrap,
       sessionKey: "agent:main:subagent:child",
       tempPaths,
       attemptOverrides: {
-        cwd: "/tmp/task-repo",
+        cwd: taskRepo,
         disableTools: false,
       },
     });
@@ -42,14 +47,14 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     const toolsCall = hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0] as
       | { cwd?: string; workspaceDir?: string; spawnWorkspaceDir?: string }
       | undefined;
-    expect(toolsCall?.cwd).toBe("/tmp/task-repo");
+    expect(toolsCall?.cwd).toBe(taskRepo);
     expect(toolsCall?.workspaceDir).toBe(bootstrapCall?.workspaceDir);
     expect(toolsCall?.spawnWorkspaceDir).toBe(bootstrapCall?.workspaceDir);
 
     const resourceLoaderInit = hoisted.defaultResourceLoaderInitMock.mock.calls[0]?.[0] as
       | { cwd?: string }
       | undefined;
-    expect(resourceLoaderInit?.cwd).toBe("/tmp/task-repo");
+    expect(resourceLoaderInit?.cwd).toBe(taskRepo);
   });
 
   it("rejects cwd overrides for sandboxed runs instead of silently ignoring them", async () => {

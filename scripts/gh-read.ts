@@ -2,6 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createPrivateKey, createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { readBoundedResponseText } from "./lib/bounded-response.ts";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 const APP_ID_ENV = "OPENCLAW_GH_READ_APP_ID";
@@ -11,6 +12,7 @@ const PERMISSIONS_ENV = "OPENCLAW_GH_READ_PERMISSIONS";
 const API_VERSION = "2022-11-28";
 const DEFAULT_GITHUB_FETCH_TIMEOUT_MS = 30_000;
 const GITHUB_ERROR_BODY_MAX_CHARS = 4096;
+const GITHUB_JSON_BODY_MAX_BYTES = 1024 * 1024;
 const DEFAULT_READ_PERMISSION_KEYS = [
   "actions",
   "checks",
@@ -230,6 +232,19 @@ export async function readBoundedGitHubErrorText(
   return truncated ? `${text}\n[truncated]` : text;
 }
 
+export async function readBoundedGitHubJson<T>(
+  response: Response,
+  maxBytes = GITHUB_JSON_BODY_MAX_BYTES,
+): Promise<T> {
+  const text = await readBoundedResponseText(response, "GitHub API", maxBytes, {
+    createTooLargeError: (message) =>
+      Object.assign(new Error(message), {
+        code: "ETOOBIG",
+      }),
+  });
+  return JSON.parse(text) as T;
+}
+
 export async function githubJson<T>(
   path: string,
   bearerToken: string,
@@ -263,7 +278,7 @@ export async function githubJson<T>(
         fail(`${init?.method ?? "GET"} ${path} failed (${response.status}): ${text}`);
       }
 
-      return (await response.json()) as T;
+      return await readBoundedGitHubJson<T>(response);
     },
   );
 }

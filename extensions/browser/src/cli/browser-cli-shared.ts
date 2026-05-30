@@ -1,3 +1,7 @@
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   BROWSER_REQUEST_GATEWAY_METHOD,
@@ -32,14 +36,26 @@ function normalizeQuery(query: BrowserRequestParams["query"]): Record<string, st
   return Object.keys(out).length ? out : undefined;
 }
 
-function parsePositiveInteger(raw: string, flag: string): number {
-  const value = raw.trim();
-  if (!/^\+?\d+$/.test(value)) {
+export function parseBrowserPositiveIntegerValue(value: unknown): number | undefined {
+  return parseStrictPositiveInteger(value);
+}
+
+export function parseBrowserNonNegativeIntegerValue(value: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(value);
+}
+
+export function parseBrowserPositiveIntegerOption(raw: string, flag: string): number {
+  const parsed = parseBrowserPositiveIntegerValue(raw);
+  if (parsed === undefined) {
     throw new Error(`${flag} must be a positive integer.`);
   }
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${flag} must be a positive integer.`);
+  return parsed;
+}
+
+export function parseBrowserNonNegativeIntegerOption(raw: string, flag: string): number {
+  const parsed = parseBrowserNonNegativeIntegerValue(raw);
+  if (parsed === undefined) {
+    throw new Error(`${flag} must be a non-negative integer.`);
   }
   return parsed;
 }
@@ -53,7 +69,7 @@ export async function callBrowserRequest<T>(
     typeof extra?.timeoutMs === "number" && Number.isFinite(extra.timeoutMs)
       ? normalizeBrowserTimerDelayMs(extra.timeoutMs)
       : typeof opts.timeout === "string"
-        ? normalizeBrowserTimerDelayMs(parsePositiveInteger(opts.timeout, "--timeout"))
+        ? normalizeBrowserTimerDelayMs(parseBrowserPositiveIntegerOption(opts.timeout, "--timeout"))
         : undefined;
   const resolvedTimeout =
     typeof resolvedTimeoutMs === "number" && Number.isFinite(resolvedTimeoutMs)

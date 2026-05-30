@@ -32,7 +32,9 @@ export function readHeaderNumber(headers: Headers, name: string): number | undef
     return undefined;
   }
   const parsed = Number(trimmed);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return Number.isFinite(parsed) && Math.abs(parsed) <= Number.MAX_SAFE_INTEGER
+    ? parsed
+    : undefined;
 }
 
 export function readResetAt(response: Response): number | undefined {

@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
+import { resolveExpiresAtMsFromDurationSeconds } from "../infra/parse-finite-number.js";
 import type { OAuthCredentials } from "../llm/oauth.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
@@ -81,9 +82,12 @@ export function parseOAuthCallbackInput(
   return { code, state };
 }
 
-function coerceExpiresAt(expiresInSeconds: number, now: number): number {
-  const value = now + Math.max(0, Math.floor(expiresInSeconds)) * 1000 - DEFAULT_EXPIRES_BUFFER_MS;
-  return Math.max(value, now + 30_000);
+function resolveChutesExpiresAt(value: unknown, now: number): number | undefined {
+  return resolveExpiresAtMsFromDurationSeconds(value, {
+    nowMs: now,
+    bufferMs: DEFAULT_EXPIRES_BUFFER_MS,
+    minRemainingMs: 30_000,
+  });
 }
 
 async function fetchChutesUserInfo(params: {
@@ -144,7 +148,7 @@ export async function exchangeChutesCodeForTokens(params: {
 
   const access = data.access_token?.trim();
   const refresh = data.refresh_token?.trim();
-  const expiresIn = data.expires_in ?? 0;
+  const expires = resolveChutesExpiresAt(data.expires_in, now);
 
   if (!access) {
     throw new Error("Chutes token exchange returned no access_token");
@@ -152,13 +156,16 @@ export async function exchangeChutesCodeForTokens(params: {
   if (!refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
   }
+  if (expires === undefined) {
+    throw new Error("Chutes token exchange returned invalid expires_in");
+  }
 
   const info = await fetchChutesUserInfo({ accessToken: access, fetchFn });
 
   return {
     access,
     refresh,
-    expires: coerceExpiresAt(expiresIn, now),
+    expires,
     email: info?.username,
     accountId: info?.sub,
     clientId: params.app.clientId,
@@ -210,10 +217,13 @@ export async function refreshChutesTokens(params: {
   };
   const access = data.access_token?.trim();
   const newRefresh = data.refresh_token?.trim();
-  const expiresIn = data.expires_in ?? 0;
+  const expires = resolveChutesExpiresAt(data.expires_in, now);
 
   if (!access) {
     throw new Error("Chutes token refresh returned no access_token");
+  }
+  if (expires === undefined) {
+    throw new Error("Chutes token refresh returned invalid expires_in");
   }
 
   return {
@@ -221,7 +231,7 @@ export async function refreshChutesTokens(params: {
     access,
     // RFC 6749 section 6: new refresh token is optional; if present, replace old.
     refresh: newRefresh || refreshToken,
-    expires: coerceExpiresAt(expiresIn, now),
+    expires,
     clientId,
   } as unknown as ChutesStoredOAuth;
 }

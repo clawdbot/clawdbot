@@ -49,6 +49,7 @@ import {
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
@@ -197,6 +198,10 @@ function resolveQmdEmbedLockOptions(embedTimeoutMs: number) {
     },
     stale: Math.max(QMD_EMBED_LOCK_MIN_WAIT_MS, expectedEmbedMs * 2),
   };
+}
+
+export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): number {
+  return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);
 }
 
 function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
@@ -2130,7 +2135,7 @@ export class QmdMemoryManager implements MemorySearchManager {
           "--timeout",
           String(Math.max(0, params.timeoutMs)),
         ],
-        { timeoutMs: Math.max(params.timeoutMs + 2_000, 5_000) },
+        { timeoutMs: resolveQmdMcporterSearchProcessTimeoutMs(params.timeoutMs) },
       );
       // If we got here with the v2 "query" tool, confirm v2 for future calls.
       if (useUnifiedQueryTool && this.qmdMcpToolVersion === null) {

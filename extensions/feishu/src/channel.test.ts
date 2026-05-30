@@ -1047,6 +1047,25 @@ describe("feishuPlugin actions", () => {
     expect(requireRecord(peers[0], "peer").id).toBe("ou_1");
   });
 
+  it("accepts plus-signed channel-list limits", async () => {
+    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "channel-list",
+      params: { query: "eng", limit: "+05", scope: "groups" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledWith({
+      cfg,
+      query: "eng",
+      limit: 5,
+      fallbackToStatic: false,
+      accountId: undefined,
+    });
+  });
+
   it("ignores malformed channel-list limits", async () => {
     listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
 

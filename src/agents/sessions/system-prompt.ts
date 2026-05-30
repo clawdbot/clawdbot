@@ -2,8 +2,8 @@
  * System prompt construction and project context loading
  */
 
+import { formatSkillsForPrompt, type Skill } from "../../skills/loading/session.js";
 import { getDocsPath, getExamplesPath, getReadmePath } from "../config.js";
-import { formatSkillsForPrompt, type Skill } from "./skills.js";
 
 export interface BuildSystemPromptOptions {
   /** Custom system prompt (replaces default). */

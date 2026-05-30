@@ -224,5 +224,5 @@ export function expectFallbackMediaAnnouncement({
   expect(event.status).toBe("ok");
   expect(String(event.result)).toContain(resultMediaPath);
   expect(event.mediaUrls).toEqual(mediaUrls);
-  expect(String(event.replyInstruction)).toContain("message-tool delivery");
+  expect(String(event.replyInstruction)).toContain("visible-reply contract");
 }

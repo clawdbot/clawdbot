@@ -266,6 +266,10 @@ The doctor checks Convex broker env, validates endpoint settings, and verifies a
 
 Live transport lanes share one contract instead of each inventing their own scenario list shape. `qa-channel` is the broad synthetic product-behavior suite and is not part of the live transport coverage matrix.
 
+Live transport runners should import the shared scenario ids, baseline
+coverage helpers, and scenario-selection helper from
+`openclaw/plugin-sdk/qa-live-transport-scenarios`.
+
 | Lane     | Canary | Mention gating | Bot-to-bot | Allowlist block | Top-level reply | Restart resume | Thread follow-up | Thread isolation | Reaction observation | Help command | Native command registration |
 | -------- | ------ | -------------- | ---------- | --------------- | --------------- | -------------- | ---------------- | ---------------- | -------------------- | ------------ | --------------------------- |
 | Matrix   | x      | x              | x          | x               | x               | x              | x                | x                | x                    |              |                             |

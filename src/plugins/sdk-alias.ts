@@ -493,6 +493,9 @@ const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
 const BUNDLED_PLUGIN_PUBLIC_SURFACE_SOURCE_PATTERN = /^(?:api|runtime-api|test-api|.+-api)$/u;
 const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN =
   /(?:\bfrom\s*["']|\bimport\s*\(\s*["']|\brequire\s*\(\s*["'])(\.{1,2}\/[^"']+)["']/g;
+// Jiti-loaded plugin code runs outside the Vitest/tsgo resolver, so every
+// workspace package import reachable from plugin SDK barrels needs an explicit
+// source/dist alias here to keep source checkouts and packaged builds aligned.
 const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
   {
     packageName: "@openclaw/gateway-client",
@@ -556,6 +559,139 @@ const WORKSPACE_PACKAGE_ALIAS_ENTRIES = [
     subpath: "version",
     srcFile: "version.ts",
     distFile: "version.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "code-spans",
+    srcFile: "code-spans.ts",
+    distFile: "code-spans.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "fences",
+    srcFile: "fences.ts",
+    distFile: "fences.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "frontmatter",
+    srcFile: "frontmatter.ts",
+    distFile: "frontmatter.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "ir",
+    srcFile: "ir.ts",
+    distFile: "ir.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "render",
+    srcFile: "render.ts",
+    distFile: "render.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "render-aware-chunking",
+    srcFile: "render-aware-chunking.ts",
+    distFile: "render-aware-chunking.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "tables",
+    srcFile: "tables.ts",
+    distFile: "tables.mjs",
+  },
+  {
+    packageName: "@openclaw/markdown-core",
+    packageDir: "markdown-core",
+    subpath: "types",
+    srcFile: "types.ts",
+    distFile: "types.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "capability-model-ref",
+    srcFile: "capability-model-ref.ts",
+    distFile: "capability-model-ref.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "catalog",
+    srcFile: "catalog.ts",
+    distFile: "catalog.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "model-ref",
+    srcFile: "model-ref.ts",
+    distFile: "model-ref.mjs",
+  },
+  {
+    packageName: "@openclaw/media-generation-core",
+    packageDir: "media-generation-core",
+    subpath: "normalization",
+    srcFile: "normalization.ts",
+    distFile: "normalization.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
+    subpath: "",
+    srcFile: "index.ts",
+    distFile: "index.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
+    subpath: "ip",
+    srcFile: "ip.ts",
+    distFile: "ip.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
+    subpath: "ipv4",
+    srcFile: "ipv4.ts",
+    distFile: "ipv4.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
+    subpath: "redact-sensitive-url",
+    srcFile: "redact-sensitive-url.ts",
+    distFile: "redact-sensitive-url.mjs",
+  },
+  {
+    packageName: "@openclaw/net-policy",
+    packageDir: "net-policy",
+    subpath: "url-userinfo",
+    srcFile: "url-userinfo.ts",
+    distFile: "url-userinfo.mjs",
   },
 ] as const;
 

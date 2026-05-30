@@ -1,3 +1,5 @@
+import type { SessionGoal } from "../config/sessions/types.js";
+
 export type TuiOptions = {
   local?: boolean;
   url?: string;
@@ -26,6 +28,7 @@ export type TuiResult = {
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
@@ -35,6 +38,7 @@ export type BtwEvent = {
   kind: "btw";
   runId?: string;
   sessionKey?: string;
+  agentId?: string;
   question: string;
   text: string;
   isError?: boolean;
@@ -63,6 +67,7 @@ export type SessionInfo = {
   inputTokens?: number | null;
   outputTokens?: number | null;
   totalTokens?: number | null;
+  goal?: SessionGoal;
   responseUsage?: ResponseUsageMode;
   updatedAt?: number | null;
   displayName?: string;

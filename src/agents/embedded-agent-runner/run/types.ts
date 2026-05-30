@@ -125,6 +125,7 @@ export type EmbeddedRunAttemptResult = {
   };
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
+    turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
     transport: "stdio" | "websocket";
     threadId?: string;
     turnId?: string;

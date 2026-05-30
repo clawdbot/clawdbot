@@ -196,6 +196,207 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.wrappedLength).toBe(details.text?.length);
   });
 
+  it("emits typed public progress for slow fetches", async () => {
+    vi.useFakeTimers();
+    try {
+      installMockFetch(async (input: RequestInfo | URL) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 6000));
+        return textResponse("Loaded page", resolveRequestUrl(input)) as Response;
+      });
+      const updates: unknown[] = [];
+      const tool = createFetchTool({ firecrawl: { enabled: false } });
+      const resultPromise = tool?.execute?.(
+        "call",
+        { url: "https://example.com/" },
+        undefined,
+        (partialResult) => {
+          updates.push(partialResult);
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(updates).toEqual([
+        {
+          content: [],
+          details: undefined,
+          progress: {
+            text: "Fetching page content...",
+            visibility: "channel",
+            privacy: "public",
+            id: "web_fetch:fetching",
+          },
+        },
+      ]);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await resultPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels typed progress when fetches finish before the progress threshold", async () => {
+    vi.useFakeTimers();
+    try {
+      installPlainTextFetch("Loaded quickly");
+      const updates: unknown[] = [];
+      const tool = createFetchTool({ firecrawl: { enabled: false } });
+
+      await tool?.execute?.("call", { url: "https://example.com/" }, undefined, (partial) => {
+        updates.push(partial);
+      });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(updates).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels typed progress when fetches are aborted", async () => {
+    vi.useFakeTimers();
+    try {
+      const providerExecute = vi.fn(async () => ({ text: "provider fallback" }));
+      resolveWebFetchDefinitionMock.mockReturnValue({
+        provider: { id: "firecrawl" },
+        definition: {
+          description: "firecrawl",
+          parameters: {},
+          execute: providerExecute,
+        },
+      });
+      installMockFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        return await new Promise<Response>((resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              reject(new Error("aborted"));
+            },
+            { once: true },
+          );
+          setTimeout(() => {
+            resolve(textResponse("Loaded page") as Response);
+          }, 6000);
+        });
+      });
+      const updates: unknown[] = [];
+      const controller = new AbortController();
+      const tool = createFetchTool({ firecrawl: { enabled: false } });
+      const resultPromise = tool?.execute?.(
+        "call",
+        { url: "https://example.com/" },
+        controller.signal,
+        (partial) => {
+          updates.push(partial);
+        },
+      );
+      const observedResultPromise = resultPromise?.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(5000);
+
+      const error = await observedResultPromise;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("aborted");
+      expect(updates).toHaveLength(0);
+      expect(resolveWebFetchDefinitionMock).not.toHaveBeenCalled();
+      expect(providerExecute).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cancels typed progress when fetch body reads are aborted", async () => {
+    vi.useFakeTimers();
+    try {
+      const providerExecute = vi.fn(async () => ({ text: "provider fallback" }));
+      resolveWebFetchDefinitionMock.mockReturnValue({
+        provider: { id: "firecrawl" },
+        definition: {
+          description: "firecrawl",
+          parameters: {},
+          execute: providerExecute,
+        },
+      });
+      installMockFetch(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial body"));
+            const lateTimer = setTimeout(() => {
+              controller.enqueue(new TextEncoder().encode("late body"));
+              controller.close();
+            }, 6000);
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                clearTimeout(lateTimer);
+                controller.error(new Error("body aborted"));
+              },
+              { once: true },
+            );
+          },
+        });
+        return new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        });
+      });
+      const updates: unknown[] = [];
+      const controller = new AbortController();
+      const tool = createFetchTool({ firecrawl: { enabled: false } });
+      const resultPromise = tool?.execute?.(
+        "call",
+        { url: "https://example.com/" },
+        controller.signal,
+        (partial) => {
+          updates.push(partial);
+        },
+      );
+      const observedResultPromise = resultPromise?.catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort(new Error("cancelled"));
+      await vi.advanceTimersByTimeAsync(5000);
+
+      const error = await observedResultPromise;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("cancelled");
+      expect(updates).toHaveLength(0);
+      expect(providerExecute).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps fetch execution alive when progress subscribers throw", async () => {
+    vi.useFakeTimers();
+    try {
+      installMockFetch(async (input: RequestInfo | URL) => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 6000));
+        return textResponse("Loaded page", resolveRequestUrl(input)) as Response;
+      });
+      const tool = createFetchTool({ firecrawl: { enabled: false } });
+      const onUpdate = vi.fn(() => {
+        throw new Error("subscriber failed");
+      });
+      const resultPromise = tool?.execute?.(
+        "call",
+        { url: "https://example.com/" },
+        undefined,
+        onUpdate,
+      );
+
+      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(resultPromise).resolves.toBeTruthy();
+      expect(onUpdate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("enforces maxChars after wrapping", async () => {
     const longText = "x".repeat(5_000);
     installMockFetch((input: RequestInfo | URL) =>

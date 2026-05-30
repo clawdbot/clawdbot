@@ -1,3 +1,4 @@
+import { resolveExpiresAtMsFromDurationSeconds } from "openclaw/plugin-sdk/number-runtime";
 import { generateHexPkceVerifierChallenge } from "openclaw/plugin-sdk/provider-auth";
 import {
   generateOAuthState,
@@ -10,6 +11,7 @@ const GOOGLE_MEET_REDIRECT_URI = "http://localhost:8085/oauth2callback";
 const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
+const GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/meetings.space.created",
   "https://www.googleapis.com/auth/meetings.space.readonly",
@@ -18,6 +20,16 @@ const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/calendar.events.readonly",
   "https://www.googleapis.com/auth/drive.meet.readonly",
 ] as const;
+
+function resolveGoogleMeetTokenExpiresAt(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
+    return Date.now();
+  }
+  return (
+    resolveExpiresAtMsFromDurationSeconds(value) ??
+    Date.now() + GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS * 1000
+  );
+}
 
 export type GoogleMeetOAuthTokens = {
   accessToken: string;
@@ -78,13 +90,9 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
     if (!accessToken) {
       throw new Error("Google OAuth token response was missing access_token");
     }
-    const expiresInSeconds =
-      typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in)
-        ? payload.expires_in
-        : 3600;
     return {
       accessToken,
-      expiresAt: Date.now() + expiresInSeconds * 1000,
+      expiresAt: resolveGoogleMeetTokenExpiresAt(payload.expires_in),
       refreshToken: payload.refresh_token?.trim() || undefined,
       scope: payload.scope?.trim() || undefined,
       tokenType: payload.token_type?.trim() || undefined,

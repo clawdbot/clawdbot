@@ -9,7 +9,10 @@ import {
   type ExecSecurity,
   loadExecApprovals,
   maxAsk,
+  minSecurity,
   requireValidExecTarget,
+  resolveExecApprovalsFromFile,
+  resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
@@ -18,7 +21,11 @@ import {
   resolveShellEnvFallbackTimeoutMs,
 } from "../infra/shell-env.js";
 import { logInfo } from "../logger.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+} from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -57,6 +64,7 @@ import {
   resolveWorkdir,
   truncateMiddle,
 } from "./bash-tools.shared.js";
+import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { EXEC_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { type AgentToolWithMeta, failedTextResult, textResult } from "./tools/common.js";
@@ -1215,6 +1223,18 @@ function rejectUnsafeControlShellCommand(command: string): void {
   }
 }
 
+function resolveExecReviewerDefaults(params: { defaults?: ExecToolDefaults; agentId?: string }) {
+  if (params.defaults?.reviewer) {
+    return params.defaults.reviewer;
+  }
+  const cfg = params.defaults?.config;
+  const agentId = params.agentId ? normalizeAgentId(params.agentId) : undefined;
+  const agentExec = agentId
+    ? cfg?.agents?.list?.find((entry) => normalizeAgentId(entry.id) === agentId)?.tools?.exec
+    : undefined;
+  return agentExec?.reviewer ?? cfg?.tools?.exec?.reviewer;
+}
+
 export function createExecTool(
   defaults?: ExecToolDefaults,
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
@@ -1271,6 +1291,13 @@ export function createExecTool(
   const agentId =
     defaults?.agentId ??
     (parsedAgentSession ? resolveAgentIdFromSessionKey(defaults?.sessionKey) : undefined);
+  const autoReviewer =
+    defaults?.autoReviewer ??
+    createModelExecAutoReviewer({
+      cfg: defaults?.config,
+      agentId,
+      reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
+    });
 
   return {
     name: "exec",
@@ -1391,21 +1418,58 @@ export function createExecTool(
       });
       const host: ExecHost = target.effectiveHost;
 
-      const approvalDefaults = loadExecApprovals().defaults;
-      const configuredSecurity =
-        defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
-      let security = configuredSecurity;
-      if (elevatedRequested && elevatedMode === "full") {
+      const explicitSecurity = defaults?.security;
+      const configuredSecurity = explicitSecurity ?? (host === "sandbox" ? "deny" : "full");
+      const modePolicy = resolveExecModePolicy({
+        mode: defaults?.mode,
+        security: configuredSecurity,
+        ask: defaults?.ask ?? "off",
+      });
+      const approvalPolicy =
+        host === "sandbox"
+          ? undefined
+          : resolveExecApprovalsFromFile({
+              file: loadExecApprovals(),
+              agentId,
+              overrides: {
+                security: "full",
+                ask: "off",
+              },
+            }).agent;
+      let security = minSecurity(
+        modePolicy.security,
+        approvalPolicy?.security ?? modePolicy.security,
+      );
+      if (
+        security === "deny" &&
+        (host !== "sandbox" || defaults?.mode === "deny" || explicitSecurity === "deny")
+      ) {
+        throw new Error(`exec denied: host=${host} security=deny`);
+      }
+      const hostPolicyAllowsFullBypass =
+        (approvalPolicy?.security ?? "full") === "full" && (approvalPolicy?.ask ?? "off") === "off";
+      const modePolicyAllowsFullBypass = modePolicy.security === "full" && modePolicy.ask === "off";
+      if (
+        elevatedRequested &&
+        elevatedMode === "full" &&
+        modePolicyAllowsFullBypass &&
+        hostPolicyAllowsFullBypass
+      ) {
         security = "full";
       }
       // Keep local exec defaults in sync with exec-approvals.json when tools.exec.* is unset.
-      const configuredAsk = defaults?.ask ?? approvalDefaults?.ask ?? "off";
       const requestedAsk = normalizeExecAsk(params.ask);
-      let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
-      const bypassApprovals = elevatedRequested && elevatedMode === "full";
+      const hostAsk = maxAsk(modePolicy.ask, approvalPolicy?.ask ?? modePolicy.ask);
+      let ask = maxAsk(hostAsk, requestedAsk ?? hostAsk);
+      const bypassApprovals =
+        elevatedRequested &&
+        elevatedMode === "full" &&
+        modePolicyAllowsFullBypass &&
+        hostPolicyAllowsFullBypass;
       if (bypassApprovals) {
         ask = "off";
       }
+      const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
       if (target.selectedTarget === "sandbox" && !sandbox) {
@@ -1535,6 +1599,8 @@ export function createExecTool(
           agentId,
           security,
           ask,
+          autoReview,
+          autoReviewer,
           strictInlineEval: defaults?.strictInlineEval,
           commandHighlighting: defaults?.commandHighlighting,
           trigger: defaults?.trigger,
@@ -1564,6 +1630,8 @@ export function createExecTool(
           defaultTimeoutSec,
           security,
           ask,
+          autoReview,
+          autoReviewer,
           safeBins,
           safeBinProfiles,
           strictInlineEval: defaults?.strictInlineEval,

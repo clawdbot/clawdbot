@@ -342,6 +342,65 @@ describe("FeishuStreamingSession", () => {
       "Final replace failed: Error: Replace card content failed with HTTP 500",
     );
   });
+
+  it("bounds streaming token cache lifetime when token expiry overflows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-29T12:00:00.000Z"));
+    const release = vi.fn(async () => {});
+    const authTokens: string[] = [];
+    fetchWithSsrFGuardMock.mockImplementation(
+      async ({ url }: { url: string; init?: { body?: string } }) => {
+        if (url.includes("/auth/")) {
+          const token = `token-${authTokens.length + 1}`;
+          authTokens.push(token);
+          return {
+            response: {
+              ok: true,
+              json: async () => ({
+                code: 0,
+                msg: "ok",
+                tenant_access_token: token,
+                expire: Number.MAX_SAFE_INTEGER,
+              }),
+            },
+            release,
+          };
+        }
+        return {
+          response: {
+            ok: true,
+            json: async () => ({
+              code: 0,
+              msg: "ok",
+              data: { card_id: `card-${authTokens.length}` },
+            }),
+          },
+          release,
+        };
+      },
+    );
+    const client = {
+      im: {
+        message: {
+          create: vi.fn(async () => ({ code: 0, msg: "ok", data: { message_id: "om_1" } })),
+        },
+      },
+    } as never;
+
+    await new FeishuStreamingSession(client, {
+      appId: "app_unsafe_token_expiry",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+    expect(authTokens).toEqual(["token-1"]);
+
+    vi.setSystemTime(Date.now() + 7200 * 1000 - 60_000 + 1);
+    await new FeishuStreamingSession(client, {
+      appId: "app_unsafe_token_expiry",
+      appSecret: "secret",
+    }).start("chat_id", "open_id");
+
+    expect(authTokens).toEqual(["token-1", "token-2"]);
+  });
 });
 
 describe("mergeStreamingText", () => {

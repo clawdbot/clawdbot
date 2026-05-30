@@ -53,14 +53,8 @@ function validateIrcPortInput(input: ChannelSetupInput): string | null {
   if (raw === undefined || raw === null || raw === "") {
     return null;
   }
-  const value = String(raw).trim();
-  if (!/^\+?\d+$/.test(value)) {
-    return "IRC port must be between 1 and 65535.";
-  }
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 65535
-    ? null
-    : "IRC port must be between 1 and 65535.";
+  const parsed = parseStrictPositiveInteger(String(raw));
+  return parsed !== undefined && parsed <= 65535 ? null : "IRC port must be between 1 and 65535.";
 }
 
 export function updateIrcAccountConfig(

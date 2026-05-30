@@ -567,6 +567,15 @@ describe("qa cli registration", () => {
     });
   });
 
+  it("normalizes signed decimal QA numeric option values through the shared parser", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "aimock", "--port", "+044080"]);
+
+    expect(runQaProviderServerCommand).toHaveBeenCalledWith("aimock", {
+      host: "127.0.0.1",
+      port: 44080,
+    });
+  });
+
   it.each([
     [["qa", "suite", "--concurrency", "1.5"], "--concurrency must be a positive integer."],
     [["qa", "suite", "--cpus", "0x4"], "--cpus must be a positive integer."],

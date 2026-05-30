@@ -98,6 +98,29 @@ describe("gradium speech provider", () => {
     expect(result.audioBuffer).toEqual(audioData);
   });
 
+  it("applies the configured media byte cap to synthesized audio", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(new Uint8Array(2048), { status: 200 })),
+    );
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {
+          agents: {
+            defaults: {
+              mediaMaxMb: 0.001,
+            },
+          },
+        } as never,
+        providerConfig: { apiKey: "gsk_test123" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Gradium TTS audio response exceeds");
+  });
+
   it("uses ulaw_8000 for telephony synthesis", async () => {
     const audioData = Buffer.from("ulaw-audio-data");
     const fetchMock = vi.fn().mockResolvedValue(new Response(audioData, { status: 200 }));

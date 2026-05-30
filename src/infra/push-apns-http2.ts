@@ -1,4 +1,5 @@
 import http2 from "node:http2";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
 import {
   getActiveManagedProxyUrl,
@@ -17,6 +18,7 @@ const APNS_AUTHORITIES = new Set([
 type ApnsAuthority = "https://api.push.apple.com" | "https://api.sandbox.push.apple.com";
 
 export const APNS_HTTP2_CANCEL_CODE = http2.constants.NGHTTP2_CANCEL;
+const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 
 export type ConnectApnsHttp2SessionParams = {
   authority: string;
@@ -85,6 +87,7 @@ export async function connectApnsHttp2Session(
   params: ConnectApnsHttp2SessionParams,
 ): Promise<http2.ClientHttp2Session> {
   const authority = assertApnsAuthority(params.authority);
+  const timeoutMs = resolveApnsHttp2TimeoutMs(params.timeoutMs);
   const proxyUrl = getActiveManagedProxyUrl();
   if (!proxyUrl) {
     return http2.connect(authority);
@@ -94,19 +97,24 @@ export async function connectApnsHttp2Session(
     authority,
     proxyUrl,
     proxyTls: getActiveManagedProxyTlsOptions(),
-    timeoutMs: params.timeoutMs,
+    timeoutMs,
   });
+}
+
+function resolveApnsHttp2TimeoutMs(timeoutMs: number): number {
+  return resolveTimerTimeoutMs(timeoutMs, APNS_HTTP2_MIN_TIMEOUT_MS, APNS_HTTP2_MIN_TIMEOUT_MS);
 }
 
 export async function probeApnsHttp2ReachabilityViaProxy(
   params: ProbeApnsHttp2ReachabilityViaProxyParams,
 ): Promise<ProbeApnsHttp2ReachabilityViaProxyResult> {
   const authority = assertApnsAuthority(params.authority);
+  const timeoutMs = resolveApnsHttp2TimeoutMs(params.timeoutMs);
   const session = await openProxiedApnsHttp2Session({
     authority,
     proxyUrl: new URL(params.proxyUrl),
     ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
-    timeoutMs: params.timeoutMs,
+    timeoutMs,
   });
 
   try {
@@ -116,10 +124,8 @@ export async function probeApnsHttp2ReachabilityViaProxy(
       let status: number | undefined;
       let responseHeaders: Record<string, string> = {};
       const timeout = setTimeout(() => {
-        fail(
-          new Error(`APNs reachability probe timed out after ${Math.trunc(params.timeoutMs)}ms`),
-        );
-      }, Math.trunc(params.timeoutMs));
+        fail(new Error(`APNs reachability probe timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
       timeout.unref?.();
 
       const cleanup = () => {

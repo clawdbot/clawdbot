@@ -456,28 +456,18 @@ describe("runNpmReleaseCheckCommand", () => {
 });
 
 describe("resolveNpmReleaseCheckCommandTimeoutMs", () => {
-  it("uses a positive environment timeout", () => {
-    expect(
-      resolveNpmReleaseCheckCommandTimeoutMs({
-        OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "1234",
-      }),
-    ).toBe(1234);
-  });
-
-  it("falls back when the environment timeout is invalid", () => {
-    expect(
-      resolveNpmReleaseCheckCommandTimeoutMs({
-        OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "nope",
-      }),
-    ).toBe(10 * 60 * 1000);
-  });
-
-  it("falls back when the environment timeout has a numeric prefix", () => {
-    expect(
-      resolveNpmReleaseCheckCommandTimeoutMs({
-        OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: "10m",
-      }),
-    ).toBe(10 * 60 * 1000);
+  it("parses only positive integer environment timeouts", () => {
+    for (const [raw, expected] of [
+      ["1234", 1234],
+      ["nope", 10 * 60 * 1000],
+      ["10m", 10 * 60 * 1000],
+    ] as const) {
+      expect(
+        resolveNpmReleaseCheckCommandTimeoutMs({
+          OPENCLAW_NPM_RELEASE_CHECK_COMMAND_TIMEOUT_MS: raw,
+        }),
+      ).toBe(expected);
+    }
   });
 });
 

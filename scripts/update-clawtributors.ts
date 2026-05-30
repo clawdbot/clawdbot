@@ -6,6 +6,7 @@ import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtribut
 const REPO = "openclaw/openclaw";
 const PER_LINE = 10;
 const AVATAR_PROBE_SIZE = 40;
+const AVATAR_PROBE_MAX_BYTES = 256 * 1024;
 const AVATAR_SIZE = 48;
 const CLAWTRIBUTORS_START = "<!-- clawtributors:start -->";
 const CLAWTRIBUTORS_END = "<!-- clawtributors:end -->";
@@ -459,7 +460,7 @@ async function probeDefaultGitHubAvatar(login: string): Promise<boolean> {
     if (!response.ok) {
       return false;
     }
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const buffer = await readAvatarProbeBuffer(response);
     const dimensions = readImageDimensions(buffer);
     return Boolean(
       dimensions && (dimensions.width > AVATAR_PROBE_SIZE || dimensions.height > AVATAR_PROBE_SIZE),
@@ -467,6 +468,43 @@ async function probeDefaultGitHubAvatar(login: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function readAvatarProbeBuffer(response: Response): Promise<Buffer> {
+  const contentLength = Number(response.headers.get("content-length") ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > AVATAR_PROBE_MAX_BYTES) {
+    throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+  }
+
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.byteLength > AVATAR_PROBE_MAX_BYTES) {
+      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+    }
+    return buffer;
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value?.byteLength) {
+      continue;
+    }
+    const chunk = Buffer.from(value);
+    const nextTotal = total + chunk.byteLength;
+    if (nextTotal > AVATAR_PROBE_MAX_BYTES) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`avatar probe exceeded ${AVATAR_PROBE_MAX_BYTES} bytes`);
+    }
+    chunks.push(chunk);
+    total = nextTotal;
+  }
+  return Buffer.concat(chunks, total);
 }
 
 async function filterVisibleEntries(

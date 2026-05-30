@@ -89,6 +89,28 @@ describe("Codex app-server attempt results", () => {
       replayInvalid: true,
       livenessState: "abandoned",
     });
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({
+          assistantTexts: ["I am changing the data model now..."],
+        }),
+        turnCompletionIdleTimedOut: true,
+      }),
+    ).toEqual({
+      message:
+        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
+    });
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({
+          toolMetas: [{ toolName: "exec" }],
+        }),
+        turnCompletionIdleTimedOut: true,
+      }),
+    ).toEqual({
+      message:
+        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
+    });
   });
 
   it("classifies replay blocked reasons", () => {

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addQaCredentialSet,
   diagnoseQaCredentialBroker,
@@ -52,6 +53,10 @@ async function expectQaCredentialAdminError(promise: Promise<unknown>, code: str
 }
 
 describe("qa credential admin runtime", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("adds a credential set through the admin endpoint", async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       jsonResponse({
@@ -149,6 +154,30 @@ describe("qa credential admin runtime", () => {
     expect(requireFirstFetchInput(fetchImpl)).toBe(
       "http://127.0.0.1:3210/qa-credentials/v1/admin/list",
     );
+  });
+
+  it("caps oversized admin HTTP timeouts before creating abort signals", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({
+        status: "ok",
+        count: 0,
+        credentials: [],
+      }),
+    );
+
+    await listQaCredentialSets({
+      siteUrl: "https://first-schnauzer-821.convex.site",
+      env: {
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+        OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
+      },
+      fetchImpl,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(requireFirstFetchInit(fetchImpl).signal).toBe(timeoutController.signal);
   });
 
   it("rejects unsafe endpoint-prefix overrides", async () => {

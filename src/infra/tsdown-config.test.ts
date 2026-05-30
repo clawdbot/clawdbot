@@ -99,6 +99,7 @@ describe("tsdown config", () => {
       "agents/model-catalog.runtime",
       "agents/models-config.runtime",
       "cli/gateway-lifecycle.runtime",
+      "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",

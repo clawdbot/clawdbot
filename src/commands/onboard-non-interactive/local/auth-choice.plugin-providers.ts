@@ -21,6 +21,7 @@ import {
   CODEX_RUNTIME_PLUGIN_ID,
   ensureCodexRuntimePluginForModelSelection,
 } from "../../codex-runtime-plugin-install.js";
+import { ensureCopilotRuntimePluginForModelSelection } from "../../copilot-runtime-plugin-install.js";
 import { createNonInteractiveLoggingPrompter } from "../../non-interactive-prompter.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 
@@ -191,5 +192,12 @@ export async function applyNonInteractivePluginProviderChoice(params: {
       nonInteractive: true,
     });
   }
-  return codexInstall.cfg;
+  const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
+    cfg: codexInstall.cfg,
+    model: selectedModel,
+    prompter: nonInteractivePrompter,
+    runtime: params.runtime,
+    workspaceDir,
+  });
+  return copilotInstall.cfg;
 }

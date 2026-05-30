@@ -1,4 +1,4 @@
-import type { Model, StreamFn } from "../../llm.js";
+import type { Model, StreamFn } from "../../../../llm-core/src/index.js";
 import {
   type AgentCoreCompletionRuntimeDeps,
   resolveAgentCoreCompleteFn,

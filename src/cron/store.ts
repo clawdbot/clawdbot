@@ -15,14 +15,27 @@ type SerializedStoreCacheEntry = {
   needsSplitMigration: boolean;
 };
 
-export type PreservedCronConfigJob = {
-  index: number;
-  job: Record<string, unknown>;
+export type QuarantinedCronConfigJob = {
+  sourceIndex: number;
+  reason: string;
+  job?: Record<string, unknown>;
+  raw?: unknown;
+  state?: Record<string, unknown>;
+  updatedAtMs?: number;
+  scheduleIdentity?: string;
+};
+
+export type CronQuarantineFile = {
+  version: 1;
+  jobs: Array<QuarantinedCronConfigJob & { quarantinedAtMs: number }>;
 };
 
 export type LoadedCronStore = {
   store: CronStoreFile;
   configJobs: Array<Record<string, unknown>>;
+  configJobIndexes: number[];
+  configJobRuntimeEntries: CronConfigJobRuntimeEntry[];
+  invalidConfigRows: QuarantinedCronConfigJob[];
 };
 
 const serializedStoreCache = new Map<string, SerializedStoreCacheEntry>();
@@ -51,27 +64,61 @@ function resolveStatePath(storePath: string): string {
   return `${storePath}-state.json`;
 }
 
+export function resolveCronQuarantinePath(storePath: string): string {
+  if (storePath.endsWith(".json")) {
+    return storePath.replace(/\.json$/, "-quarantine.json");
+  }
+  return `${storePath}-quarantine.json`;
+}
+
 type CronStateFileEntry = {
   updatedAtMs?: number;
   scheduleIdentity?: string;
   state?: Record<string, unknown>;
 };
 
+export type CronConfigJobRuntimeEntry = CronStateFileEntry;
+
 type CronStateFile = {
   version: 1;
   jobs: Record<string, CronStateFileEntry>;
 };
 
+function parseCronStateFile(raw: string): CronStateFile | null {
+  try {
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    const record = parsed as Record<string, unknown>;
+    if (
+      record.version !== 1 ||
+      typeof record.jobs !== "object" ||
+      record.jobs === null ||
+      Array.isArray(record.jobs)
+    ) {
+      return null;
+    }
+    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
+  } catch {
+    return null;
+  }
+}
+
 function normalizeCronStoreFile(parsed: unknown): CronStoreFile {
-  const rawJobs = Array.isArray(parsed)
-    ? parsed
-    : isRecord(parsed) && Array.isArray(parsed.jobs)
-      ? parsed.jobs
-      : [];
+  const rawJobs = getRawCronJobs(parsed);
   return {
     version: 1,
     jobs: rawJobs.filter(isRecord) as never as CronStoreFile["jobs"],
   };
+}
+
+function getRawCronJobs(parsed: unknown): unknown[] {
+  return Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.jobs)
+      ? parsed.jobs
+      : [];
 }
 
 function cloneConfigJobs(jobs: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
@@ -83,61 +130,11 @@ function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<strin
   return { ...rest, state: {} };
 }
 
-function persistedJobId(job: Record<string, unknown>): string | null {
-  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId) ?? null;
-}
-
-function mergePreservedConfigJobs(
-  jobs: Array<Record<string, unknown>>,
-  preservedConfigJobs: PreservedCronConfigJob[] | undefined,
-): Array<Record<string, unknown>> {
-  if (!preservedConfigJobs?.length) {
-    return jobs;
-  }
-
-  const occupiedIds = new Set<string>();
-  for (const job of jobs) {
-    const id = persistedJobId(job);
-    if (id) {
-      occupiedIds.add(id);
-    }
-  }
-
-  const seenPreservedIds = new Set<string>();
-  const preserved = preservedConfigJobs
-    .filter((entry) => {
-      const id = persistedJobId(entry.job);
-      if (!id) {
-        return true;
-      }
-      if (occupiedIds.has(id) || seenPreservedIds.has(id)) {
-        return false;
-      }
-      seenPreservedIds.add(id);
-      return true;
-    })
-    .toSorted((a, b) => a.index - b.index);
-
-  if (preserved.length === 0) {
-    return jobs;
-  }
-
-  const merged = jobs.slice();
-  for (const entry of preserved) {
-    const index = Math.max(0, Math.min(entry.index, merged.length));
-    merged.splice(index, 0, { ...entry.job });
-  }
-  return merged;
-}
-
-function stripRuntimeOnlyCronFields(
-  store: CronStoreFile,
-  preservedConfigJobs?: PreservedCronConfigJob[],
-): unknown {
+function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   const jobs = store.jobs.map(stripJobRuntimeFields);
   return {
     version: store.version,
-    jobs: mergePreservedConfigJobs(jobs, preservedConfigJobs),
+    jobs,
   };
 }
 
@@ -177,25 +174,7 @@ async function loadStateFile(statePath: string): Promise<CronStateFile | null> {
     });
   }
 
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
-  } catch {
-    // Best-effort: if state file is corrupt, treat as absent.
-    return null;
-  }
+  return parseCronStateFile(raw);
 }
 
 function loadStateFileSync(statePath: string): CronStateFile | null {
@@ -211,24 +190,7 @@ function loadStateFileSync(statePath: string): CronStateFile | null {
     });
   }
 
-  try {
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return null;
-    }
-    const record = parsed as Record<string, unknown>;
-    if (
-      record.version !== 1 ||
-      typeof record.jobs !== "object" ||
-      record.jobs === null ||
-      Array.isArray(record.jobs)
-    ) {
-      return null;
-    }
-    return { version: 1, jobs: record.jobs as Record<string, CronStateFileEntry> };
-  } catch {
-    return null;
-  }
+  return parseCronStateFile(raw);
 }
 
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
@@ -278,6 +240,10 @@ function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown)
   }
 }
 
+function resolveCronStateId(job: Record<string, unknown>): string | undefined {
+  return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
+}
+
 export async function loadCronStoreWithConfigJobs(storePath: string): Promise<LoadedCronStore> {
   try {
     const raw = await fs.promises.readFile(storePath, "utf-8");
@@ -289,9 +255,29 @@ export async function loadCronStoreWithConfigJobs(storePath: string): Promise<Lo
         cause: err,
       });
     }
-    const store = normalizeCronStoreFile(parsed);
+    const rawJobs = getRawCronJobs(parsed);
+    const configJobIndexes: number[] = [];
+    const configRows: Array<Record<string, unknown>> = [];
+    const configJobRuntimeEntries: CronConfigJobRuntimeEntry[] = [];
+    const invalidConfigRows: QuarantinedCronConfigJob[] = [];
+    for (const [index, row] of rawJobs.entries()) {
+      if (isRecord(row)) {
+        configJobIndexes.push(index);
+        configRows.push(row);
+      } else {
+        invalidConfigRows.push({
+          sourceIndex: index,
+          reason: "non-object-row",
+          raw: structuredClone(row),
+        });
+      }
+    }
+    const store: CronStoreFile = {
+      version: 1,
+      jobs: configRows as never as CronStoreFile["jobs"],
+    };
     const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
-    const configJobs = cloneConfigJobs(jobs);
+    const configJobs = cloneConfigJobs(configRows);
 
     // Load state file and merge.
     const statePath = resolveStatePath(storePath);
@@ -301,7 +287,9 @@ export async function loadCronStoreWithConfigJobs(storePath: string): Promise<Lo
     if (stateFile) {
       // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
       for (const job of store.jobs) {
-        const entry = stateFile.jobs[job.id];
+        const stateId = resolveCronStateId(job as unknown as Record<string, unknown>);
+        const entry = stateId ? stateFile.jobs[stateId] : undefined;
+        configJobRuntimeEntries.push(isRecord(entry) ? structuredClone(entry) : {});
         if (entry) {
           mergeStateFileEntry(job, entry);
         } else {
@@ -329,11 +317,17 @@ export async function loadCronStoreWithConfigJobs(storePath: string): Promise<Lo
       needsSplitMigration: hasLegacyInlineState,
     });
 
-    return { store, configJobs };
+    return { store, configJobs, configJobIndexes, configJobRuntimeEntries, invalidConfigRows };
   } catch (err) {
     if ((err as { code?: unknown })?.code === "ENOENT") {
       serializedStoreCache.delete(storePath);
-      return { store: { version: 1, jobs: [] }, configJobs: [] };
+      return {
+        store: { version: 1, jobs: [] },
+        configJobs: [],
+        configJobIndexes: [],
+        configJobRuntimeEntries: [],
+        invalidConfigRows: [],
+      };
     }
     throw err;
   }
@@ -362,7 +356,8 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
 
     if (stateFile) {
       for (const job of store.jobs) {
-        const entry = stateFile.jobs[job.id];
+        const stateId = resolveCronStateId(job as unknown as Record<string, unknown>);
+        const entry = stateId ? stateFile.jobs[stateId] : undefined;
         if (entry) {
           mergeStateFileEntry(job, entry);
         } else {
@@ -391,7 +386,6 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
 type SaveCronStoreOptions = {
   skipBackup?: boolean;
   stateOnly?: boolean;
-  preservedConfigJobs?: PreservedCronConfigJob[];
 };
 
 async function setSecureFileMode(filePath: string): Promise<void> {
@@ -435,11 +429,7 @@ export async function saveCronStore(
   opts?: SaveCronStoreOptions,
 ) {
   const stateOnly = opts?.stateOnly === true;
-  const configJson = JSON.stringify(
-    stripRuntimeOnlyCronFields(store, opts?.preservedConfigJobs),
-    null,
-    2,
-  );
+  const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
   const stateFile = extractStateFile(store);
   const stateJson = JSON.stringify(stateFile, null, 2);
 
@@ -484,4 +474,110 @@ export async function saveCronStore(
     updatedCache.configJson = configJson;
   }
   updatedCache.needsSplitMigration = stateOnly && migrating;
+}
+
+export async function loadCronQuarantineFile(path: string): Promise<CronQuarantineFile> {
+  try {
+    const raw = await fs.promises.readFile(path, "utf-8");
+    const parsed = parseJsonWithJson5Fallback(raw);
+    if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.jobs)) {
+      throw new Error(`Unsupported cron quarantine file shape at ${path}`);
+    }
+    const jobs = parsed.jobs.map((entry, index) => {
+      if (
+        !isRecord(entry) ||
+        typeof entry.reason !== "string" ||
+        (!isRecord(entry.job) && !("raw" in entry))
+      ) {
+        throw new Error(`Unsupported cron quarantine entry at ${path} index ${index}`);
+      }
+      const sourceIndex = typeof entry.sourceIndex === "number" ? entry.sourceIndex : -1;
+      const quarantinedAtMs =
+        typeof entry.quarantinedAtMs === "number" && Number.isFinite(entry.quarantinedAtMs)
+          ? entry.quarantinedAtMs
+          : Date.now();
+      const quarantined: CronQuarantineFile["jobs"][number] = {
+        quarantinedAtMs,
+        sourceIndex,
+        reason: entry.reason,
+      };
+      if (isRecord(entry.job)) {
+        quarantined.job = entry.job;
+      }
+      if ("raw" in entry) {
+        quarantined.raw = entry.raw;
+      }
+      if (isRecord(entry.state)) {
+        quarantined.state = entry.state;
+      }
+      if (typeof entry.updatedAtMs === "number" && Number.isFinite(entry.updatedAtMs)) {
+        quarantined.updatedAtMs = entry.updatedAtMs;
+      }
+      if (typeof entry.scheduleIdentity === "string") {
+        quarantined.scheduleIdentity = entry.scheduleIdentity;
+      }
+      return quarantined;
+    });
+    return { version: 1, jobs };
+  } catch (err) {
+    if ((err as { code?: unknown })?.code === "ENOENT") {
+      return { version: 1, jobs: [] };
+    }
+    throw err;
+  }
+}
+
+function quarantineEntryKey(entry: QuarantinedCronConfigJob): string {
+  const rawId = entry.job
+    ? (normalizeOptionalString(entry.job.id) ?? normalizeOptionalString(entry.job.jobId))
+    : null;
+  return JSON.stringify({
+    id: rawId ?? null,
+    sourceIndex: entry.sourceIndex,
+    reason: entry.reason,
+    job: entry.job ?? null,
+    raw: entry.raw ?? null,
+    state: entry.state ?? null,
+    updatedAtMs: entry.updatedAtMs ?? null,
+    scheduleIdentity: entry.scheduleIdentity ?? null,
+  });
+}
+
+export async function saveCronQuarantineFile(params: {
+  storePath: string;
+  entries: QuarantinedCronConfigJob[];
+  nowMs: number;
+}) {
+  if (params.entries.length === 0) {
+    return null;
+  }
+  const quarantinePath = resolveCronQuarantinePath(params.storePath);
+  const existing = await loadCronQuarantineFile(quarantinePath);
+  const seen = new Set(existing.jobs.map(quarantineEntryKey));
+  const nextJobs = existing.jobs.slice();
+  let appended = false;
+  for (const entry of params.entries.toSorted((a, b) => a.sourceIndex - b.sourceIndex)) {
+    const key = quarantineEntryKey(entry);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    appended = true;
+    nextJobs.push({
+      quarantinedAtMs: params.nowMs,
+      sourceIndex: entry.sourceIndex,
+      reason: entry.reason,
+      ...(entry.job ? { job: structuredClone(entry.job) } : {}),
+      ...("raw" in entry ? { raw: structuredClone(entry.raw) } : {}),
+      ...(entry.state ? { state: structuredClone(entry.state) } : {}),
+      ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
+      ...(entry.scheduleIdentity !== undefined ? { scheduleIdentity: entry.scheduleIdentity } : {}),
+    });
+  }
+  if (!appended) {
+    return quarantinePath;
+  }
+  const payload = JSON.stringify({ version: 1, jobs: nextJobs }, null, 2);
+  await atomicWrite(quarantinePath, payload);
+  return quarantinePath;
 }

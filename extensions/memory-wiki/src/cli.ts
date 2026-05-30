@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeStringEntries,
@@ -450,9 +451,8 @@ function parseWikiConfidenceOption(value: string): number {
 }
 
 function parseWikiPositiveIntegerOption(value: string, flag: string): number {
-  const trimmed = value.trim();
-  const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     throw invalidCliArgument(`${flag} must be a positive integer.`);
   }
   return parsed;

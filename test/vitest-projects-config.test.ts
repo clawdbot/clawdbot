@@ -28,6 +28,7 @@ import {
 import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 import { unitUiIncludePatterns } from "./vitest/vitest.ui-paths.mjs";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
@@ -223,6 +224,14 @@ describe("projects vitest config", () => {
     const config = createUnitFastVitestConfig();
     expect(config.test.isolate).toBe(false);
     expect(config.test.runner).toBeUndefined();
+  });
+
+  it("keeps fake-timer unit-fast files serial with the non-isolated runner", () => {
+    const config = createUnitFastFakeTimersVitestConfig();
+    expect(config.test.isolate).toBe(false);
+    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+    expect(config.test.fileParallelism).toBe(false);
+    expect(config.test.maxWorkers).toBe(1);
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {

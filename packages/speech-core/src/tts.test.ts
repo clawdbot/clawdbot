@@ -1,6 +1,7 @@
 import { rmSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   clearRuntimeConfigSnapshot,
@@ -418,6 +419,50 @@ describe("speech-core native voice-note routing", () => {
     expect(request.timeoutMs).toBe(600_000);
   });
 
+  it("caps oversized provider default TTS timeouts before synthesis", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { defaultTimeoutMs: Number.MAX_SAFE_INTEGER }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use capped provider timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("provider default capped timeout request");
+    expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("ignores nonpositive provider default TTS timeouts", async () => {
+    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 0 })]);
+
+    const result = await synthesizeSpeech({
+      text: "Use fallback timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("provider default fallback timeout request");
+    expect(request.timeoutMs).toBe(30_000);
+  });
+
   it("keeps explicit TTS config timeout ahead of provider default timeout", async () => {
     installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
 
@@ -437,6 +482,34 @@ describe("speech-core native voice-note routing", () => {
 
     const request = requireFirstSynthesisRequest("configured timeout synthesis request");
     expect(request.timeoutMs).toBe(45_000);
+  });
+
+  it("caps oversized voice model TTS timeouts before synthesis", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { autoSelectOrder: 1, models: ["mock-tts"] }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use capped explicit timeout.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: { primary: "mock/mock-tts", timeoutMs: Number.MAX_SAFE_INTEGER },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("voice model capped timeout request");
+    expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses agents.defaults.voiceModel as the default speech provider and model", async () => {

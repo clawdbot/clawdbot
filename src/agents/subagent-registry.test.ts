@@ -2045,6 +2045,58 @@ describe("subagent registry seam flow", () => {
     expect(run?.outcome?.status).toBe("error");
   });
 
+  it("announces provider hard timeout wait snapshots as timeouts despite blocked metadata", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "error",
+          startedAt: 100,
+          endedAt: 250,
+          livenessState: "blocked",
+          timeoutPhase: "provider",
+          providerStarted: true,
+          error: "model timed out",
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-hard-timeout-wait",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "provider timeout wait",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "hard timeout wait announce"),
+      { childRunId: "run-blocked-hard-timeout-wait" },
+      "hard timeout wait announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 250,
+        elapsedMs: 150,
+      },
+      "hard timeout wait announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-blocked-hard-timeout-wait");
+    expect(run?.endedReason).toBe("subagent-complete");
+    expect(run?.outcome?.status).toBe("timeout");
+  });
+
   it("announces aborted agent.wait snapshots as killed subagent failures", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {

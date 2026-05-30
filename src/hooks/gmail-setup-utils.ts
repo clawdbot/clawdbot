@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { hasBinary } from "../agents/skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveExecutable } from "../infra/executable-path.js";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
+import { hasBinary } from "../skills/loading/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 

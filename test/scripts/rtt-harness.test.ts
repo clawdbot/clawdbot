@@ -257,6 +257,108 @@ describe("RTT harness", () => {
     }
   });
 
+  it("does not start another credential acquire after retry delay exhausts the deadline", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          status: "error",
+          code: "POOL_EXHAUSTED",
+          message: "credential pool exhausted",
+          retryAfterMs: 1_000,
+        }),
+      );
+    });
+    const { port } = await listenOnLoopback(server);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-credentials-retry-"));
+    tempDirs.push(tempDir);
+    const startedAt = Date.now();
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          CREDENTIAL_SCRIPT_PATH,
+          "acquire",
+          "--lease-file",
+          path.join(tempDir, "lease.json"),
+          "--credential-env-file",
+          path.join(tempDir, "credentials.env"),
+        ],
+        {
+          env: {
+            ...credentialBrokerEnv(port),
+            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "75",
+            OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: "250",
+          },
+          maxBuffer: 128 * 1024,
+        },
+      );
+      throw new Error("Expected credential acquire to fail.");
+    } catch (error) {
+      const execError = error as Error & { stderr?: string };
+      expect(execError.stderr).toContain("credential broker acquire timed out after 75ms");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(requests).toBe(1);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("caps credential acquire HTTP retries to the remaining acquire deadline", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      if (requests === 1) {
+        response.writeHead(503, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            status: "error",
+            code: "POOL_EXHAUSTED",
+            message: "credential pool exhausted",
+            retryAfterMs: 1,
+          }),
+        );
+      }
+    });
+    const { port } = await listenOnLoopback(server);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-credentials-cap-"));
+    tempDirs.push(tempDir);
+    const startedAt = Date.now();
+
+    try {
+      await execFileAsync(
+        process.execPath,
+        [
+          CREDENTIAL_SCRIPT_PATH,
+          "acquire",
+          "--lease-file",
+          path.join(tempDir, "lease.json"),
+          "--credential-env-file",
+          path.join(tempDir, "credentials.env"),
+        ],
+        {
+          env: {
+            ...credentialBrokerEnv(port),
+            OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "100",
+            OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: "900",
+          },
+          maxBuffer: 128 * 1024,
+        },
+      );
+      throw new Error("Expected credential acquire to fail.");
+    } catch (error) {
+      const execError = error as Error & { stderr?: string };
+      expect(execError.stderr).toContain("credential broker acquire timed out after");
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(requests).toBe(2);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
   it("preserves empty broker responses for successful lease release", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(204);

@@ -221,7 +221,7 @@ async function startTypingForEvent(
   try {
     const creds = accountToCreds(account);
     const rawNotifyFn = createRawInputNotifyFn(account.appId);
-    try {
+    const sendNotifyAndStartKeepAlive = async () => {
       const resp = await senderSendInputNotify({
         openid: event.senderId,
         creds,
@@ -238,26 +238,14 @@ async function startTypingForEvent(
       );
       keepAlive.start();
       return { refIdx: resp.refIdx, keepAlive };
+    };
+    try {
+      return await sendNotifyAndStartKeepAlive();
     } catch (notifyErr) {
       const errMsg = String(notifyErr);
       if (errMsg.includes("token") || errMsg.includes("401") || errMsg.includes("11244")) {
         clearTokenCache(account.appId);
-        const resp = await senderSendInputNotify({
-          openid: event.senderId,
-          creds,
-          msgId: event.messageId,
-          inputSecond: TYPING_INPUT_SECOND,
-        });
-        const keepAlive = new TypingKeepAlive(
-          () => getAccessToken(account.appId, account.clientSecret),
-          () => clearTokenCache(account.appId),
-          rawNotifyFn,
-          event.senderId,
-          event.messageId,
-          log,
-        );
-        keepAlive.start();
-        return { refIdx: resp.refIdx, keepAlive };
+        return await sendNotifyAndStartKeepAlive();
       }
       throw notifyErr;
     }

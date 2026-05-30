@@ -20,10 +20,20 @@ export function readFlagValue(args, name) {
   return undefined;
 }
 
-function consumeStringFlag(argv, index, flag) {
+function isMissingStringFlagValue(value, options = {}) {
+  if (!value) {
+    return true;
+  }
+  if (value.startsWith("--")) {
+    return true;
+  }
+  return options.rejectShortOptions === true && value.startsWith("-");
+}
+
+function consumeStringFlag(argv, index, flag, options = {}) {
   const inlineValue = readInlineFlagValue(argv[index], flag);
   if (inlineValue !== null) {
-    if (!inlineValue) {
+    if (isMissingStringFlagValue(inlineValue, options)) {
       throw new Error(`${flag} requires a value`);
     }
     return {
@@ -35,7 +45,7 @@ function consumeStringFlag(argv, index, flag) {
     return null;
   }
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (isMissingStringFlagValue(value, options)) {
     throw new Error(`${flag} requires a value`);
   }
   return {
@@ -126,10 +136,10 @@ function parseFloatFlagValue(raw, flag) {
   return parsed;
 }
 
-export function stringFlag(flag, key) {
+export function stringFlag(flag, key, options = {}) {
   return {
     consume(argv, index) {
-      const option = consumeStringFlag(argv, index, flag);
+      const option = consumeStringFlag(argv, index, flag, options);
       if (!option) {
         return null;
       }
@@ -137,6 +147,24 @@ export function stringFlag(flag, key) {
         nextIndex: option.nextIndex,
         apply(target) {
           target[key] = option.value;
+        },
+      };
+    },
+  };
+}
+
+export function stringListFlag(flag, key, options = {}) {
+  return {
+    consume(argv, index) {
+      const option = consumeStringFlag(argv, index, flag, options);
+      if (!option) {
+        return null;
+      }
+      return {
+        nextIndex: option.nextIndex,
+        apply(target) {
+          target[key] ??= [];
+          target[key].push(option.value);
         },
       };
     },

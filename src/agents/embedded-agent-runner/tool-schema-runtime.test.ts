@@ -18,9 +18,8 @@ vi.mock("./logger.js", () => ({
   log: mocks.log,
 }));
 
-const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } = await import(
-  "./tool-schema-runtime.js"
-);
+const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =
+  await import("./tool-schema-runtime.js");
 
 describe("tool schema runtime diagnostics", () => {
   it("stays quiet when a provider reports no diagnostics", () => {
@@ -37,12 +36,14 @@ describe("tool schema runtime diagnostics", () => {
 
   it("passes through provider runtime loading policy for normalization", () => {
     const tools = [{ name: "alpha" }] as never;
+    const runtimeHandle = { provider: "example", plugin: { id: "example-plugin" } } as never;
     mocks.normalizeProviderToolSchemasWithPlugin.mockReturnValueOnce(tools);
 
     expect(
       normalizeProviderToolSchemas({
         provider: "example",
         tools,
+        runtimeHandle,
         allowRuntimePluginLoad: false,
       }),
     ).toBe(tools);
@@ -50,6 +51,7 @@ describe("tool schema runtime diagnostics", () => {
     expect(mocks.normalizeProviderToolSchemasWithPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "example",
+        runtimeHandle,
         allowRuntimePluginLoad: false,
       }),
     );

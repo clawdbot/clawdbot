@@ -40,7 +40,7 @@ There are two runtime families:
   model, execute through Claude CLI." `claude-cli` is not an embedded harness id
   and must not be passed to AgentHarness selection.
 
-The `copilot` harness is a separate, opt-in plugin harness for the
+The `copilot` harness is a separate, opt-in external plugin harness for the
 GitHub Copilot CLI; see [GitHub Copilot agent runtime](/plugins/copilot)
 for the user-facing decision between PI, Codex, and GitHub Copilot agent runtime.
 
@@ -207,7 +207,7 @@ If `openclaw doctor` warns that the `codex` plugin is enabled while
 
 ## GitHub Copilot agent runtime
 
-The bundled `copilot` extension registers an opt-in `copilot` runtime
+The external `@openclaw/copilot` plugin registers an opt-in `copilot` runtime
 backed by the GitHub Copilot CLI (`@github/copilot-sdk`). It claims the
 canonical subscription `github-copilot` provider and is **never** selected by
 `auto`. Opt in per-model or per-provider via `agentRuntime.id`:

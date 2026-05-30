@@ -7,12 +7,17 @@ import type { CallGatewayOptions } from "../../gateway/call.js";
 import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { readPositiveIntegerParam } from "./common.js";
 
 type EmbeddedCallGateway = <T = Record<string, unknown>>(opts: CallGatewayOptions) => Promise<T>;
 
 interface EmbeddedGatewayRuntime {
-  resolveSessionAgentId: (opts: { sessionKey: string; config: OpenClawConfig }) => string;
+  resolveSessionAgentId: (opts: {
+    sessionKey: string;
+    config: OpenClawConfig;
+    agentId?: string;
+  }) => string;
   getRuntimeConfig: () => OpenClawConfig;
   augmentChatHistoryWithCliSessionImports: (opts: {
     entry: unknown;
@@ -41,7 +46,10 @@ interface EmbeddedGatewayRuntime {
     store: unknown;
     opts: SessionsListParams;
   }) => Promise<SessionsListResult>;
-  loadCombinedSessionStoreForGateway: (cfg: OpenClawConfig) => {
+  loadCombinedSessionStoreForGateway: (
+    cfg: OpenClawConfig,
+    opts?: { agentId?: string },
+  ) => {
     storePath: string;
     store: unknown;
   };
@@ -49,7 +57,10 @@ interface EmbeddedGatewayRuntime {
     cfg: OpenClawConfig;
     p: SessionsResolveParams;
   }) => Promise<SessionsResolveResult>;
-  loadSessionEntry: (sessionKey: string) => {
+  loadSessionEntry: (
+    sessionKey: string,
+    opts?: { agentId?: string },
+  ) => {
     cfg: OpenClawConfig;
     storePath: string | undefined;
     entry: Record<string, unknown> | undefined;
@@ -79,12 +90,15 @@ async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
 async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
-  const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg);
+  const opts = params as SessionsListParams;
+  const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg, {
+    agentId: opts.agentId,
+  });
   return rt.listSessionsFromStoreAsync({
     cfg,
     storePath,
     store,
-    opts: params as SessionsListParams,
+    opts,
   });
 }
 
@@ -112,11 +126,19 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const rt = await getRuntime();
 
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
+  const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
+  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
+  const requestedAgentId = agentId ?? parsedAgentId;
   const limit = readPositiveIntegerParam(params, "limit");
 
-  const { cfg, storePath, entry } = rt.loadSessionEntry(sessionKey);
+  const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
+  const { cfg, storePath, entry } = rt.loadSessionEntry(sessionKey, sessionLoadOptions);
   const sessionId = entry?.sessionId as string | undefined;
-  const sessionAgentId = rt.resolveSessionAgentId({ sessionKey, config: cfg });
+  const sessionAgentId = rt.resolveSessionAgentId({
+    sessionKey,
+    config: cfg,
+    agentId: requestedAgentId,
+  });
   const resolvedSessionModel = rt.resolveSessionModelRef(cfg, entry, sessionAgentId);
   const hardMax = 1000;
   const defaultLimit = 200;

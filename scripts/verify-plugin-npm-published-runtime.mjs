@@ -212,6 +212,23 @@ function npmPack(spec, destinationDir) {
   return path.isAbsolute(filename) ? filename : path.join(destinationDir, filename);
 }
 
+export function parseNpmReadmeMetadata(raw) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return "";
+  }
+  return typeof parsed === "string" ? parsed.trim() : "";
+}
+
+function npmViewReadme(spec) {
+  return execFileSync("npm", ["view", spec, "readme", "--json", "--prefer-online"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -231,6 +248,36 @@ async function packPublishedPackage(spec, destinationDir) {
         );
         await sleep(delayMs);
       }
+    }
+  }
+  throw lastError;
+}
+
+async function verifyPublishedPackageReadme(spec) {
+  const attempts = Number.parseInt(
+    process.env.OPENCLAW_PLUGIN_NPM_README_VERIFY_ATTEMPTS ?? "6",
+    10,
+  );
+  const delayMs = Number.parseInt(
+    process.env.OPENCLAW_PLUGIN_NPM_README_VERIFY_DELAY_MS ?? "10000",
+    10,
+  );
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const readme = parseNpmReadmeMetadata(npmViewReadme(spec));
+      if (readme) {
+        return readme;
+      }
+      lastError = new Error(`npm view ${spec} readme returned empty metadata`);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      console.error(
+        `npm readme metadata for ${spec} not ready (attempt ${attempt}/${attempts}); retrying in ${delayMs}ms...`,
+      );
+      await sleep(delayMs);
     }
   }
   throw lastError;
@@ -273,10 +320,12 @@ export async function verifyPublishedPluginRuntime(spec) {
     if (errors.length > 0) {
       throw new Error(errors.join("\n"));
     }
+    const readme = await verifyPublishedPackageReadme(spec);
     return {
       packageName: packedPackage.packageJson.name,
       version: packedPackage.packageJson.version,
       fileCount: packedPackage.files.length,
+      readmeLength: readme.length,
     };
   } finally {
     fs.rmSync(workingDir, { force: true, recursive: true });
@@ -290,7 +339,7 @@ async function main(argv) {
   }
   const result = await verifyPublishedPluginRuntime(spec);
   console.log(
-    `plugin-npm-published-runtime-check: ${result.packageName}@${result.version} OK (${result.fileCount} files)`,
+    `plugin-npm-published-runtime-check: ${result.packageName}@${result.version} OK (${result.fileCount} files, ${result.readmeLength} readme chars)`,
   );
 }
 

@@ -528,6 +528,57 @@ describe("handlePendingApprovalRequest", () => {
     );
   });
 
+  it("keeps register-only approval requests pending without a delivery route", async () => {
+    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
+    const manager = new ExecApprovalManager();
+    const record = manager.create(
+      {
+        command: "echo ok",
+      },
+      60_000,
+      "approval-register-only",
+    );
+    const decisionPromise = manager.register(record, 60_000);
+    const respond = vi.fn();
+    const requestPromise = handlePendingApprovalRequest({
+      manager,
+      record,
+      decisionPromise,
+      respond,
+      context: {
+        broadcast: vi.fn(),
+        hasExecApprovalClients: () => false,
+      } as unknown as GatewayRequestContext,
+      requestEventName: "exec.approval.requested",
+      requestEvent: {
+        id: record.id,
+        request: record.request,
+        createdAtMs: record.createdAtMs,
+        expiresAtMs: record.expiresAtMs,
+      },
+      twoPhase: true,
+      requireDeliveryRoute: false,
+      deliverRequest: () => false,
+    });
+
+    await Promise.resolve();
+    expect(manager.getSnapshot(record.id)?.resolvedAtMs).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-register-only", status: "accepted" }),
+      undefined,
+    );
+
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await requestPromise;
+    expect(manager.getSnapshot(record.id)?.resolvedBy).not.toBe("no-approval-route");
+    expect(respond).toHaveBeenLastCalledWith(
+      true,
+      expect.objectContaining({ id: "approval-register-only", decision: "allow-once" }),
+      undefined,
+    );
+  });
+
   it("does not target no-device browser UI approvals to unrelated approval-scoped clients", async () => {
     hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
     const manager = new ExecApprovalManager();

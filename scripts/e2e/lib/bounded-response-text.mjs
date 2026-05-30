@@ -23,7 +23,9 @@ export async function readBoundedResponseText(response, label, byteLimit, timeou
   let text = "";
   try {
     while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
+      const { done, value } = await (timeoutPromise
+        ? Promise.race([reader.read(), timeoutPromise])
+        : reader.read());
       if (done) {
         return text + decoder.decode();
       }

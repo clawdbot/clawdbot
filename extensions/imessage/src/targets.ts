@@ -15,7 +15,7 @@ export type IMessageTarget =
   | { kind: "chat_id"; chatId: number }
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string }
-  | { kind: "handle"; to: string; service: IMessageService };
+  | { kind: "handle"; to: string; service: IMessageService; serviceExplicit?: boolean };
 
 export type IMessageAllowTarget = ParsedChatTarget | { kind: "handle"; handle: string };
 
@@ -91,6 +91,9 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
     parseTarget: parseIMessageTarget,
   });
   if (servicePrefixed) {
+    if (servicePrefixed.kind === "handle") {
+      return { ...servicePrefixed, serviceExplicit: true };
+    }
     return servicePrefixed;
   }
 

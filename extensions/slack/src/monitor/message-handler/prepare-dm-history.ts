@@ -4,6 +4,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackDmHistoryMessage = {
   text?: string;
@@ -96,7 +97,7 @@ export async function resolveSlackDmHistoryContext(params: {
           ? await resolveUserLabel(message.user)
           : (normalizeOptionalString(message.username) ?? (message.bot_id ? "Bot" : "Unknown"));
       const sender = `${senderBase} (${role})`;
-      const timestamp = message.ts ? Math.round(Number(message.ts) * 1000) : undefined;
+      const timestamp = resolveSlackTimestampMs(message.ts);
       entries.push({ sender, body, timestamp });
       formatted.push(
         formatInboundEnvelope({

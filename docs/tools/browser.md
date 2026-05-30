@@ -482,6 +482,42 @@ Notes:
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
 
+### Notte
+
+[Notte](https://www.notte.cc) is a cloud platform for running headless
+browsers with built-in stealth, residential proxies, and a CDP-native
+WebSocket gateway.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "notte",
+    remoteCdpTimeoutMs: 3000,
+    remoteCdpHandshakeTimeoutMs: 5000,
+    profiles: {
+      notte: {
+        cdpUrl: "wss://us-prod.notte.cc/sessions/connect?token=<NOTTE_API_KEY>",
+        color: "#7C3AED",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://console.notte.cc) and copy your **API Key** from the
+  console settings page.
+- Replace `<NOTTE_API_KEY>` with your real Notte API key.
+- Notte auto-creates a browser session on WebSocket connect, so no manual
+  session creation step is needed. The session is destroyed when the
+  WebSocket disconnects.
+- The free tier allows five concurrent sessions and 100 lifetime browser
+  hours. See [pricing](https://www.notte.cc/#pricing) for paid plan limits.
+- See the [Notte docs](https://docs.notte.cc) for full API reference, SDK
+  guides, and integration examples.
+
 ## Security
 
 Key ideas:

@@ -14,6 +14,20 @@ function timeoutError(): Error {
   return new DOMException("timed out", "TimeoutError");
 }
 
+function mockTokenResponse(body: unknown, status = 200): void {
+  mockTokenResponseText(JSON.stringify(body), status);
+}
+
+function mockTokenResponseText(body: string, status = 200): void {
+  ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    response: new Response(body, {
+      status,
+      headers: { "Content-Type": "application/json" },
+    }),
+    release: vi.fn(async () => undefined),
+  });
+}
+
 afterEach(() => {
   ssrfMocks.fetchWithSsrFGuard.mockReset();
 });
@@ -110,6 +124,24 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it("rejects unsafe token exchange lifetimes", async () => {
+    mockTokenResponseText(
+      '{"access_token":"access-token","refresh_token":"refresh-token","expires_in":1e309}',
+    );
+
+    const result = await testing.exchangeAuthorizationCode(
+      "code",
+      "verifier",
+      testing.resolveRedirectUri("localhost"),
+      { timeoutMs: 5 },
+    );
+
+    expect(result).toEqual({
+      type: "failed",
+      message: "OpenAI Codex token exchange response missing fields: expires_in",
+    });
+  });
+
   it("times out token refresh requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 
@@ -124,6 +156,21 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(result).toMatchObject({
       type: "failed",
       message: "OpenAI Codex token refresh timed out after 5ms",
+    });
+  });
+
+  it("rejects non-positive token refresh lifetimes", async () => {
+    mockTokenResponse({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      expires_in: 0,
+    });
+
+    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
+
+    expect(result).toEqual({
+      type: "failed",
+      message: "OpenAI Codex token refresh response missing fields: expires_in",
     });
   });
 });

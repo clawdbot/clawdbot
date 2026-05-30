@@ -11,6 +11,42 @@ private extension NSLock {
     }
 }
 
+private final class DoubleCallbackPingWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    private let callbacks: [Error?]
+
+    init(callbacks: [Error?]) {
+        self.callbacks = callbacks
+    }
+
+    var state: URLSessionTask.State { .running }
+
+    func resume() {}
+
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
+        _ = (closeCode, reason)
+    }
+
+    func send(_ message: URLSessionWebSocketTask.Message) async throws {
+        _ = message
+    }
+
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void) {
+        for callback in self.callbacks {
+            pongReceiveHandler(callback)
+        }
+    }
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        throw URLError(.badServerResponse)
+    }
+
+    func receive(
+        completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
+    {
+        completionHandler(.failure(URLError(.badServerResponse)))
+    }
+}
+
 private final class FakeGatewayWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private let lock = NSLock()
     private let helloAuth: [String: Any]?
@@ -193,6 +229,25 @@ private actor SeqGapProbe {
 
 @Suite(.serialized)
 struct GatewayNodeSessionTests {
+    @Test
+    func websocketPingIgnoresDuplicateSuccessCallbacks() async throws {
+        let task = DoubleCallbackPingWebSocketTask(callbacks: [nil, nil])
+        try await WebSocketTaskBox(task: task).sendPing()
+    }
+
+    @Test
+    func websocketPingIgnoresDuplicateCallbacksAfterFirstError() async throws {
+        let firstError = URLError(.networkConnectionLost)
+        let task = DoubleCallbackPingWebSocketTask(callbacks: [firstError, nil])
+
+        do {
+            try await WebSocketTaskBox(task: task).sendPing()
+            Issue.record("sendPing unexpectedly succeeded")
+        } catch let error as URLError {
+            #expect(error.code == firstError.code)
+        }
+    }
+
     @Test
     func scannedSetupCodePrefersBootstrapAuthOverStoredDeviceToken() async throws {
         let tempDir = FileManager.default.temporaryDirectory

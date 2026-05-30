@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearCodexAppServerBinding,
+  clearCodexAppServerBindingForThread,
   readCodexAppServerBinding,
   resolveCodexAppServerBindingPath,
   writeCodexAppServerBinding,
@@ -300,6 +301,28 @@ describe("codex app-server session binding", () => {
   it("clears missing bindings without throwing", async () => {
     const sessionFile = path.join(tempDir, "missing.json");
     await clearCodexAppServerBinding(sessionFile);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
+  });
+
+  it("clears a binding only when the thread matches", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-current",
+      cwd: tempDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+    });
+
+    await expect(
+      clearCodexAppServerBindingForThread(sessionFile, "thread-transient"),
+    ).resolves.toBe(false);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-current",
+    });
+
+    await expect(clearCodexAppServerBindingForThread(sessionFile, "thread-current")).resolves.toBe(
+      true,
+    );
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 });

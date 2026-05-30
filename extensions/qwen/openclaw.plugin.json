@@ -4,7 +4,11 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["qwen", "qwencloud", "modelstudio", "dashscope"],
+  "providers": ["qwen", "qwencloud", "modelstudio", "dashscope", "qwen-oauth", "qwen-portal", "qwen-cli"],
+  "providerAuthAliases": {
+    "qwen-portal": "qwen-oauth",
+    "qwen-cli": "qwen-oauth"
+  },
   "providerEndpoints": [
     {
       "endpointClass": "modelstudio-native",
@@ -14,6 +18,10 @@
         "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
       ]
+    },
+    {
+      "endpointClass": "qwen-portal-native",
+      "baseUrls": ["https://portal.qwen.ai/v1"]
     }
   ],
   "providerRequest": {
@@ -29,10 +37,27 @@
       },
       "dashscope": {
         "family": "modelstudio"
+      },
+      "qwen-oauth": {
+        "family": "qwen-portal"
+      },
+      "qwen-portal": {
+        "family": "qwen-portal"
+      },
+      "qwen-cli": {
+        "family": "qwen-portal"
       }
     }
   },
   "modelCatalog": {
+    "aliases": {
+      "qwen-portal": {
+        "provider": "qwen-oauth"
+      },
+      "qwen-cli": {
+        "provider": "qwen-oauth"
+      }
+    },
     "suppressions": [
       {
         "provider": "qwen",
@@ -52,7 +77,141 @@
           "providerConfigApiIn": ["qwen", "modelstudio"]
         }
       }
-    ]
+    ],
+    "providers": {
+      "qwen-oauth": {
+        "baseUrl": "https://portal.qwen.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "qwen3.5-plus",
+            "name": "qwen3.5-plus",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.6-plus",
+            "name": "qwen3.6-plus",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3-max-2026-01-23",
+            "name": "qwen3-max-2026-01-23",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3-coder-next",
+            "name": "qwen3-coder-next",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3-coder-plus",
+            "name": "qwen3-coder-plus",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "MiniMax-M2.5",
+            "name": "MiniMax-M2.5",
+            "reasoning": true,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "glm-5",
+            "name": "glm-5",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 202752,
+            "maxTokens": 65536
+          },
+          {
+            "id": "glm-4.7",
+            "name": "glm-4.7",
+            "reasoning": false,
+            "input": ["text"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 202752,
+            "maxTokens": 65536
+          },
+          {
+            "id": "kimi-k2.5",
+            "name": "kimi-k2.5",
+            "reasoning": false,
+            "input": ["text", "image"],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 262144,
+            "maxTokens": 65536
+          }
+        ]
+      }
+    }
   },
   "contracts": {
     "mediaUnderstandingProviders": ["qwen"],
@@ -75,6 +234,10 @@
       {
         "id": "qwen",
         "envVars": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
+      },
+      {
+        "id": "qwen-oauth",
+        "envVars": ["QWEN_API_KEY"]
       }
     ]
   },
@@ -138,6 +301,20 @@
       "cliFlag": "--modelstudio-api-key",
       "cliOption": "--modelstudio-api-key <key>",
       "cliDescription": "Qwen Cloud Coding Plan API key (Global/Intl)"
+    },
+    {
+      "provider": "qwen-oauth",
+      "method": "api-key",
+      "choiceId": "qwen-oauth",
+      "choiceLabel": "Qwen OAuth",
+      "choiceHint": "Portal token for portal.qwen.ai",
+      "groupId": "qwen",
+      "groupLabel": "Qwen Cloud",
+      "groupHint": "Standard / Coding Plan / OAuth",
+      "optionKey": "qwenOauthToken",
+      "cliFlag": "--qwen-oauth-token",
+      "cliOption": "--qwen-oauth-token <token>",
+      "cliDescription": "Qwen OAuth token"
     }
   ],
   "configSchema": {

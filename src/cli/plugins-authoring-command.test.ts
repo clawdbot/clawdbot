@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Type } from "typebox";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { defineToolPlugin, getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   buildToolPluginManifest,
@@ -55,7 +55,65 @@ function createOptionalDemoMetadata() {
   return metadata;
 }
 
+function writeSourceToolPluginProject(params: {
+  tmpDir: string;
+  packageName: string;
+  pluginId: string;
+  toolName: string;
+}): string {
+  const sourceDir = path.join(params.tmpDir, "src");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(params.tmpDir, "package.json"),
+    JSON.stringify(
+      {
+        name: params.packageName,
+        type: "module",
+        openclaw: { extensions: ["./src/index.ts"] },
+      },
+      null,
+      2,
+    ),
+  );
+  const entryPath = path.join(sourceDir, "index.ts");
+  fs.writeFileSync(
+    entryPath,
+    `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+
+export default defineToolPlugin({
+  id: ${JSON.stringify(params.pluginId)},
+  name: "Source Demo",
+  description: "Source demo plugin.",
+  tools: (tool) => [
+    tool({
+      name: ${JSON.stringify(params.toolName)},
+      description: "Echo input.",
+      parameters: { type: "object", additionalProperties: false, properties: {} },
+      execute: async () => ({ ok: true }),
+    }),
+  ],
+});
+`,
+  );
+  return entryPath;
+}
+
 describe("plugin authoring commands", () => {
+  beforeAll(async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-source-warm-"));
+    try {
+      const entryPath = writeSourceToolPluginProject({
+        tmpDir,
+        packageName: "openclaw-plugin-source-warm",
+        pluginId: "source-warm",
+        toolName: "source_warm_echo",
+      });
+      await loadToolPlugin({ rootDir: tmpDir, entryPath });
+    } finally {
+      fs.rmSync(tmpDir, { force: true, recursive: true });
+    }
+  });
+
   it("generates manifest metadata from defineToolPlugin metadata", () => {
     const metadata = createDemoMetadata();
 
@@ -238,43 +296,16 @@ describe("plugin authoring commands", () => {
 
   it("loads source entries that import the OpenClaw plugin SDK package subpath", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-source-"));
-    const sourceDir = path.join(tmpDir, "src");
-    fs.mkdirSync(sourceDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(tmpDir, "package.json"),
-      JSON.stringify(
-        {
-          name: "openclaw-plugin-source-demo",
-          type: "module",
-          openclaw: { extensions: ["./src/index.ts"] },
-        },
-        null,
-        2,
-      ),
-    );
-    fs.writeFileSync(
-      path.join(sourceDir, "index.ts"),
-      `import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-
-export default defineToolPlugin({
-  id: "source-demo",
-  name: "Source Demo",
-  description: "Source demo plugin.",
-  tools: (tool) => [
-    tool({
-      name: "source_echo",
-      description: "Echo input.",
-      parameters: { type: "object", additionalProperties: false, properties: {} },
-      execute: async () => ({ ok: true }),
-    }),
-  ],
-});
-`,
-    );
+    const entryPath = writeSourceToolPluginProject({
+      tmpDir,
+      packageName: "openclaw-plugin-source-demo",
+      pluginId: "source-demo",
+      toolName: "source_echo",
+    });
 
     const loaded = await loadToolPlugin({
       rootDir: tmpDir,
-      entryPath: path.join(sourceDir, "index.ts"),
+      entryPath,
     });
 
     expect(loaded.metadata.id).toBe("source-demo");

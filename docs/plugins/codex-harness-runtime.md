@@ -34,9 +34,10 @@ personality files and OpenClaw agent identity stay authoritative. Lightweight
 OpenClaw runs still preserve their existing project-doc suppression. OpenClaw
 developer instructions cover OpenClaw runtime concerns such as source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. OpenClaw skill catalogs plus `MEMORY.md`
-and active `BOOTSTRAP.md` content are projected as turn input reference context
-for native Codex.
+active agent workspace profile files. OpenClaw skill catalogs and tool-routed
+`MEMORY.md` pointers are projected as turn-scoped collaboration developer
+instructions for native Codex. Active `BOOTSTRAP.md` content and full
+`MEMORY.md` fallback injection still use turn input reference context.
 
 ## Thread bindings and model changes
 

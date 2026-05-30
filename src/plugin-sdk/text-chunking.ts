@@ -20,19 +20,19 @@ export {
   type MarkdownStyle,
   type MarkdownStyleSpan,
   type MarkdownTableMeta,
-} from "../markdown/ir.js";
+} from "../../packages/markdown-core/src/ir.js";
 export {
   renderMarkdownIRChunksWithinLimit,
   type RenderMarkdownIRChunksWithinLimitOptions,
-} from "../markdown/render-aware-chunking.js";
+} from "../../packages/markdown-core/src/render-aware-chunking.js";
 export {
   renderMarkdownWithMarkers,
   type RenderLink,
   type RenderOptions,
   type RenderStyleMap,
   type RenderStyleMarker,
-} from "../markdown/render.js";
-export { convertMarkdownTables } from "../markdown/tables.js";
+} from "../../packages/markdown-core/src/render.js";
+export { convertMarkdownTables } from "../../packages/markdown-core/src/tables.js";
 export {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithOptions,

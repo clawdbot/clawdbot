@@ -99,6 +99,7 @@ const SESSION_TABLE_HEADERS = [
   "Fast",
   "Verbose",
   "Reasoning",
+  "Actions",
 ];
 
 describe("sessions view", () => {
@@ -129,6 +130,53 @@ describe("sessions view", () => {
       includeUnknown: false,
       showArchived: true,
     });
+  });
+
+  it("offers workboard capture for dashboard sessions", async () => {
+    const container = document.createElement("div");
+    const onAddToWorkboard = vi.fn();
+    const session = {
+      key: "agent:main:dashboard:1",
+      kind: "direct",
+      updatedAt: Date.now(),
+    } as const;
+    render(
+      renderSessions({
+        ...buildProps(buildResult(session)),
+        onAddToWorkboard,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const button = container.querySelector<HTMLButtonElement>('button[title="Add to Workboard"]');
+    if (!(button instanceof HTMLButtonElement)) {
+      throw new Error("Expected Add to Workboard button");
+    }
+    button.click();
+
+    expect(onAddToWorkboard).toHaveBeenCalledWith(session);
+  });
+
+  it("marks sessions that already have workboard cards", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:dashboard:1",
+            kind: "direct",
+            updatedAt: Date.now(),
+          }),
+        ),
+        workboardSessionKeys: new Set(["agent:main:dashboard:1"]),
+        onAddToWorkboard: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector('button[title="Open Workboard card"]')).not.toBeNull();
   });
 
   it("uses one short styled tooltip per session filter", async () => {
@@ -512,6 +560,47 @@ describe("sessions view", () => {
     ]);
   });
 
+  it("renders session goals in the status cell and search index", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:goal",
+            kind: "direct",
+            updatedAt: 20,
+            hasActiveRun: true,
+            status: "running",
+            goal: {
+              schemaVersion: 1,
+              id: "goal-1",
+              objective: "Ship the web goal indicator",
+              status: "active",
+              createdAt: 1,
+              updatedAt: 2,
+              tokenStart: 100,
+              tokensUsed: 12_400,
+              tokenBudget: 50_000,
+              continuationTurns: 0,
+            },
+          }),
+        ),
+        searchQuery: "web goal",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const chip = container.querySelector(".session-goal-chip");
+    expect(chip?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Pursuing goal (12k/50k) Ship the web goal indicator",
+    );
+    expect(chip?.getAttribute("aria-label")).toBe(
+      "Pursuing goal (12k/50k): Ship the web goal indicator",
+    );
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
+  });
+
   it("renders and filters the session runtime", async () => {
     const container = document.createElement("div");
     render(
@@ -691,6 +780,19 @@ describe("sessions view", () => {
             modelProvider: "openai",
             status: "running",
             runtimeMs: 125000,
+            goal: {
+              schemaVersion: 1,
+              id: "goal-1",
+              objective: "Finish the compaction details",
+              status: "blocked",
+              createdAt: 1,
+              updatedAt: 2,
+              tokenStart: 1000,
+              tokensUsed: 24_000,
+              continuationTurns: 3,
+              lastStatusNote: "Waiting for owner review",
+              blockedAt: 3,
+            },
             compactionCheckpointCount: 1,
             latestCompactionCheckpoint: {
               checkpointId: "checkpoint-1",
@@ -730,9 +832,9 @@ describe("sessions view", () => {
     );
     expect(
       Array.from(details?.querySelectorAll(".session-details-panel__badges > *") ?? []).map(
-        (badge) => badge.textContent?.trim(),
+        (badge) => badge.textContent?.replace(/\s+/g, " ").trim(),
       ),
-    ).toEqual(["Live", "direct"]);
+    ).toEqual(["Live", "Goal blocked (24k used) Finish the compaction details", "direct"]);
 
     const stats = readSessionDetailStats(details ?? container);
     expect(stats.get("Status")).toBe("running");
@@ -741,6 +843,10 @@ describe("sessions view", () => {
     expect(stats.get("Runtime")).toBe("2m 5s");
     expect(stats.get("Tokens")).toBe("123456 / 200000");
     expect(stats.get("Compaction")).toBe("1 Checkpoint");
+    expect(stats.get("Goal")).toBe(
+      "Goal blocked (24k used): Finish the compaction details - Waiting for owner review",
+    );
+    expect(stats.get("Goal note")).toBe("Waiting for owner review");
 
     const compactionSection = details?.querySelector(".session-details-section");
     expect(

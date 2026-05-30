@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_SAFE_TIMEOUT_DELAY_MS } from "../timer-delay.js";
 import { normalizeActRequest } from "./agent.act.normalize.js";
 
 describe("normalizeActRequest numeric fields", () => {
@@ -29,6 +30,20 @@ describe("normalizeActRequest numeric fields", () => {
       kind: "wait",
       timeMs: 25,
       timeoutMs: 5000,
+    });
+  });
+
+  it("caps oversized action timeouts", () => {
+    expect(
+      normalizeActRequest({
+        kind: "wait",
+        text: "ready",
+        timeoutMs: String(Number.MAX_SAFE_INTEGER),
+      }),
+    ).toMatchObject({
+      kind: "wait",
+      text: "ready",
+      timeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
     });
   });
 

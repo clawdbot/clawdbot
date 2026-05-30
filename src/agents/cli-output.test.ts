@@ -450,6 +450,33 @@ describe("parseCliJsonl", () => {
     });
   });
 
+  it("captures the last Claude session_id when an ephemeral id precedes the canonical one", () => {
+    // claude-cli emits ephemeral session_ids from SessionStart hooks before the
+    // canonical resumed session_id surfaces in the init event and the terminal
+    // result event. First-wins capture would bind to the ephemeral id whose
+    // transcript JSONL never lands on disk; last-wins captures the canonical id.
+    const result = parseCliJsonl(
+      [
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-ephemeral" }),
+        JSON.stringify({ type: "system", subtype: "init", session_id: "session-canonical" }),
+        JSON.stringify({
+          type: "result",
+          session_id: "session-canonical",
+          result: "rotated reply",
+        }),
+      ].join("\n"),
+      {
+        command: "claude",
+        output: "jsonl",
+        sessionIdFields: ["session_id"],
+      },
+      "claude-cli",
+    );
+
+    expect(result?.sessionId).toBe("session-canonical");
+    expect(result?.text).toBe("rotated reply");
+  });
+
   it("extracts nested Claude API errors from failed stream-json output", () => {
     const { message, jsonl } = createClaudeApiErrorFixture();
     const result = extractCliErrorMessage(jsonl);

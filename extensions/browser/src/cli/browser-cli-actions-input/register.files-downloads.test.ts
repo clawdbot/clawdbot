@@ -58,6 +58,16 @@ describe("browser action input file/download commands", () => {
     expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(120000);
   });
 
+  it("accepts signed and zero-padded download timeouts", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(["browser", "waitfordownload", "--timeout-ms", "+025000"], {
+      from: "user",
+    });
+
+    expect(getLastRequestOptions()?.timeoutMs).toBeGreaterThan(25_000);
+  });
+
   it("uses custom download timeouts as the inner wait plus outer slack", async () => {
     const program = createActionInputProgram();
 

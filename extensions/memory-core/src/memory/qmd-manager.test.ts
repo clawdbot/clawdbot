@@ -166,7 +166,8 @@ import {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { QmdMemoryManager } from "./qmd-manager.js";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -225,6 +226,18 @@ describe("QmdMemoryManager", () => {
   function expectMockMessageNotContains(mock: Mock, text: string): void {
     expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
+
+  it("caps mcporter search process timeout grace", () => {
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(1_000)).toBe(5_000);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(10_000)).toBe(12_000);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(Number.MAX_VALUE)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolveQmdMcporterSearchProcessTimeoutMs(MAX_TIMER_TIMEOUT_MS - 100)).toBe(
+      MAX_TIMER_TIMEOUT_MS,
+    );
+  });
 
   async function expectPathMissing(targetPath: string): Promise<void> {
     try {

@@ -68,6 +68,10 @@
       "types": "./dist/src/plugin-sdk/transport-ready-runtime.d.ts",
       "default": "./src/transport-ready-runtime.ts"
     },
+    "./exec-approvals-runtime": {
+      "types": "./dist/src/plugin-sdk/exec-approvals-runtime.d.ts",
+      "default": "./src/exec-approvals-runtime.ts"
+    },
     "./core": {
       "types": "./dist/src/plugin-sdk/core.d.ts",
       "default": "./src/core.ts"

@@ -3,14 +3,16 @@ import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-ru
 import { normalizeProviderId } from "../provider-id.js";
 import type { AuthProfileStore } from "./types.js";
 
-/**
- * Migration hints for deprecated/removed OAuth providers.
- * Users with stale credentials should be guided to migrate.
- */
-const DEPRECATED_PROVIDER_MIGRATION_HINTS: Record<string, string> = {
-  "qwen-portal":
-    "Qwen OAuth via portal.qwen.ai has been deprecated. Please migrate to Qwen Cloud Coding Plan. Run: openclaw onboard --auth-choice qwen-api-key (or qwen-api-key-cn for the China endpoint). Legacy modelstudio auth-choice ids still work.",
-};
+const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
+  "Legacy Qwen Portal OAuth profiles are not refreshable. Re-authenticate with a current portal token: openclaw onboard --auth-choice qwen-oauth.";
+
+function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: string): boolean {
+  const profiles = profileId ? [store.profiles[profileId]] : Object.values(store.profiles);
+  return profiles.some(
+    (profile) =>
+      profile?.type === "oauth" && normalizeProviderId(profile.provider) === "qwen-portal",
+  );
+}
 
 export async function formatAuthDoctorHint(params: {
   cfg?: OpenClawConfig;
@@ -19,11 +21,11 @@ export async function formatAuthDoctorHint(params: {
   profileId?: string;
 }): Promise<string> {
   const normalizedProvider = normalizeProviderId(params.provider);
-
-  // Check for deprecated provider migration hints first
-  const migrationHint = DEPRECATED_PROVIDER_MIGRATION_HINTS[normalizedProvider];
-  if (migrationHint) {
-    return migrationHint;
+  if (
+    normalizedProvider === "qwen-portal" &&
+    hasLegacyQwenPortalOAuthProfile(params.store, params.profileId)
+  ) {
+    return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
   }
 
   const pluginHint = await buildProviderAuthDoctorHintWithPlugin({

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
+import { sameNodeApprovalSurfaceSet, sameNodePermissionSurface } from "./node-pairing-surface.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -131,43 +132,6 @@ function refreshPendingNodePairingRequest(
   };
 }
 
-function normalizeApprovalSurfaceList(value: string[] | undefined): string[] {
-  return normalizeArrayBackedTrimmedStringList(value) ?? [];
-}
-
-function sameApprovalSurfaceSet(left: string[] | undefined, right: string[] | undefined): boolean {
-  const normalizedLeft = new Set(normalizeApprovalSurfaceList(left));
-  const normalizedRight = new Set(normalizeApprovalSurfaceList(right));
-  if (normalizedLeft.size !== normalizedRight.size) {
-    return false;
-  }
-  for (const entry of normalizedLeft) {
-    if (!normalizedRight.has(entry)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function samePermissions(
-  left: Record<string, boolean> | undefined,
-  right: Record<string, boolean> | undefined,
-): boolean {
-  const leftEntries = Object.entries(left ?? {}).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
-  );
-  const rightEntries = Object.entries(right ?? {}).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
-  );
-  if (leftEntries.length !== rightEntries.length) {
-    return false;
-  }
-  return leftEntries.every(([key, value], index) => {
-    const rightEntry = rightEntries[index];
-    return rightEntry !== undefined && rightEntry[0] === key && rightEntry[1] === value;
-  });
-}
-
 function samePendingApprovalSurface(
   existing: NodePairingPendingRequest,
   incoming: NodePairingRequestInput,
@@ -177,9 +141,9 @@ function samePendingApprovalSurface(
     normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
   const incomingPermissions = incoming.permissions ?? existing.permissions;
   return (
-    sameApprovalSurfaceSet(existing.caps, incomingCaps) &&
-    sameApprovalSurfaceSet(existing.commands, incomingCommands) &&
-    samePermissions(existing.permissions, incomingPermissions)
+    sameNodeApprovalSurfaceSet(existing.caps, incomingCaps) &&
+    sameNodeApprovalSurfaceSet(existing.commands, incomingCommands) &&
+    sameNodePermissionSurface(existing.permissions, incomingPermissions)
   );
 }
 

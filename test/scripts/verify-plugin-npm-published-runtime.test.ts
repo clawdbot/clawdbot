@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectPluginNpmPublishedRuntimeErrors,
+  parseNpmReadmeMetadata,
   resolveNpmPackFilename,
 } from "../../scripts/verify-plugin-npm-published-runtime.mjs";
 
@@ -176,5 +177,19 @@ describe("resolveNpmPackFilename", () => {
     ].join("\n");
 
     expect(resolveNpmPackFilename(noisyOutput)).toBe("openclaw-msteams-2026.5.24-beta.1.tgz");
+  });
+});
+
+describe("parseNpmReadmeMetadata", () => {
+  it("accepts non-empty npm readme metadata", () => {
+    expect(parseNpmReadmeMetadata(JSON.stringify("# Plugin\n\nInstall it."))).toBe(
+      "# Plugin\n\nInstall it.",
+    );
+  });
+
+  it("rejects empty or unsupported npm readme metadata", () => {
+    expect(parseNpmReadmeMetadata(JSON.stringify(""))).toBe("");
+    expect(parseNpmReadmeMetadata(JSON.stringify(null))).toBe("");
+    expect(parseNpmReadmeMetadata("{")).toBe("");
   });
 });

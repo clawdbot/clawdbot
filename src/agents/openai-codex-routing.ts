@@ -200,10 +200,15 @@ export function resolveSelectedOpenAIRuntimeProvider(params: {
 export function resolveContextConfigProviderForRuntime(params: {
   provider: string;
   runtimeId?: string;
+  config?: OpenClawConfig;
 }): string {
   const provider = normalizeProviderId(params.provider);
   const runtimeId = normalizeOptionalAgentRuntimeId(params.runtimeId) ?? OPENCLAW_AGENT_RUNTIME_ID;
-  if (provider === OPENAI_PROVIDER_ID && runtimeId === "codex") {
+  if (
+    provider === OPENAI_PROVIDER_ID &&
+    runtimeId === "codex" &&
+    openAIProviderUsesCodexRuntimeByDefault({ provider, config: params.config })
+  ) {
     return OPENAI_CODEX_PROVIDER_ID;
   }
   return params.provider;

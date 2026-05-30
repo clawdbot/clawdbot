@@ -49,6 +49,50 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
   "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
+  "@openclaw/llm-core/diagnostics": [
+    "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
+  ],
+  "@openclaw/llm-core/event-stream": [
+    "../dist/plugin-sdk/packages/llm-core/src/utils/event-stream.d.ts",
+  ],
+  "@openclaw/llm-core/types": ["../dist/plugin-sdk/packages/llm-core/src/types.d.ts"],
+  "@openclaw/llm-core/validation": ["../dist/plugin-sdk/packages/llm-core/src/validation.d.ts"],
+  "@openclaw/llm-core/*": ["../dist/plugin-sdk/packages/llm-core/src/*.d.ts"],
+  "@openclaw/markdown-core": ["../dist/plugin-sdk/packages/markdown-core/src/index.d.ts"],
+  "@openclaw/markdown-core/code-spans": [
+    "../dist/plugin-sdk/packages/markdown-core/src/code-spans.d.ts",
+  ],
+  "@openclaw/markdown-core/fences": ["../dist/plugin-sdk/packages/markdown-core/src/fences.d.ts"],
+  "@openclaw/markdown-core/frontmatter": [
+    "../dist/plugin-sdk/packages/markdown-core/src/frontmatter.d.ts",
+  ],
+  "@openclaw/markdown-core/ir": ["../dist/plugin-sdk/packages/markdown-core/src/ir.d.ts"],
+  "@openclaw/markdown-core/render": ["../dist/plugin-sdk/packages/markdown-core/src/render.d.ts"],
+  "@openclaw/markdown-core/render-aware-chunking": [
+    "../dist/plugin-sdk/packages/markdown-core/src/render-aware-chunking.d.ts",
+  ],
+  "@openclaw/markdown-core/tables": ["../dist/plugin-sdk/packages/markdown-core/src/tables.d.ts"],
+  "@openclaw/markdown-core/types": ["../dist/plugin-sdk/packages/markdown-core/src/types.d.ts"],
+  "@openclaw/markdown-core/*": ["../dist/plugin-sdk/packages/markdown-core/src/*.d.ts"],
+  "@openclaw/media-generation-core": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/index.d.ts",
+  ],
+  "@openclaw/media-generation-core/capability-model-ref": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/capability-model-ref.d.ts",
+  ],
+  "@openclaw/media-generation-core/catalog": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/catalog.d.ts",
+  ],
+  "@openclaw/media-generation-core/model-ref": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/model-ref.d.ts",
+  ],
+  "@openclaw/media-generation-core/normalization": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/normalization.d.ts",
+  ],
+  "@openclaw/media-generation-core/*": [
+    "../dist/plugin-sdk/packages/media-generation-core/src/*.d.ts",
+  ],
   "@openclaw/*.js": ["../packages/plugin-sdk/dist/extensions/*.d.ts", "../extensions/*"],
   "@openclaw/*": ["../packages/plugin-sdk/dist/extensions/*", "../extensions/*"],
   "openclaw/plugin-sdk/qa-channel": ["../dist/plugin-sdk/src/plugin-sdk/qa-channel.d.ts"],

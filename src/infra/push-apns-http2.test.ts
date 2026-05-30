@@ -1,5 +1,6 @@
 import type http2 from "node:http2";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import type { HttpConnectTunnelParams } from "./net/http-connect-tunnel.js";
 import {
   resetActiveManagedProxyStateForTests,
@@ -193,6 +194,21 @@ describe("connectApnsHttp2Session", () => {
     expect(createConnection?.(new URL("https://api.push.apple.com"), {})).toBe(fakeTlsSocket);
   });
 
+  it("caps oversized managed proxy timeouts before opening the APNs tunnel", async () => {
+    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
+      loopbackMode: "gateway-only",
+    });
+    const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
+
+    await connectApnsHttp2Session({
+      authority: "https://api.push.apple.com",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    stopActiveManagedProxyRegistration(registration);
+
+    expect(lastTunnelCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
   it("ignores ambient proxy env when managed proxy is inactive", async () => {
     const originalHttpsProxy = process.env["HTTPS_PROXY"];
     process.env["HTTPS_PROXY"] = "http://ambient.example:8080";
@@ -250,6 +266,18 @@ describe("connectApnsHttp2Session", () => {
       "apns-priority": "10",
     });
     expect(fakeSession.close).toHaveBeenCalledOnce();
+  });
+
+  it("caps oversized explicit proxy probe timeouts", async () => {
+    const { probeApnsHttp2ReachabilityViaProxy } = await import("./push-apns-http2.js");
+
+    await probeApnsHttp2ReachabilityViaProxy({
+      authority: "https://api.sandbox.push.apple.com",
+      proxyUrl: "http://proxy.example:8080",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(lastTunnelCall().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("rejects non-APNs authorities", async () => {

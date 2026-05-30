@@ -28,7 +28,7 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('{0}-manual-v1-{1}', github.workflow, github.run_id) || (github.event_name == 'pull_request' && format('{0}-v7-{1}', github.workflow, github.event.pull_request.number) || (github.repository == 'openclaw/openclaw' && format('{0}-v7-{1}', github.workflow, github.ref) || format('{0}-v7-{1}-{2}', github.workflow, github.ref, github.sha))) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -466,8 +466,8 @@ jobs:
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-  # Warm the lockfile- and pnpm-pinned store once before Linux Node shards fan out.
-  # On a cold key this job owns the save, so later shards restore the exact key.
+  # Warm the lockfile- and pnpm-pinned store without blocking Linux Node shards.
+  # On a cold key this job owns the save for later workflow runs.
   pnpm-store-warmup:
     permissions:
       contents: read
@@ -532,9 +532,9 @@ jobs:
   build-artifacts:
     permissions:
       contents: read
-    needs: [preflight, pnpm-store-warmup]
+    needs: [preflight]
     if: needs.preflight.outputs.run_build_artifacts == 'true'
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     outputs:
       channels-result: ${{ steps.built_artifact_checks.outputs['channels-result'] }}
@@ -596,6 +596,14 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
+
+      - name: Restore build-all step cache
+        uses: actions/cache@v5
+        with:
+          path: .artifacts/build-all-cache
+          key: ${{ runner.os }}-build-all-v3-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'npm-shrinkwrap.json', 'packages/plugin-sdk/package.json', 'packages/llm-core/package.json', 'packages/memory-host-sdk/package.json', 'scripts/build-all.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entries.mjs', 'tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'src/plugin-sdk/**', 'packages/llm-core/src/**', 'packages/memory-host-sdk/src/**', 'src/types/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'scripts/copy-export-html-templates.ts', 'scripts/lib/copy-assets.ts', 'src/auto-reply/reply/export-html/**') }}
+          restore-keys: |
+            ${{ runner.os }}-build-all-v3-
 
       - name: Build dist
         env:
@@ -694,20 +702,6 @@ jobs:
             pids+=("$!")
           }
 
-          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
-            gateway_watch_log="${RUNNER_TEMP}/gateway-watch.log"
-            echo "starting gateway-watch: node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000"
-            if node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000 >"$gateway_watch_log" 2>&1; then
-              result="success"
-            else
-              result="failure"
-            fi
-            echo "::group::gateway-watch log"
-            cat "$gateway_watch_log"
-            echo "::endgroup::"
-            results["gateway-watch"]="$result"
-          fi
-
           if [ "$RUN_CHANNELS" = "true" ]; then
             start_check "channels" env \
               NODE_OPTIONS=--max-old-space-size=8192 \
@@ -720,6 +714,11 @@ jobs:
               NODE_OPTIONS=--max-old-space-size=8192 \
               OPENCLAW_VITEST_MAX_WORKERS=2 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+          fi
+
+          if [ "$RUN_GATEWAY_WATCH" = "true" ]; then
+            start_check "gateway-watch" \
+              node scripts/check-gateway-watch-regression.mjs --skip-build --ready-timeout-ms 5000
           fi
 
           for index in "${!pids[@]}"; do
@@ -764,7 +763,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight, pnpm-store-warmup]
+    needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast_core == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -853,7 +852,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.checkName }}
-    needs: [preflight, pnpm-store-warmup]
+    needs: [preflight]
     if: needs.preflight.outputs.run_plugin_contracts_shards == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -933,7 +932,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.checkName }}
-    needs: [preflight, pnpm-store-warmup]
+    needs: [preflight]
     if: needs.preflight.outputs.run_checks_fast == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -1085,7 +1084,7 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight, pnpm-store-warmup]
+    needs: [preflight]
     if: needs.preflight.outputs.run_checks_node_core_nondist == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 60
@@ -1191,8 +1190,8 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight, pnpm-store-warmup]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' && needs.pnpm-store-warmup.result == 'success' }}
+    needs: [preflight]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check == 'true' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
@@ -1322,8 +1321,8 @@ jobs:
     permissions:
       contents: read
     name: ${{ matrix.check_name }}
-    needs: [preflight, pnpm-store-warmup]
-    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' && needs.pnpm-store-warmup.result == 'success' }}
+    needs: [preflight]
+    if: ${{ !cancelled() && always() && needs.preflight.outputs.run_check_additional == 'true' }}
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
     strategy:
@@ -1404,7 +1403,7 @@ jobs:
             packages/plugin-sdk/dist
             extensions/*/dist/.boundary-tsc.tsbuildinfo
             extensions/*/dist/.boundary-tsc.stamp
-          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/auto-reply/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
+          key: ${{ runner.os }}-extension-package-boundary-v1-${{ hashFiles('tsconfig.json', 'tsconfig.plugin-sdk.dts.json', 'packages/plugin-sdk/tsconfig.json', 'packages/llm-core/package.json', 'scripts/check-extension-package-tsc-boundary.mjs', 'scripts/prepare-extension-package-boundary-artifacts.mjs', 'scripts/write-plugin-sdk-entry-dts.ts', 'scripts/lib/plugin-sdk-entrypoints.json', 'scripts/lib/plugin-sdk-entries.mjs', 'src/plugin-sdk/**', 'src/auto-reply/**', 'packages/llm-core/src/**', 'src/video-generation/dashscope-compatible.ts', 'src/video-generation/types.ts', 'src/types/**', 'extensions/**', 'extensions/tsconfig.package-boundary*.json', 'package.json', 'pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-extension-package-boundary-v1-
 
@@ -1421,10 +1420,14 @@ jobs:
           find src \
             -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
             -exec touch -t 200001010000 {} +
+          find packages/llm-core/src \
+            -type f \( -name '*.ts' -o -name '*.tsx' -o -name '*.mts' -o -name '*.cts' -o -name '*.js' -o -name '*.mjs' -o -name '*.json' \) \
+            -exec touch -t 200001010000 {} +
           touch -t 200001010000 \
             tsconfig.json \
             tsconfig.plugin-sdk.dts.json \
             packages/plugin-sdk/tsconfig.json \
+            packages/llm-core/package.json \
             scripts/check-extension-package-tsc-boundary.mjs \
             scripts/prepare-extension-package-boundary-artifacts.mjs \
             scripts/write-plugin-sdk-entry-dts.ts \
@@ -1489,7 +1492,7 @@ jobs:
   check-docs:
     permissions:
       contents: read
-    needs: [preflight, pnpm-store-warmup]
+    needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
     runs-on: ${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 20
@@ -1673,6 +1676,7 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_timeout_seconds=90
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
@@ -1681,7 +1685,7 @@ jobs:
             local fetch_pid="$!"
             local elapsed=0
             while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge 30 ]; then
+              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
                 kill -TERM "$fetch_pid" 2>/dev/null || true
                 sleep 10
                 kill -KILL "$fetch_pid" 2>/dev/null || true
@@ -1793,6 +1797,7 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_timeout_seconds=90
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
@@ -1801,7 +1806,7 @@ jobs:
             local fetch_pid="$!"
             local elapsed=0
             while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge 30 ]; then
+              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
                 kill -TERM "$fetch_pid" 2>/dev/null || true
                 sleep 10
                 kill -KILL "$fetch_pid" 2>/dev/null || true
@@ -1859,6 +1864,7 @@ jobs:
           git init "$GITHUB_WORKSPACE"
           git -C "$GITHUB_WORKSPACE" config gc.auto 0
           git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
+          fetch_timeout_seconds=90
           fetch_checkout_ref() {
             git -C "$GITHUB_WORKSPACE" \
               -c protocol.version=2 \
@@ -1867,7 +1873,7 @@ jobs:
             local fetch_pid="$!"
             local elapsed=0
             while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge 30 ]; then
+              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
                 kill -TERM "$fetch_pid" 2>/dev/null || true
                 sleep 10
                 kill -KILL "$fetch_pid" 2>/dev/null || true
@@ -2114,7 +2120,7 @@ jobs:
       - macos-node
       - macos-swift
       - android
-    if: ${{ !cancelled() && always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    if: ${{ !cancelled() && always() && github.event_name != 'push' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

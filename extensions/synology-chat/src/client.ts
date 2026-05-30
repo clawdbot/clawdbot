@@ -6,6 +6,7 @@
 import * as http from "node:http";
 import * as https from "node:https";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import {
   formatErrorMessage,
@@ -295,12 +296,7 @@ function parseNumericUserId(userId?: string | number): number | undefined {
   if (typeof userId === "number") {
     return Number.isSafeInteger(userId) ? userId : undefined;
   }
-  const trimmed = userId.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  const numericId = Number(trimmed);
-  return Number.isSafeInteger(numericId) ? numericId : undefined;
+  return parseStrictNonNegativeInteger(userId);
 }
 
 function doPost(url: string, body: string, allowInsecureSsl = false): Promise<boolean> {

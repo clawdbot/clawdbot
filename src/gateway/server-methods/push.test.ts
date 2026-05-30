@@ -209,16 +209,20 @@ describe("push.test handler", () => {
 
     expect(resolveApnsAuthConfigFromEnv).not.toHaveBeenCalled();
     expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(1);
-    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(process.env, {
-      push: {
-        apns: {
-          relay: {
-            baseUrl: "https://relay.example.com",
-            timeoutMs: 1000,
+    expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledWith(
+      process.env,
+      {
+        push: {
+          apns: {
+            relay: {
+              baseUrl: "https://relay.example.com",
+              timeoutMs: 1000,
+            },
           },
         },
       },
-    });
+      { registrationRelayOrigin: undefined },
+    );
     expect(sendApnsAlert).toHaveBeenCalledTimes(1);
     const call = firstRespondCall(respond);
     expect(call?.[0]).toBe(true);

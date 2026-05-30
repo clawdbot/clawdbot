@@ -35,6 +35,17 @@ describe("resolveSandboxWorkdir", () => {
     expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
   });
 
+  it("reads only strict signed decimal environment integers", () => {
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "+250");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBe(250);
+
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "0x10");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "1e2");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+  });
+
   it("ignores unsafe environment integers", () => {
     vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "9007199254740993");
 

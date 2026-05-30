@@ -217,7 +217,7 @@ describe("sandbox fs bridge anchored ops", () => {
     });
   });
 
-  it("does not accept partial stat size output", async () => {
+  it("saturates unsafe stat size output", async () => {
     await withTempDir("openclaw-fs-bridge-stat-parse-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
@@ -228,7 +228,7 @@ describe("sandbox fs bridge anchored ops", () => {
           return dockerExecResult(`${getDockerArg(args, 1)}\n`);
         }
         if (script.includes('stat -c "%F|%s|%y"')) {
-          return dockerExecResult("regular file|12oops|not-a-date\n");
+          return dockerExecResult("regular file|9007199254740992|not-a-date\n");
         }
         return dockerExecResult("");
       });
@@ -242,7 +242,7 @@ describe("sandbox fs bridge anchored ops", () => {
 
       await expect(bridge.stat({ filePath: "note.txt" })).resolves.toMatchObject({
         type: "file",
-        size: 0,
+        size: Number.MAX_SAFE_INTEGER,
         mtimeMs: 0,
       });
     });

@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -406,6 +407,20 @@ describe("qa suite runtime agent process helpers", () => {
       "agent.wait",
       { runId: "run-3", timeoutMs: 30_000 },
       { timeoutMs: 35_000 },
+    );
+  });
+
+  it("caps the gateway client timeout when waiting for oversized agent runs", async () => {
+    const gatewayCall = vi.fn(async () => ({ status: "ok" }));
+
+    await expect(
+      waitForAgentRun({ gateway: { call: gatewayCall } } as never, "run-oversized", 9e15),
+    ).resolves.toEqual({ status: "ok" });
+
+    expect(gatewayCall).toHaveBeenCalledWith(
+      "agent.wait",
+      { runId: "run-oversized", timeoutMs: 9e15 },
+      { timeoutMs: MAX_TIMER_TIMEOUT_MS },
     );
   });
 

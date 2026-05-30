@@ -1,13 +1,13 @@
 ---
-summary: "Run OpenClaw embedded agent turns through the bundled GitHub Copilot SDK harness"
+summary: "Run OpenClaw embedded agent turns through the external GitHub Copilot SDK harness"
 title: "Copilot SDK harness"
 read_when:
-  - You want to use the bundled GitHub Copilot SDK harness for an agent
+  - You want to use the GitHub Copilot SDK harness for an agent
   - You need configuration examples for the `copilot` runtime
   - You are wiring an agent to subscription Copilot (github / openclaw / copilot) and want it to run through the Copilot CLI
 ---
 
-The bundled `copilot` extension lets OpenClaw run embedded subscription
+The external `@openclaw/copilot` plugin lets OpenClaw run embedded subscription
 Copilot agent turns through the GitHub Copilot CLI (`@github/copilot-sdk`)
 instead of the built-in PI harness.
 
@@ -24,11 +24,11 @@ For the broader model/provider/runtime split, start with
 
 ## Requirements
 
-- OpenClaw with the bundled `copilot` extension available.
+- OpenClaw with the `@openclaw/copilot` plugin installed.
 - If your config uses `plugins.allow`, include `copilot` (the manifest
-  id in `extensions/copilot/openclaw.plugin.json`). A restrictive
+  id declared by the plugin). A restrictive
   allowlist that uses the npm-style `@openclaw/copilot` package name
-  will leave the bundled plugin blocked and the runtime will not load
+  will leave the plugin blocked and the runtime will not load
   even with `agentRuntime.id: "copilot"`.
 - A GitHub Copilot subscription that can drive the Copilot CLI (or a
   `gitHubToken` env / auth-profile entry for headless / cron runs).
@@ -38,56 +38,38 @@ For the broader model/provider/runtime split, start with
   or `~/.config/copilot` elsewhere) is used as the doctor probe fallback when
   no explicit home is set.
 
-`openclaw doctor` runs the bundled
+`openclaw doctor` runs the plugin
 [doctor contract](#doctor-and-probes) for the extension; failures there are
 the canonical way to confirm the environment is ready before opting an agent
 in.
 
-## On-demand SDK install
+## Plugin install
 
-The Copilot agent runtime ships its small TypeScript code bundled inside
-the openclaw tarball, but the underlying `@github/copilot-sdk` package
-(and its platform-specific `@github/copilot-<platform>-<arch>` CLI
-binary) is **not** installed by default — together they add ~260 MB to
-your openclaw install footprint, and most openclaw users do not select
-a Copilot model.
+The Copilot runtime is an external plugin so the core `openclaw` package does
+not carry the `@github/copilot-sdk` dependency or its platform-specific
+`@github/copilot-<platform>-<arch>` CLI binary. Together they add roughly
+260 MB, so install them only for agents that opt into this runtime:
 
-The wizard offers to install the SDK the first time you select a
+```bash
+openclaw plugins install @openclaw/copilot
+```
+
+The wizard installs the plugin the first time you select a
 `github-copilot/*` model **and** your config opts the model (or its
 provider) into the Copilot agent runtime via
 `agentRuntime: { id: "copilot" }` (see [Quickstart](#quickstart) below).
 Without the opt-in, openclaw uses its built-in GitHub Copilot provider
-and never prompts for the SDK install:
-
-```
-The Copilot agent runtime needs @github/copilot-sdk (~260 MB on first
-install, downloads the @github/copilot CLI binary for your platform).
-Install now? [Y/n]
-```
-
-If you accept, the SDK is installed into
-`~/.openclaw/npm-runtime/copilot/` and detected on subsequent runs. The
-install runs `npm ci` against a checked-in `package-lock.json` shipped
-with openclaw at
-`src/commands/copilot-sdk-install-manifest/package-lock.json`, so the
-exact transitive graph reviewed for this release lands on disk on every
-user machine.
-
-If you decline, the runtime will fail at first invocation with an
-actionable install message; re-run `openclaw setup` to retry the install
-(or copy the pinned manifest into `~/.openclaw/npm-runtime/copilot/` and
-run `npm ci` yourself if you need to install offline).
+and never installs the runtime plugin.
 
 The runtime resolves the SDK in this order:
 
-1. `import("@github/copilot-sdk")` against the host openclaw install
-   (covers source/dev checkouts and any environment that pre-installs
-   the SDK alongside openclaw).
+1. `import("@github/copilot-sdk")` from the installed `@openclaw/copilot`
+   package.
 2. The well-known fallback dir `~/.openclaw/npm-runtime/copilot/` (the
-   wizard install target).
+   legacy on-demand install target).
 
 A missing SDK surfaces a single error with code `COPILOT_SDK_MISSING`
-and the manual install command above.
+and the plugin reinstall command above.
 
 ## Quickstart
 

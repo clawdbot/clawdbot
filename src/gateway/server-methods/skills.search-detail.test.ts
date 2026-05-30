@@ -14,7 +14,7 @@ vi.mock("../../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
 }));
 
-vi.mock("../../agents/skills-clawhub.js", () => ({
+vi.mock("../../skills/lifecycle/clawhub.js", () => ({
   installSkillFromClawHub: vi.fn(),
   updateSkillsFromClawHub: vi.fn(),
   searchSkillsFromClawHub: (...args: unknown[]) => searchSkillsFromClawHubMock(...args),
@@ -27,7 +27,7 @@ vi.mock("../../infra/clawhub.js", () => ({
   downloadClawHubSkillArchive: vi.fn(),
 }));
 
-vi.mock("../../agents/skills-install.js", () => ({
+vi.mock("../../skills/lifecycle/install.js", () => ({
   installSkill: vi.fn(),
 }));
 

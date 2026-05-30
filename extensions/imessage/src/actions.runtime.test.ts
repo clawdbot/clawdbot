@@ -135,6 +135,20 @@ describe("findChatGuid cross-format identifier resolution", () => {
     expect(result).toBe("iMessage;+;chat0000");
   });
 
+  it("does not coerce non-decimal chat ids from chats.list", () => {
+    const result = findChatGuidForTest(
+      [
+        {
+          id: "0x7",
+          identifier: "wrong",
+          guid: "iMessage;+;wrong",
+        },
+      ],
+      { kind: "chat_id", chatId: 7 },
+    );
+    expect(result).toBeNull();
+  });
+
   it("returns null for a phone number that does not exist in chats.list", () => {
     const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",

@@ -3,7 +3,15 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadCronStore, loadCronStoreSync, resolveCronStorePath, saveCronStore } from "./store.js";
+import {
+  loadCronQuarantineFile,
+  loadCronStore,
+  loadCronStoreSync,
+  resolveCronQuarantinePath,
+  resolveCronStorePath,
+  saveCronQuarantineFile,
+  saveCronStore,
+} from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -220,6 +228,45 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.state).toStrictEqual({});
   });
 
+  it("fails closed instead of overwriting unrecognized quarantine files", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      quarantinePath,
+      JSON.stringify({ version: 2, jobs: [{ reason: "old-shape", raw: "keep-me" }] }, null, 2),
+      "utf-8",
+    );
+
+    await expect(loadCronQuarantineFile(quarantinePath)).rejects.toThrow(
+      /Unsupported cron quarantine file shape/,
+    );
+    await expect(
+      saveCronQuarantineFile({
+        storePath,
+        nowMs: 123,
+        entries: [{ sourceIndex: 0, reason: "missing-schedule", job: { id: "new-row" } }],
+      }),
+    ).rejects.toThrow(/Unsupported cron quarantine file shape/);
+
+    const preserved = JSON.parse(await fs.readFile(quarantinePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(preserved.jobs[0]?.raw).toBe("keep-me");
+  });
+
+  it("does not rewrite quarantine files when every entry is already present", async () => {
+    const { storePath } = await makeStorePath();
+    const quarantinePath = resolveCronQuarantinePath(storePath);
+    const entry = { sourceIndex: 0, reason: "missing-schedule", job: { id: "same-row" } };
+
+    await saveCronQuarantineFile({ storePath, nowMs: 100, entries: [entry] });
+    const firstRaw = await fs.readFile(quarantinePath, "utf-8");
+    await saveCronQuarantineFile({ storePath, nowMs: 200, entries: [entry] });
+
+    expect(await fs.readFile(quarantinePath, "utf-8")).toBe(firstRaw);
+  });
+
   it("loads split cron state synchronously for task reconciliation", async () => {
     const { storePath } = await makeStorePath();
     await saveCronStore(storePath, makeStore("job-sync", true));
@@ -230,6 +277,54 @@ describe("cron store", () => {
     expect(loaded.jobs[0]?.id).toBe("job-sync");
     expect(loaded.jobs[0]?.state).toStrictEqual({});
     expect(loaded.jobs[0]?.updatedAtMs).toBeTypeOf("number");
+  });
+
+  it("loads split cron state synchronously for legacy jobId rows", async () => {
+    const { storePath } = await makeStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              jobId: "legacy-sync-job",
+              name: "legacy sync job",
+              enabled: true,
+              schedule: { kind: "every", everyMs: 60_000 },
+              payload: { kind: "systemEvent", text: "tick" },
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            "legacy-sync-job": {
+              updatedAtMs: 123,
+              state: { runningAtMs: 456 },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = loadCronStoreSync(storePath);
+
+    expect(loaded.jobs[0]?.state).toEqual({ runningAtMs: 456 });
+    expect(loaded.jobs[0]?.updatedAtMs).toBe(123);
   });
 
   it("compares split state identity for flat legacy cron rows", async () => {

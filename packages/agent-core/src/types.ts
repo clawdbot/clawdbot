@@ -10,7 +10,7 @@ import type {
   TextContent,
   Tool,
   ToolResultMessage,
-} from "./llm.js";
+} from "../../llm-core/src/index.js";
 
 /**
  * Stream function used by the agent loop.
@@ -345,12 +345,26 @@ export interface AgentState {
   readonly errorMessage?: string;
 }
 
+/** Channel-safe progress text emitted by a running tool. */
+export interface AgentToolProgress {
+  /** Public text suitable for user-facing progress surfaces. */
+  text: string;
+  /** Tool progress is rendered by channel progress UIs. */
+  visibility: "channel";
+  /** Progress text must not contain secrets, private args, or fetched content. */
+  privacy: "public";
+  /** Optional stable id for progress line replacement. */
+  id?: string;
+}
+
 /** Final or partial result produced by a tool. */
 export interface AgentToolResult<T> {
   /** Text or image content returned to the model. */
   content: (TextContent | ImageContent)[];
   /** Arbitrary structured details for logs or UI rendering. */
   details: T;
+  /** Optional public progress hint for partial tool updates; never model content. */
+  progress?: AgentToolProgress;
   /**
    * Hint that the agent should stop after the current tool batch.
    * Early termination only happens when every finalized tool result in the batch sets this to true.

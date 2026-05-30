@@ -6,10 +6,13 @@ import {
   markMigrationItemError,
   markMigrationItemSkipped,
 } from "openclaw/plugin-sdk/migration";
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  buildOpenAICodexCredentialExtra,
   buildOauthProviderAuthResult,
+  resolveOpenAICodexAccessTokenExpiry,
+  resolveOpenAICodexAuthIdentity,
+  resolveOpenAICodexImportProfileName,
   updateAuthProfileStoreWithLock,
   type AuthProfileStore,
   type OAuthCredential,
@@ -61,79 +64,12 @@ type HermesCodexAuthProfile = {
   sourceProfileId: string;
 };
 
-type CodexIdentity = {
-  accountId?: string;
-  chatgptPlanType?: string;
-  email?: string;
-  profileName?: string;
-};
-
 function readTimestamp(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
-  const payload = token.split(".")[1];
-  if (!payload) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveCodexIdentity(access: string, accountId?: string): CodexIdentity {
-  const payload = decodeJwtPayload(access);
-  const auth = isRecord(payload?.["https://api.openai.com/auth"])
-    ? payload["https://api.openai.com/auth"]
-    : {};
-  const profile = isRecord(payload?.["https://api.openai.com/profile"])
-    ? payload["https://api.openai.com/profile"]
-    : {};
-  const email = readString(profile.email);
-  const resolvedAccountId = accountId ?? readString(auth.chatgpt_account_id);
-  const chatgptPlanType = readString(auth.chatgpt_plan_type);
-  if (email) {
-    return {
-      ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
-      ...(chatgptPlanType ? { chatgptPlanType } : {}),
-      email,
-      profileName: email,
-    };
-  }
-  const stableSubject =
-    readString(auth.chatgpt_account_user_id) ??
-    readString(auth.chatgpt_user_id) ??
-    readString(auth.user_id) ??
-    readString(payload?.sub) ??
-    resolvedAccountId;
-  return {
-    ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
-    ...(chatgptPlanType ? { chatgptPlanType } : {}),
-    ...(stableSubject
-      ? { profileName: `id-${Buffer.from(stableSubject).toString("base64url")}` }
-      : {}),
-  };
-}
-
-function resolveAccessTokenExpiry(access: string): number | undefined {
-  const payload = decodeJwtPayload(access);
-  const exp = payload?.exp;
-  if (typeof exp === "number" && Number.isFinite(exp) && exp > 0) {
-    return Math.trunc(exp) * 1000;
-  }
-  if (typeof exp === "string") {
-    const seconds = parseStrictPositiveInteger(exp);
-    return seconds === undefined ? undefined : seconds * 1000;
-  }
-  return undefined;
 }
 
 function sourceCredentialFingerprint(candidate: HermesCodexAuthCandidate): string {
@@ -266,39 +202,24 @@ async function readOpenCodeOpenAICandidates(
   ];
 }
 
-function credentialExtra(identity: CodexIdentity): Record<string, unknown> | undefined {
-  const extra = {
-    ...(identity.accountId ? { accountId: identity.accountId } : {}),
-    ...(identity.chatgptPlanType ? { chatgptPlanType: identity.chatgptPlanType } : {}),
-  };
-  return Object.keys(extra).length > 0 ? extra : undefined;
-}
-
-function importProfileName(identity: CodexIdentity, fallback: string): string {
-  if (identity.accountId) {
-    return `account-${identity.accountId.replaceAll(/[^A-Za-z0-9._-]+/gu, "-")}`;
-  }
-  if (identity.profileName?.startsWith("id-")) {
-    return identity.profileName;
-  }
-  return fallback;
-}
-
 function buildAuthResult(
   candidate: HermesCodexAuthCandidate,
   fallbackProfileName = "hermes-import",
 ): ProviderAuthResult {
-  const identity = resolveCodexIdentity(candidate.access, candidate.accountId);
+  const identity = resolveOpenAICodexAuthIdentity({
+    access: candidate.access,
+    accountId: candidate.accountId,
+  });
   return buildOauthProviderAuthResult({
     providerId: OPENAI_CODEX_PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
     access: candidate.access,
     refresh: candidate.refresh,
-    expires: resolveAccessTokenExpiry(candidate.access),
+    expires: resolveOpenAICodexAccessTokenExpiry(candidate.access),
     email: identity.email,
-    profileName: importProfileName(identity, fallbackProfileName),
+    profileName: resolveOpenAICodexImportProfileName(identity, fallbackProfileName),
     displayName: HERMES_AUTH_DISPLAY_NAME,
-    credentialExtra: credentialExtra(identity),
+    credentialExtra: buildOpenAICodexCredentialExtra(identity),
   });
 }
 

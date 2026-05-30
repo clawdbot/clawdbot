@@ -1,13 +1,23 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
-import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
+import type {
+  ExecAsk,
+  ExecHost,
+  ExecMode,
+  ExecSecurity,
+  ExecTarget,
+} from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
+import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 
 export type ExecToolDefaults = {
   hasCronTool?: boolean;
   host?: ExecTarget;
+  mode?: ExecMode;
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
@@ -18,6 +28,9 @@ export type ExecToolDefaults = {
   commandHighlighting?: boolean;
   safeBinTrustedDirs?: string[];
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
+  reviewer?: ExecReviewerConfig;
+  config?: OpenClawConfig;
+  autoReviewer?: ExecAutoReviewer;
   agentId?: string;
   backgroundMs?: number;
   timeoutSec?: number;

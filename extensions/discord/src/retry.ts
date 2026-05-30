@@ -4,6 +4,7 @@ import {
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   createRateLimitRetryRunner,
   type RetryConfig,
@@ -45,13 +46,7 @@ function readDiscordErrorStatus(err: unknown): number | undefined {
       : "statusCode" in err && err.statusCode !== undefined
         ? err.statusCode
         : undefined;
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return raw;
-  }
-  if (typeof raw === "string" && /^\d+$/.test(raw)) {
-    return Number(raw);
-  }
-  return undefined;
+  return parseStrictNonNegativeInteger(raw);
 }
 
 export function isRetryableDiscordTransientError(err: unknown): boolean {

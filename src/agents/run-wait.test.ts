@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { addTimerTimeoutGraceMs, MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
@@ -57,8 +58,10 @@ function expectAgentWaitRequest(
 
   const paramTimeoutMs = expectNumber(request.params?.timeoutMs, `${runId} param timeoutMs`);
   const requestTimeoutMs = expectNumber(request.timeoutMs, `${runId} request timeoutMs`);
-  expect(requestTimeoutMs).toBe(paramTimeoutMs + 2_000);
-  expect(requestTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs + 2_000);
+  expect(requestTimeoutMs).toBe(addTimerTimeoutGraceMs(paramTimeoutMs, 2_000));
+  expect(requestTimeoutMs).toBeLessThanOrEqual(
+    addTimerTimeoutGraceMs(maxParamTimeoutMs, 2_000) ?? MAX_TIMER_TIMEOUT_MS,
+  );
   expect(paramTimeoutMs).toBeGreaterThanOrEqual(1);
   expect(paramTimeoutMs).toBeLessThanOrEqual(maxParamTimeoutMs);
 }
@@ -268,7 +271,26 @@ describe("waitForAgentRun", () => {
     });
   });
 
-  it("preserves timing metadata from agent.wait", async () => {
+  it("caps oversized wait timeouts before sending agent.wait", async () => {
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+
+    const result = await waitForAgentRun({
+      runId: "run-huge",
+      timeoutMs: Number.MAX_VALUE,
+    });
+
+    expect(result).toEqual({ status: "ok" });
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "agent.wait",
+      params: {
+        runId: "run-huge",
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
+      },
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+  });
+
+  it("preserves timing metadata on provider-attributed wait timeouts", async () => {
     callGatewayMock.mockResolvedValue({
       status: "ok",
       startedAt: 100,
@@ -280,9 +302,29 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
 
     expect(result).toEqual({
-      status: "ok",
+      status: "timeout",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+  });
+
+  it("keeps hard wait timeouts stronger than blocked liveness", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "error",
+      error: "model timed out",
+      livenessState: "blocked",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked-timeout", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "timeout",
+      error: "model timed out",
+      livenessState: "blocked",
       timeoutPhase: "provider",
       providerStarted: true,
     });

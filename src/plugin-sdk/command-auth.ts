@@ -97,9 +97,9 @@ export {
   listSkillCommandsForAgents,
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
-} from "../auto-reply/skill-commands.js";
+} from "../skills/discovery/chat-commands.js";
 export { getPluginCommandSpecs, listProviderPluginCommandSpecs } from "../plugins/command-specs.js";
-export type { SkillCommandSpec } from "../agents/skills.js";
+export type { SkillCommandSpec } from "../skills/types.js";
 export {
   buildModelsProviderData,
   formatModelsAvailableHeader,

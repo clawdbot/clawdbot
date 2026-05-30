@@ -6,17 +6,27 @@ import {
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   type ExecApprovalsFile,
+  type ExecAllowlistEntry,
   type ExecAsk,
   type ExecSecurity,
   type SystemRunApprovalPlan,
+  commandRequiresSecurityAuditSuppressionApproval,
   evaluateShellAllowlist,
   hasDurableExecApproval,
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
-import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
-import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
+import {
+  parsePreparedSystemRunPayload,
+  type PreparedRunExecPolicy,
+} from "../infra/system-run-approval-context.js";
+import {
+  extractShellCommandFromArgv,
+  formatExecCommand,
+  resolveSystemRunCommandRequest,
+} from "../infra/system-run-command.js";
 import { normalizeNullableString } from "../shared/string-coerce.js";
+import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -41,14 +51,85 @@ type PreparedNodeRun = {
   cwd: string | undefined;
   agentId: string | undefined;
   sessionKey: string | undefined;
+  execPolicy?: PreparedRunExecPolicy;
 };
 
 type NodeApprovalAnalysis = {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
   durableApprovalSatisfied: boolean;
+  nodeApprovalPolicyKnown: boolean;
+  nodeSecurity?: ExecSecurity;
+  nodeAsk?: ExecAsk;
   inlineEvalHit: InterpreterInlineEvalHit | null;
+  requiresSecurityAuditSuppressionApproval: boolean;
+  autoReviewArgv?: string[];
 };
+
+function resolveNodeRunTimeoutSec(
+  timeoutSec: number | null | undefined,
+  defaultTimeoutSec: number,
+): number {
+  return typeof timeoutSec === "number" && Number.isFinite(timeoutSec)
+    ? timeoutSec
+    : defaultTimeoutSec;
+}
+
+function resolveNodeInvokeTimeoutMs(runTimeoutSec: number, defaultTimeoutSec: number): number {
+  const baseTimeoutSec =
+    Number.isFinite(runTimeoutSec) && runTimeoutSec > 0 ? runTimeoutSec : defaultTimeoutSec;
+  if (!Number.isFinite(baseTimeoutSec) || baseTimeoutSec <= 0) {
+    return 10_000;
+  }
+  return Math.max(10_000, addSafeTimeoutDelayGraceMs(baseTimeoutSec * 1000, 5_000));
+}
+
+function resolveNodeRunTimeoutMs(runTimeoutSec: number): number {
+  return Number.isFinite(runTimeoutSec) && runTimeoutSec > 0
+    ? addSafeTimeoutDelayGraceMs(runTimeoutSec * 1000, 0, { minMs: 0 })
+    : 0;
+}
+
+type NodePolicyCommandEval = {
+  command: string;
+  cwd: string | undefined;
+  allowlistEval: ReturnType<typeof evaluateShellAllowlist>;
+};
+
+function hasExactCommandDurableApproval(params: {
+  allowlist: readonly ExecAllowlistEntry[];
+  commandText: string;
+}): boolean {
+  const normalizedCommand = params.commandText.trim();
+  if (!normalizedCommand) {
+    return false;
+  }
+  const commandPattern = `=command:${crypto
+    .createHash("sha256")
+    .update(normalizedCommand)
+    .digest("hex")
+    .slice(0, 16)}`;
+  return params.allowlist.some(
+    (entry) =>
+      entry.source === "allow-always" &&
+      (entry.pattern === commandPattern ||
+        (typeof entry.commandText === "string" && entry.commandText.trim() === normalizedCommand)),
+  );
+}
+
+function extractPreparedNodeShellPayload(argv: readonly string[]): string | null {
+  const extracted = extractShellCommandFromArgv([...argv]);
+  if (extracted) {
+    return extracted;
+  }
+  const executable = argv[0]?.split(/[\\/]/).pop()?.toLowerCase();
+  const flag = argv[1]?.trim();
+  const payload = argv[2]?.trim();
+  if (argv.length === 3 && executable === "sh" && flag === "-lc" && payload) {
+    return payload;
+  }
+  return null;
+}
 
 export function shouldSkipNodeApprovalPrepare(params: {
   hostSecurity: ExecSecurity;
@@ -132,15 +213,13 @@ export async function resolveNodeExecutionTarget(
     );
   }
 
-  const runTimeoutSec =
-    typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-  const invokeBaseTimeoutSec = runTimeoutSec > 0 ? runTimeoutSec : params.defaultTimeoutSec;
+  const runTimeoutSec = resolveNodeRunTimeoutSec(params.timeoutSec, params.defaultTimeoutSec);
   return {
     nodeId,
     platform: nodeInfo?.platform,
     argv: buildNodeShellCommand(params.command, nodeInfo?.platform),
     env: params.requestedEnv ? { ...params.requestedEnv } : undefined,
-    invokeTimeoutMs: Math.max(10_000, invokeBaseTimeoutSec * 1000 + 5_000),
+    invokeTimeoutMs: resolveNodeInvokeTimeoutMs(runTimeoutSec, params.defaultTimeoutSec),
     runTimeoutSec,
     supportsSystemRunPrepare: declaredCommands.includes("system.run.prepare"),
   };
@@ -164,8 +243,7 @@ export function buildNodeSystemRunInvoke(params: {
   notifyOnExit?: boolean;
   systemRunPlan?: SystemRunApprovalPlan;
 }): Record<string, unknown> {
-  const timeoutMs =
-    params.target.runTimeoutSec > 0 ? Math.floor(params.target.runTimeoutSec * 1000) : 0;
+  const timeoutMs = resolveNodeRunTimeoutMs(params.target.runTimeoutSec);
   const runId = params.runId ?? crypto.randomUUID();
   return {
     nodeId: params.target.nodeId,
@@ -253,6 +331,7 @@ export async function prepareNodeSystemRun(params: {
     cwd: prepared.plan.cwd ?? params.request.workdir,
     agentId: prepared.plan.agentId ?? params.request.agentId,
     sessionKey: prepared.plan.sessionKey ?? params.request.sessionKey,
+    ...(prepared.execPolicy ? { execPolicy: prepared.execPolicy } : {}),
   };
 }
 
@@ -299,30 +378,105 @@ export async function analyzeNodeApprovalRequirement(params: {
   hostSecurity: ExecSecurity;
   hostAsk: ExecAsk;
 }): Promise<NodeApprovalAnalysis> {
+  const approvalCommand = params.prepared.rawCommand;
+  const approvalCwd = params.prepared.cwd ?? params.request.workdir;
   const baseAllowlistEval = evaluateShellAllowlist({
-    command: params.request.command,
+    command: approvalCommand,
     allowlist: [],
     safeBins: new Set(),
-    cwd: params.request.workdir,
+    cwd: approvalCwd,
     env: params.request.env,
     platform: params.target.platform,
     trustedSafeBinDirs: params.request.trustedSafeBinDirs,
   });
+  const bindingCommandEvals: NodePolicyCommandEval[] = [
+    {
+      command: approvalCommand,
+      cwd: approvalCwd,
+      allowlistEval: baseAllowlistEval,
+    },
+  ];
+  const addCommandEval = (
+    entries: NodePolicyCommandEval[],
+    command: string | null | undefined,
+    cwd: string | undefined,
+  ) => {
+    const normalizedCommand = command?.trim();
+    if (!normalizedCommand) {
+      return;
+    }
+    if (entries.some((entry) => entry.command.trim() === normalizedCommand && entry.cwd === cwd)) {
+      return;
+    }
+    entries.push({
+      command: normalizedCommand,
+      cwd,
+      allowlistEval: evaluateShellAllowlist({
+        command: normalizedCommand,
+        allowlist: [],
+        safeBins: new Set(),
+        cwd,
+        env: params.request.env,
+        platform: params.target.platform,
+        trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+      }),
+    });
+  };
+  const preparedCommand = resolveSystemRunCommandRequest({
+    command: params.prepared.argv,
+    rawCommand: params.prepared.rawCommand,
+  });
+  const preparedShellPayload =
+    extractPreparedNodeShellPayload(params.prepared.argv) ??
+    (preparedCommand.ok ? preparedCommand.shellPayload : null);
+  addCommandEval(bindingCommandEvals, preparedShellPayload, approvalCwd);
+  const autoReviewBindingCommand = preparedShellPayload?.trim() || approvalCommand;
+  const autoReviewBindingEval =
+    bindingCommandEvals.find(
+      (entry) =>
+        entry.command.trim() === autoReviewBindingCommand.trim() && entry.cwd === approvalCwd,
+    )?.allowlistEval ?? baseAllowlistEval;
+  const policyCommandEvals = [...bindingCommandEvals];
+  addCommandEval(policyCommandEvals, params.prepared.plan.commandPreview, approvalCwd);
+  addCommandEval(policyCommandEvals, params.request.command, params.request.workdir);
   let analysisOk = baseAllowlistEval.analysisOk;
   let allowlistSatisfied = false;
   let durableApprovalSatisfied = false;
+  let nodeApprovalsFileKnown = false;
   const inlineEvalHit =
     params.request.strictInlineEval === true
-      ? detectPolicyInlineEval(baseAllowlistEval.segments)
+      ? (policyCommandEvals
+          .map((entry) => detectPolicyInlineEval(entry.allowlistEval.segments))
+          .find((hit) => hit !== null) ?? null)
       : null;
   if (inlineEvalHit) {
     params.request.warnings.push(
-      `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
+      `Warning: strict inline-eval mode requires reviewer or explicit approval for ${describeInterpreterInlineEval(
         inlineEvalHit,
       )}.`,
     );
   }
-  if ((params.hostAsk === "always" || params.hostSecurity === "allowlist") && analysisOk) {
+  const suppressionCommandEvals =
+    preparedShellPayload && preparedShellPayload.trim().length > 0
+      ? policyCommandEvals.filter(
+          (entry) => entry.command.trim() !== approvalCommand.trim() || entry.cwd !== approvalCwd,
+        )
+      : policyCommandEvals;
+  const requiresSecurityAuditSuppressionApproval =
+    suppressionCommandEvals.some((entry) =>
+      commandRequiresSecurityAuditSuppressionApproval({
+        command: entry.command,
+        cwd: entry.cwd,
+        env: params.request.env,
+        segments: entry.allowlistEval.segments,
+      }),
+    ) && !(params.hostSecurity === "full" && params.hostAsk === "off");
+  if (
+    (params.hostAsk === "always" ||
+      params.hostSecurity === "allowlist" ||
+      params.request.autoReview === true) &&
+    analysisOk
+  ) {
     try {
       const approvalsSnapshot = await callGatewayTool<{ file: string }>(
         "exec.approvals.node.get",
@@ -334,29 +488,51 @@ export async function analyzeNodeApprovalRequirement(params: {
           ? approvalsSnapshot.file
           : undefined;
       if (approvalsFile && typeof approvalsFile === "object") {
+        nodeApprovalsFileKnown = true;
         const resolved = resolveExecApprovalsFromFile({
           file: approvalsFile as ExecApprovalsFile,
-          agentId: params.request.agentId,
+          agentId: params.prepared.agentId,
           overrides: { security: "full" },
         });
         // Allowlist-only precheck; safe bins are node-local and may diverge.
-        const allowlistEval = evaluateShellAllowlist({
-          command: params.request.command,
-          allowlist: resolved.allowlist,
-          safeBins: new Set(),
-          cwd: params.request.workdir,
-          env: params.request.env,
-          platform: params.target.platform,
-          trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+        // POSIX node transport wraps commands, so mirror node policy by
+        // accepting either the prepared wrapper or its semantic inner command.
+        const allowlistEvals = bindingCommandEvals.map((entry) => {
+          const allowlistEval = evaluateShellAllowlist({
+            command: entry.command,
+            allowlist: resolved.allowlist,
+            safeBins: new Set(),
+            cwd: entry.cwd,
+            env: params.request.env,
+            platform: params.target.platform,
+            trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+          });
+          return {
+            command: entry.command,
+            allowlistEligible:
+              !preparedShellPayload || entry.command.trim() === preparedShellPayload.trim(),
+            exactDurableApprovalSatisfied: hasExactCommandDurableApproval({
+              allowlist: resolved.allowlist,
+              commandText: entry.command,
+            }),
+            allowlistEval,
+            durableApprovalSatisfied: hasDurableExecApproval({
+              analysisOk: allowlistEval.analysisOk,
+              segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+              allowlist: resolved.allowlist,
+              commandText: entry.command,
+            }),
+          };
         });
-        durableApprovalSatisfied = hasDurableExecApproval({
-          analysisOk: allowlistEval.analysisOk,
-          segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
-          allowlist: resolved.allowlist,
-          commandText: params.prepared.rawCommand,
-        });
-        allowlistSatisfied = allowlistEval.allowlistSatisfied;
-        analysisOk = allowlistEval.analysisOk;
+        durableApprovalSatisfied = allowlistEvals.some(
+          (entry) =>
+            entry.durableApprovalSatisfied &&
+            (entry.allowlistEligible || entry.exactDurableApprovalSatisfied),
+        );
+        allowlistSatisfied = allowlistEvals.some(
+          (entry) => entry.allowlistEligible && entry.allowlistEval.allowlistSatisfied,
+        );
+        analysisOk = allowlistEvals.some((entry) => entry.allowlistEval.analysisOk);
       }
     } catch {
       // Fall back to requiring approval if node approvals cannot be fetched.
@@ -366,6 +542,16 @@ export async function analyzeNodeApprovalRequirement(params: {
     analysisOk,
     allowlistSatisfied,
     durableApprovalSatisfied,
+    nodeApprovalPolicyKnown: nodeApprovalsFileKnown && params.prepared.execPolicy !== undefined,
+    nodeSecurity: params.prepared.execPolicy?.security,
+    nodeAsk: params.prepared.execPolicy?.ask,
     inlineEvalHit,
+    requiresSecurityAuditSuppressionApproval,
+    autoReviewArgv:
+      autoReviewBindingEval.segments.length === 1 &&
+      (autoReviewBindingEval.segments[0]?.raw === undefined ||
+        autoReviewBindingEval.segments[0].raw.trim() === autoReviewBindingCommand.trim())
+        ? autoReviewBindingEval.segments[0].argv
+        : undefined,
   };
 }

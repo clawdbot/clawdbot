@@ -10,7 +10,7 @@ import {
 } from "./agent.shared.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
 import { DEFAULT_UPLOAD_DIR, pathScope } from "./path-output.js";
-import { readRoutePositiveInteger } from "./route-numeric.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import {
   asyncBrowserRoute,
@@ -35,7 +35,7 @@ export function registerBrowserAgentActHookRoutes(
       const paths = toStringArray(body.paths) ?? [];
       let timeoutMs: number | undefined;
       try {
-        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }
@@ -126,7 +126,7 @@ export function registerBrowserAgentActHookRoutes(
       const promptText = toStringOrEmpty(body.promptText) || undefined;
       let timeoutMs: number | undefined;
       try {
-        timeoutMs = readRoutePositiveInteger(body.timeoutMs, "timeoutMs");
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       } catch (err) {
         return jsonError(res, 400, formatErrorMessage(err));
       }

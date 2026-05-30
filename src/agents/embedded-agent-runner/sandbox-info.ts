@@ -1,11 +1,43 @@
-import type { ExecElevatedDefaults } from "../bash-tools.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.js";
+import { resolveExecDefaults } from "../exec-defaults.js";
 import type { resolveSandboxContext } from "../sandbox.js";
 import type { EmbeddedFullAccessBlockedReason, EmbeddedSandboxInfo } from "./types.js";
 
-export function resolveEmbeddedFullAccessState(params: { execElevated?: ExecElevatedDefaults }): {
+type EmbeddedFullAccessExecPolicy = Pick<ExecToolDefaults, "mode" | "security" | "ask">;
+type EmbeddedFullAccessHostPolicy = Pick<ExecToolDefaults, "security" | "ask">;
+type EmbeddedSandboxInfoExecOverrides = Pick<
+  ExecToolDefaults,
+  "host" | "security" | "ask" | "node"
+>;
+
+function execPolicyBlocksFullAccess(params: {
+  execPolicy?: EmbeddedFullAccessExecPolicy;
+  hostPolicy?: EmbeddedFullAccessHostPolicy;
+}): boolean {
+  return (
+    (params.execPolicy?.mode !== undefined && params.execPolicy.mode !== "full") ||
+    (params.execPolicy?.security !== undefined && params.execPolicy.security !== "full") ||
+    (params.execPolicy?.ask !== undefined && params.execPolicy.ask === "always") ||
+    (params.hostPolicy?.security !== undefined && params.hostPolicy.security !== "full") ||
+    (params.hostPolicy?.ask !== undefined && params.hostPolicy.ask === "always")
+  );
+}
+
+export function resolveEmbeddedFullAccessState(params: {
+  execElevated?: ExecElevatedDefaults;
+  execPolicy?: EmbeddedFullAccessExecPolicy;
+  hostPolicy?: EmbeddedFullAccessHostPolicy;
+}): {
   available: boolean;
   blockedReason?: EmbeddedFullAccessBlockedReason;
 } {
+  if (execPolicyBlocksFullAccess(params)) {
+    return {
+      available: false,
+      blockedReason: "host-policy",
+    };
+  }
   if (params.execElevated?.fullAccessAvailable === true) {
     return { available: true };
   }
@@ -24,9 +56,33 @@ export function resolveEmbeddedFullAccessState(params: { execElevated?: ExecElev
   return { available: true };
 }
 
+export function resolveEmbeddedSandboxInfoExecPolicy(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  sandboxAvailable?: boolean;
+  execOverrides?: EmbeddedSandboxInfoExecOverrides;
+}): EmbeddedFullAccessExecPolicy {
+  const defaults = resolveExecDefaults({
+    cfg: params.config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    sandboxAvailable: params.sandboxAvailable,
+    elevatedRequested: true,
+    execOverrides: params.execOverrides,
+  });
+  return {
+    mode: defaults.mode,
+    security: defaults.security,
+    ask: defaults.ask,
+  };
+}
+
 export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
   execElevated?: ExecElevatedDefaults,
+  execPolicy?: EmbeddedFullAccessExecPolicy,
+  hostPolicy?: EmbeddedFullAccessHostPolicy,
 ): EmbeddedSandboxInfo | undefined {
   if (!sandbox?.enabled) {
     return undefined;
@@ -35,6 +91,8 @@ export function buildEmbeddedSandboxInfo(
   const elevatedAllowed = Boolean(execElevated?.enabled && execElevated.allowed);
   const fullAccess = resolveEmbeddedFullAccessState({
     execElevated,
+    execPolicy,
+    hostPolicy,
   });
   return {
     enabled: true,

@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import { formatCliCommand } from "../cli/command-format.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
@@ -20,9 +21,9 @@ import {
   normalizeTrimmedStringList,
   uniqueStrings,
 } from "../shared/string-normalization.js";
+import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { shouldIgnoreInstalledPluginDirName } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
-import type { SkillScanFinding } from "./skill-scanner.js";
 import type { ExecFn } from "./windows-acl.js";
 
 export type SecurityAuditFinding = {
@@ -37,7 +38,7 @@ type CollectPluginsTrustFindingsParams = Parameters<
   typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings
 >[0];
 type SkillScanSummary = Awaited<
-  ReturnType<typeof import("./skill-scanner.js").scanDirectoryWithSummary>
+  ReturnType<typeof import("../skills/security/scanner.js").scanDirectoryWithSummary>
 >;
 type ExecDockerRawFn = (
   args: string[],
@@ -47,23 +48,23 @@ type ExecDockerRawFn = (
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-let skillsModulePromise: Promise<typeof import("../agents/skills.js")> | undefined;
+let skillsModulePromise: Promise<typeof import("../skills/loading/workspace.js")> | undefined;
 let configModulePromise: Promise<typeof import("../config/config.js")> | undefined;
 let agentScopeModulePromise: Promise<typeof import("../agents/agent-scope.js")> | undefined;
 let agentWorkspaceDirsModulePromise:
   | Promise<typeof import("../agents/workspace-dirs.js")>
   | undefined;
-let skillSourceModulePromise: Promise<typeof import("../agents/skills/source.js")> | undefined;
+let skillSourceModulePromise: Promise<typeof import("../skills/loading/source.js")> | undefined;
 let sandboxDockerModulePromise: Promise<typeof import("../agents/sandbox/docker.js")> | undefined;
 let sandboxConstantsModulePromise:
   | Promise<typeof import("../agents/sandbox/constants.js")>
   | undefined;
 let auditPluginsTrustModulePromise: Promise<typeof import("./audit-plugins-trust.js")> | undefined;
 let auditFsModulePromise: Promise<typeof import("./audit-fs.js")> | undefined;
-let skillScannerModulePromise: Promise<typeof import("./skill-scanner.js")> | undefined;
+let skillScannerModulePromise: Promise<typeof import("../skills/security/scanner.js")> | undefined;
 
 function loadSkillsModule() {
-  skillsModulePromise ??= import("../agents/skills.js");
+  skillsModulePromise ??= import("../skills/loading/workspace.js");
   return skillsModulePromise;
 }
 
@@ -88,12 +89,12 @@ function loadAgentWorkspaceDirsModule() {
 }
 
 function loadSkillSourceModule() {
-  skillSourceModulePromise ??= import("../agents/skills/source.js");
+  skillSourceModulePromise ??= import("../skills/loading/source.js");
   return skillSourceModulePromise;
 }
 
 function loadSkillScannerModule() {
-  skillScannerModulePromise ??= import("./skill-scanner.js");
+  skillScannerModulePromise ??= import("../skills/security/scanner.js");
   return skillScannerModulePromise;
 }
 
@@ -300,10 +301,10 @@ async function withDockerProbeTimeout<T>(
   run: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
   const controller = new AbortController();
-  let timeout: NodeJS.Timeout | undefined;
+  let timeout: ReturnType<typeof setNodeTimeout> | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => {
+    timeout = setNodeTimeout(() => {
       timedOut = true;
       controller.abort();
       reject(new DockerProbeTimeoutError(timeoutMs));
@@ -318,7 +319,7 @@ async function withDockerProbeTimeout<T>(
     throw err;
   } finally {
     if (timeout) {
-      clearTimeout(timeout);
+      clearNodeTimeout(timeout);
     }
   }
 }

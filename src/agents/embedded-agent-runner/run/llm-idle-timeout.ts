@@ -1,5 +1,10 @@
 import { DEFAULT_LLM_IDLE_TIMEOUT_SECONDS } from "../../../config/agent-timeout-defaults.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  finiteSecondsToTimerSafeMilliseconds,
+  clampTimerTimeoutMs,
+  MAX_TIMER_TIMEOUT_MS,
+} from "../../../shared/number-coercion.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
@@ -9,11 +14,6 @@ import type { EmbeddedRunTrigger } from "./params.js";
  * Default idle timeout for LLM streaming responses in milliseconds.
  */
 export const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 1000;
-
-/**
- * Maximum safe timeout value (approximately 24.8 days).
- */
-const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 /**
  * Detects loopback / private-network / `.local` base URLs. Local providers
@@ -119,30 +119,25 @@ export function resolveLlmIdleTimeoutMs(params?: {
   modelRequestTimeoutMs?: number;
   model?: { baseUrl?: string; id?: string; provider?: string };
 }): number {
-  const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
+  const clampTimeoutMs = (valueMs: number) => clampTimerTimeoutMs(valueMs) ?? 1;
   const clampImplicitTimeoutMs = (valueMs: number) =>
     clampTimeoutMs(Math.min(valueMs, DEFAULT_LLM_IDLE_TIMEOUT_MS));
 
   const runTimeoutMs = params?.runTimeoutMs;
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {
-    if (runTimeoutMs >= MAX_SAFE_TIMEOUT_MS) {
+    if (runTimeoutMs >= MAX_TIMER_TIMEOUT_MS) {
       return 0;
     }
   }
 
   const agentTimeoutSeconds = params?.cfg?.agents?.defaults?.timeoutSeconds;
-  const agentTimeoutMs =
-    typeof agentTimeoutSeconds === "number" &&
-    Number.isFinite(agentTimeoutSeconds) &&
-    agentTimeoutSeconds > 0
-      ? agentTimeoutSeconds * 1000
-      : undefined;
+  const agentTimeoutMs = finiteSecondsToTimerSafeMilliseconds(agentTimeoutSeconds);
   const timeoutBounds = [runTimeoutMs, agentTimeoutMs].filter(
     (value): value is number =>
       typeof value === "number" &&
       Number.isFinite(value) &&
       value > 0 &&
-      value < MAX_SAFE_TIMEOUT_MS,
+      value < MAX_TIMER_TIMEOUT_MS,
   );
 
   const modelRequestTimeoutMs = params?.modelRequestTimeoutMs;

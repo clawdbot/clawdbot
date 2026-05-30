@@ -1,4 +1,5 @@
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 
 export type ExecuteNodeHostCommandParams = {
@@ -18,6 +19,8 @@ export type ExecuteNodeHostCommandParams = {
   agentId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
+  autoReview?: boolean;
+  autoReviewer?: ExecAutoReviewer;
   strictInlineEval?: boolean;
   commandHighlighting?: boolean;
   timeoutSec?: number;

@@ -85,6 +85,7 @@ export const pushHandlers: GatewayRequestHandlers = {
               const relay = resolveApnsRelayConfigFromEnv(
                 process.env,
                 context.getRuntimeConfig().gateway,
+                { registrationRelayOrigin: registration.relayOrigin },
               );
               if (!relay.ok) {
                 respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));

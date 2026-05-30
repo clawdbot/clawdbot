@@ -6,8 +6,34 @@ import {
   extractProviderErrorInfo,
   extractProviderRequestId,
   ProviderHttpError,
+  readProviderBinaryResponse,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
+
+function createStreamingBinaryResponse(params: {
+  chunkCount: number;
+  chunkSize: number;
+  byte: number;
+}): { response: Response; getReadCount: () => number } {
+  let reads = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "Content-Type": "audio/mpeg" },
+    }),
+    getReadCount: () => reads,
+  };
+}
 
 describe("provider error utils", () => {
   it("formats nested provider error details with request ids", async () => {
@@ -146,5 +172,21 @@ describe("provider error utils", () => {
     await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
       "Provider catalog failed: malformed JSON response",
     );
+  });
+
+  it("caps successful binary responses instead of buffering oversized bodies", async () => {
+    const streamed = createStreamingBinaryResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+      byte: 121,
+    });
+
+    await expect(
+      readProviderBinaryResponse(streamed.response, "Provider TTS failed", "audio", {
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Provider TTS failed: audio response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 });

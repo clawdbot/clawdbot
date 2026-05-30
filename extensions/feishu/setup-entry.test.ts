@@ -14,6 +14,8 @@ describe("feishu setup entry", () => {
     const { default: setupEntry } = await import("./setup-entry.js");
 
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
+    expect(setupEntry.features).toEqual({ legacyStateMigrations: true });
     expect(typeof setupEntry.loadSetupPlugin).toBe("function");
+    expect(setupEntry.loadLegacyStateMigrationDetector?.()).toBeTypeOf("function");
   });
 });

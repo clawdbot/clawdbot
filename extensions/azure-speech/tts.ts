@@ -1,4 +1,5 @@
 import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech-core";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech-core";
 import {
@@ -11,6 +12,7 @@ export const DEFAULT_AZURE_SPEECH_LANG = "en-US";
 export const DEFAULT_AZURE_SPEECH_AUDIO_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 export const DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT = "ogg-24khz-16bit-mono-opus";
 export const DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT = "raw-8khz-8bit-mono-mulaw";
+const DEFAULT_AZURE_SPEECH_MAX_BYTES = 16 * 1024 * 1024;
 
 type AzureSpeechVoiceEntry = {
   ShortName?: string;
@@ -175,6 +177,7 @@ export async function azureSpeechTTS(params: {
   lang?: string;
   outputFormat?: string;
   timeoutMs?: number;
+  maxBytes?: number;
 }): Promise<Buffer> {
   const voice = trimToUndefined(params.voice) ?? DEFAULT_AZURE_SPEECH_VOICE;
   const outputFormat = trimToUndefined(params.outputFormat) ?? DEFAULT_AZURE_SPEECH_AUDIO_FORMAT;
@@ -202,7 +205,14 @@ export async function azureSpeechTTS(params: {
 
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
-    return Buffer.from(await response.arrayBuffer());
+    return await readResponseWithLimit(
+      response,
+      params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
+      {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
+      },
+    );
   } finally {
     await release();
   }

@@ -1,3 +1,4 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   fetchWithSsrFGuard,
@@ -144,15 +145,17 @@ export async function discoverHuggingfaceModels(
   }
 
   try {
+    const requestTimeoutMs = resolveTimerTimeoutMs(timeoutMs, HUGGINGFACE_DISCOVERY_TIMEOUT_MS);
     const { response, release } = await fetchWithSsrFGuard({
       url: `${HUGGINGFACE_BASE_URL}/models`,
       init: {
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: AbortSignal.timeout(requestTimeoutMs),
         headers: {
           Authorization: `Bearer ${trimmedKey}`,
           "Content-Type": "application/json",
         },
       },
+      timeoutMs: requestTimeoutMs,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(HUGGINGFACE_BASE_URL),
       auditContext: "huggingface-model-discovery",
     });

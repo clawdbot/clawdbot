@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
   installRequestBodyLimitGuard,
@@ -8,6 +9,7 @@ import {
   type RequestBodyLimitErrorCode,
   readJsonBodyWithLimit,
   readRequestBodyWithLimit,
+  testApi,
 } from "./http-body.js";
 
 type MockIncomingMessage = IncomingMessage & {
@@ -252,6 +254,18 @@ describe("http body limits", () => {
       statusCode: 408,
     });
     expect(req["__unhandledDestroyError"]).toBeUndefined();
+  });
+
+  it("does not overflow oversized request body timeouts into immediate failures", async () => {
+    expect(
+      testApi.resolveRequestBodyLimitValues({
+        maxBytes: 128,
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).toEqual({
+      maxBytes: 128,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
   });
 
   it("guard clamps invalid maxBytes to one byte", async () => {

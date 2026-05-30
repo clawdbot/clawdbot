@@ -18,6 +18,8 @@ export type SqliteWalMaintenanceOptions = {
   autoCheckpointPages?: number;
   checkpointIntervalMs?: number;
   checkpointMode?: SqliteWalCheckpointMode;
+  databaseLabel?: string;
+  databasePath?: string;
   onCheckpointError?: (error: unknown) => void;
 };
 
@@ -41,7 +43,6 @@ export function configureSqliteWalMaintenance(
     "checkpointIntervalMs",
   );
   const checkpointMode = options.checkpointMode ?? "TRUNCATE";
-
   db.exec("PRAGMA journal_mode = WAL;");
   db.exec(`PRAGMA wal_autocheckpoint = ${autoCheckpointPages};`);
 

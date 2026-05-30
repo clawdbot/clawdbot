@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+
 // Compatibility constants for existing imports. Discord no longer enforces
 // channel-owned listener or inbound run timeouts.
 export const DISCORD_DEFAULT_LISTENER_TIMEOUT_MS = 120_000;
@@ -43,9 +45,10 @@ export async function raceWithTimeout<T, U>(params: {
   timeoutMs: number;
   onTimeout: () => U;
 }): Promise<T | U> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<U>((resolve) => {
-    timeoutTimer = setTimeout(() => resolve(params.onTimeout()), Math.max(1, params.timeoutMs));
+    timeoutTimer = setTimeout(() => resolve(params.onTimeout()), timeoutMs);
     timeoutTimer.unref?.();
   });
   try {
@@ -62,16 +65,14 @@ export async function withAbortTimeout<T>(params: {
   createTimeoutError: () => Error;
   run: (signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   const controller = new AbortController();
   let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeoutTimer = setTimeout(
-      () => {
-        controller.abort();
-        reject(params.createTimeoutError());
-      },
-      Math.max(1, params.timeoutMs),
-    );
+    timeoutTimer = setTimeout(() => {
+      controller.abort();
+      reject(params.createTimeoutError());
+    }, timeoutMs);
     timeoutTimer.unref?.();
   });
   try {

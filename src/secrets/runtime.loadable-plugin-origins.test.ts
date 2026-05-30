@@ -1,4 +1,8 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
 
 const manifestMocks = vi.hoisted(() => ({
@@ -94,5 +98,87 @@ describe("prepareSecretsRuntimeSnapshot loadable plugin origins", () => {
     expect(snapshotParams?.env.HOME).toBe("/home/demo");
     expect(snapshotParams?.env.DEMO_API_KEY).toBe("sk-demo");
     expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(snapshot);
+  });
+
+  it("carries the shared manifest registry into plugin-managed SecretRef resolution", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-runtime-secret-provider-"));
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(rootDir, "resolve.mjs"),
+      [
+        "import process from 'node:process';",
+        "let input = '';",
+        "process.stdin.setEncoding('utf8');",
+        "process.stdin.on('data', (chunk) => input += chunk);",
+        "process.stdin.on('end', () => {",
+        "  const request = JSON.parse(input);",
+        "  process.stdout.write(JSON.stringify({ protocolVersion: 1, values: Object.fromEntries(request.ids.map((id) => [id, `value:${id}`])) }));",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const plugin: PluginManifestRecord = {
+      id: "vault-secrets",
+      rootDir,
+      source: path.join(rootDir, "index.ts"),
+      manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+      origin: "global",
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      secretProviderIntegrations: {
+        vault: {
+          providerAlias: "vault",
+          source: "exec",
+          command: "${node}",
+          args: ["./resolve.mjs"],
+        },
+      },
+    };
+    const pluginMetadataSnapshot = {
+      plugins: [plugin],
+      manifestRegistry: {
+        plugins: [plugin],
+        diagnostics: [],
+      },
+    };
+
+    try {
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: { source: "exec", provider: "vault", id: "gateway/token" },
+            },
+          },
+          secrets: {
+            providers: {
+              vault: {
+                source: "exec",
+                pluginIntegration: {
+                  pluginId: "vault-secrets",
+                  integrationId: "vault",
+                },
+              },
+            },
+          },
+        }),
+        env: { HOME: rootDir },
+        includeAuthStoreRefs: false,
+        pluginMetadataSnapshot,
+      });
+
+      expect(snapshot.config.gateway?.auth?.token).toBe("value:gateway/token");
+      expect(manifestMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+      expect(manifestMocks.listPluginOriginsFromMetadataSnapshot).toHaveBeenCalledWith(
+        pluginMetadataSnapshot,
+      );
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 });

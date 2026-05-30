@@ -3,6 +3,10 @@ import path from "node:path";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import {
+  clampPositiveTimerTimeoutMs,
+  resolvePositiveTimerTimeoutMs,
+} from "../shared/number-coercion.js";
 
 const log = createSubsystemLogger("provider-local-service");
 const DEFAULT_READY_TIMEOUT_MS = 120_000;
@@ -261,7 +265,11 @@ async function startAndWaitForLocalService(params: {
     throw new Error(`${provider} local service failed to start: ${spawnError.message}`);
   }
 
-  const deadline = Date.now() + (service.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);
+  const readyTimeoutMs = resolvePositiveTimerTimeoutMs(
+    service.readyTimeoutMs,
+    DEFAULT_READY_TIMEOUT_MS,
+  );
+  const deadline = Date.now() + readyTimeoutMs;
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal)) {
       log.info(`${provider} local service ready`);
@@ -286,7 +294,7 @@ function scheduleIdleStop(
   managed: ManagedLocalService,
   service: ModelProviderLocalServiceConfig,
 ) {
-  const idleStopMs = service.idleStopMs ?? 0;
+  const idleStopMs = clampPositiveTimerTimeoutMs(service.idleStopMs);
   if (managed.active > 0) {
     return;
   }
@@ -296,7 +304,7 @@ function scheduleIdleStop(
     }
     return;
   }
-  if (idleStopMs <= 0) {
+  if (idleStopMs === undefined) {
     return;
   }
   managed.idleTimer = setTimeout(() => {

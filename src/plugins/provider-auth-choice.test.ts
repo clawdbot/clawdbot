@@ -10,6 +10,11 @@ vi.mock("../commands/codex-runtime-plugin-install.js", () => ({
   ensureCodexRuntimePluginForModelSelection,
 }));
 
+const ensureCopilotRuntimePluginForModelSelection = vi.hoisted(() => vi.fn());
+vi.mock("../commands/copilot-runtime-plugin-install.js", () => ({
+  ensureCopilotRuntimePluginForModelSelection,
+}));
+
 const offerPostInstallMigrations = vi.hoisted(() => vi.fn());
 vi.mock("../wizard/setup.post-install-migration.js", () => ({
   offerPostInstallMigrations,
@@ -40,6 +45,14 @@ describe("applyAuthChoicePluginProvider", () => {
   beforeEach(() => {
     testing.resetDepsForTest();
     ensureCodexRuntimePluginForModelSelection.mockReset();
+    ensureCopilotRuntimePluginForModelSelection.mockReset();
+    ensureCopilotRuntimePluginForModelSelection.mockImplementation(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        required: false,
+        installed: false,
+      }),
+    );
     offerPostInstallMigrations.mockReset();
   });
 

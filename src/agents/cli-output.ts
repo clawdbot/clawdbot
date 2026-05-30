@@ -750,9 +750,7 @@ export function parseCliJsonl(
   const texts: string[] = [];
   for (const line of lines) {
     for (const parsed of parseJsonRecordCandidates(line)) {
-      if (!sessionId) {
-        sessionId = pickCliSessionId(parsed, backend);
-      }
+      sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
       if (!sessionId && typeof parsed.thread_id === "string") {
         sessionId = parsed.thread_id.trim();
       }

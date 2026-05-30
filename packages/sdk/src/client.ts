@@ -59,12 +59,24 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
   const status = typeof record.status === "string" ? record.status.toLowerCase() : undefined;
   const stopReason = typeof record.stopReason === "string" ? record.stopReason.toLowerCase() : "";
   const pendingError = record.pendingError === true;
+  const timeoutPhase =
+    typeof record.timeoutPhase === "string" ? record.timeoutPhase.toLowerCase() : undefined;
+  const statusAlreadyTimeoutAttributed = status === "timeout" || status === "timed_out";
+  const hardTimeout =
+    !pendingError &&
+    ((record.providerStarted === true && statusAlreadyTimeoutAttributed) ||
+      timeoutPhase === "preflight" ||
+      timeoutPhase === "provider" ||
+      timeoutPhase === "post_turn");
   const hasTerminalTimeoutMetadata =
     readOptionalTimestamp(record.endedAt) !== undefined ||
     (!pendingError && readOptionalString(record.error) !== undefined) ||
     stopReason.length > 0 ||
     typeof record.livenessState === "string" ||
     record.yielded === true;
+  if (hardTimeout) {
+    return "timed_out";
+  }
   if (
     status === "aborted" ||
     status === "cancelled" ||

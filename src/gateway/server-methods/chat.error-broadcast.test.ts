@@ -15,6 +15,7 @@ function createMockContext() {
     chatAbortControllers,
     agentRunSeq,
     dedupe,
+    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
     logGateway: { warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
@@ -59,6 +60,64 @@ describe("chat.send error broadcast", () => {
         runId: "test-run-1",
         state: "error",
         errorMessage: expect.stringContaining("LLM timeout"),
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("LLM timeout"),
+            }),
+          ],
+        }),
+      }),
+    );
+  });
+
+  it("scopes selected-agent global errors to the linked agent", async () => {
+    const ctx = createMockContext();
+    const respond = vi.fn();
+
+    ctx.addChatRun.mockImplementation(() => {
+      throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
+    });
+
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "global",
+        agentId: "main",
+        message: "hello",
+        idempotencyKey: "test-run-global",
+      },
+      respond: respond as never,
+      context: ctx as unknown as GatewayRequestContext,
+      req: {} as never,
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(ctx.broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        runId: "test-run-global",
+        sessionKey: "global",
+        agentId: "main",
+        state: "error",
+      }),
+    );
+    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
+      "agent:main:global",
+      "chat",
+      expect.objectContaining({
+        agentId: "main",
+        state: "error",
+      }),
+    );
+    expect(ctx.nodeSendToSession).toHaveBeenCalledWith(
+      "global",
+      "chat",
+      expect.objectContaining({
+        agentId: "main",
+        state: "error",
       }),
     );
   });

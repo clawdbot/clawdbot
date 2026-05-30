@@ -453,6 +453,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain("stricter side wins");
   });
 
+  it("warns when normalized tools.exec mode is broader than host exec defaults", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              mode: "full",
+            },
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("tools.exec is broader than the host exec policy");
+    expect(message).toContain('tools.exec.mode="full"');
+    expect(message).toContain('defaults.security="allowlist"');
+    expect(message).not.toContain("OpenClaw default");
+  });
+
   it("attributes broader host policy warnings to wildcard agent entries", async () => {
     await expectAgentExecHostPolicyWarning("*");
   });

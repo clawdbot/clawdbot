@@ -20,7 +20,9 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
+import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -106,6 +108,10 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
+const BYTES_PER_MB = 1024 * 1024;
+// Match OpenClaw's default image media cap for generated image tool outputs.
+const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * BYTES_PER_MB;
 const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "message",
   "messages",
@@ -168,6 +174,8 @@ export class CodexAppServerEventProjector {
   private readonly transcriptToolProgressCallIds = new Set<string>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaUrls = new Set<string>();
+  private readonly nativeGeneratedMediaItemIds = new Set<string>();
+  private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private assistantStarted = false;
@@ -252,7 +260,7 @@ export class CodexAppServerEventProjector {
         await this.handleTurnCompleted(params);
         break;
       case "rawResponseItem/completed":
-        this.handleRawResponseItemCompleted(params);
+        await this.handleRawResponseItemCompleted(params);
         break;
       case "error":
         if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
@@ -331,6 +339,7 @@ export class CodexAppServerEventProjector {
     const hadPotentialSideEffects =
       toolTelemetry.didSendViaMessagingTool ||
       (toolTelemetry.successfulCronAdds ?? 0) > 0 ||
+      this.nativeGeneratedMediaItemIds.size > 0 ||
       this.sideEffectingToolItemIds.size > 0 ||
       this.sideEffectingDynamicToolCallIds.size > 0;
     return {
@@ -812,9 +821,13 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private handleRawResponseItemCompleted(params: JsonObject): void {
+  private async handleRawResponseItemCompleted(params: JsonObject): Promise<void> {
     const item = isJsonObject(params.item) ? params.item : undefined;
-    if (!item || readString(item, "role") !== "assistant") {
+    if (!item) {
+      return;
+    }
+    await this.recordRawGeneratedImageMedia(item);
+    if (readString(item, "role") !== "assistant") {
       return;
     }
     const text = extractRawAssistantText(item);
@@ -839,8 +852,71 @@ export class CodexAppServerEventProjector {
     }
     const savedPath = readItemString(item, "savedPath")?.trim();
     if (savedPath) {
-      this.nativeGeneratedMediaUrls.add(savedPath);
+      this.recordNativeGeneratedMediaUrl({
+        itemId: item.id,
+        mediaUrl: savedPath,
+      });
     }
+  }
+
+  private async recordRawGeneratedImageMedia(item: JsonObject): Promise<void> {
+    if (readString(item, "type") !== "image_generation_call") {
+      return;
+    }
+    const result = readString(item, "result");
+    if (!result) {
+      return;
+    }
+    const itemId = readString(item, "id") ?? `raw-image-${this.nativeGeneratedMediaItemIds.size}`;
+    this.nativeGeneratedMediaItemIds.add(itemId);
+    const maxBytes = resolveGeneratedImageMaxBytes(this.params.config);
+    const estimatedDecodedBytes = estimateBase64DecodedBytes(result);
+    if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
+      embeddedAgentLog.warn("codex app-server raw image generation result exceeds media limit", {
+        itemId,
+        estimatedDecodedBytes,
+        maxBytes,
+      });
+      return;
+    }
+    const asset = generatedImageAssetFromBase64({
+      base64: result,
+      index: this.nativeGeneratedMediaItemIds.size,
+      revisedPrompt: readString(item, "revised_prompt") ?? readString(item, "revisedPrompt"),
+      fileNamePrefix: "codex-image-generation",
+      sniffMimeType: true,
+    });
+    if (!asset) {
+      return;
+    }
+    try {
+      const saved = await saveMediaBuffer(
+        asset.buffer,
+        asset.mimeType,
+        GENERATED_IMAGE_MEDIA_SUBDIR,
+        maxBytes,
+        asset.fileName,
+      );
+      this.recordNativeGeneratedMediaUrl({
+        itemId,
+        mediaUrl: saved.path,
+      });
+    } catch (error) {
+      embeddedAgentLog.warn("codex app-server raw image generation result save failed", {
+        itemId,
+        error,
+      });
+    }
+  }
+
+  private recordNativeGeneratedMediaUrl(params: { itemId: string; mediaUrl: string }): void {
+    if (this.nativeGeneratedMediaUrlsByItemId.has(params.itemId)) {
+      this.nativeGeneratedMediaItemIds.add(params.itemId);
+      return;
+    }
+    this.nativeGeneratedMediaUrlsByItemId.set(params.itemId, params.mediaUrl);
+    this.nativeGeneratedMediaUrls.add(params.mediaUrl);
+    this.nativeGeneratedMediaItemIds.add(params.itemId);
   }
 
   private buildToolMediaUrls(toolTelemetry: CodexAppServerToolTelemetry): string[] | undefined {
@@ -1581,6 +1657,39 @@ function readNotificationTurnId(record: JsonObject): string | undefined {
 function readString(record: JsonObject, key: string): string | undefined {
   const value = record[key];
   return typeof value === "string" ? value : undefined;
+}
+
+function estimateBase64DecodedBytes(base64: string): number | undefined {
+  let nonWhitespaceLength = 0;
+  let previousCode = -1;
+  let lastCode = -1;
+  for (let i = 0; i < base64.length; i += 1) {
+    const code = base64.charCodeAt(i);
+    if (isBase64WhitespaceCode(code)) {
+      continue;
+    }
+    nonWhitespaceLength += 1;
+    previousCode = lastCode;
+    lastCode = code;
+  }
+  if (nonWhitespaceLength === 0) {
+    return undefined;
+  }
+  const equalsCode = "=".charCodeAt(0);
+  const padding = lastCode === equalsCode ? (previousCode === equalsCode ? 2 : 1) : 0;
+  return Math.max(0, Math.floor((nonWhitespaceLength * 3) / 4) - padding);
+}
+
+function isBase64WhitespaceCode(code: number): boolean {
+  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
+}
+
+function resolveGeneratedImageMaxBytes(config: EmbeddedRunAttemptParams["config"]): number {
+  const configured = config?.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * BYTES_PER_MB);
+  }
+  return DEFAULT_GENERATED_IMAGE_MAX_BYTES;
 }
 
 function normalizeNonEmptyString(value: unknown): string | undefined {

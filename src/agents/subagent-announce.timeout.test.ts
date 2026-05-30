@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { clampTimerTimeoutMs } from "../shared/number-coercion.js";
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type GatewayCall = {
@@ -130,13 +131,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       },
     });
     const timeoutMs =
-      typeof configOverride.agents?.defaults?.subagents?.announceTimeoutMs === "number" &&
-      Number.isFinite(configOverride.agents.defaults.subagents.announceTimeoutMs)
-        ? Math.min(
-            Math.max(1, Math.floor(configOverride.agents.defaults.subagents.announceTimeoutMs)),
-            2_147_000_000,
-          )
-        : 120_000;
+      clampTimerTimeoutMs(configOverride.agents?.defaults?.subagents?.announceTimeoutMs) ?? 120_000;
     const retryDelaysMs =
       process.env.OPENCLAW_TEST_FAST === "1" ? [8, 16, 32] : [5_000, 10_000, 20_000];
     let retryIndex = 0;
@@ -168,10 +163,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     params.requesterOrigin,
   resolveSubagentAnnounceTimeoutMs: (cfg: typeof configOverride) => {
     const configured = cfg.agents?.defaults?.subagents?.announceTimeoutMs;
-    if (typeof configured !== "number" || !Number.isFinite(configured)) {
-      return 120_000;
-    }
-    return Math.min(Math.max(1, Math.floor(configured)), 2_147_000_000);
+    return clampTimerTimeoutMs(configured) ?? 120_000;
   },
   runAnnounceDeliveryWithRetry: async <T>(params: { run: () => Promise<T> }) => await params.run(),
 }));

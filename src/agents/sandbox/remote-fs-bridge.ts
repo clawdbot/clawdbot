@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import type {
   SandboxBackendCommandParams,
@@ -23,6 +24,14 @@ type ResolvedRemotePath = SandboxResolvedPath & {
   mountRootPath: string;
   source: RemoteMountSource;
 };
+
+function hasMultipleHardlinks(raw: string): boolean {
+  const linkCount = parseStrictNonNegativeInteger(raw);
+  if (linkCount !== undefined) {
+    return linkCount > 1;
+  }
+  return /^\d+$/.test(raw);
+}
 
 type MountInfo = {
   localRoot: string;
@@ -513,7 +522,7 @@ class RemoteShellSandboxFsBridge implements SandboxFsBridge {
       return;
     }
     const [kind = "", linksRaw = "1"] = output.split("|");
-    if (kind === "regular file" && Number(linksRaw) > 1) {
+    if (kind === "regular file" && hasMultipleHardlinks(linksRaw)) {
       throw new Error(
         `Hardlinked path is not allowed under sandbox mount root: ${params.containerPath}`,
       );

@@ -583,6 +583,13 @@ export async function projectPluginSessionExtensions(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): Promise<PluginSessionExtensionProjection[]> {
+  return collectPluginSessionExtensionProjections(params);
+}
+
+function collectPluginSessionExtensionProjections(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+}): PluginSessionExtensionProjection[] {
   const registry = getActivePluginRegistry();
   const extensions = registry?.sessionExtensions ?? [];
   if (extensions.length === 0) {
@@ -666,46 +673,5 @@ export function projectPluginSessionExtensionsSync(params: {
   sessionKey: string;
   entry: SessionEntry;
 }): PluginSessionExtensionProjection[] {
-  const registry = getActivePluginRegistry();
-  const extensions = registry?.sessionExtensions ?? [];
-  if (extensions.length === 0) {
-    return [];
-  }
-  const projections: PluginSessionExtensionProjection[] = [];
-  for (const registration of extensions) {
-    const state = params.entry.pluginExtensions?.[registration.pluginId]?.[
-      registration.extension.namespace
-    ] as PluginJsonValue | undefined;
-    if (state === undefined) {
-      continue;
-    }
-    const projected = projectSessionExtensionValue({
-      pluginId: registration.pluginId,
-      namespace: registration.extension.namespace,
-      project: registration.extension.project,
-      sessionKey: params.sessionKey,
-      sessionId: params.entry.sessionId,
-      state,
-    });
-    if (projected === PROJECTION_FAILED) {
-      continue;
-    }
-    if (isPromiseLike(projected)) {
-      discardUnexpectedPromiseProjection(projected);
-      continue;
-    }
-    if (projected === undefined || !isPluginJsonValue(projected)) {
-      // Validate the projection regardless of whether the extension has a
-      // `project` function: with a projector the value can be arbitrary;
-      // without one the persisted state could be hand-edited or malformed.
-      // Either way the size + shape check should run before projection.
-      continue;
-    }
-    projections.push({
-      pluginId: registration.pluginId,
-      namespace: registration.extension.namespace,
-      value: copyJsonValue(projected),
-    });
-  }
-  return projections;
+  return collectPluginSessionExtensionProjections(params);
 }

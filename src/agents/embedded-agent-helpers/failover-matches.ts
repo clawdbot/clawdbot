@@ -47,6 +47,8 @@ const CJK_AUTH_ERROR_PATTERNS = [
   "鉴权失败",
   "密钥无效",
   "apikey 无效",
+  /(?:当前\s*ak|ce-011).*?(?:违规请求|禁止访问)|(?:违规请求|禁止访问).*?(?:当前\s*ak|ce-011)/i,
+  /\bce-011\b/i,
 ] as const satisfies readonly ErrorPattern[];
 
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;

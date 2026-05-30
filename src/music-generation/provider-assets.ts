@@ -1,5 +1,7 @@
 import { fetchProviderDownloadResponse } from "../media-understanding/shared.js";
+import { maxBytesForKind } from "../media/constants.js";
 import { extensionForMime } from "../media/mime.js";
+import { readResponseWithLimit } from "../media/read-response-with-limit.js";
 import { isRecord } from "../shared/record-coerce.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { GeneratedMusicAsset } from "./types.js";
@@ -82,6 +84,7 @@ export async function downloadGeneratedMusicAsset(params: {
   provider: string;
   requestFailedMessage: string;
   index?: number;
+  maxBytes?: number;
 }): Promise<GeneratedMusicAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.candidate.url,
@@ -96,8 +99,12 @@ export async function downloadGeneratedMusicAsset(params: {
     normalizeSpecificAudioMimeType(params.candidate.mimeType) ??
     "audio/mpeg";
   const ext = extensionForMime(mimeType)?.replace(/^\./u, "") || "mp3";
+  const maxBytes = params.maxBytes ?? maxBytesForKind("audio");
   return {
-    buffer: Buffer.from(await response.arrayBuffer()),
+    buffer: await readResponseWithLimit(response, maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`${params.provider} generated music download exceeds ${maxBytes} bytes`),
+    }),
     mimeType,
     fileName: params.candidate.fileName ?? `track-${(params.index ?? 0) + 1}.${ext}`,
     metadata: {

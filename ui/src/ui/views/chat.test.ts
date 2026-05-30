@@ -543,6 +543,38 @@ describe("chat compaction divider", () => {
   });
 });
 
+describe("chat goal status", () => {
+  it("renders the active session goal above the composer", () => {
+    const container = renderChatView({
+      sessions: createSessionsResultFromRows([
+        {
+          key: "main",
+          kind: "direct",
+          updatedAt: 2,
+          goal: {
+            schemaVersion: 1,
+            id: "goal-1",
+            objective: "Land the web goal UI",
+            status: "active",
+            createdAt: 1,
+            updatedAt: 2,
+            tokenStart: 100,
+            tokensUsed: 12_400,
+            tokenBudget: 50_000,
+            continuationTurns: 0,
+          },
+        },
+      ]),
+    });
+
+    const goal = container.querySelector(".agent-chat__goal");
+    expect(goal?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+      "Pursuing goal (12k/50k) Land the web goal UI",
+    );
+    expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
   loadSessionsMock.mockClear();

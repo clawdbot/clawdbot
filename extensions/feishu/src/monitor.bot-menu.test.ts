@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdbotConfig } from "../runtime-api.js";
+import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { expectFirstSentCardUsesFillWidthOnly } from "./card-test-helpers.js";
 import { createFeishuBotMenuHandler } from "./monitor.bot-menu-handler.js";
 
@@ -40,15 +40,18 @@ function createBotMenuEvent(params: { eventKey: string; timestamp: string }) {
   };
 }
 
-async function registerHandlers() {
-  return createFeishuBotMenuHandler({
-    cfg: {} as ClawdbotConfig,
-    accountId: "default",
-    runtime: {
+async function registerHandlers(params: { runtime?: RuntimeEnv } = {}) {
+  const runtime =
+    params.runtime ??
+    ({
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
-    },
+    } as RuntimeEnv);
+  return createFeishuBotMenuHandler({
+    cfg: {} as ClawdbotConfig,
+    accountId: "default",
+    runtime,
     chatHistories: new Map(),
     fireAndForget: true,
     getBotOpenId: () => "ou_bot",
@@ -163,7 +166,8 @@ describe("Feishu bot menu handler", () => {
   });
 
   it("reopens replay for explicit retryable fallback failures", async () => {
-    const onBotMenu = await registerHandlers();
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as RuntimeEnv;
+    const onBotMenu = await registerHandlers({ runtime });
     sendCardFeishuMock
       .mockImplementationOnce(async () => {
         throw new Error("boom");
@@ -180,9 +184,16 @@ describe("Feishu bot menu handler", () => {
       .mockResolvedValueOnce(undefined);
 
     await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
+    await vi.waitFor(() => {
+      expect(runtime.error).toHaveBeenCalledWith(
+        "feishu[default]: error handling bot menu event: FeishuRetryableSyntheticEventError: retry me",
+      );
+    });
     await onBotMenu(createBotMenuEvent({ eventKey: "quick-actions", timestamp: "1700000000004" }));
 
     expect(sendCardFeishuMock).toHaveBeenCalledTimes(2);
-    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
+    });
   });
 });

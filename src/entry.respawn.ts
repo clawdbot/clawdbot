@@ -8,14 +8,15 @@ import {
 import { normalizeWindowsArgv } from "./cli/windows-argv.js";
 import { isTruthyEnvValue } from "./infra/env.js";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
+import {
+  runRespawnChildWithSignalBridge,
+  type RespawnChildRuntime,
+} from "./process/respawn-child-runner.js";
 
 export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
 export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
 export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
-const CLI_RESPAWN_SIGNAL_EXIT_GRACE_MS = 1_000;
-const CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS = 1_000;
-const CLI_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS = 1_000;
 
 type CliRespawnPlan = {
   command: string;
@@ -23,10 +24,7 @@ type CliRespawnPlan = {
   env: NodeJS.ProcessEnv;
 };
 
-type CliRespawnRuntime = {
-  spawn: typeof spawn;
-  attachChildProcessBridge: typeof attachChildProcessBridge;
-  exit: (code?: number) => never;
+type CliRespawnRuntime = RespawnChildRuntime & {
   writeError: (message: string, error?: unknown) => void;
 };
 
@@ -164,80 +162,16 @@ export function runCliRespawnPlan(
     writeError: (message, error) => console.error(message, error),
   },
 ): ChildProcess {
-  const child = runtime.spawn(plan.command, plan.argv, {
-    stdio: "inherit",
+  return runRespawnChildWithSignalBridge({
+    command: plan.command,
+    args: plan.argv,
     env: plan.env,
+    runtime,
+    onError: (error) => {
+      runtime.writeError(
+        "[openclaw] Failed to respawn CLI:",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
+    },
   });
-  let signalExitTimer: NodeJS.Timeout | undefined;
-  let signalForceKillTimer: NodeJS.Timeout | undefined;
-  let signalHardExitTimer: NodeJS.Timeout | undefined;
-  const clearSignalTimers = (): void => {
-    if (signalExitTimer) {
-      clearTimeout(signalExitTimer);
-      signalExitTimer = undefined;
-    }
-    if (signalForceKillTimer) {
-      clearTimeout(signalForceKillTimer);
-      signalForceKillTimer = undefined;
-    }
-    if (signalHardExitTimer) {
-      clearTimeout(signalHardExitTimer);
-      signalHardExitTimer = undefined;
-    }
-  };
-  const forceKillChild = (): void => {
-    try {
-      child.kill(process.platform === "win32" ? "SIGTERM" : "SIGKILL");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-  };
-  const requestChildTermination = (): void => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Best-effort shutdown fallback.
-    }
-    signalForceKillTimer = setTimeout(() => {
-      forceKillChild();
-      signalHardExitTimer = setTimeout(() => {
-        runtime.exit(1);
-      }, CLI_RESPAWN_SIGNAL_HARD_EXIT_GRACE_MS);
-      signalHardExitTimer.unref?.();
-    }, CLI_RESPAWN_SIGNAL_FORCE_KILL_GRACE_MS);
-    signalForceKillTimer.unref?.();
-  };
-  const scheduleParentExit = (): void => {
-    if (signalExitTimer) {
-      return;
-    }
-    signalExitTimer = setTimeout(() => {
-      requestChildTermination();
-    }, CLI_RESPAWN_SIGNAL_EXIT_GRACE_MS);
-    signalExitTimer.unref?.();
-  };
-
-  runtime.attachChildProcessBridge(child, {
-    onSignal: scheduleParentExit,
-  });
-
-  child.once("exit", (code, signal) => {
-    clearSignalTimers();
-    if (signal) {
-      runtime.exit(1);
-      return;
-    }
-    runtime.exit(code ?? 1);
-  });
-
-  child.once("error", (error) => {
-    clearSignalTimers();
-    runtime.writeError(
-      "[openclaw] Failed to respawn CLI:",
-      error instanceof Error ? (error.stack ?? error.message) : error,
-    );
-    runtime.exit(1);
-  });
-
-  return child;
 }

@@ -122,6 +122,7 @@ type RealtimeEvent = {
   text?: string;
   transcript?: string;
   item_id?: string;
+  response_id?: string;
   call_id?: string;
   name?: string;
   arguments?: string;
@@ -989,6 +990,10 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         direction: "server",
         type: event.type,
         detail: this.describeServerEvent(event),
+        ...(event.item_id ? { itemId: event.item_id } : {}),
+        ...((event.response_id ?? event.response?.id)
+          ? { responseId: event.response_id ?? event.response?.id }
+          : {}),
       });
     if (
       event.type === "error" &&

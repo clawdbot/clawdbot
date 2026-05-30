@@ -5,7 +5,11 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import {
+  asObject,
+  parseSpeechDirectiveNumberOverride,
+  trimToUndefined,
+} from "openclaw/plugin-sdk/speech-core";
 import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_INWORLD_MODEL_ID,
@@ -99,14 +103,12 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
       }
       return { handled: true, overrides: { modelId: ctx.value } };
     case "temperature": {
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      const temperature = normalizeInworldTemperature(Number(ctx.value));
-      if (temperature === undefined) {
-        return { handled: true, warnings: [`invalid Inworld temperature "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { temperature } };
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "temperature",
+        range: { min: 0, minExclusive: true, max: 2 },
+        warning: (value) => `invalid Inworld temperature "${value}"`,
+      });
     }
     default:
       return { handled: false };

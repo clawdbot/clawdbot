@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -74,5 +75,28 @@ describe("browser.request local timeout", () => {
       code: "UNAVAILABLE",
       message: "Error: browser request timed out",
     });
+  });
+
+  it("caps timeoutMs before local browser dispatches", async () => {
+    const respond = vi.fn();
+
+    await browserHandlers["browser.request"]({
+      params: {
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      },
+      respond: respond as never,
+      context: {
+        nodeRegistry: { listConnected: () => [] },
+      } as never,
+      client: null,
+      req: { type: "req", id: "req-1", method: "browser.request" },
+      isWebchatConnect: () => false,
+    });
+
+    const [, timeoutMs] = withTimeoutMock.mock.calls.at(-1) ?? [];
+    expect(timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 });

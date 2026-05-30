@@ -300,6 +300,27 @@ export async function clearCodexAppServerBinding(
   }
 }
 
+export async function clearCodexAppServerBindingForThread(
+  sessionFile: string,
+  threadId: string,
+  lookup: Omit<CodexAppServerAuthProfileLookup, "authProfileId"> = {},
+): Promise<boolean> {
+  const binding = await readCodexAppServerBinding(sessionFile, lookup);
+  if (!binding) {
+    return false;
+  }
+  if (binding.threadId !== threadId) {
+    embeddedAgentLog.debug("codex app-server binding points at a different thread; preserving", {
+      sessionFile,
+      threadId,
+      boundThreadId: binding.threadId,
+    });
+    return false;
+  }
+  await clearCodexAppServerBinding(sessionFile);
+  return true;
+}
+
 function isNotFound(error: unknown): boolean {
   return Boolean(error && typeof error === "object" && "code" in error && error.code === "ENOENT");
 }

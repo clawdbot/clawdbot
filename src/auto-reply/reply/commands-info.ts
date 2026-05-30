@@ -2,7 +2,10 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
-import { listSkillCommandsForAgents, resolveSkillCommandInvocation } from "../skill-commands.js";
+import {
+  listSkillCommandsForAgents,
+  resolveSkillCommandInvocation,
+} from "../../skills/discovery/chat-commands.js";
 import {
   buildCommandsMessage,
   buildCommandsMessagePaginated,

@@ -5,6 +5,7 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
 
@@ -20,36 +21,6 @@ function assert(condition, message) {
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function tailText(text, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
-  if (Buffer.byteLength(text, "utf8") <= maxBytes) {
-    return text;
-  }
-  return Buffer.from(text, "utf8").subarray(-maxBytes).toString("utf8");
-}
-
-function readTextFileTail(file, maxBytes = ERROR_DETAIL_TAIL_BYTES) {
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    return "";
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return "";
-  }
-
-  const length = Math.min(maxBytes, stat.size);
-  const start = stat.size - length;
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(length);
-    const bytesRead = fs.readSync(fd, buffer, 0, length, start);
-    return buffer.subarray(0, bytesRead).toString("utf8");
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 function fileContainsText(file, needle) {
@@ -142,7 +113,7 @@ function assertFileContains() {
   const needle = process.argv[4];
   assert(
     fileContainsText(file, needle),
-    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file)}`,
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
   );
 }
 

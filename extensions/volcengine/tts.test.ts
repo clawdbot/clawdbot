@@ -130,6 +130,28 @@ describe("Volcengine speech provider", () => {
     });
   });
 
+  it("rejects non-decimal speedRatio directive values", () => {
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "0x1",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid Volcengine speedRatio "0x1"'],
+    });
+  });
+
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { agentCliCommand } from "./agent-via-gateway.js";
+import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -20,6 +20,8 @@ const isGatewayTransportError = vi.hoisted(() =>
   }),
 );
 const agentCommand = vi.hoisted(() => vi.fn());
+const agentModuleLoadCount = vi.hoisted(() => vi.fn());
+const loadAgentSessionModuleMock = vi.hoisted(() => vi.fn());
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -135,6 +137,28 @@ function createSignalProcess() {
   };
 }
 
+async function waitForAgentCommandCall(expectedCalls = 1) {
+  for (
+    let attempt = 0;
+    attempt < 50 && agentCommand.mock.calls.length < expectedCalls;
+    attempt += 1
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  expect(agentCommand).toHaveBeenCalledTimes(expectedCalls);
+}
+
+async function waitForGatewayCall(expectedCalls = 1) {
+  for (
+    let attempt = 0;
+    attempt < 50 && callGateway.mock.calls.length < expectedCalls;
+    attempt += 1
+  ) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
+  expect(callGateway).toHaveBeenCalledTimes(expectedCalls);
+}
+
 function mockMessages(mock: unknown): string[] {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
   return calls.map(([message]) => String(message));
@@ -182,18 +206,24 @@ function createGatewayNormalCloseError() {
   });
 }
 
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: loadConfig, loadConfig }));
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: loadConfig, loadConfig }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   isGatewayTransportError,
   randomIdempotencyKey: () => "idem-1",
 }));
-vi.mock("./agent.js", () => ({ agentCommand }));
+vi.mock("./agent.js", () => {
+  agentModuleLoadCount();
+  return { agentCommand };
+});
 
 let originalForceConsoleToStderr = false;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  agentViaGatewayTesting.resetLazyImportsForTests();
+  loadAgentSessionModuleMock.mockImplementation(async () => await import("./agent/session.js"));
+  agentViaGatewayTesting.setAgentSessionModuleLoaderForTests(loadAgentSessionModuleMock);
   originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
   loggingState.forceConsoleToStderr = false;
 });
@@ -237,6 +267,7 @@ describe("agentCliCommand", () => {
       expect(request).not.toHaveProperty("scopes");
       expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
+      expect(agentModuleLoadCount).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
     });
   });
@@ -253,7 +284,10 @@ describe("agentCliCommand", () => {
       expect(params.sessionKey).toBe("agent:main:incident-42");
       expect(params.sessionId).toBeUndefined();
       expect(params.to).toBeUndefined();
+      expect(request.config).toBe(loadConfig.mock.results[0]?.value);
+      expect(loadConfig).toHaveBeenCalledWith({ skipPluginValidation: true, pin: false });
       expect(agentCommand).not.toHaveBeenCalled();
+      expect(loadAgentSessionModuleMock).not.toHaveBeenCalled();
     });
   });
 
@@ -513,7 +547,7 @@ describe("agentCliCommand", () => {
         const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
           process: signals.processLike,
         });
-        await Promise.resolve();
+        await waitForGatewayCall();
         signals.emit(signalName);
         expect(signals.listenerCount("SIGTERM")).toBe(0);
         expect(signals.listenerCount("SIGINT")).toBe(0);
@@ -580,7 +614,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await Promise.resolve();
+      await waitForGatewayCall();
       signals.emit("SIGTERM");
 
       await run;
@@ -622,7 +656,7 @@ describe("agentCliCommand", () => {
       const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
         process: signals.processLike,
       });
-      await Promise.resolve();
+      await waitForGatewayCall();
       signals.emit("SIGTERM");
 
       await run;
@@ -686,7 +720,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await Promise.resolve();
+      await waitForGatewayCall();
       signals.emit("SIGTERM");
 
       await run;
@@ -762,7 +796,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await Promise.resolve();
+      await waitForGatewayCall();
       signals.emit("SIGTERM");
 
       await run;
@@ -779,6 +813,7 @@ describe("agentCliCommand", () => {
       });
       expect(fallbackAbort?.method).toBe("chat.abort");
       expect(fallbackAbort?.timeoutMs).toBe(2_000);
+      expect(fallbackAbort?.config).toBe(loadConfig.mock.results[0]?.value);
       expect(fallbackAbort?.params).toEqual({
         sessionKey: "agent:main:main",
         runId: "pre-accepted-run",
@@ -840,7 +875,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await Promise.resolve();
+      await waitForGatewayCall();
       signals.emit("SIGTERM");
 
       await run;
@@ -916,7 +951,7 @@ describe("agentCliCommand", () => {
           process: signals.processLike,
         },
       );
-      await Promise.resolve();
+      await waitForGatewayCall();
       signals.emit("SIGTERM");
 
       await run;
@@ -928,6 +963,7 @@ describe("agentCliCommand", () => {
       expect(fallbackAbort?.clientName).toBe("gateway-client");
       expect(fallbackAbort?.mode).toBe("backend");
       expect(fallbackAbort?.scopes).toEqual(["operator.admin"]);
+      expect(fallbackAbort?.config).toBe(loadConfig.mock.results[0]?.value);
       expect(fallbackAbort?.params).toEqual({
         sessionKey: "agent:main:main",
         runId: "run-model-fallback",
@@ -958,12 +994,11 @@ describe("agentCliCommand", () => {
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await Promise.resolve();
+      await waitForAgentCommandCall();
       signals.emit("SIGTERM");
 
       await run;
       expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(143);
       expect(signals.listenerCount("SIGTERM")).toBe(0);
       expect(signals.listenerCount("SIGINT")).toBe(0);
@@ -991,12 +1026,11 @@ describe("agentCliCommand", () => {
       const run = agentCliCommand({ message: "hi", to: "+1555", local: true }, runtime, {
         process: signals.processLike,
       });
-      await Promise.resolve();
+      await waitForAgentCommandCall();
       signals.emit("SIGTERM");
 
       await expect(run).resolves.toBeUndefined();
       expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.exit).toHaveBeenCalledWith(143);
     });
   });
@@ -1015,10 +1049,7 @@ describe("agentCliCommand", () => {
       const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
         process: signals.processLike,
       });
-      for (let attempt = 0; attempt < 10 && agentCommand.mock.calls.length === 0; attempt += 1) {
-        await Promise.resolve();
-      }
-      expect(agentCommand).toHaveBeenCalledTimes(1);
+      await waitForAgentCommandCall();
       signals.emit("SIGTERM");
       resolveFallback?.({
         payloads: [],
@@ -1407,6 +1438,10 @@ describe("agentCliCommand", () => {
         };
         expect(fallbackOpts.sessionId).toMatch(/^gateway-fallback-/);
         expect(fallbackOpts.sessionKey).toBe(`agent:ops:explicit:${fallbackOpts.sessionId}`);
+        expect(loadConfig.mock.calls).toEqual([
+          [{ skipPluginValidation: true, pin: false }],
+          [{ skipPluginValidation: true, pin: false }],
+        ]);
       },
       { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
     );
@@ -1594,6 +1629,7 @@ describe("agentCliCommand", () => {
       );
       expect(localOpts.agentId).toBe("ops");
       expect(localOpts.sessionKey).toBe("agent:ops:incident-42");
+      expect(loadConfig).toHaveBeenCalledWith();
     });
   });
 

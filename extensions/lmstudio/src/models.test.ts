@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
@@ -90,6 +91,7 @@ describe("lmstudio-models", () => {
 
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -377,6 +379,45 @@ describe("lmstudio-models", () => {
       expect(result.reachable).toBe(false);
       expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
     }
+  });
+
+  it("caps oversized direct fetch timeouts before discovering models", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      requestInit: init,
+      json: async () => ({ models: [] }),
+    }));
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result.reachable).toBe(true);
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(timeoutController.signal);
+  });
+
+  it("caps oversized guarded-fetch timeouts before discovering models", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ models: [] }), { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      ssrfPolicy: {},
+    });
+
+    expect(result.reachable).toBe(true);
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toMatchObject({
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
   });
 
   it("skips model load when already loaded", async () => {

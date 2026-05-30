@@ -149,58 +149,72 @@ describe("normalizeModelCompat — Anthropic baseUrl", () => {
 });
 
 describe("normalizeModelCompat", () => {
-  it("forces supportsDeveloperRole off for z.ai models", () => {
-    expectSupportsDeveloperRoleForcedOff();
-  });
+  it.each([
+    ["z.ai models", undefined],
+    ["moonshot models", { provider: "moonshot", baseUrl: "https://api.moonshot.ai/v1" }],
+    [
+      "custom moonshot-compatible endpoints",
+      { provider: "custom-kimi", baseUrl: "https://api.moonshot.cn/v1" },
+    ],
+    [
+      "DashScope provider ids",
+      { provider: "dashscope", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    ],
+    [
+      "DashScope-compatible endpoints",
+      {
+        provider: "custom-qwen",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      },
+    ],
+    [
+      "Azure OpenAI chat completions",
+      { provider: "azure-openai", baseUrl: "https://my-deployment.openai.azure.com/openai" },
+    ],
+    [
+      "generic custom openai-completions providers",
+      { provider: "custom-cpa", baseUrl: "https://cpa.example.com/v1" },
+    ],
+    [
+      "Qwen proxy via openai-completions",
+      { provider: "qwen-proxy", baseUrl: "https://qwen-api.example.org/compatible-mode/v1" },
+    ],
+    [
+      "malformed baseUrl values",
+      { provider: "custom-cpa", baseUrl: "://api.openai.com malformed" },
+    ],
+  ] satisfies Array<[string, Partial<Model> | undefined]>)(
+    "forces supportsDeveloperRole off for %s",
+    (_name, overrides) => {
+      expectSupportsDeveloperRoleForcedOff(overrides);
+    },
+  );
 
-  it("forces supportsDeveloperRole off for moonshot models", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "moonshot",
-      baseUrl: "https://api.moonshot.ai/v1",
-    });
-  });
-
-  it("forces supportsDeveloperRole off for custom moonshot-compatible endpoints", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "custom-kimi",
-      baseUrl: "https://api.moonshot.cn/v1",
-    });
-  });
-
-  it("forces supportsDeveloperRole off for DashScope provider ids", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "dashscope",
-      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    });
-  });
-
-  it("forces supportsDeveloperRole off for DashScope-compatible endpoints", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "custom-qwen",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    });
-  });
-
-  it("keeps supportsUsageInStreaming on for native Qwen endpoints", () => {
-    expectNativeStreamingSupported({
-      provider: "qwen",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    });
-  });
-
-  it("keeps supportsUsageInStreaming on for DashScope-compatible endpoints regardless of provider id", () => {
-    expectNativeStreamingSupported({
-      provider: "custom-qwen",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    });
-  });
-
-  it("keeps supportsUsageInStreaming on for Moonshot-native endpoints regardless of provider id", () => {
-    expectNativeStreamingSupported({
-      provider: "custom-kimi",
-      baseUrl: "https://api.moonshot.ai/v1",
-    });
-  });
+  it.each([
+    [
+      "native Qwen endpoints",
+      {
+        provider: "qwen",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      },
+    ],
+    [
+      "DashScope-compatible endpoints regardless of provider id",
+      {
+        provider: "custom-qwen",
+        baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      },
+    ],
+    [
+      "Moonshot-native endpoints regardless of provider id",
+      { provider: "custom-kimi", baseUrl: "https://api.moonshot.ai/v1" },
+    ],
+  ] satisfies Array<[string, Partial<Model>]>)(
+    "keeps supportsUsageInStreaming on for %s",
+    (_name, overrides) => {
+      expectNativeStreamingSupported(overrides);
+    },
+  );
 
   it("leaves native api.openai.com model untouched", () => {
     const model = {
@@ -213,19 +227,6 @@ describe("normalizeModelCompat", () => {
     expect(normalized.compat).toBeUndefined();
   });
 
-  it("forces supportsDeveloperRole off for Azure OpenAI (Chat Completions, not Responses API)", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "azure-openai",
-      baseUrl: "https://my-deployment.openai.azure.com/openai",
-    });
-  });
-  it("forces supportsDeveloperRole off for generic custom openai-completions provider", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "custom-cpa",
-      baseUrl: "https://cpa.example.com/v1",
-    });
-  });
-
   it("forces supportsUsageInStreaming off for generic custom openai-completions provider", () => {
     expectSupportsUsageInStreamingForcedOff({
       provider: "custom-cpa",
@@ -233,23 +234,18 @@ describe("normalizeModelCompat", () => {
     });
   });
 
-  it("forces supportsStrictMode off for z.ai models", () => {
-    expectSupportsStrictModeForcedOff();
-  });
-
-  it("forces supportsStrictMode off for custom openai-completions provider", () => {
-    expectSupportsStrictModeForcedOff({
-      provider: "custom-cpa",
-      baseUrl: "https://cpa.example.com/v1",
-    });
-  });
-
-  it("forces supportsDeveloperRole off for Qwen proxy via openai-completions", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "qwen-proxy",
-      baseUrl: "https://qwen-api.example.org/compatible-mode/v1",
-    });
-  });
+  it.each([
+    ["z.ai models", undefined],
+    [
+      "custom openai-completions providers",
+      { provider: "custom-cpa", baseUrl: "https://cpa.example.com/v1" },
+    ],
+  ] satisfies Array<[string, Partial<Model> | undefined]>)(
+    "forces supportsStrictMode off for %s",
+    (_name, overrides) => {
+      expectSupportsStrictModeForcedOff(overrides);
+    },
+  );
 
   it("leaves openai-completions model with empty baseUrl untouched", () => {
     const model = {
@@ -260,13 +256,6 @@ describe("normalizeModelCompat", () => {
     delete (model as { compat?: unknown }).compat;
     const normalized = normalizeModelCompat(model as Model);
     expect(normalized.compat).toBeUndefined();
-  });
-
-  it("forces supportsDeveloperRole off for malformed baseUrl values", () => {
-    expectSupportsDeveloperRoleForcedOff({
-      provider: "custom-cpa",
-      baseUrl: "://api.openai.com malformed",
-    });
   });
 
   it("respects explicit supportsDeveloperRole true on non-native endpoints", () => {

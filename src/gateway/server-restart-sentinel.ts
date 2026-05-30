@@ -201,19 +201,6 @@ function resolveRestartContinuationRoute(params: {
   };
 }
 
-function resolveRestartContinuationOutboundPayload(params: {
-  payload: OutboundReplyPayload;
-  messageId: string;
-  replyToId?: string;
-}): OutboundReplyPayload {
-  if (params.payload.replyToId !== params.messageId) {
-    return params.payload;
-  }
-  const payload: OutboundReplyPayload = { ...params.payload };
-  delete payload.replyToId;
-  return params.replyToId ? { ...payload, replyToId: params.replyToId } : payload;
-}
-
 function isRestartContinuationBusyPayload(payload: OutboundReplyPayload): boolean {
   return (
     typeof payload.text === "string" && payload.text.trim() === REPLY_RUN_STILL_SHUTTING_DOWN_TEXT
@@ -313,7 +300,7 @@ async function deliverQueuedSessionDelivery(params: {
       ReplyToId: route.replyToId,
       OriginatingChannel: route.channel,
       OriginatingTo: route.to,
-      ExplicitDeliverRoute: true,
+      ExplicitDeliverRoute: false,
       MessageThreadId: route.threadId,
     },
     {
@@ -331,50 +318,20 @@ async function deliverQueuedSessionDelivery(params: {
     ctxPayload,
     recordInboundSession,
     dispatchReplyWithBufferedBlockDispatcher,
+    replyOptions: {
+      sourceReplyDeliveryMode: "message_tool_only",
+    },
     delivery: {
       preparePayload: (payload) => {
         if (isRestartContinuationBusyPayload(payload)) {
           throw new Error(RESTART_CONTINUATION_BUSY_RETRY_ERROR);
         }
-        return resolveRestartContinuationOutboundPayload({
-          payload,
-          messageId,
-          replyToId: route.replyToId,
-        });
+        return payload;
       },
-      durable: (_payload, info) =>
-        info.kind === "final"
-          ? {
-              to: route.to,
-              replyToId: route.replyToId,
-              threadId: route.threadId,
-              deps: params.deps,
-            }
-          : false,
-      deliver: async (payload) => {
-        const send = await sendDurableMessageBatch({
-          cfg,
-          channel: route.channel,
-          to: route.to,
-          accountId: route.accountId,
-          replyToId: route.replyToId,
-          threadId: route.threadId,
-          payloads: [payload],
-          session: buildOutboundSessionContext({
-            cfg,
-            sessionKey: canonicalKey,
-          }),
-          deps: params.deps,
-          bestEffort: false,
-        });
-        if (send.status === "failed" || send.status === "partial_failed") {
-          throw send.error;
-        }
-        const results = send.status === "sent" ? send.results : [];
-        if (results.length === 0) {
-          throw new Error("restart continuation delivery returned no results");
-        }
-      },
+      durable: false,
+      // Restart continuations are internal lifecycle turns. Visible follow-up
+      // must go through the message tool; automatic final delivery stays off.
+      deliver: async () => ({ visibleReplySent: false }),
       onError: (err, info) => {
         dispatchError ??= err;
         log.warn(`restart continuation dispatch failed during ${info.kind}: ${String(err)}`, {

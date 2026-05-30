@@ -2,6 +2,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
+import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import {
   classifyUnitFastTestFileContent,
   collectBroadUnitFastTestCandidates,
@@ -9,8 +10,11 @@ import {
   collectUnitFastTestFileAnalysis,
   forcedUnitFastTestFiles,
   getUnitFastTestFiles,
+  getUnitFastTimerTestFiles,
   isUnitFastTestFile,
+  isUnitFastTimerTestFile,
   resolveUnitFastTestIncludePattern,
+  resolveUnitFastTimerTestIncludePattern,
 } from "./vitest/vitest.unit-fast-paths.mjs";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
@@ -53,6 +57,7 @@ describe("unit-fast vitest lane", () => {
   let configProbeResult: ReturnType<typeof spawnNodeEvalSync>;
   let unitFastConfig: ReturnType<typeof createUnitFastVitestConfig>;
   let unitFastTestFiles: ReturnType<typeof getUnitFastTestFiles>;
+  let unitFastTimerTestFiles: ReturnType<typeof getUnitFastTimerTestFiles>;
   let unitFastAnalysis: ReturnType<typeof collectUnitFastTestFileAnalysis>;
   let broadCandidates: ReturnType<typeof collectBroadUnitFastTestCandidates>;
   let broadAnalysis: ReturnType<typeof collectUnitFastTestFileAnalysis>;
@@ -77,6 +82,7 @@ describe("unit-fast vitest lane", () => {
     });
     unitFastConfig = createUnitFastVitestConfig({});
     unitFastTestFiles = getUnitFastTestFiles();
+    unitFastTimerTestFiles = getUnitFastTimerTestFiles();
     unitFastAnalysis = collectUnitFastTestFileAnalysis();
     currentCandidates = collectUnitFastTestCandidates();
     broadCandidates = collectBroadUnitFastTestCandidates();
@@ -106,7 +112,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
     expect(testConfig.include).toContain("src/commands/status-overview-values.test.ts");
-    expect(testConfig.include).toContain("src/entry.respawn.test.ts");
     expect(testConfig.include).toContain("src/entry.version-fast-path.test.ts");
     expect(testConfig.include).toContain("src/flows/doctor-startup-channel-maintenance.test.ts");
     expect(testConfig.include).toContain("src/crestodian/rescue-policy.test.ts");
@@ -127,7 +132,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/security/audit-gateway-tools-http.test.ts");
     expect(testConfig.include).toContain("src/security/audit-plugin-readonly-scope.test.ts");
     expect(testConfig.include).toContain("src/security/audit-loopback-logging.test.ts");
-    expect(testConfig.include).toContain("src/security/audit-sandbox-browser.test.ts");
     expect(testConfig.include).toContain("src/ui-app-settings.agents-files-refresh.test.ts");
     expect(testConfig.include).toContain("src/video-generation/provider-registry.test.ts");
     expect(testConfig.include).toContain("src/plugin-sdk/provider-entry.test.ts");
@@ -185,6 +189,26 @@ describe("unit-fast vitest lane", () => {
     }
     const unroutedForcedFiles = collectUnroutedForcedFiles(unitFastAnalysis, forcedFileSet);
     expect(unroutedForcedFiles).toStrictEqual([]);
+  });
+
+  it("routes fake-timer unit-fast tests through the serial fake-timer lane", () => {
+    const fakeTimerFiles = unitFastAnalysis
+      .filter((entry) => entry.unitFast && entry.reasons.includes("fake-timers"))
+      .map((entry) => entry.file);
+    expect(unitFastTimerTestFiles.length).toBeGreaterThan(0);
+    expect(unitFastTimerTestFiles).toEqual(fakeTimerFiles);
+    for (const file of unitFastTimerTestFiles) {
+      expect(isUnitFastTimerTestFile(file)).toBe(true);
+      expect(resolveUnitFastTestIncludePattern(file)).toBeNull();
+      expect(resolveUnitFastTimerTestIncludePattern(file)).toBe(file);
+    }
+
+    const fastConfig = requireTestConfig(unitFastConfig);
+    const timerConfig = requireTestConfig(createUnitFastFakeTimersVitestConfig({}));
+    expect(fastConfig.include).not.toEqual(expect.arrayContaining(unitFastTimerTestFiles));
+    expect(timerConfig.include).toEqual(unitFastTimerTestFiles);
+    expect(timerConfig.fileParallelism).toBe(false);
+    expect(timerConfig.maxWorkers).toBe(1);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

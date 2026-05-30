@@ -56,7 +56,7 @@ describe("command-path-policy", () => {
 
   it("resolves status policy with shared startup semantics", () => {
     expectResolvedPolicy(["status"], {
-      routeConfigGuard: "when-suppressed",
+      routeConfigGuard: "never",
       loadPlugins: "never",
       pluginRegistry: { scope: "channels" },
       ensureCliPath: false,
@@ -221,6 +221,13 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    for (const commandPath of [["tasks"], ["tasks", "list"], ["tasks", "audit"]]) {
+      expectResolvedPolicy(commandPath, {
+        ensureCliPath: false,
+        loadPlugins: "never",
+        networkProxy: "bypass",
+      });
+    }
     for (const commandPath of [
       ["plugins", "install"],
       ["plugins", "inspect"],

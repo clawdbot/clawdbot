@@ -62,10 +62,12 @@ session:
 1. OpenClaw submits the request to the provider and immediately returns a task id.
 2. The provider processes the job in the background (typically 30 seconds to several minutes depending on the provider and resolution; slow queue-backed providers can run up to the configured timeout).
 3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
-4. The agent tells the user and attaches the finished video through the
-   message tool. If the requester session is inactive or its active wake
-   fails, and some generated video is still missing from message-tool delivery,
-   OpenClaw sends an idempotent direct fallback with only the missing video.
+4. The agent tells the user through the session's normal visible-reply mode:
+   final reply delivery when automatic, or `message(action="send")` when the
+   session requires the message tool. If the requester session is inactive or
+   its active wake fails, and some generated video is still missing from the
+   completion reply, OpenClaw sends an idempotent direct fallback with only the
+   missing video.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another

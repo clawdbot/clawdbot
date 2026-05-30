@@ -1,9 +1,9 @@
-import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "../../agents/run-termination.js";
 import {
-  normalizeAgentRunTimeoutPhase,
-  normalizeProviderStarted,
-  type AgentRunTimeoutPhase,
-} from "../../agents/run-timeout-attribution.js";
+  buildAgentRunTerminalOutcome,
+  isStickyAgentRunTerminalOutcome,
+  mergeAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../../agents/agent-run-terminal-outcome.js";
 import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { asFiniteNumber } from "../../shared/number-coercion.js";
@@ -20,11 +20,21 @@ export type AgentWaitTerminalSnapshot = {
   livenessState?: string;
   yielded?: boolean;
   pendingError?: boolean;
-  timeoutPhase?: AgentRunTimeoutPhase;
+  timeoutPhase?: AgentRunTerminalOutcome["timeoutPhase"];
   providerStarted?: boolean;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
+
+function normalizeTerminalOutcomeForWaitSnapshot(outcome: AgentRunTerminalOutcome): {
+  status: AgentWaitTerminalSnapshot["status"];
+  error?: string;
+} {
+  if (outcome.reason === "hard_timeout") {
+    return { status: outcome.status, error: outcome.error };
+  }
+  return normalizeBlockedLivenessWaitStatus(outcome);
+}
 
 function parseRunIdFromDedupeKey(key: string): string | null {
   if (key.startsWith("agent:")) {
@@ -106,28 +116,27 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
   const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
   const yielded = payload?.yielded === true || resultMeta?.yielded === true;
-  const timeoutPhase =
-    normalizeAgentRunTimeoutPhase(payload?.timeoutPhase) ??
-    normalizeAgentRunTimeoutPhase(resultMeta?.timeoutPhase);
-  const providerStarted =
-    normalizeProviderStarted(payload?.providerStarted) ??
-    normalizeProviderStarted(resultMeta?.providerStarted);
+  const timeoutPhase = payload?.timeoutPhase ?? resultMeta?.timeoutPhase;
+  const providerStarted = payload?.providerStarted ?? resultMeta?.providerStarted;
   const errorMessage =
     typeof payload?.error === "string"
       ? payload.error
       : typeof payload?.summary === "string"
         ? payload.summary
         : entry.error?.message;
-  const abortedStopReason = isAbortedAgentStopReason(stopReason);
-  const normalizedError =
-    abortedStopReason && !errorMessage ? AGENT_RUN_ABORTED_ERROR : errorMessage;
 
   if (status === "ok" || status === "timeout") {
-    const normalized = normalizeBlockedLivenessWaitStatus({
-      status: abortedStopReason ? "error" : status,
+    const terminalOutcome = buildAgentRunTerminalOutcome({
+      status,
       livenessState,
-      error: normalizedError,
+      error: errorMessage,
+      stopReason,
+      timeoutPhase,
+      providerStarted,
+      startedAt,
+      endedAt,
     });
+    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
     return {
       status: normalized.status,
       startedAt,
@@ -136,29 +145,58 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         normalized.status === "error"
           ? normalized.error
           : normalized.status === "timeout"
-            ? normalizedError
+            ? terminalOutcome.error
             : undefined,
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),
-      ...(timeoutPhase ? { timeoutPhase } : {}),
-      ...(providerStarted !== undefined ? { providerStarted } : {}),
+      ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
+      ...(terminalOutcome.providerStarted !== undefined
+        ? { providerStarted: terminalOutcome.providerStarted }
+        : {}),
     };
   }
   if (status === "error" || !entry.ok) {
-    return {
+    const terminalOutcome = buildAgentRunTerminalOutcome({
       status: "error",
+      livenessState,
+      error: errorMessage,
+      stopReason,
+      timeoutPhase,
+      providerStarted,
       startedAt,
       endedAt,
-      error: errorMessage,
+    });
+    const normalized = normalizeTerminalOutcomeForWaitSnapshot(terminalOutcome);
+    return {
+      status: normalized.status,
+      startedAt,
+      endedAt,
+      error:
+        normalized.status === "error"
+          ? normalized.error
+          : normalized.status === "timeout"
+            ? terminalOutcome.error
+            : undefined,
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),
-      ...(timeoutPhase ? { timeoutPhase } : {}),
-      ...(providerStarted !== undefined ? { providerStarted } : {}),
+      ...(terminalOutcome.timeoutPhase ? { timeoutPhase: terminalOutcome.timeoutPhase } : {}),
+      ...(terminalOutcome.providerStarted !== undefined
+        ? { providerStarted: terminalOutcome.providerStarted }
+        : {}),
     };
   }
   return null;
+}
+
+function terminalOutcomeFromWaitSnapshot(
+  snapshot: AgentWaitTerminalSnapshot,
+): AgentRunTerminalOutcome | undefined {
+  if (snapshot.pendingError) {
+    return undefined;
+  }
+  return buildAgentRunTerminalOutcome(snapshot);
 }
 
 export function readTerminalSnapshotFromGatewayDedupe(params: {
@@ -264,8 +302,22 @@ export function setGatewayDedupeEntry(params: {
   const existing = params.dedupe.get(params.key);
   const existingSnapshot = existing ? readTerminalSnapshotFromDedupeEntry(existing) : null;
   const incomingSnapshot = readTerminalSnapshotFromDedupeEntry(params.entry);
-  if (existingSnapshot?.status === "timeout" && existingSnapshot.stopReason === "rpc") {
+  const existingOutcome = existingSnapshot
+    ? terminalOutcomeFromWaitSnapshot(existingSnapshot)
+    : undefined;
+  const incomingOutcome = incomingSnapshot
+    ? terminalOutcomeFromWaitSnapshot(incomingSnapshot)
+    : undefined;
+  if (existingOutcome && isStickyAgentRunTerminalOutcome(existingOutcome) && !incomingOutcome) {
+    // Accepted/in-flight rewrites are not evidence against a terminal hard
+    // timeout or explicit cancellation already stored for this run id.
     return;
+  }
+  if (existingOutcome && incomingOutcome && isStickyAgentRunTerminalOutcome(existingOutcome)) {
+    const merged = mergeAgentRunTerminalOutcome(existingOutcome, incomingOutcome);
+    if (merged === existingOutcome) {
+      return;
+    }
   }
   params.dedupe.set(params.key, params.entry);
   const runId = parseRunIdFromDedupeKey(params.key);

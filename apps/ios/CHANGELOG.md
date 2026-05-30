@@ -1,5 +1,11 @@
 # OpenClaw iOS Changelog
 
+## 2026.5.30 - 2026-05-30
+
+Maintenance update for the current OpenClaw release.
+
+- Added hosted push relay defaults, realtime Talk playback, and safer WebSocket ping handling for mobile sessions.
+
 ## 2026.5.28 - 2026-05-28
 
 Maintenance update for the current OpenClaw release.

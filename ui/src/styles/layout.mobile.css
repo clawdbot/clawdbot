@@ -1064,6 +1064,17 @@
     padding: 2px 6px;
   }
 
+  .sessions-table .session-goal-chip {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 72px;
+    gap: 0;
+    padding: 2px 6px;
+  }
+
+  .sessions-table .session-goal-chip__objective {
+    display: none;
+  }
+
   .sessions-table .session-compaction-col {
     width: 84px;
     min-width: 84px;

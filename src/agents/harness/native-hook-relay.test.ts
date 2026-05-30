@@ -776,6 +776,20 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("treats stale direct bridge records as retryable during lookup", () => {
+    expect(
+      testing.isNativeHookRelayBridgeLookupRetryableForTests(
+        new Error("native hook relay bridge stale registration"),
+      ),
+    ).toBe(true);
+    expect(
+      testing.isNativeHookRelayBridgeLookupRetryableForTests(
+        new Error("native hook relay bridge stale registration"),
+        300,
+      ),
+    ).toBe(false);
+  });
+
   it("accepts bootstrap generation mismatches during a bounded grace window", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",

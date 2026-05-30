@@ -356,6 +356,43 @@ describe("bundled plugin install/uninstall probe", () => {
     }
   });
 
+  it("keeps stalled runtime readiness probes inside the ready deadline", async () => {
+    const runtimeSmoke = await importRuntimeSmokeWithEnv({
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_HTTP_MS: "1000",
+      OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS: "50",
+    });
+    const sockets = new Set<Socket>();
+    const server = createNetServer((socket) => {
+      sockets.add(socket);
+      socket.on("close", () => {
+        sockets.delete(socket);
+      });
+    });
+    const root = makePackageRoot();
+    const logPath = path.join(root, "gateway.log");
+    fs.writeFileSync(logPath, "booting\n", "utf8");
+
+    try {
+      const port = await listenOnLoopback(server);
+      const startedAt = Date.now();
+
+      await expect(
+        runtimeSmoke.waitForReady({
+          child: { exitCode: null, signalCode: null },
+          logPath,
+          port,
+        }),
+      ).rejects.toThrow("gateway did not become ready");
+
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await closeServer(server);
+    }
+  });
+
   it("creates runtime smoke state with OPENCLAW_HOME at the test home", async () => {
     const runtimeSmoke = await import(pathToFileURL(runtimeSmokePath).href);
     const env = runtimeSmoke.createIsolatedStateEnv("runtime-env");

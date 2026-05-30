@@ -190,6 +190,7 @@ export class GatewayChatClient implements TuiBackend {
     const runId = opts.runId ?? randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       message: opts.message,
       thinking: opts.thinking,
@@ -200,19 +201,21 @@ export class GatewayChatClient implements TuiBackend {
     return { runId };
   }
 
-  async abortChat(opts: { sessionKey: string; runId: string }) {
+  async abortChat(opts: { sessionKey: string; agentId?: string; runId: string }) {
     return await this.client.request<{ ok: boolean; aborted: boolean }>("chat.abort", {
       sessionKey: opts.sessionKey,
+      ...(opts.agentId ? { agentId: opts.agentId } : {}),
       runId: opts.runId,
     });
   }
 
-  async loadHistory(opts: { sessionKey: string; limit?: number }) {
+  async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
     const startedAt = Date.now();
     for (;;) {
       try {
         return await this.client.request("chat.history", {
           sessionKey: opts.sessionKey,
+          ...(opts.agentId ? { agentId: opts.agentId } : {}),
           limit: opts.limit,
         });
       } catch (err) {
@@ -239,9 +242,10 @@ export class GatewayChatClient implements TuiBackend {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
-  async resetSession(key: string, reason?: "new" | "reset") {
+  async resetSession(key: string, reason?: "new" | "reset", opts?: { agentId?: string }) {
     return await this.client.request("sessions.reset", {
       key,
+      ...(opts?.agentId ? { agentId: opts.agentId } : {}),
       ...(reason ? { reason } : {}),
     });
   }

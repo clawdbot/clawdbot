@@ -179,6 +179,12 @@ describe("browser cli snapshot defaults", () => {
     expect(params?.query?.depth).toBe(0);
   });
 
+  it("accepts signed decimal snapshot numeric options", async () => {
+    const params = await runSnapshot(["--limit", "+10", "--depth", "+0"]);
+    expect(params?.query?.limit).toBe(10);
+    expect(params?.query?.depth).toBe(0);
+  });
+
   it("sends screenshot request with trimmed target id and jpeg type", async () => {
     const params = await runBrowserInspect(["screenshot", " tab-1 ", "--type", "jpeg"], true);
     expect(params?.path).toBe("/screenshot");

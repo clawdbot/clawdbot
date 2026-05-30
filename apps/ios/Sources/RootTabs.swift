@@ -36,6 +36,7 @@ struct RootTabs: View {
     private enum AppTab: Hashable {
         case control
         case chat
+        case talk
         case agent
         case settings
     }
@@ -53,6 +54,8 @@ struct RootTabs: View {
         switch arguments[valueIndex].lowercased() {
         case "chat":
             return .chat
+        case "talk", "voice":
+            return .talk
         case "agent", "agents":
             return .agent
         case "settings":
@@ -144,6 +147,14 @@ struct RootTabs: View {
             ChatProTab()
                 .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
                 .tag(AppTab.chat)
+
+            TalkProTab(openSettings: { self.selectedTab = .settings })
+                .tabItem {
+                    Label(
+                        "Talk",
+                        systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
+                }
+                .tag(AppTab.talk)
 
             AgentProTab()
                 .tabItem { Label("Agent", systemImage: "person.2.fill") }

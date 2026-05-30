@@ -125,6 +125,32 @@ describe("kitchen-sink RPC gateway teardown", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("keeps stalled readiness probes inside the caller deadline", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-stalled-ready-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "booting\n");
+      let calls = 0;
+      const startedAt = Date.now();
+
+      await expect(
+        waitForGatewayReady({ exitCode: null, signalCode: null }, 9, logPath, {
+          fetchImpl: () => {
+            calls += 1;
+            return new Promise(() => {});
+          },
+          pollDelayMs: 1,
+          timeoutMs: 25,
+        }),
+      ).rejects.toThrow("gateway did not become ready");
+
+      expect(calls).toBe(1);
+      expect(Date.now() - startedAt).toBeLessThan(500);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("kitchen-sink RPC gateway readiness logs", () => {
@@ -634,6 +660,56 @@ describe("kitchen-sink RPC process sampling", () => {
       code: "ETOOBIG",
       message: "fetch response body exceeded 1024 bytes",
     });
+  });
+
+  it("rejects oversized HTTP probe responses before reading declared large bodies", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      {
+        headers: {
+          "content-length": "1025",
+        },
+      },
+    );
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(canceled).toBe(true);
+  });
+
+  it("bounds HTTP probe response bodies without a readable stream", async () => {
+    const response = {
+      headers: new Headers(),
+      text: vi.fn(async () => "x".repeat(1025)),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(response.text).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects declared large HTTP probe responses without a readable stream", async () => {
+    const response = {
+      headers: new Headers({
+        "content-length": "1025",
+      }),
+      text: vi.fn(async () => "not read"),
+    };
+
+    await expect(readBoundedResponseText(response, 1024)).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "fetch response body exceeded 1024 bytes",
+    });
+    expect(response.text).not.toHaveBeenCalled();
   });
 
   it("reads bounded response streams", async () => {

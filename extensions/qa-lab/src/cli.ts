@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { collectString } from "./cli-options.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
 import { registerMantisCli } from "./mantis/cli.js";
@@ -23,8 +24,6 @@ async function loadQaLabCliRuntime(): Promise<QaLabCliRuntime> {
   return await qaLabCliRuntimePromise;
 }
 
-const DECIMAL_INTEGER_RE = /^\d+$/;
-
 function invalidQaCliArgument(message: string): Error & { code: string; exitCode: number } {
   const error = new Error(message) as Error & { code: string; exitCode: number };
   error.name = "InvalidArgumentError";
@@ -34,9 +33,8 @@ function invalidQaCliArgument(message: string): Error & { code: string; exitCode
 }
 
 function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
-  const trimmed = value.trim();
-  const parsed = DECIMAL_INTEGER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     throw invalidQaCliArgument(`${flag} must be a positive integer.`);
   }
   return parsed;

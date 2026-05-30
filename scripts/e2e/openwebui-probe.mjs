@@ -1,4 +1,5 @@
 import { Agent, setGlobalDispatcher } from "undici";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response-text.mjs";
 
 const baseUrl = process.env.OPENWEBUI_BASE_URL ?? "";
 const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
@@ -69,12 +70,6 @@ function createTimeoutError(label, timeoutMs) {
   return error;
 }
 
-function createBodyTooLargeError(label, byteLimit) {
-  const error = new Error(`${label} response body exceeded ${byteLimit} bytes`);
-  error.code = "ETOOBIG";
-  return error;
-}
-
 async function withRequestTimeout(label, timeoutMs, run) {
   const controller = new AbortController();
   const timeoutError = createTimeoutError(label, timeoutMs);
@@ -95,38 +90,7 @@ async function withRequestTimeout(label, timeoutMs, run) {
 }
 
 async function readBoundedResponseText(response, label, byteLimit = responseBodyMaxBytes) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw createBodyTooLargeError(label, byteLimit);
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw createBodyTooLargeError(label, byteLimit);
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
 }
 
 async function readBoundedResponseJson(response, label) {

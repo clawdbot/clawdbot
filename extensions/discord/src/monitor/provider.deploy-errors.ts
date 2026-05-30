@@ -1,4 +1,8 @@
 import { inspect } from "node:util";
+import {
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import { formatDurationSeconds } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { RateLimitError } from "../internal/discord.js";
@@ -101,10 +105,13 @@ function readFiniteNumber(value: unknown): number | undefined {
     return value;
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    return Number.isFinite(parsed) ? parsed : undefined;
+    return parseStrictFiniteNumber(value);
   }
   return undefined;
+}
+
+function readNonNegativeInteger(value: unknown): number | undefined {
+  return parseStrictNonNegativeInteger(value);
 }
 
 function formatDurationMs(ms: number): string {
@@ -186,7 +193,8 @@ export function resolveDiscordDeployRateLimitDetails(
     return undefined;
   }
   const deployErr = err as DiscordDeployErrorLike;
-  const status = readFiniteNumber(deployErr.status) ?? readFiniteNumber(deployErr.statusCode);
+  const status =
+    readNonNegativeInteger(deployErr.status) ?? readNonNegativeInteger(deployErr.statusCode);
   const retryAfterSeconds =
     readFiniteNumber(deployErr.retryAfter) ??
     readFiniteNumber(readDiscordDeployObjectField(deployErr.rawBody, "retry_after"));
@@ -353,8 +361,8 @@ export function isDiscordDeployDailyCreateLimit(err: unknown): boolean {
     return false;
   }
   const deployErr = err as DiscordDeployErrorLike;
-  const discordCode = readFiniteNumber(deployErr.discordCode);
-  const rawCode = readFiniteNumber(readDiscordDeployObjectField(deployErr.rawBody, "code"));
+  const discordCode = readNonNegativeInteger(deployErr.discordCode);
+  const rawCode = readNonNegativeInteger(readDiscordDeployObjectField(deployErr.rawBody, "code"));
   return (
     (discordCode === 30034 || rawCode === 30034) &&
     /daily application command creates/i.test(formatErrorMessage(err))

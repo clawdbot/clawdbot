@@ -1,6 +1,8 @@
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import { clearCliSession } from "../../agents/cli-session.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, onAgentEvent } from "../../infra/agent-events.js";
 import { isRecord } from "../../shared/record-coerce.js";
@@ -84,6 +86,60 @@ export type CliToolEventPayload = {
   phase: "start" | "update";
   args: Record<string, unknown> | undefined;
 };
+
+export function keepCliSessionBindingOnlyWhenReused(params: {
+  result: EmbeddedAgentRunResult;
+  existingSessionId?: string;
+  onDroppedReplacement?: () => void;
+}): EmbeddedAgentRunResult {
+  const existingSessionId = normalizeOptionalString(params.existingSessionId);
+  const agentMeta = params.result.meta.agentMeta;
+  const returnedSessionId = normalizeOptionalString(agentMeta?.cliSessionBinding?.sessionId);
+  const shouldClearStoredSession = agentMeta?.clearCliSessionBinding === true;
+  if (agentMeta === undefined || (existingSessionId && returnedSessionId === existingSessionId)) {
+    return params.result;
+  }
+  if (returnedSessionId || shouldClearStoredSession) {
+    params.onDroppedReplacement?.();
+  }
+  return {
+    ...params.result,
+    meta: {
+      ...params.result.meta,
+      agentMeta: {
+        ...agentMeta,
+        sessionId: "",
+        cliSessionBinding: undefined,
+        clearCliSessionBinding: undefined,
+      },
+    },
+  };
+}
+
+export async function clearDroppedCliSessionBinding(params: {
+  provider: string;
+  sessionKey?: string;
+  sessionStore?: Record<string, SessionEntry>;
+  storePath?: string;
+  activeSessionEntry?: SessionEntry;
+}): Promise<void> {
+  const updatedAt = Date.now();
+  const clearEntry = (entry: SessionEntry | undefined) => {
+    if (!entry) {
+      return;
+    }
+    clearCliSession(entry, params.provider);
+    entry.updatedAt = updatedAt;
+  };
+  clearEntry(params.activeSessionEntry);
+  clearEntry(params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
+  if (!params.storePath || !params.sessionKey) {
+    return;
+  }
+  await updateSessionStore(params.storePath, (store) => {
+    clearEntry(store[params.sessionKey!]);
+  });
+}
 
 function createToolEventBridge(params: {
   runId: string;

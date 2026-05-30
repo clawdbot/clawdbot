@@ -626,6 +626,31 @@ function shouldPreferPackageLocalDistRuntimeArtifact(source: string): boolean {
   }
 }
 
+function resolvePackageLocalDistRuntimeArtifact(params: {
+  source: string;
+  rootDir: string;
+}): string | null {
+  const relativeSource = path.relative(params.rootDir, params.source);
+  if (
+    !shouldPreferPackageLocalDistRuntimeArtifact(relativeSource) ||
+    relativeSource === "" ||
+    relativeSource.startsWith("..") ||
+    path.isAbsolute(relativeSource)
+  ) {
+    return null;
+  }
+  const artifactRoot = path.join(params.rootDir, "dist");
+  for (const artifactRelativePath of listPackageLocalDistRuntimeArtifactRelativePaths(
+    relativeSource,
+  )) {
+    const artifactSource = path.join(artifactRoot, artifactRelativePath);
+    if (fs.existsSync(artifactSource)) {
+      return safeRealpathOrResolve(artifactSource);
+    }
+  }
+  return null;
+}
+
 function resolvePreferredBuiltRuntimeArtifact(params: {
   source: string;
   rootDir: string;
@@ -638,27 +663,15 @@ function resolvePreferredBuiltRuntimeArtifact(params: {
     return { source, rootDir };
   }
   if (params.origin !== "bundled") {
-    const relativeSource = path.relative(rootDir, source);
-    if (
-      shouldPreferPackageLocalDistRuntimeArtifact(relativeSource) &&
-      relativeSource !== "" &&
-      !relativeSource.startsWith("..") &&
-      !path.isAbsolute(relativeSource)
-    ) {
-      const artifactRoot = path.join(rootDir, "dist");
-      for (const artifactRelativePath of listPackageLocalDistRuntimeArtifactRelativePaths(
-        relativeSource,
-      )) {
-        const artifactSource = path.join(artifactRoot, artifactRelativePath);
-        if (fs.existsSync(artifactSource)) {
-          return {
-            source: safeRealpathOrResolve(artifactSource),
-            rootDir,
-          };
-        }
-      }
+    const artifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+    if (artifactSource) {
+      return { source: artifactSource, rootDir };
     }
     return { source, rootDir };
+  }
+  const packageLocalArtifactSource = resolvePackageLocalDistRuntimeArtifact({ source, rootDir });
+  if (packageLocalArtifactSource) {
+    return { source: packageLocalArtifactSource, rootDir };
   }
   const extensionsDir = path.dirname(rootDir);
   if (path.basename(extensionsDir) !== "extensions") {

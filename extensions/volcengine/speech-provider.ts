@@ -5,7 +5,11 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import {
+  asObject,
+  parseSpeechDirectiveNumberOverride,
+  trimToUndefined,
+} from "openclaw/plugin-sdk/speech-core";
 import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { volcengineTTS, type VolcengineTtsEncoding } from "./tts.js";
 
@@ -144,14 +148,13 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
     case "speed":
     case "speedratio":
     case "speed_ratio": {
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      const speedRatio = Number(ctx.value);
-      if (!Number.isFinite(speedRatio) || speedRatio < 0.2 || speedRatio > 3.0) {
-        return { handled: true, warnings: [`invalid Volcengine speedRatio "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, speedRatio } };
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "speedRatio",
+        range: { min: 0.2, max: 3 },
+        warning: (value) => `invalid Volcengine speedRatio "${value}"`,
+        mergeCurrentOverrides: true,
+      });
     }
     case "emotion":
       if (!ctx.policy.allowVoiceSettings) {

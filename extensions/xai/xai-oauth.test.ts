@@ -231,6 +231,47 @@ describe("xAI OAuth", () => {
     expect(refreshed.expires).toBe(100);
   });
 
+  it("preserves the cached xAI expiry when token lifetimes overflow safe milliseconds", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
+        expires_in: Number.MAX_SAFE_INTEGER,
+      }),
+    );
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
+
+    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+
+    expect(refreshed.expires).toBe(100);
+  });
+
+  it("ignores unsafe JWT expiry fallbacks from xAI access tokens", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
+      }),
+    );
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
+
+    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+
+    expect(refreshed.expires).toBe(100);
+  });
+
   it("prints the authorize URL through plain prompter output so terminal link detection keeps it whole", async () => {
     waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "AUTHCODE", state: "state-1" });
     stubSuccessfulXaiOAuthNetwork();
@@ -348,7 +389,7 @@ describe("xAI OAuth", () => {
         }),
       );
     vi.stubGlobal("fetch", fetchImpl);
-    const note = vi.fn(async () => {});
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
     const openUrl = vi.fn(async () => {});
     const log = vi.fn();
     const runtime = { ...createRuntimeEnv(), log };
@@ -403,6 +444,63 @@ describe("xAI OAuth", () => {
       access: expect.any(String),
     });
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
+    expect(progress.stop).toHaveBeenCalledWith("xAI device code complete");
+  });
+
+  it("falls back for unsafe xAI device-code lifetime fields", async () => {
+    const progress = {
+      update: vi.fn(),
+      stop: vi.fn(),
+    };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+          device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          device_code: "device-code-1",
+          user_code: "ABCD-1234",
+          verification_uri: "https://accounts.x.ai/oauth2/device",
+          expires_in: Number.MAX_SAFE_INTEGER,
+          interval: Number.MAX_SAFE_INTEGER,
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          access_token: "access-token",
+          refresh_token: "refresh-1",
+          expires_in: 120,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchImpl);
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => {});
+    const ctx: ProviderAuthContext = {
+      config: {},
+      isRemote: true,
+      openUrl: vi.fn(async () => {}),
+      prompter: createTestWizardPrompter({
+        progress: vi.fn(() => progress),
+        note,
+      }),
+      runtime: createRuntimeEnv(),
+      oauth: {
+        createVpsAwareHandlers: () => {
+          throw new Error("unexpected VPS OAuth handler request");
+        },
+      },
+    };
+
+    await loginXaiDeviceCode(ctx);
+
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Code expires in 5 minutes."),
+      "xAI device code",
+    );
     expect(progress.stop).toHaveBeenCalledWith("xAI device code complete");
   });
 });

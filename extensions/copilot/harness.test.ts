@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CopilotClientPool } from "./harness.js";
-import { createCopilotAgentHarness } from "./harness.js";
+import { createCopilotAgentHarness, type CopilotSessionBinding } from "./harness.js";
 
 const mocks = vi.hoisted(() => ({
   runCopilotAttempt: vi.fn(),
@@ -27,6 +27,20 @@ function makePoolMock(): CopilotClientPool {
     release: vi.fn(),
     dispose: vi.fn().mockResolvedValue([]),
     size: vi.fn().mockReturnValue(0),
+  };
+}
+
+function makeSessionStoreMock() {
+  const entries = new Map<string, CopilotSessionBinding>();
+  return {
+    entries,
+    store: {
+      register: vi.fn((key: string, value: CopilotSessionBinding) => {
+        entries.set(key, value);
+      }),
+      lookup: vi.fn((key: string) => entries.get(key)),
+      delete: vi.fn((key: string) => entries.delete(key)),
+    },
   };
 }
 
@@ -735,6 +749,289 @@ describe("createCopilotAgentHarness", () => {
       // The newer sdkSessionId must be the one targeted by reset, not
       // the stale first-turn id.
       expect(deleteSession).toHaveBeenCalledWith("sdk-sess-2");
+    });
+
+    it("persists sdkSessionId in plugin state and resumes it from a new harness instance", async () => {
+      const firstPool = makePoolMock();
+      const secondPool = makePoolMock();
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-sqlite",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const firstHarness = createCopilotAgentHarness({
+        pool: firstPool,
+        sessionStore: sessionStore.store,
+      });
+      const secondHarness = createCopilotAgentHarness({
+        pool: secondPool,
+        sessionStore: sessionStore.store,
+      });
+
+      await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      await secondHarness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      expect(sessionStore.store.register).toHaveBeenCalledWith(
+        "oc-sess-reuse",
+        expect.objectContaining({
+          schemaVersion: 1,
+          sdkSessionId: "sdk-sess-sqlite",
+        }),
+      );
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-sqlite");
+    });
+
+    it("starts a fresh SDK session when persisted binding lookup fails", async () => {
+      const sessionStore = makeSessionStoreMock();
+      sessionStore.store.lookup.mockImplementation(() => {
+        throw new Error("sqlite read failed");
+      });
+      mocks.runCopilotAttempt.mockResolvedValue(ATTEMPT_RESULT);
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await expect(harness.runAttempt(makeAttemptParams({ runId: "t1" }))).resolves.toBe(
+        ATTEMPT_RESULT,
+      );
+
+      const callParams = mocks.runCopilotAttempt.mock.calls[0]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(callParams.initialReplayState?.sdkSessionId).toBeUndefined();
+      expect(sessionStore.store.delete).toHaveBeenCalledWith("oc-sess-reuse");
+    });
+
+    it("keeps the in-memory binding when durable register fails", async () => {
+      const sessionStore = makeSessionStoreMock();
+      sessionStore.entries.set("oc-sess-reuse", {
+        schemaVersion: 1,
+        sdkSessionId: "sdk-sess-stale",
+        compatKey: "stale",
+        updatedAt: 1,
+      });
+      sessionStore.store.register.mockImplementation(() => {
+        throw new Error("sqlite write failed");
+      });
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-memory-only",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await harness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      await harness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBe("sdk-sess-memory-only");
+      expect(sessionStore.store.delete).toHaveBeenCalledWith("oc-sess-reuse");
+      expect(sessionStore.entries.has("oc-sess-reuse")).toBe(false);
+    });
+
+    it("ignores a persisted sdkSessionId when the compatibility fingerprint changes", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-old-model",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const firstHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+      const secondHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await firstHarness.runAttempt(
+        makeAttemptParams({ runId: "t1", model: { provider: "github-copilot", id: "gpt-4.1" } }),
+      );
+      await secondHarness.runAttempt(
+        makeAttemptParams({
+          runId: "t2",
+          model: { provider: "github-copilot", id: "claude-sonnet-4.5" },
+        }),
+      );
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
+    });
+
+    it("ignores a persisted sdkSessionId when the default Copilot home changes by agent id", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-main-home",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const firstHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+      const secondHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+      const defaultHomeParams = {
+        agentDir: undefined,
+        copilotHome: undefined,
+      };
+
+      await firstHarness.runAttempt(
+        makeAttemptParams({
+          ...defaultHomeParams,
+          runId: "t1",
+          agentId: "main",
+        }),
+      );
+      await secondHarness.runAttempt(
+        makeAttemptParams({
+          ...defaultHomeParams,
+          runId: "t2",
+          agentId: "ops",
+        }),
+      );
+
+      const secondCallParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(secondCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
+    });
+
+    it("does not let stale plugin state override a newer incompatible tracked session", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-tracked-model",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await harness.runAttempt(
+        makeAttemptParams({ runId: "t1", model: { provider: "github-copilot", id: "gpt-4.1" } }),
+      );
+      const persisted = sessionStore.entries.get("oc-sess-reuse");
+      expect(persisted).toBeDefined();
+
+      await harness.runAttempt(
+        makeAttemptParams({
+          runId: "t2",
+          model: { provider: "github-copilot", id: "claude-sonnet-4.5" },
+        }),
+      );
+      sessionStore.entries.set("oc-sess-reuse", persisted!);
+      await harness.runAttempt(
+        makeAttemptParams({ runId: "t3", model: { provider: "github-copilot", id: "gpt-4.1" } }),
+      );
+
+      const thirdCallParams = mocks.runCopilotAttempt.mock.calls[2]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(thirdCallParams.initialReplayState?.sdkSessionId).toBeUndefined();
+    });
+
+    it("deletes persisted sdkSessionId on reset even when no in-memory client is tracked", async () => {
+      const sessionStore = makeSessionStoreMock();
+      sessionStore.entries.set("oc-sess-reuse", {
+        schemaVersion: 1,
+        sdkSessionId: "sdk-sess-orphan",
+        compatKey: "compat",
+        updatedAt: 1,
+      });
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await harness.reset?.({ sessionId: "oc-sess-reuse" });
+
+      expect(sessionStore.store.delete).toHaveBeenCalledWith("oc-sess-reuse");
+      expect(sessionStore.entries.has("oc-sess-reuse")).toBe(false);
+    });
+
+    it("still clears tracked SDK sessions when durable reset delete fails", async () => {
+      const sessionStore = makeSessionStoreMock();
+      sessionStore.store.delete.mockImplementation(() => {
+        throw new Error("sqlite delete failed");
+      });
+      const deleteSession = vi.fn();
+      mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-reset",
+          pooledClient: { key: {} as any, client: { deleteSession } as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await harness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      await harness.reset?.({ sessionId: "oc-sess-reuse" });
+
+      expect(deleteSession).toHaveBeenCalledWith("sdk-sess-reset");
+    });
+
+    it("blocks persisted reuse after reset cannot delete a durable binding", async () => {
+      const sessionStore = makeSessionStoreMock();
+      mocks.runCopilotAttempt.mockImplementationOnce(async (_params, deps) => {
+        deps.onSessionEstablished?.({
+          sdkSessionId: "sdk-sess-before-reset",
+          pooledClient: { key: {} as any, client: {} as any },
+        });
+        return ATTEMPT_RESULT;
+      });
+      const firstHarness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await firstHarness.runAttempt(makeAttemptParams({ runId: "t1" }));
+      expect(sessionStore.entries.get("oc-sess-reuse")?.sdkSessionId).toBe("sdk-sess-before-reset");
+      sessionStore.store.delete.mockImplementation(() => {
+        throw new Error("sqlite delete failed");
+      });
+      mocks.runCopilotAttempt.mockResolvedValue(ATTEMPT_RESULT);
+      const harness = createCopilotAgentHarness({
+        pool: makePoolMock(),
+        sessionStore: sessionStore.store,
+      });
+
+      await harness.reset?.({ sessionId: "oc-sess-reuse" });
+      await harness.runAttempt(makeAttemptParams({ runId: "t2" }));
+
+      const callParams = mocks.runCopilotAttempt.mock.calls[1]?.[0] as {
+        initialReplayState?: { sdkSessionId?: string };
+      };
+      expect(callParams.initialReplayState?.sdkSessionId).toBeUndefined();
     });
   });
 

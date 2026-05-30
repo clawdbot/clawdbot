@@ -167,7 +167,7 @@
         "install": {
           "npmSpec": "@openclaw/feishu",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.25"
+          "minHostVersion": ">=2026.5.29"
         }
       }
     },

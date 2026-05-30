@@ -46,7 +46,7 @@ export function createLocalGatewayRequestContext(
 ): GatewayRequestContext {
   const logGateway = createSubsystemLogger("gateway/local");
   const sessionEvents = new Set<string>();
-  const chatRuns = new Map<string, { sessionKey: string; clientRunId: string }>();
+  const chatRuns = new Map<string, { sessionKey: string; agentId?: string; clientRunId: string }>();
   const chatRunBuffers: GatewayRequestContext["chatRunBuffers"] = new Map();
   const chatDeltaSentAt: GatewayRequestContext["chatDeltaSentAt"] = new Map();
   const chatDeltaLastBroadcastLen: GatewayRequestContext["chatDeltaLastBroadcastLen"] = new Map();

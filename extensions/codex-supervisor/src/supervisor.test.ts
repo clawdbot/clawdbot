@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { WebSocketServer } from "ws";
 import { loadCodexSupervisorEndpoints, resolveCodexSupervisorPluginConfig } from "./config.js";
 import { connectCodexAppServerEndpoint, resolveSafeApprovalResult } from "./json-rpc-client.js";
 import { CodexSupervisor } from "./supervisor.js";
@@ -350,6 +351,7 @@ describe("CodexSupervisor", () => {
     ]);
     expect(fake.calls.find((call) => call.method === "thread/list")?.params).toMatchObject({
       sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
+      useStateDbOnly: true,
     });
   });
 
@@ -390,6 +392,51 @@ describe("CodexSupervisor", () => {
         endpointId: "local",
         threadId: "thread-2",
         status: "notLoaded",
+      },
+    ]);
+  });
+
+  it("bounds stored session pagination for large real Codex homes", async () => {
+    const fake = new FakeCodexConnection({
+      id: "thread-1",
+      status: { type: "idle" },
+      turns: [],
+    });
+    fake.request = async (method, params) => {
+      fake.calls.push({ method, params });
+      if (method === "thread/loaded/list") {
+        return { data: [], nextCursor: null };
+      }
+      if (method === "thread/list") {
+        return {
+          data: [
+            { id: "thread-1", status: { type: "notLoaded" }, turns: [] },
+            { id: "thread-2", status: { type: "notLoaded" }, turns: [] },
+          ],
+          nextCursor: "page-2",
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    };
+    const supervisor = new CodexSupervisor([endpoint], async () => fake);
+
+    await expect(
+      supervisor.listSessions({ includeStored: true, maxStoredSessions: 1 }),
+    ).resolves.toEqual([
+      {
+        endpointId: "local",
+        threadId: "thread-1",
+        status: "notLoaded",
+      },
+    ]);
+    expect(fake.calls.filter((call) => call.method === "thread/list")).toEqual([
+      {
+        method: "thread/list",
+        params: {
+          limit: 1,
+          sourceKinds: ["cli", "vscode", "exec", "appServer", "unknown"],
+          useStateDbOnly: true,
+        },
       },
     ]);
   });
@@ -505,6 +552,88 @@ describe("CodexSupervisor", () => {
       endpointId: "local",
       threadId: "thread-1",
       mode: "start",
+    });
+  });
+
+  it("uses a unique loaded endpoint match even when another endpoint is down", async () => {
+    const upEndpoint: CodexSupervisorEndpoint = { id: "up", transport: "stdio-proxy" };
+    const downEndpoint: CodexSupervisorEndpoint = { id: "down", transport: "stdio-proxy" };
+    const fake = new FakeCodexConnection({
+      id: "thread-1",
+      status: { type: "idle" },
+      turns: [],
+    });
+    const supervisor = new CodexSupervisor([upEndpoint, downEndpoint], async (target) => {
+      if (target.id === "down") {
+        throw new Error("host offline");
+      }
+      return fake;
+    });
+
+    await expect(
+      supervisor.sendToSession({ threadId: "thread-1", text: "continue" }),
+    ).resolves.toMatchObject({
+      endpointId: "up",
+      threadId: "thread-1",
+      mode: "start",
+    });
+  });
+
+  it("resolves omitted endpoint ids by exact thread read without scanning stored pages", async () => {
+    const fake = new FakeCodexConnection({
+      id: "thread-old",
+      status: { type: "notLoaded" },
+      turns: [],
+    });
+    fake.request = async (method, params) => {
+      fake.calls.push({ method, params });
+      if (method === "thread/loaded/list") {
+        return { data: [], nextCursor: null };
+      }
+      if (method === "thread/read" && params?.threadId === "thread-old") {
+        return { thread: { id: "thread-old", status: { type: "notLoaded" }, turns: [] } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    };
+    const supervisor = new CodexSupervisor([endpoint], async () => fake);
+
+    await expect(supervisor.readSession({ threadId: "thread-old" })).resolves.toEqual({
+      thread: { id: "thread-old", status: { type: "notLoaded" }, turns: [] },
+    });
+    expect(fake.calls.map((call) => call.method)).toEqual([
+      "thread/loaded/list",
+      "thread/read",
+      "thread/read",
+    ]);
+  });
+
+  it("resolves stored threads on healthy endpoints when another endpoint is down", async () => {
+    const downEndpoint: CodexSupervisorEndpoint = { id: "down", transport: "stdio-proxy" };
+    const upEndpoint: CodexSupervisorEndpoint = { id: "up", transport: "stdio-proxy" };
+    const fake = new FakeCodexConnection({
+      id: "thread-old",
+      status: { type: "notLoaded" },
+      turns: [],
+    });
+    fake.request = async (method, params) => {
+      fake.calls.push({ method, params });
+      if (method === "thread/loaded/list") {
+        return { data: [], nextCursor: null };
+      }
+      if (method === "thread/read" && params?.threadId === "thread-old") {
+        return { thread: { id: "thread-old", status: { type: "notLoaded" }, turns: [] } };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    };
+    const supervisor = new CodexSupervisor([downEndpoint, upEndpoint], async (target) => {
+      if (target.id === "down") {
+        throw new Error("host offline");
+      }
+      return fake;
+    });
+
+    await expect(supervisor.readSession({ threadId: "thread-old" })).resolves.toEqual({
+      thread: { id: "thread-old", status: { type: "notLoaded" }, turns: [] },
     });
   });
 
@@ -668,6 +797,53 @@ async function waitForFile(filePath: string): Promise<string> {
 }
 
 describe("connectCodexAppServerEndpoint", () => {
+  it("rejects pending websocket requests when the supervisor closes intentionally", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    const port = await new Promise<number>((resolve) => {
+      server.once("listening", () => {
+        const address = server.address();
+        resolve(typeof address === "object" && address ? address.port : 0);
+      });
+    });
+    const sawProbeRequest = new Promise<void>((resolve) => {
+      server.once("connection", (socket) => {
+        socket.on("message", (data) => {
+          const messageText =
+            typeof data === "string"
+              ? data
+              : Array.isArray(data)
+                ? Buffer.concat(data).toString()
+                : data instanceof ArrayBuffer
+                  ? Buffer.from(new Uint8Array(data)).toString()
+                  : Buffer.from(data).toString();
+          const request = JSON.parse(messageText) as Record<string, unknown>;
+          if (request.method === "initialize") {
+            socket.send(JSON.stringify({ id: request.id, result: {} }));
+          }
+          if (request.method === "thread/loaded/list") {
+            resolve();
+          }
+        });
+      });
+    });
+    const supervisor = new CodexSupervisor(
+      [{ id: "ws", transport: "websocket", url: `ws://127.0.0.1:${port}` }],
+      connectCodexAppServerEndpoint,
+    );
+
+    const probe = supervisor.probeEndpoints();
+    await sawProbeRequest;
+    await supervisor.close();
+
+    await expect(
+      Promise.race([
+        probe,
+        new Promise((_, reject) => setTimeout(() => reject(new Error("probe timed out")), 500)),
+      ]),
+    ).resolves.toMatchObject([{ endpointId: "ws", ok: false }]);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
   it("rejects malformed stdio frames instead of throwing out of band", async () => {
     const markerDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-supervisor-malformed-"));
     const marker = path.join(markerDir, "closed");
@@ -735,7 +911,7 @@ describe("connectCodexAppServerEndpoint", () => {
           process.stdout.write(JSON.stringify({ id: request.id, result: {} }) + "\\n");
           return;
         }
-        if (request.method === "thread/list") {
+        if (request.method === "thread/loaded/list") {
           process.stdout.write(JSON.stringify({ id: request.id, result: { threads: [] } }) + "\\n");
           setTimeout(() => process.exit(0), 0);
         }

@@ -1,6 +1,9 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const resolvePinnedHostnameWithPolicyMock = vi.fn();
+const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicyMock: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   resolvePinnedHostnameWithPolicy: (...args: unknown[]) =>
@@ -87,6 +90,38 @@ describe("Zalo API request methods", () => {
       expect(init.signal.aborted).toBe(true);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("caps oversized sendChatAction timeouts before scheduling the timer", async () => {
+    const setTimeoutMock = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    const clearTimeoutMock = vi
+      .spyOn(globalThis, "clearTimeout")
+      .mockImplementation(() => undefined);
+    try {
+      const fetcher = vi.fn<ZaloFetch>(
+        async () =>
+          ({
+            json: async () => ({ ok: true, result: {} }),
+          }) as Response,
+      );
+
+      await sendChatAction(
+        "test-token",
+        {
+          chat_id: "chat-123",
+          action: "typing",
+        },
+        fetcher,
+        MAX_TIMER_TIMEOUT_MS + 1_000_000,
+      );
+
+      expect(setTimeoutMock).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutMock.mockRestore();
+      clearTimeoutMock.mockRestore();
     }
   });
 

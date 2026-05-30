@@ -88,6 +88,31 @@ describe("openai responses payload policy", () => {
     });
   });
 
+  it("accepts plus-signed responses compaction thresholds", () => {
+    const payload = {} satisfies Record<string, unknown>;
+
+    applyOpenAIResponsesPayloadPolicy(
+      payload,
+      resolveOpenAIResponsesPayloadPolicy(
+        {
+          api: "openai-responses",
+          provider: "openai",
+          baseUrl: "https://api.openai.com/v1",
+        },
+        {
+          enableServerCompaction: true,
+          extraParams: { responsesCompactThreshold: "+120000" },
+          storeMode: "provider-policy",
+        },
+      ),
+    );
+
+    expect(payload).toEqual({
+      store: true,
+      context_management: [{ type: "compaction", compact_threshold: 120_000 }],
+    });
+  });
+
   it("strips store and prompt cache for proxy-like responses routes when requested", () => {
     const policy = resolveOpenAIResponsesPayloadPolicy(
       {

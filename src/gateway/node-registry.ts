@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -110,7 +111,7 @@ function normalizeSystemRunTimeoutMs(value: unknown): number | null | undefined 
     return undefined;
   }
   const timeoutMs = Math.trunc(value);
-  return timeoutMs > 0 ? timeoutMs : null;
+  return timeoutMs > 0 ? resolveTimerTimeoutMs(timeoutMs, 1) : null;
 }
 
 function resolvePendingSystemRunEvent(params: {
@@ -440,7 +441,7 @@ export class NodeRegistry {
         ...systemRunEvent,
       });
     }
-    const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 30_000;
+    const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
     return await new Promise<NodeInvokeResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingInvokes.delete(requestId);
@@ -528,7 +529,9 @@ export class NodeRegistry {
     if (typeof timeoutMs !== "number") {
       return null;
     }
-    return Date.now() + timeoutMs + AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS;
+    return (
+      Date.now() + (addTimerTimeoutGraceMs(timeoutMs, AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS) ?? 0)
+    );
   }
 
   private matchAuthorizedSystemRunEvent(params: {

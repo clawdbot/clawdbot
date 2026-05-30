@@ -1,3 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -16,6 +24,11 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
+import {
+  resolveAuthStatePath,
+  resolveAuthStorePath,
+  resolveLegacyAuthStorePath,
+} from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { note } from "../terminal/note.js";
@@ -119,6 +132,49 @@ type AuthIssue = {
   remainingMs?: number;
 };
 
+type AuthProfileHealthTarget = {
+  agentId: string;
+  agentDir: string;
+  isDefault: boolean;
+};
+
+function hasLocalAuthProfileStoreSource(agentDir: string): boolean {
+  return (
+    fs.existsSync(resolveAuthStorePath(agentDir)) ||
+    fs.existsSync(resolveAuthStatePath(agentDir)) ||
+    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
+  );
+}
+
+function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boolean): string {
+  return labelAgents ? `${title} (agent: ${agentId})` : title;
+}
+
+function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const targets = new Map<string, AuthProfileHealthTarget>();
+  const addTarget = (agentId: string, agentDir: string, isDefault: boolean) => {
+    const key = path.resolve(agentDir);
+    const existing = targets.get(key);
+    if (!existing || isDefault) {
+      targets.set(key, { agentId, agentDir, isDefault: isDefault || existing?.isDefault === true });
+    }
+  };
+
+  addTarget(defaultAgentId, resolveDefaultAgentDir(cfg), true);
+  for (const agentId of listAgentIds(cfg)) {
+    if (agentId === defaultAgentId) {
+      continue;
+    }
+    const agentDir = resolveAgentDir(cfg, agentId);
+    if (hasLocalAuthProfileStoreSource(agentDir)) {
+      addTarget(agentId, agentDir, false);
+    }
+  }
+
+  return [...targets.values()];
+}
+
 export function resolveUnusableProfileHint(params: {
   kind: "cooldown" | "disabled";
   reason?: string;
@@ -202,20 +258,18 @@ async function formatAuthIssueLine(
   return `- ${issue.profileId}: ${issue.status}${reason}${remaining}${hint ? ` — ${hint}` : ""}`;
 }
 
-export async function noteAuthProfileHealth(params: {
+async function noteAuthProfileHealthForTarget(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;
   allowKeychainPrompt: boolean;
+  target: AuthProfileHealthTarget;
+  labelAgents: boolean;
 }): Promise<void> {
-  if (
-    Object.keys(params.cfg.auth?.profiles ?? {}).length === 0 &&
-    !hasAnyAuthProfileStoreSource()
-  ) {
-    return;
-  }
-  const store = ensureAuthProfileStore(undefined, {
+  const store = ensureAuthProfileStore(params.target.agentDir, {
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
+  const noteTitle = (title: string) =>
+    formatAgentNoteTitle(title, params.target.agentId, params.labelAgents);
   const unusable = (() => {
     const now = Date.now();
     const out: string[] = [];
@@ -240,7 +294,7 @@ export async function noteAuthProfileHealth(params: {
   })();
 
   if (unusable.length > 0) {
-    note(unusable.join("\n"), "Auth profile cooldowns");
+    note(unusable.join("\n"), noteTitle("Auth profile cooldowns"));
   }
 
   let summary = buildAuthHealthSummary({
@@ -280,6 +334,7 @@ export async function noteAuthProfileHealth(params: {
           cfg: params.cfg,
           store,
           profileId: profile.profileId,
+          agentDir: params.target.agentDir,
         });
       } catch (err) {
         const message = formatErrorMessage(err);
@@ -293,10 +348,10 @@ export async function noteAuthProfileHealth(params: {
       }
     }
     if (errors.length > 0) {
-      note(errors.join("\n"), "OAuth refresh errors");
+      note(errors.join("\n"), noteTitle("OAuth refresh errors"));
     }
     summary = buildAuthHealthSummary({
-      store: ensureAuthProfileStore(undefined, {
+      store: ensureAuthProfileStore(params.target.agentDir, {
         allowKeychainPrompt: false,
       }),
       cfg: params.cfg,
@@ -321,6 +376,32 @@ export async function noteAuthProfileHealth(params: {
         ),
       ),
     );
-    note(issueLines.join("\n"), "Model auth");
+    note(issueLines.join("\n"), noteTitle("Model auth"));
+  }
+}
+
+export async function noteAuthProfileHealth(params: {
+  cfg: OpenClawConfig;
+  prompter: DoctorPrompter;
+  allowKeychainPrompt: boolean;
+}): Promise<void> {
+  const configuredProfiles = Object.keys(params.cfg.auth?.profiles ?? {}).length > 0;
+  const targets = listAuthProfileHealthTargets(params.cfg);
+  const activeTargets = targets.filter((target) =>
+    target.isDefault
+      ? hasAnyAuthProfileStoreSource(target.agentDir) || configuredProfiles
+      : hasLocalAuthProfileStoreSource(target.agentDir),
+  );
+  if (activeTargets.length === 0) {
+    return;
+  }
+
+  const labelAgents = activeTargets.length > 1;
+  for (const target of activeTargets) {
+    await noteAuthProfileHealthForTarget({
+      ...params,
+      target,
+      labelAgents,
+    });
   }
 }

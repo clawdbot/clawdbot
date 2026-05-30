@@ -45,6 +45,7 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { chunkMarkdownTextWithMode } from "openclaw/plugin-sdk/reply-chunking";
 import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
@@ -382,6 +383,7 @@ async function mirrorTelegramAssistantReplyToTranscript(params: {
   emitSessionTranscriptUpdate({
     sessionFile,
     sessionKey: params.sessionKey,
+    agentId: params.route.agentId,
     message: appendedMessage,
     messageId,
   });
@@ -407,13 +409,7 @@ function formatProgressAsMarkdownCode(text: string): string {
 }
 
 function normalizeTelegramThreadId(value: unknown): number | undefined {
-  const raw =
-    typeof value === "number" ? value : typeof value === "string" ? Number(value) : Number.NaN;
-  if (!Number.isFinite(raw)) {
-    return undefined;
-  }
-  const normalized = Math.trunc(raw);
-  return normalized > 0 ? normalized : undefined;
+  return parseStrictPositiveInteger(value);
 }
 
 function resolveTelegramForumThreadScopeFromSessionKey(
@@ -452,6 +448,28 @@ function resolveDispatchTelegramThreadSpec(params: {
   return recoveredThreadId == null || recoveredThreadId === params.threadSpec.id
     ? params.threadSpec
     : { ...params.threadSpec, id: recoveredThreadId };
+}
+
+function normalizeDispatchTelegramThreadPayload(params: {
+  context: TelegramMessageContext;
+  threadSpec: TelegramThreadSpec;
+}): TelegramMessageContext {
+  if (params.threadSpec.scope !== "forum" || params.threadSpec.id == null) {
+    return params.context;
+  }
+  const messageThreadId = normalizeTelegramThreadId(params.context.ctxPayload.MessageThreadId);
+  const transportThreadId = normalizeTelegramThreadId(params.context.ctxPayload.TransportThreadId);
+  if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
+    return params.context;
+  }
+  return {
+    ...params.context,
+    ctxPayload: {
+      ...params.context.ctxPayload,
+      MessageThreadId: params.threadSpec.id,
+      TransportThreadId: params.threadSpec.id,
+    },
+  };
 }
 
 function extractCurrentTelegramBody(body: string | undefined): string {
@@ -581,7 +599,7 @@ function resolveDispatchTelegramContext(params: {
     threadSpec: params.context.threadSpec,
   });
   if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
-    return params.context;
+    return normalizeDispatchTelegramThreadPayload({ context: params.context, threadSpec });
   }
   const recoveredRoutingTarget = buildTelegramInboundOriginTarget(
     params.context.chatId,

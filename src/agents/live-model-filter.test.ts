@@ -92,10 +92,30 @@ describe("shouldExcludeProviderFromDefaultHighSignalLiveSweep", () => {
 });
 
 describe("resolveHighSignalLiveModelLimit", () => {
+  it("accepts signed decimal max model limits", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "+3",
+        useExplicitModels: false,
+        defaultLimit: 5,
+      }),
+    ).toBe(3);
+  });
+
   it("does not coerce partial max model limits", () => {
     expect(
       resolveHighSignalLiveModelLimit({
         rawMaxModels: "3models",
+        useExplicitModels: false,
+        defaultLimit: 5,
+      }),
+    ).toBe(0);
+  });
+
+  it("does not coerce non-decimal max model limits", () => {
+    expect(
+      resolveHighSignalLiveModelLimit({
+        rawMaxModels: "0x3",
         useExplicitModels: false,
         defaultLimit: 5,
       }),

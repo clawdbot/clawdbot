@@ -126,6 +126,40 @@ describe("loadEnabledBundleMcpConfig", () => {
     );
   });
 
+  it("uses a provided manifest registry instead of rediscovering bundle plugins", async () => {
+    const homeDir = await tempHarness.createTempDir("openclaw-bundle-mcp-home-");
+    const workspaceDir = await tempHarness.createTempDir("openclaw-bundle-mcp-workspace-");
+    const { pluginRoot } = await createBundleProbePlugin(homeDir);
+
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["bundle-probe"]),
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "bundle-probe",
+            origin: "global",
+            format: "bundle",
+            bundleFormat: "claude",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: await fs.realpath(pluginRoot),
+            source: "test",
+            manifestPath: path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+          },
+        ],
+      },
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.bundleProbe).toMatchObject({
+      command: "node",
+    });
+  });
+
   it("merges inline bundle MCP servers and skips disabled bundles", async () => {
     await withBundleHomeEnv(
       tempHarness,

@@ -1,25 +1,10 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 
-const gatewayClientState = vi.hoisted(() => ({
-  lastOptions: undefined as Record<string, unknown> | undefined,
-}));
-
-vi.mock("./client.js", () => ({
-  GatewayClient: class MockGatewayClient {
-    constructor(options: Record<string, unknown>) {
-      gatewayClientState.lastOptions = options;
-    }
-
-    start() {
-      const options = gatewayClientState.lastOptions as
-        | { onHelloOk?: (hello: { type: "hello-ok" }) => void }
-        | undefined;
-      queueMicrotask(() => options?.onHelloOk?.({ type: "hello-ok" }));
-    }
-
-    async stopAndWait() {}
+vi.mock("./client-start-readiness.js", () => ({
+  startGatewayClientWhenEventLoopReady: async (client: { start: () => void }) => {
+    client.start();
+    return { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 0 };
   },
 }));
 
@@ -30,9 +15,13 @@ describe("gateway cli backend live helpers", () => {
     liveHelpers = await import("./gateway-cli-backend.live-helpers.js");
   });
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
     cliBackendsTesting.resetDepsForTest();
-    gatewayClientState.lastOptions = undefined;
     delete process.env.OPENCLAW_SKIP_CHANNELS;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
@@ -86,26 +75,6 @@ describe("gateway cli backend live helpers", () => {
     expect(process.env.OPENCLAW_TEST_MINIMAL_GATEWAY).toBe("old-minimal");
     expect(process.env.ANTHROPIC_API_KEY).toBe("old-anthropic");
     expect(process.env.ANTHROPIC_API_KEY_OLD).toBe("old-anthropic-old");
-  });
-
-  it("builds the live gateway client with test identity defaults", async () => {
-    const { connectTestGatewayClient } = await import("./gateway-cli-backend.live-helpers.js");
-
-    const client = await connectTestGatewayClient({
-      url: "ws://127.0.0.1:18789",
-      token: "gateway-token",
-    });
-
-    expect(client.start).toBeTypeOf("function");
-    expect(client.stopAndWait).toBeTypeOf("function");
-    expect(gatewayClientState.lastOptions?.url).toBe("ws://127.0.0.1:18789");
-    expect(gatewayClientState.lastOptions?.token).toBe("gateway-token");
-    expect(gatewayClientState.lastOptions?.clientName).toBe(GATEWAY_CLIENT_NAMES.TEST);
-    expect(gatewayClientState.lastOptions?.clientDisplayName).toBe("vitest-live");
-    expect(gatewayClientState.lastOptions?.clientVersion).toBe("dev");
-    expect(gatewayClientState.lastOptions?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
-    expect(gatewayClientState.lastOptions?.connectChallengeTimeoutMs).toBe(45_000);
-    expect(gatewayClientState.lastOptions).not.toHaveProperty("requestTimeoutMs");
   });
 
   it("defaults the model switch probe to Claude Sonnet -> Opus", async () => {

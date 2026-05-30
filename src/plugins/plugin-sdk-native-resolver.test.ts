@@ -1,7 +1,9 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   installOpenClawPluginSdkNativeResolver,
@@ -120,6 +122,80 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         fs.chmodSync(distRoot, distMode);
       }
     }
+  });
+
+  it("keeps SDK aliases available for native ESM lazy imports", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-native-esm-resolver-"));
+    const probePath = path.join(root, "probe.mjs");
+    const resolverModuleUrl = pathToFileURL(
+      path.join(process.cwd(), "src", "plugins", "plugin-sdk-native-resolver.ts"),
+    ).href;
+    fs.writeFileSync(
+      probePath,
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'import { pathToFileURL } from "node:url";',
+        `import { installOpenClawPluginSdkNativeResolver, resetOpenClawPluginSdkNativeResolverForTest } from ${JSON.stringify(resolverModuleUrl)};`,
+        `const root = ${JSON.stringify(root)};`,
+        "const writeJson = (targetPath, value) => {",
+        "  fs.mkdirSync(path.dirname(targetPath), { recursive: true });",
+        '  fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\\n`, "utf8");',
+        "};",
+        'writeJson(path.join(root, "package.json"), {',
+        '  name: "openclaw",',
+        '  type: "module",',
+        '  bin: { openclaw: "./openclaw.mjs" },',
+        "  exports: {",
+        '    "./plugin-sdk": "./dist/plugin-sdk/root-alias.cjs",',
+        '    "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",',
+        "  },",
+        "});",
+        'fs.writeFileSync(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\\n", "utf8");',
+        'fs.mkdirSync(path.join(root, "dist", "plugin-sdk"), { recursive: true });',
+        'fs.writeFileSync(path.join(root, "dist", "plugin-sdk", "root-alias.cjs"), "module.exports = {};\\n", "utf8");',
+        'fs.writeFileSync(path.join(root, "dist", "plugin-sdk", "channel-outbound.js"), "export const defineChannelMessageAdapter = () => \\"adapter\\";\\n", "utf8");',
+        'const loaderModulePath = path.join(root, "dist", "plugins", "loader.js");',
+        "fs.mkdirSync(path.dirname(loaderModulePath), { recursive: true });",
+        'fs.writeFileSync(loaderModulePath, "export default {};\\n", "utf8");',
+        'const pluginRoot = path.join(root, "external-plugin");',
+        'writeJson(path.join(pluginRoot, "package.json"), { name: "external-plugin", type: "module" });',
+        'const entryPath = path.join(pluginRoot, "dist", "runtime-api.js");',
+        'const lazyPath = path.join(pluginRoot, "dist", "lazy.js");',
+        "fs.mkdirSync(path.dirname(entryPath), { recursive: true });",
+        "fs.writeFileSync(",
+        "  entryPath,",
+        '  "import { defineChannelMessageAdapter } from \\"openclaw/plugin-sdk/channel-outbound\\"; export const eager = defineChannelMessageAdapter(); export const loadLazy = () => import(\\"./lazy.js\\");\\n",',
+        '  "utf8",',
+        ");",
+        "fs.writeFileSync(",
+        "  lazyPath,",
+        '  "import { defineChannelMessageAdapter } from \\"openclaw/plugin-sdk/channel-outbound\\"; export const lazy = defineChannelMessageAdapter();\\n",',
+        '  "utf8",',
+        ");",
+        "installOpenClawPluginSdkNativeResolver({",
+        "  modulePath: loaderModulePath,",
+        "  pluginModulePath: entryPath,",
+        '  pluginSdkResolution: "dist",',
+        "});",
+        "const module = await import(pathToFileURL(entryPath).href);",
+        "const lazy = await module.loadLazy();",
+        "resetOpenClawPluginSdkNativeResolverForTest();",
+        "console.log(`${module.eager}:${lazy.lazy}`);",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(process.execPath, ["--import", "tsx", probePath], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+    fs.rmSync(root, { recursive: true, force: true });
+
+    expect(result.stderr).toBe("");
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("adapter:adapter");
   });
 
   it("does not resolve SDK aliases for parents outside registered plugin roots", () => {

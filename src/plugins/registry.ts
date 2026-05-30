@@ -28,8 +28,10 @@ import {
 } from "../infra/node-commands.js";
 import {
   createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
   type PluginStateKeyedStore,
+  type PluginStateSyncKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -2573,18 +2575,27 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         };
         if (prop === "state") {
           const baseState = getRuntimeProperty();
+          const assertPluginStateAllowed = () => {
+            const record =
+              pluginRuntimeRecordById.get(pluginId) ??
+              registry.plugins.find((entry) => entry.id === pluginId);
+            if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
+              throw new Error(
+                "openKeyedStore is only available for trusted plugins in this release.",
+              );
+            }
+          };
           return {
             ...baseState,
             openKeyedStore: <T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => {
-              const record =
-                pluginRuntimeRecordById.get(pluginId) ??
-                registry.plugins.find((entry) => entry.id === pluginId);
-              if (record?.origin !== "bundled" && record?.trustedOfficialInstall !== true) {
-                throw new Error(
-                  "openKeyedStore is only available for trusted plugins in this release.",
-                );
-              }
+              assertPluginStateAllowed();
               return createPluginStateKeyedStore<T>(pluginId, options);
+            },
+            openSyncKeyedStore: <T>(
+              options: OpenKeyedStoreOptions,
+            ): PluginStateSyncKeyedStore<T> => {
+              assertPluginStateAllowed();
+              return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
           } satisfies PluginRuntime["state"];
         }

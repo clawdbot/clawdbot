@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
+import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../../secrets/runtime-web-tools-state.js";
 import type {
   RuntimeWebFetchMetadata,
@@ -64,7 +64,7 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
     | undefined;
   const config =
     params.lateBindRuntimeConfig === true
-      ? (getActiveSecretsRuntimeSnapshot()?.config ?? params.capturedConfig)
+      ? (getActiveSecretsRuntimeConfigSnapshot()?.config ?? params.capturedConfig)
       : params.capturedConfig;
   const providerSelectionId =
     resolveRuntimeWebProviderId(runtimeMetadata) ||

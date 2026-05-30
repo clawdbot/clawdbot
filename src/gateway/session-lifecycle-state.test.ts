@@ -112,4 +112,118 @@ describe("session lifecycle state", () => {
       abortedLastRun: false,
     });
   });
+
+  it("keeps provider hard timeouts stronger than rpc cancellation metadata", () => {
+    expect(
+      derivePersistedSessionLifecyclePatch({
+        entry: {
+          updatedAt: 1_000,
+          startedAt: 1_050,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "end",
+            aborted: true,
+            stopReason: "rpc",
+            timeoutPhase: "provider",
+            providerStarted: true,
+            endedAt: 1_550,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_550,
+      status: "timeout",
+      startedAt: 1_050,
+      endedAt: 1_550,
+      runtimeMs: 500,
+      abortedLastRun: false,
+    });
+  });
+
+  it("maps non-hard rpc lifecycle aborts to killed sessions", () => {
+    expect(
+      derivePersistedSessionLifecyclePatch({
+        entry: {
+          updatedAt: 1_000,
+          startedAt: 1_050,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "end",
+            aborted: true,
+            stopReason: "rpc",
+            timeoutPhase: "queue",
+            providerStarted: false,
+            endedAt: 1_550,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_550,
+      status: "killed",
+      startedAt: 1_050,
+      endedAt: 1_550,
+      runtimeMs: 500,
+      abortedLastRun: true,
+    });
+  });
+
+  it("maps provider timeout lifecycle errors to timed out sessions", () => {
+    expect(
+      derivePersistedSessionLifecyclePatch({
+        entry: {
+          updatedAt: 1_000,
+          startedAt: 1_050,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "error",
+            error: "provider request timed out",
+            livenessState: "blocked",
+            timeoutPhase: "provider",
+            providerStarted: true,
+            endedAt: 1_550,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_550,
+      status: "timeout",
+      startedAt: 1_050,
+      endedAt: 1_550,
+      runtimeMs: 500,
+      abortedLastRun: false,
+    });
+  });
+
+  it("maps provider timeout lifecycle end metadata to timed out sessions", () => {
+    expect(
+      derivePersistedSessionLifecyclePatch({
+        entry: {
+          updatedAt: 1_000,
+          startedAt: 1_050,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "end",
+            timeoutPhase: "provider",
+            providerStarted: true,
+            endedAt: 1_550,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_550,
+      status: "timeout",
+      startedAt: 1_050,
+      endedAt: 1_550,
+      runtimeMs: 500,
+      abortedLastRun: false,
+    });
+  });
 });

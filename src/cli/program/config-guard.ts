@@ -1,4 +1,9 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
+import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { withSuppressedNotes } from "../../terminal/note.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
@@ -17,6 +22,7 @@ const ALLOWED_INVALID_GATEWAY_SUBCOMMANDS = new Set([
   "stop",
   "restart",
 ]);
+const ALLOWED_INVALID_TASK_SUBCOMMANDS = new Set(["list", "audit"]);
 let didRunDoctorConfigFlow = false;
 let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnapshot>>> | null =
   null;
@@ -24,6 +30,91 @@ let configSnapshotPromise: Promise<Awaited<ReturnType<typeof readConfigFileSnaps
 function resetConfigGuardStateForTests() {
   didRunDoctorConfigFlow = false;
   configSnapshotPromise = null;
+}
+
+function fileOrDirExists(pathname: string): boolean {
+  try {
+    return fs.existsSync(pathname);
+  } catch {
+    return false;
+  }
+}
+
+function dirHasFile(dir: string, predicate: (name: string) => boolean): boolean {
+  try {
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .some((entry) => entry.isFile() && predicate(entry.name));
+  } catch {
+    return false;
+  }
+}
+
+function isLegacyWhatsAppAuthFile(name: string): boolean {
+  if (name === "creds.json" || name === "creds.json.bak") {
+    return true;
+  }
+  return name.endsWith(".json") && /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
+}
+
+function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
+  if (fileOrDirExists(path.join(stateDir, "discord", "model-picker-preferences.json"))) {
+    return true;
+  }
+  if (dirHasFile(path.join(stateDir, "feishu", "dedup"), (name) => name.endsWith(".json"))) {
+    return true;
+  }
+  if (
+    fileOrDirExists(path.join(oauthDir, "telegram-allowFrom.json")) ||
+    dirHasFile(
+      path.join(stateDir, "telegram"),
+      (name) => name.startsWith("bot-info-") && name.endsWith(".json"),
+    )
+  ) {
+    return true;
+  }
+  return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
+}
+
+function hasLegacyStateMigrationInputs(): boolean {
+  const stateDir = resolveStateDir(process.env, os.homedir);
+  const oauthDir = resolveOAuthDir(process.env, stateDir);
+  if (
+    !process.env.OPENCLAW_STATE_DIR?.trim() &&
+    resolveLegacyStateDirs(() => resolveRequiredHomeDir(process.env, os.homedir)).some(
+      fileOrDirExists,
+    )
+  ) {
+    return true;
+  }
+  return (
+    [
+      path.join(stateDir, "agent"),
+      path.join(stateDir, "agents"),
+      path.join(stateDir, "flows", "registry.sqlite"),
+      path.join(stateDir, "plugin-state", "state.sqlite"),
+      path.join(stateDir, "sessions"),
+      path.join(stateDir, "tasks", "runs.sqlite"),
+    ].some(fileOrDirExists) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
+  );
+}
+
+function isReadOnlyStateMigrationCommand(commandPath: string[]): boolean {
+  const commandName = commandPath[0];
+  const subcommandName = commandPath[1];
+  return (
+    commandName === "status" ||
+    (commandName === "tasks" &&
+      (subcommandName === undefined || ALLOWED_INVALID_TASK_SUBCOMMANDS.has(subcommandName)))
+  );
+}
+
+function snapshotHasConfiguredSessionStore(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): boolean {
+  const cfg = snapshot.runtimeConfig ?? snapshot.config;
+  const store = cfg?.session?.store;
+  return typeof store === "string" && store.trim().length > 0;
 }
 
 async function getConfigSnapshot() {
@@ -51,30 +142,51 @@ export async function ensureConfigReady(params: {
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   let preflightSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>> | null = null;
-  if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
+  const shouldConsiderStateMigration = shouldMigrateStateFromPath(commandPath);
+  const isReadOnlyMigrationCommand = isReadOnlyStateMigrationCommand(commandPath);
+  const runStateMigrationPreflight = async () => {
     didRunDoctorConfigFlow = true;
     const runDoctorConfigPreflight = async () =>
       (await import("../../commands/doctor-config-preflight.js")).runDoctorConfigPreflight({
-        // Keep ordinary CLI startup on the lightweight validation path.
-        migrateState: false,
+        migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
       });
-    if (!params.suppressDoctorStdout) {
-      preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
-    } else {
-      preflightSnapshot = (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
-    }
+    return !params.suppressDoctorStdout
+      ? (await runDoctorConfigPreflight()).snapshot
+      : (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
+  };
+  if (
+    !didRunDoctorConfigFlow &&
+    shouldConsiderStateMigration &&
+    (!isReadOnlyMigrationCommand || hasLegacyStateMigrationInputs())
+  ) {
+    preflightSnapshot = await runStateMigrationPreflight();
   }
 
-  const snapshot = preflightSnapshot ?? (await getConfigSnapshot());
+  let snapshot = preflightSnapshot ?? (await getConfigSnapshot());
+  if (
+    !preflightSnapshot &&
+    !didRunDoctorConfigFlow &&
+    shouldConsiderStateMigration &&
+    isReadOnlyMigrationCommand &&
+    snapshot.valid &&
+    snapshotHasConfiguredSessionStore(snapshot)
+  ) {
+    preflightSnapshot = await runStateMigrationPreflight();
+    snapshot = preflightSnapshot;
+  }
   const commandName = commandPath[0];
   const subcommandName = commandPath[1];
   const isBareGatewayForegroundRun =
     commandName === "gateway" && (subcommandName === undefined || subcommandName.trim() === "");
+  const isReadOnlyTaskStateCommand =
+    commandName === "tasks" &&
+    (subcommandName === undefined || ALLOWED_INVALID_TASK_SUBCOMMANDS.has(subcommandName));
   const allowInvalid = commandName
     ? params.allowInvalid === true ||
       ALLOWED_INVALID_COMMANDS.has(commandName) ||
+      isReadOnlyTaskStateCommand ||
       isBareGatewayForegroundRun ||
       (commandName === "gateway" &&
         subcommandName &&
@@ -134,7 +246,9 @@ export async function ensureConfigReady(params: {
     `${muted("Inspect:")} ${commandText(formatCliCommand("openclaw config validate"))}`,
   );
   params.runtime.error(
-    muted("Status, health, logs, and doctor commands still run with invalid config."),
+    muted(
+      "Status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
+    ),
   );
   if (!allowInvalid) {
     params.runtime.exit(1);

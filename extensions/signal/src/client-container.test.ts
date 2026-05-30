@@ -1,4 +1,5 @@
 import * as fetchModule from "openclaw/plugin-sdk/fetch-runtime";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
   containerCheck,
@@ -292,6 +293,29 @@ describe("containerRestRequest", () => {
       throw new Error("expected fetch call to include an abort signal");
     }
   });
+
+  it("caps oversized REST request timeouts before arming abort timers", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(0 as unknown as ReturnType<typeof setTimeout>);
+    try {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => "{}",
+      });
+
+      await containerRestRequest("/v1/about", {
+        baseUrl: "http://localhost:8080",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(requireFetchCall()[1].signal).toBeInstanceOf(AbortSignal);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
 });
 
 describe("containerSendMessage", () => {
@@ -340,6 +364,26 @@ describe("containerSendMessage", () => {
       }),
     ).rejects.toThrow("Signal REST send returned invalid timestamp");
   });
+
+  it.each(["0x18bcfe56800", "1700000000000.5"])(
+    "rejects non-decimal integer send timestamp %s",
+    async (timestamp) => {
+      mockFetch.mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ timestamp }),
+      });
+
+      await expect(
+        containerSendMessage({
+          baseUrl: "http://localhost:8080",
+          account: "+14259798283",
+          recipients: ["+15550001111"],
+          message: "Hello world",
+        }),
+      ).rejects.toThrow("Signal REST send returned invalid timestamp");
+    },
+  );
 
   it("uses container styled text mode when styles are provided", async () => {
     mockFetch.mockResolvedValue({
@@ -621,6 +665,24 @@ describe("containerFetchAttachment", () => {
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
+  it("rejects malformed content-length before reading attachments", async () => {
+    const arrayBuffer = vi.fn();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "0x3" }),
+      arrayBuffer,
+    });
+
+    await expect(
+      containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        maxResponseBytes: 4,
+      }),
+    ).rejects.toThrow("invalid content-length header: 0x3");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
   it("rejects streamed attachments that exceed the response cap", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -784,6 +846,7 @@ describe("containerSendReaction", () => {
       emoji: "👍",
       targetAuthor: "+15550001111",
       targetTimestamp: 1699999999999,
+      groupId: "group-123",
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
@@ -794,29 +857,9 @@ describe("containerSendReaction", () => {
         reaction: "👍",
         target_author: "+15550001111",
         timestamp: 1699999999999,
+        group_id: "group-123",
       }),
     );
-  });
-
-  it("includes group_id when provided", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({}),
-    });
-
-    await containerSendReaction({
-      baseUrl: "http://localhost:8080",
-      account: "+14259798283",
-      recipient: "+15550001111",
-      emoji: "❤️",
-      targetAuthor: "+15550001111",
-      targetTimestamp: 1699999999999,
-      groupId: "group-123",
-    });
-
-    const body = parseFetchBody();
-    expect(body.group_id).toBe("group-123");
   });
 });
 
@@ -871,6 +914,7 @@ describe("containerRemoveReaction", () => {
       emoji: "👍",
       targetAuthor: "+15550001111",
       targetTimestamp: 1699999999999,
+      groupId: "group-123",
     });
 
     expect(result).toEqual({ timestamp: 1700000000000 });
@@ -884,28 +928,8 @@ describe("containerRemoveReaction", () => {
         reaction: "👍",
         target_author: "+15550001111",
         timestamp: 1699999999999,
+        group_id: "group-123",
       }),
     );
-  });
-
-  it("includes group_id when provided", async () => {
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({}),
-    });
-
-    await containerRemoveReaction({
-      baseUrl: "http://localhost:8080",
-      account: "+14259798283",
-      recipient: "+15550001111",
-      emoji: "❤️",
-      targetAuthor: "+15550001111",
-      targetTimestamp: 1699999999999,
-      groupId: "group-123",
-    });
-
-    const body = parseFetchBody();
-    expect(body.group_id).toBe("group-123");
   });
 });

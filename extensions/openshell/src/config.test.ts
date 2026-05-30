@@ -70,6 +70,14 @@ describe("openshell plugin config", () => {
     ).toThrow("mode must be one of mirror, remote");
   });
 
+  it("rejects timeouts beyond Node's safe timer range", () => {
+    expect(() =>
+      resolveOpenShellPluginConfig({
+        timeoutSeconds: 2_147_001,
+      }),
+    ).toThrow("timeoutSeconds must be a number <= 2147000");
+  });
+
   it("keeps the runtime json schema in sync with the manifest config schema", () => {
     const manifest = JSON.parse(
       fsSync.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),

@@ -300,6 +300,16 @@ function parseMaxOldSpaceSizeMb(value, fallbackMb) {
   return Math.trunc(parsed);
 }
 
+function normalizeMaxOldSpaceSizeMb(value, maxOldSpaceMb) {
+  // Build wrappers may inherit smaller runner-level caps; tsdown needs the
+  // resolved build heap while still respecting cgroup-derived upper bounds.
+  const parsed = parseMaxOldSpaceSizeMb(value, maxOldSpaceMb);
+  if (parsed < maxOldSpaceMb) {
+    return maxOldSpaceMb;
+  }
+  return Math.min(parsed, maxOldSpaceMb);
+}
+
 function normalizeTsdownNodeOptions(nodeOptions, params = {}) {
   const maxOldSpaceMb = resolveTsdownMaxOldSpaceMb(params);
   const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
@@ -311,7 +321,7 @@ function normalizeTsdownNodeOptions(nodeOptions, params = {}) {
     const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
     if (inlineMatch) {
       foundMaxOldSpaceSize = true;
-      const value = Math.min(parseMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb), maxOldSpaceMb);
+      const value = normalizeMaxOldSpaceSizeMb(inlineMatch[1], maxOldSpaceMb);
       normalized.push(`--max-old-space-size=${value}`);
       continue;
     }
@@ -319,7 +329,7 @@ function normalizeTsdownNodeOptions(nodeOptions, params = {}) {
     if (part === "--max-old-space-size") {
       foundMaxOldSpaceSize = true;
       const next = parts[index + 1];
-      const value = Math.min(parseMaxOldSpaceSizeMb(next, maxOldSpaceMb), maxOldSpaceMb);
+      const value = normalizeMaxOldSpaceSizeMb(next, maxOldSpaceMb);
       normalized.push(`--max-old-space-size=${value}`);
       if (next !== undefined) {
         index += 1;

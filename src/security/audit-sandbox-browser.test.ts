@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { collectSandboxBrowserHashLabelFindings } from "./audit-extra.async.js";
 import { collectSandboxDangerousConfigFindings } from "./audit-extra.sync.js";
@@ -25,7 +25,23 @@ function requireFinding(
   return finding;
 }
 
+beforeEach(() => {
+  vi.useRealTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("security audit sandbox browser findings", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("warns when sandbox browser containers have missing or stale hash labels", async () => {
     const findings = await collectSandboxBrowserHashLabelFindings({
       execDockerRawFn: async (args: string[]) => {
@@ -78,12 +94,17 @@ describe("security audit sandbox browser findings", () => {
 
   it("bounds sandbox browser Docker probes that do not return", async () => {
     let probeSignal: AbortSignal | undefined;
-    const startedAt = Date.now();
+    let markProbeStarted!: () => void;
+    const probeStarted = new Promise<void>((resolve) => {
+      markProbeStarted = resolve;
+    });
 
-    const findings = await collectSandboxBrowserHashLabelFindings({
-      timeoutMs: 1,
+    vi.useFakeTimers();
+    const findingsPromise = collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 250,
       execDockerRawFn: async (_args, opts) => {
         probeSignal = opts?.signal;
+        markProbeStarted();
         return await new Promise((_, reject) =>
           opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
             once: true,
@@ -91,8 +112,11 @@ describe("security audit sandbox browser findings", () => {
         );
       },
     });
+    await probeStarted;
+    await vi.advanceTimersByTimeAsync(250);
 
-    expect(Date.now() - startedAt).toBeLessThan(1000);
+    const findings = await findingsPromise;
+
     expect(probeSignal?.aborted).toBe(true);
     expect(findings).toEqual([
       expect.objectContaining({
@@ -104,9 +128,14 @@ describe("security audit sandbox browser findings", () => {
 
   it("stops probing remaining sandbox browser containers after a Docker timeout", async () => {
     const calls: string[] = [];
+    let markHungProbeStarted!: () => void;
+    const hungProbeStarted = new Promise<void>((resolve) => {
+      markHungProbeStarted = resolve;
+    });
 
-    const findings = await collectSandboxBrowserHashLabelFindings({
-      timeoutMs: 1,
+    vi.useFakeTimers();
+    const findingsPromise = collectSandboxBrowserHashLabelFindings({
+      timeoutMs: 250,
       execDockerRawFn: async (args, opts) => {
         calls.push(`${args[0] ?? ""}:${args.at(-1) ?? ""}`);
         if (args[0] === "ps") {
@@ -116,6 +145,7 @@ describe("security audit sandbox browser findings", () => {
             code: 0,
           };
         }
+        markHungProbeStarted();
         return await new Promise((_, reject) =>
           opts?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
             once: true,
@@ -123,6 +153,10 @@ describe("security audit sandbox browser findings", () => {
         );
       },
     });
+    await hungProbeStarted;
+    await vi.advanceTimersByTimeAsync(250);
+
+    const findings = await findingsPromise;
 
     expect(calls).toEqual(["ps:{{.Names}}", "inspect:openclaw-sbx-browser-hung"]);
     expect(findings).toEqual([

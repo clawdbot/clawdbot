@@ -26,6 +26,7 @@ import {
 } from "./tts.js";
 
 const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
+const DEFAULT_GENERATED_AUDIO_MAX_BYTES = 16 * 1024 * 1024;
 
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
 
@@ -172,6 +173,16 @@ function readOpenAIOverrides(
     voice: trimToUndefined(overrides.voice),
     speed: normalizeOpenAISpeechSpeed(overrides.speed, baseUrl),
   };
+}
+
+function resolveGeneratedAudioMaxBytes(req: {
+  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
+}): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_AUDIO_MAX_BYTES;
 }
 
 function renderOpenAITtsPersonaInstructions(req: {
@@ -328,6 +339,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
       return {
         audioBuffer,
@@ -356,6 +368,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         responseFormat: outputFormat,
         extraBody: config.extraBody,
         timeoutMs: req.timeoutMs,
+        maxBytes: resolveGeneratedAudioMaxBytes(req),
       });
       return { audioBuffer, outputFormat, sampleRate };
     },

@@ -264,6 +264,7 @@ function websocketMessageToString(data: WebSocket.RawData): string {
 class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
   private readonly ws: WebSocket;
   private readonly openPromise: Promise<void>;
+  private closing = false;
 
   constructor(endpoint: Extract<CodexSupervisorEndpoint, { transport: "websocket" }>) {
     super();
@@ -294,7 +295,11 @@ class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
       }
     });
     this.ws.once("error", (error) => this.fail(error));
-    this.ws.once("close", () => this.fail(new Error("Codex app-server websocket closed")));
+    this.ws.once("close", () => {
+      if (!this.closing) {
+        this.fail(new Error("Codex app-server websocket closed"));
+      }
+    });
   }
 
   async ready(): Promise<void> {
@@ -310,7 +315,27 @@ class WebSocketCodexJsonRpcConnection extends BaseCodexJsonRpcConnection {
   }
 
   async close(): Promise<void> {
-    this.ws.close();
+    this.closing = true;
+    this.fail(new Error("Codex app-server websocket closed"));
+    if (this.ws.readyState === WebSocket.CLOSED) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.ws.terminate();
+        resolve();
+      }, 1000);
+      this.ws.once("close", () => {
+        clearTimeout(timeout);
+        resolve();
+      });
+      if (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN) {
+        this.ws.close();
+      } else {
+        clearTimeout(timeout);
+        resolve();
+      }
+    });
   }
 }
 

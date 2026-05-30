@@ -31,9 +31,10 @@ const createDiscordRestClient = vi.fn<typeof discordClientModule.createDiscordRe
 
 let maybeSendBindingMessage: typeof import("./thread-bindings.discord-api.js").maybeSendBindingMessage;
 let resolveChannelIdForBinding: typeof import("./thread-bindings.discord-api.js").resolveChannelIdForBinding;
+let isDiscordThreadGoneError: typeof import("./thread-bindings.discord-api.js").isDiscordThreadGoneError;
 
 beforeAll(async () => {
-  ({ maybeSendBindingMessage, resolveChannelIdForBinding } =
+  ({ isDiscordThreadGoneError, maybeSendBindingMessage, resolveChannelIdForBinding } =
     await import("./thread-bindings.discord-api.js"));
 });
 
@@ -193,6 +194,14 @@ describe("resolveChannelIdForBinding", () => {
     });
 
     expect(resolved).toBe("forum-1");
+  });
+});
+
+describe("isDiscordThreadGoneError", () => {
+  it("rejects malformed fractional Discord status values", () => {
+    expect(isDiscordThreadGoneError({ status: 403.5 })).toBe(false);
+    expect(isDiscordThreadGoneError({ statusCode: "404.5" })).toBe(false);
+    expect(isDiscordThreadGoneError({ statusCode: "+404" })).toBe(true);
   });
 });
 

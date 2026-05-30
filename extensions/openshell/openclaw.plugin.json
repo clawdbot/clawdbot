@@ -56,7 +56,8 @@
       },
       "timeoutSeconds": {
         "type": "number",
-        "minimum": 1
+        "minimum": 1,
+        "maximum": 2147000
       }
     }
   },

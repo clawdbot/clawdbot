@@ -19,6 +19,8 @@ const PINNED_GITHUB_TARBALL_PATTERN =
   /^https:\/\/codeload\.github\.com\/[^/\s]+\/[^/\s]+\/tar\.gz\/[0-9a-f]{40}$/iu;
 const EXOTIC_SPEC_PATTERN = /^(?:git\+|github:|gitlab:|bitbucket:|https?:)/iu;
 const RECENTLY_PUBLISHED_VERSION_TYPE = "recently-published-version";
+const NPM_PACKUMENT_ACCEPT_HEADER = "application/json";
+export const NPM_PACKUMENT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function isAllowedPinnedSpec(spec) {
   if (typeof spec !== "string") {
@@ -54,6 +56,52 @@ function resolveRegistryBaseUrl() {
 
 function isExoticResolvedVersion(version) {
   return EXOTIC_SPEC_PATTERN.test(version);
+}
+
+export async function readBoundedNpmRegistryText(
+  response,
+  maxBytes = NPM_PACKUMENT_RESPONSE_MAX_BYTES,
+) {
+  const contentLength = response.headers?.get?.("content-length");
+  if (contentLength) {
+    const parsedContentLength = Number(contentLength);
+    if (Number.isFinite(parsedContentLength) && parsedContentLength > maxBytes) {
+      await response.body?.cancel().catch(() => {});
+      throw new Error(
+        `npm registry response exceeded ${maxBytes} bytes (content-length ${contentLength})`,
+      );
+    }
+  }
+
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let receivedBytes = 0;
+  let text = "";
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      receivedBytes += value.byteLength;
+      if (receivedBytes > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error(
+          `npm registry response exceeded ${maxBytes} bytes while reading response body`,
+        );
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function packageVersionsFromPayload(payload) {
@@ -209,12 +257,23 @@ function collectManifestFindings({
   return { findings, workspaceExcludedFindings };
 }
 
-async function fetchNpmManifest({ packageName, version, fetchImpl, registryBaseUrl }) {
-  const response = await fetchImpl(`${registryBaseUrl}/${encodePackageName(packageName)}`);
+export async function fetchNpmManifest({
+  packageName,
+  version,
+  fetchImpl,
+  registryBaseUrl,
+  maxBytes = NPM_PACKUMENT_RESPONSE_MAX_BYTES,
+}) {
+  const response = await fetchImpl(`${registryBaseUrl}/${encodePackageName(packageName)}`, {
+    headers: {
+      Accept: NPM_PACKUMENT_ACCEPT_HEADER,
+    },
+  });
   if (!response.ok) {
     throw new Error(`${response.status} ${response.statusText}`);
   }
-  const packument = await response.json();
+  const packumentText = await readBoundedNpmRegistryText(response, maxBytes);
+  const packument = JSON.parse(packumentText);
   const manifest = packument.versions?.[version];
   if (!manifest) {
     throw new Error(`version ${version} not found`);

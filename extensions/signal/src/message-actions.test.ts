@@ -184,6 +184,16 @@ describe("signalMessageActions", () => {
       signalMessageActions.handleAction?.({
         channel: "signal",
         action: "react",
+        params: { to: "+15559999999", messageId: "123abc", emoji: "✅" },
+        cfg,
+      }),
+    ).rejects.toThrow(/Invalid messageId/);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+
+    await expect(
+      signalMessageActions.handleAction?.({
+        channel: "signal",
+        action: "react",
         params: { to: "signal:group:group-id", messageId: "123", emoji: "✅" },
         cfg,
       }),

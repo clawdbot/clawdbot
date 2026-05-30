@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "./lib/bounded-response.ts";
 import {
   maskIdentifier,
   parseStrictIntegerOption,
@@ -24,6 +25,7 @@ type FetchOptions = {
 };
 
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
+const FETCH_RESPONSE_MAX_BYTES = 256 * 1024;
 
 const mask = (value: string) => {
   return maskIdentifier(
@@ -124,6 +126,17 @@ const withFetchTimeout = async <T>(
   }
 };
 
+const readBoundedResponseText = (
+  response: Response,
+  label: string,
+  signal: AbortSignal,
+  maxBytes = FETCH_RESPONSE_MAX_BYTES,
+): Promise<string> =>
+  readBoundedResponseTextWithLimit(response, label, maxBytes, {
+    createTooLargeError: (message) => new Error(message),
+    signal,
+  });
+
 const fetchText = async (
   label: string,
   url: string,
@@ -134,7 +147,7 @@ const fetchText = async (
   const timeoutMs = options.timeoutMs ?? resolveFetchTimeoutMs();
   return await withFetchTimeout(label, timeoutMs, async (signal) => {
     const res = await fetchImpl(url, { ...init, signal });
-    const text = await res.text();
+    const text = await readBoundedResponseText(res, label, signal);
     return { res, text };
   });
 };
@@ -467,9 +480,11 @@ const main = async () => {
 export const testing = {
   CLAUDE_COOKIE_HOST_SQL,
   CLAUDE_FIREFOX_COOKIE_HOST_SQL,
+  FETCH_RESPONSE_MAX_BYTES,
   browserRootLabel,
   fetchAnthropicOAuthUsage,
   mask,
+  readBoundedResponseText,
   resolveFetchTimeoutMs,
 };
 

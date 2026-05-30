@@ -76,7 +76,7 @@ const mockPluginSpecs = [{ name: "tts", description: "Text to speech", acceptsAr
 vi.mock("../../auto-reply/commands-registry.js", () => ({
   listChatCommandsForConfig: vi.fn(() => mockChatCommands),
 }));
-vi.mock("../../auto-reply/skill-commands.js", () => ({
+vi.mock("../../skills/discovery/chat-commands.js", () => ({
   listSkillCommandsForAgents: vi.fn(() => mockSkillCommands),
 }));
 vi.mock("../../plugins/command-specs.js", () => ({

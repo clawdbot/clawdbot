@@ -15,16 +15,26 @@ export type PluginStateKeyedStore<T> = {
   clear(): Promise<void>;
 };
 
+export type PluginStateSyncKeyedStore<T> = {
+  register(key: string, value: T, opts?: { ttlMs?: number }): void;
+  registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }): boolean;
+  lookup(key: string): T | undefined;
+  consume(key: string): T | undefined;
+  delete(key: string): boolean;
+  entries(): PluginStateEntry<T>[];
+  clear(): void;
+};
+
 export type OpenKeyedStoreOptions = {
   namespace: string;
   maxEntries: number;
   defaultTtlMs?: number;
+  env?: NodeJS.ProcessEnv;
 };
 
 export type PluginStateStoreErrorCode =
   | "PLUGIN_STATE_SQLITE_UNAVAILABLE"
   | "PLUGIN_STATE_OPEN_FAILED"
-  | "PLUGIN_STATE_SCHEMA_UNSUPPORTED"
   | "PLUGIN_STATE_WRITE_FAILED"
   | "PLUGIN_STATE_READ_FAILED"
   | "PLUGIN_STATE_CORRUPT"
@@ -77,6 +87,6 @@ export type PluginStateStoreProbeStep = {
 
 export type PluginStateStoreProbeResult = {
   ok: boolean;
-  dbPath: string;
+  databasePath: string;
   steps: PluginStateStoreProbeStep[];
 };

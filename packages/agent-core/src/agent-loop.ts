@@ -3,7 +3,16 @@
  * Transforms to Message[] only at the LLM call boundary.
  */
 
-import { type AssistantMessage, type Context, EventStream, type ToolResultMessage } from "./llm.js";
+// Keep the runtime class on the package specifier so built agent-core shares
+// constructor identity with @openclaw/llm-core; source types keep SDK d.ts bundled.
+import { EventStream as LlmEventStream } from "@openclaw/llm-core";
+import {
+  type AssistantMessage,
+  type Context,
+  type EventStream,
+  type ToolResultMessage,
+} from "../../llm-core/src/index.js";
+import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import type {
   AgentContext,
@@ -27,6 +36,8 @@ const EMPTY_USAGE = {
   totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
+
+const EventStreamConstructor: typeof SourceEventStream = LlmEventStream;
 
 /**
  * Start an agent loop with a new prompt message.
@@ -52,11 +63,13 @@ export function agentLoop(
     signal,
     streamFn,
     runtime,
-  ).then((messages) => {
-    stream.end(messages);
-  }).catch((error) => {
-    pushLoopFailure(stream, config, error, signal?.aborted === true);
-  });
+  )
+    .then((messages) => {
+      stream.end(messages);
+    })
+    .catch((error) => {
+      pushLoopFailure(stream, config, error, signal?.aborted === true);
+    });
 
   return stream;
 }
@@ -95,11 +108,13 @@ export function agentLoopContinue(
     signal,
     streamFn,
     runtime,
-  ).then((messages) => {
-    stream.end(messages);
-  }).catch((error) => {
-    pushLoopFailure(stream, config, error, signal?.aborted === true);
-  });
+  )
+    .then((messages) => {
+      stream.end(messages);
+    })
+    .catch((error) => {
+      pushLoopFailure(stream, config, error, signal?.aborted === true);
+    });
 
   return stream;
 }
@@ -157,7 +172,7 @@ export async function runAgentLoopContinue(
 }
 
 function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
-  return new EventStream<AgentEvent, AgentMessage[]>(
+  return new EventStreamConstructor<AgentEvent, AgentMessage[]>(
     (event: AgentEvent) => event.type === "agent_end",
     (event: AgentEvent) => (event.type === "agent_end" ? event.messages : []),
   );

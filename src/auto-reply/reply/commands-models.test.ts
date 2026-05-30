@@ -736,6 +736,12 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
   });
 
+  it("ignores unsafe bare list page tokens", async () => {
+    const result = await handleModelsCommand(buildParams("/models openai 9007199254740992"), true);
+
+    expect(result?.reply?.text).toContain("Models (openai) — showing 1-2 of 2 (page 1/1)");
+  });
+
   it("does not list bare fallback models under the default provider when catalog ownership is unique", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "openai-codex", id: "gpt-5.4", name: "GPT-5.4" },

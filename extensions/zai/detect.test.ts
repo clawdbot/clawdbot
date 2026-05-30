@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectZaiEndpoint } from "./detect.js";
 
 type FetchResponse = { status: number; body?: unknown };
@@ -19,6 +20,10 @@ function makeFetch(map: Record<string, FetchResponse>) {
 }
 
 describe("detectZaiEndpoint", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("resolves preferred/fallback endpoints and null when probes fail", async () => {
     const scenarios: Array<{
       endpoint?: "global" | "cn" | "coding-global" | "coding-cn";
@@ -113,5 +118,23 @@ describe("detectZaiEndpoint", () => {
         expect(detected?.modelId).toBe(scenario.expected.modelId);
       }
     }
+  });
+
+  it("caps oversized probe timeouts before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const fetchFn = makeFetch({
+      "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+    });
+
+    await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      fetchFn,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });

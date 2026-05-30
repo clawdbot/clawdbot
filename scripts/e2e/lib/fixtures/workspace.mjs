@@ -19,6 +19,7 @@ function writeOpenWebUiWorkspace() {
 function writeAgentsDeleteConfig() {
   const stateDir = requireArg(process.env.OPENCLAW_STATE_DIR, "OPENCLAW_STATE_DIR");
   const sharedWorkspace = requireArg(process.env.SHARED_WORKSPACE, "SHARED_WORKSPACE");
+  const gatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN?.trim();
   fs.mkdirSync(sharedWorkspace, { recursive: true });
   writeJson(path.join(stateDir, "openclaw.json"), {
     agents: {
@@ -27,6 +28,7 @@ function writeAgentsDeleteConfig() {
         { id: "ops", workspace: sharedWorkspace },
       ],
     },
+    ...(gatewayToken ? { gateway: { auth: { mode: "token", token: gatewayToken } } } : {}),
   });
 }
 

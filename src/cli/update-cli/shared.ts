@@ -6,6 +6,7 @@ import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { normalizePackageTagInput } from "../../infra/package-tag.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
 import { fetchNpmTagVersion } from "../../infra/update-check.js";
@@ -60,13 +61,8 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
     return undefined;
   }
   const trimmed = timeout.trim();
-  const seconds = Number(trimmed);
-  if (
-    !/^\d+$/u.test(trimmed) ||
-    !Number.isSafeInteger(seconds) ||
-    seconds <= 0 ||
-    seconds > MAX_SAFE_TIMEOUT_SECONDS
-  ) {
+  const seconds = parseStrictPositiveInteger(trimmed);
+  if (seconds === undefined || seconds > MAX_SAFE_TIMEOUT_SECONDS) {
     defaultRuntime.error(INVALID_TIMEOUT_ERROR);
     defaultRuntime.exit(1);
     return null;

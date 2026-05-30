@@ -15,6 +15,7 @@ import {
   type MemoryChunk,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   MEMORY_BATCH_FAILURE_LIMIT,
   recordMemoryBatchFailure,
@@ -54,6 +55,17 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 
 const log = createSubsystemLogger("memory");
 
+function resolveEmbeddingSecondsTimeoutMs(seconds: number): number {
+  if (!Number.isFinite(seconds)) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
+  const timeoutMs = Math.floor(seconds * 1000);
+  return resolveTimerTimeoutMs(
+    Number.isFinite(timeoutMs) ? timeoutMs : MAX_TIMER_TIMEOUT_MS,
+    MAX_TIMER_TIMEOUT_MS,
+  );
+}
+
 type MemoryIndexEntry = {
   path: string;
   absPath: string;
@@ -77,7 +89,7 @@ export function resolveEmbeddingTimeoutMs(params: {
   if (params.kind === "query") {
     const runtimeTimeoutMs = params.providerRuntime?.inlineQueryTimeoutMs;
     if (typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0) {
-      return runtimeTimeoutMs;
+      return resolveTimerTimeoutMs(runtimeTimeoutMs, EMBEDDING_QUERY_TIMEOUT_REMOTE_MS);
     }
     return params.providerId === "local"
       ? EMBEDDING_QUERY_TIMEOUT_LOCAL_MS
@@ -86,11 +98,11 @@ export function resolveEmbeddingTimeoutMs(params: {
 
   const configuredTimeoutSeconds = params.configuredBatchTimeoutSeconds;
   if (typeof configuredTimeoutSeconds === "number" && configuredTimeoutSeconds > 0) {
-    return configuredTimeoutSeconds * 1000;
+    return resolveEmbeddingSecondsTimeoutMs(configuredTimeoutSeconds);
   }
   const runtimeTimeoutMs = params.providerRuntime?.inlineBatchTimeoutMs;
   if (typeof runtimeTimeoutMs === "number" && runtimeTimeoutMs > 0) {
-    return runtimeTimeoutMs;
+    return resolveTimerTimeoutMs(runtimeTimeoutMs, EMBEDDING_BATCH_TIMEOUT_REMOTE_MS);
   }
   return params.providerId === "local"
     ? EMBEDDING_BATCH_TIMEOUT_LOCAL_MS
@@ -121,13 +133,14 @@ export async function runEmbeddingOperationWithTimeout<T>(params: {
   if (!Number.isFinite(params.timeoutMs) || params.timeoutMs <= 0) {
     return await params.run(controller.signal);
   }
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   let timer: NodeJS.Timeout | null = null;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
       const error = new Error(params.message);
       reject(error);
       controller.abort(error);
-    }, params.timeoutMs);
+    }, timeoutMs);
     timer.unref?.();
   });
   try {
@@ -453,9 +466,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       return await promise;
     }
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
     let timer: NodeJS.Timeout | null = null;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      timer = setTimeout(() => reject(new Error(message)), resolvedTimeoutMs);
     });
     try {
       return (await Promise.race([promise, timeoutPromise])) as T;

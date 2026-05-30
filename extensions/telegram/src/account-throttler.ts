@@ -1,3 +1,4 @@
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { apiThrottler } from "./bot.runtime.js";
 
 type ApiThrottlerTransformer = ReturnType<typeof apiThrottler>;
@@ -92,18 +93,7 @@ class GroupFairQueue {
 const throttlerByToken = new Map<string, ApiThrottlerTransformer>();
 
 function readNumericId(value: unknown): number | undefined {
-  if (typeof value === "number") {
-    return Number.isSafeInteger(value) ? value : undefined;
-  }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!/^[+-]?\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  const numeric = Number(trimmed);
-  return Number.isSafeInteger(numeric) ? numeric : undefined;
+  return parseStrictInteger(value);
 }
 
 function readPayload(payload: unknown): TelegramApiPayload | undefined {

@@ -1,0 +1,39 @@
+{
+  "name": "@openclaw/tokenjuice",
+  "version": "2026.5.30",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/tokenjuice",
+      "version": "2026.5.30",
+      "dependencies": {
+        "tokenjuice": "0.8.0"
+      },
+      "peerDependencies": {
+        "openclaw": ">=2026.5.30"
+      },
+      "peerDependenciesMeta": {
+        "openclaw": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/tokenjuice": {
+      "version": "0.8.0",
+      "resolved": "https://registry.npmjs.org/tokenjuice/-/tokenjuice-0.8.0.tgz",
+      "integrity": "sha512-8jSOhyW3NzYNx7HbbGDkNVltQPiGaZB10Tty5Ovqpsw1VOBw7y+FikykNZ4+Gp9Ze94UubtcPDak7kkyv6F2cg==",
+      "license": "MIT",
+      "bin": {
+        "tokenjuice": "dist/cli/main.js"
+      },
+      "engines": {
+        "node": ">=20"
+      },
+      "funding": {
+        "type": "github",
+        "url": "https://github.com/sponsors/vincentkoc"
+      }
+    }
+  }
+}

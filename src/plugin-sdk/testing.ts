@@ -107,7 +107,7 @@ export {
   isLiveTestEnabled,
 } from "../agents/live-test-helpers.js";
 export { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
-export { writeSkill } from "../agents/skills.e2e-test-helpers.js";
+export { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 export {
   castAgentMessage,
   makeAgentAssistantMessage,

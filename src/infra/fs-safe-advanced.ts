@@ -5,6 +5,7 @@ export {
   assertNoSymlinkParentsSync,
   sameFileIdentity,
   sanitizeUntrustedFileName,
+  writeSiblingTempFile,
   writeViaSiblingTempPath,
   type AssertNoSymlinkParentsOptions,
   type FileIdentityStat,

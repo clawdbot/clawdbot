@@ -181,12 +181,14 @@ prompt surface that matches their lifetime:
 On the native Codex harness, OpenClaw avoids repeating stable workspace files
 in every user turn. Codex loads `AGENTS.md` through its own project-doc
 discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
-Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
-turns get a collaboration-mode note pointing to the file when it exists and is
-non-empty. `MEMORY.md` content from the configured agent workspace is not pasted
-into every native Codex turn; when memory tools are available for that workspace,
-Codex turns get a small workspace-memory note and should use `memory_search` or
-`memory_get` when durable memory is relevant. If tools are disabled, memory
+Codex developer instructions. The compact OpenClaw skills list is also forwarded
+as turn-scoped collaboration developer instructions. `HEARTBEAT.md` content is
+not injected; heartbeat turns get a collaboration-mode note pointing to the file
+when it exists and is non-empty. `MEMORY.md` content from the configured agent
+workspace is not pasted into every native Codex turn; when memory tools are
+available for that workspace, Codex turns get a small workspace-memory note in
+turn-scoped collaboration developer instructions and should use `memory_search`
+or `memory_get` when durable memory is relevant. If tools are disabled, memory
 search is unavailable, or the active workspace differs from the agent memory
 workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
 `BOOTSTRAP.md` content keeps the normal turn-context role for now.
@@ -257,6 +259,11 @@ When eligible skills exist, OpenClaw injects a compact **available skills list**
 prompt instructs the model to use `read` to load the SKILL.md at the listed
 location (workspace, managed, or bundled). If no skills are eligible, the
 Skills section is omitted.
+
+Native Codex turns receive this list as turn-scoped collaboration developer
+instructions instead of per-turn user input, except lightweight cron turns that
+preserve the exact scheduled prompt. Other harnesses keep the normal prompt
+section.
 
 The location can point at a nested skill, such as
 `skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt still

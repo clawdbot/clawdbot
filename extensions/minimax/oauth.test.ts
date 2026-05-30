@@ -13,4 +13,10 @@ describe("normalizeOAuthExpires", () => {
   it("preserves absolute millisecond timestamps", () => {
     expect(normalizeOAuthExpires(1_700_000_000_000)).toBe(1_700_000_000_000);
   });
+
+  it("rejects unsafe and malformed expiry values", () => {
+    expect(normalizeOAuthExpires(Number.POSITIVE_INFINITY)).toBeUndefined();
+    expect(normalizeOAuthExpires(Number.MAX_SAFE_INTEGER + 1)).toBeUndefined();
+    expect(normalizeOAuthExpires("3600s")).toBeUndefined();
+  });
 });

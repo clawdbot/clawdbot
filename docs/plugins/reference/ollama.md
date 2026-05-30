@@ -1,5 +1,5 @@
 ---
-summary: "Adds Ollama model provider support to OpenClaw."
+summary: "Adds Ollama, Ollama Cloud model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the ollama plugin
 title: "Ollama plugin"
@@ -7,7 +7,7 @@ title: "Ollama plugin"
 
 # Ollama plugin
 
-Adds Ollama model provider support to OpenClaw.
+Adds Ollama, Ollama Cloud model provider support to OpenClaw.
 
 ## Distribution
 
@@ -16,7 +16,7 @@ Adds Ollama model provider support to OpenClaw.
 
 ## Surface
 
-providers: ollama; contracts: memoryEmbeddingProviders, webSearchProviders
+providers: ollama, ollama-cloud; contracts: memoryEmbeddingProviders, webSearchProviders
 
 ## Related docs
 

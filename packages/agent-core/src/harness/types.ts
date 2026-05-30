@@ -1,4 +1,3 @@
-import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";
 import type {
   ImageContent,
   Model,
@@ -6,7 +5,8 @@ import type {
   StreamFn,
   TextContent,
   Transport,
-} from "../llm.js";
+} from "../../../llm-core/src/index.js";
+import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";
 import type { AgentCoreCompletionRuntimeDeps, AgentCoreRuntimeDeps } from "../runtime-deps.js";
 import type { Session } from "./session/session.js";
 

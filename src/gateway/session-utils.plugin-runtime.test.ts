@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 
@@ -17,14 +17,19 @@ vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
   getCurrentPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
+let sessionUtils: typeof import("./session-utils.js");
+
 describe("gateway session list plugin runtime normalization", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
     vi.resetModules();
+    sessionUtils = await import("./session-utils.js");
+  });
+
+  beforeEach(() => {
     normalizeProviderModelIdWithPluginMock.mockReset();
   });
 
   it("skips provider runtime normalization for lightweight list rows", async () => {
-    const { listSessionsFromStoreAsync } = await import("./session-utils.js");
     const cfg = {
       agents: {
         defaults: { model: { primary: "custom-provider/custom-legacy-model" } },
@@ -37,7 +42,7 @@ describe("gateway session list plugin runtime normalization", () => {
       ]),
     );
 
-    const listed = await listSessionsFromStoreAsync({
+    const listed = await sessionUtils.listSessionsFromStoreAsync({
       cfg,
       storePath: "",
       store,
@@ -62,14 +67,13 @@ describe("gateway session list plugin runtime normalization", () => {
       },
     );
 
-    const { buildGatewaySessionRow } = await import("./session-utils.js");
     const cfg = {
       agents: {
         defaults: { model: { primary: "custom-provider/custom-legacy-model" } },
       },
     } as OpenClawConfig;
 
-    const row = buildGatewaySessionRow({
+    const row = sessionUtils.buildGatewaySessionRow({
       cfg,
       storePath: "",
       store: {},

@@ -251,6 +251,7 @@ function buildCoreDistEntries(): Record<string, string> {
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
     "agents/models-config.runtime": "src/agents/models-config.runtime.ts",
     "agents/code-mode.worker": "src/agents/code-mode.worker.ts",
+    "agents/compaction-planning.worker": "src/agents/compaction-planning.worker.ts",
     "agents/model-provider-auth.worker": "src/agents/model-provider-auth.worker.ts",
     "acp/control-plane/manager": "src/acp/control-plane/manager.ts",
     "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
@@ -383,6 +384,30 @@ function buildNetPolicyDistEntries(): Record<string, string> {
   };
 }
 
+function buildMediaGenerationCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/media-generation-core/src/index.ts",
+    "capability-model-ref": "packages/media-generation-core/src/capability-model-ref.ts",
+    catalog: "packages/media-generation-core/src/catalog.ts",
+    "model-ref": "packages/media-generation-core/src/model-ref.ts",
+    normalization: "packages/media-generation-core/src/normalization.ts",
+  };
+}
+
+function buildMarkdownCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/markdown-core/src/index.ts",
+    "code-spans": "packages/markdown-core/src/code-spans.ts",
+    fences: "packages/markdown-core/src/fences.ts",
+    frontmatter: "packages/markdown-core/src/frontmatter.ts",
+    ir: "packages/markdown-core/src/ir.ts",
+    render: "packages/markdown-core/src/render.ts",
+    "render-aware-chunking": "packages/markdown-core/src/render-aware-chunking.ts",
+    tables: "packages/markdown-core/src/tables.ts",
+    types: "packages/markdown-core/src/types.ts",
+  };
+}
+
 function buildSpeechCoreDistEntries(): Record<string, string> {
   return {
     api: "packages/speech-core/api.ts",
@@ -392,8 +417,28 @@ function buildSpeechCoreDistEntries(): Record<string, string> {
   };
 }
 
+function buildLlmCoreDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-core/src/index.ts",
+    types: "packages/llm-core/src/types.ts",
+    "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
+    "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
+    validation: "packages/llm-core/src/validation.ts",
+  };
+}
+
+function buildLlmRuntimeDistEntries(): Record<string, string> {
+  return {
+    index: "packages/llm-runtime/src/index.ts",
+    "api-registry": "packages/llm-runtime/src/api-registry.ts",
+    stream: "packages/llm-runtime/src/stream.ts",
+  };
+}
+
 function shouldExternalizeAgentCoreDependency(id: string): boolean {
   return (
+    id === "@openclaw/llm-core" ||
+    id.startsWith("@openclaw/llm-core/") ||
     id === "ignore" ||
     id === "openclaw" ||
     id.startsWith("openclaw/") ||
@@ -423,6 +468,20 @@ function shouldExternalizeNetPolicyDependency(id: string): boolean {
 
 function shouldExternalizeSpeechCoreDependency(id: string): boolean {
   return id === "openclaw" || id.startsWith("openclaw/");
+}
+
+function shouldExternalizeLlmCoreDependency(id: string): boolean {
+  return id === "typebox" || id.startsWith("typebox/");
+}
+
+function shouldExternalizeLlmRuntimeDependency(id: string): boolean {
+  return id === "@openclaw/llm-core" || id.startsWith("@openclaw/llm-core/");
+}
+
+function shouldExternalizeMarkdownCoreDependency(id: string): boolean {
+  return (
+    id === "markdown-it" || id.startsWith("markdown-it/") || id === "yaml" || id.startsWith("yaml/")
+  );
 }
 
 const coreDistEntries = buildCoreDistEntries();
@@ -497,10 +556,43 @@ export default defineConfig([
   nodeWorkspacePackageBuildConfig({
     clean: true,
     dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMediaGenerationCoreDistEntries(),
+    outDir: "packages/media-generation-core/dist",
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildMarkdownCoreDistEntries(),
+    outDir: "packages/markdown-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeMarkdownCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildSpeechCoreDistEntries(),
     outDir: "packages/speech-core/dist",
     deps: {
       neverBundle: shouldExternalizeSpeechCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmCoreDistEntries(),
+    outDir: "packages/llm-core/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmCoreDependency,
+    },
+  }),
+  nodeWorkspacePackageBuildConfig({
+    clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
+    entry: buildLlmRuntimeDistEntries(),
+    outDir: "packages/llm-runtime/dist",
+    deps: {
+      neverBundle: shouldExternalizeLlmRuntimeDependency,
     },
   }),
   nodeBuildConfig({

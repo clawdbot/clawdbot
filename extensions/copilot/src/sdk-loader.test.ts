@@ -117,7 +117,7 @@ describe("sdk-loader", () => {
     }
   });
 
-  it("throws an actionable error with install instructions when both probes fail", async () => {
+  it("throws an actionable error with plugin install instructions when both probes fail", async () => {
     const primaryImport = vi.fn(async () => {
       throw new Error("Cannot find module '@github/copilot-sdk'");
     });
@@ -134,7 +134,7 @@ describe("sdk-loader", () => {
       }),
     ).rejects.toMatchObject({
       code: "COPILOT_SDK_MISSING",
-      message: expect.stringContaining(COPILOT_SDK_SPEC),
+      message: expect.stringContaining("openclaw plugins install @openclaw/copilot"),
     });
 
     expect(fallbackImport).not.toHaveBeenCalled();
@@ -160,7 +160,8 @@ describe("sdk-loader", () => {
     const message = captured?.message ?? "";
     expect(message).toContain("primary boom");
     expect(message).toContain(path.join(fallbackDir, "node_modules", "@github", "copilot-sdk"));
-    expect(message).toContain("pnpm add");
+    expect(message).toContain(COPILOT_SDK_SPEC);
+    expect(message).toContain("openclaw plugins install @openclaw/copilot");
   });
 
   it("caches successful loads across calls when cache is enabled", async () => {
@@ -217,13 +218,8 @@ describe("sdk-loader", () => {
   });
 });
 
-describe("contract with core copilot-sdk-install", () => {
-  // We assert literal values rather than importing core's exports because
-  // extension test files must stay on public plugin-sdk surfaces. The
-  // symmetric test in src/commands/copilot-sdk-install.test.ts asserts the
-  // same literals against core's exports, so any drift on either side fails
-  // one of the two tests.
-  it("COPILOT_SDK_FALLBACK_DIR matches the canonical core install fallback path", () => {
+describe("sdk dependency constants", () => {
+  it("COPILOT_SDK_FALLBACK_DIR keeps the legacy fallback path stable", () => {
     expect(COPILOT_SDK_FALLBACK_DIR).toMatch(/\.openclaw[\\/]+npm-runtime[\\/]+copilot$/);
   });
   it("COPILOT_SDK_SPEC pins the canonical SDK spec", () => {

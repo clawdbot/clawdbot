@@ -9,8 +9,11 @@ import type { MigrationItem, MigrationProviderContext } from "openclaw/plugin-sd
 import {
   applyAuthProfileConfig,
   buildApiKeyCredential,
+  buildOpenAICodexCredentialExtra,
   buildOauthProviderAuthResult,
   readCodexCliCredentialsCached,
+  resolveOpenAICodexAuthIdentity,
+  resolveOpenAICodexImportProfileName,
   updateAuthProfileStoreWithLock,
   type AuthProfileStore,
   type OAuthCredential,
@@ -69,87 +72,6 @@ type CodexAuthConfigApplyResult = "configured" | "conflict" | "unavailable";
 
 class CodexAuthConfigConflict extends Error {}
 
-function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
-  const payload = token.split(".")[1];
-  if (!payload) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveCodexIdentity(
-  access: string,
-  accountId?: string,
-): {
-  accountId?: string;
-  chatgptPlanType?: string;
-  email?: string;
-  profileName?: string;
-} {
-  const payload = decodeJwtPayload(access);
-  const auth = isRecord(payload?.["https://api.openai.com/auth"])
-    ? payload["https://api.openai.com/auth"]
-    : {};
-  const profile = isRecord(payload?.["https://api.openai.com/profile"])
-    ? payload["https://api.openai.com/profile"]
-    : {};
-  const email = readString(profile.email);
-  const resolvedAccountId = accountId ?? readString(auth.chatgpt_account_id);
-  const chatgptPlanType = readString(auth.chatgpt_plan_type);
-  if (email) {
-    return {
-      ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
-      ...(chatgptPlanType ? { chatgptPlanType } : {}),
-      email,
-      profileName: email,
-    };
-  }
-  const stableSubject =
-    readString(auth.chatgpt_account_user_id) ??
-    readString(auth.chatgpt_user_id) ??
-    readString(auth.user_id) ??
-    readString(payload?.sub) ??
-    resolvedAccountId;
-  return {
-    ...(resolvedAccountId ? { accountId: resolvedAccountId } : {}),
-    ...(chatgptPlanType ? { chatgptPlanType } : {}),
-    ...(stableSubject
-      ? { profileName: `id-${Buffer.from(stableSubject).toString("base64url")}` }
-      : {}),
-  };
-}
-
-function credentialExtra(identity: {
-  accountId?: string;
-  chatgptPlanType?: string;
-  idToken?: string;
-}): Record<string, unknown> | undefined {
-  const extra = {
-    ...(identity.accountId ? { accountId: identity.accountId } : {}),
-    ...(identity.chatgptPlanType ? { chatgptPlanType: identity.chatgptPlanType } : {}),
-    ...(identity.idToken ? { idToken: identity.idToken } : {}),
-  };
-  return Object.keys(extra).length > 0 ? extra : undefined;
-}
-
-function importProfileName(
-  identity: { accountId?: string; profileName?: string },
-  fallback: string,
-): string {
-  if (identity.accountId) {
-    return `account-${identity.accountId.replaceAll(/[^A-Za-z0-9._-]+/gu, "-")}`;
-  }
-  if (identity.profileName?.startsWith("id-")) {
-    return identity.profileName;
-  }
-  return fallback;
-}
-
 async function readModelRefs(source: CodexSource): Promise<string[]> {
   const cache = await readJsonObject(source.modelsCachePath);
   const models = Array.isArray(cache.models) ? cache.models : [];
@@ -188,7 +110,10 @@ async function buildCodexOAuthCredential(source: CodexSource): Promise<CodexAuth
   if (!credential) {
     return null;
   }
-  const identity = resolveCodexIdentity(credential.access, credential.accountId);
+  const identity = resolveOpenAICodexAuthIdentity({
+    access: credential.access,
+    accountId: credential.accountId,
+  });
   const modelRefs = await readModelRefs(source);
   const configPatch = {
     agents: {
@@ -204,9 +129,9 @@ async function buildCodexOAuthCredential(source: CodexSource): Promise<CodexAuth
     refresh: credential.refresh,
     expires: credential.expires,
     email: identity.email,
-    profileName: importProfileName(identity, "codex-import"),
+    profileName: resolveOpenAICodexImportProfileName(identity, "codex-import"),
     displayName: CODEX_IMPORT_DISPLAY_NAME,
-    credentialExtra: credentialExtra({
+    credentialExtra: buildOpenAICodexCredentialExtra({
       accountId: identity.accountId,
       chatgptPlanType: identity.chatgptPlanType,
       idToken: credential.idToken,

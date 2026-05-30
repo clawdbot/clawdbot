@@ -73,9 +73,10 @@ Release behavior:
 - Changing the root gateway version does not change the iOS app version until you explicitly pin from the gateway.
 - See `apps/ios/VERSIONING.md` for the full workflow.
 
-Required env for beta builds:
+Relay behavior for beta builds:
 
-- `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
+- Beta builds default to `https://ios-push-relay.openclaw.ai`.
+- Optional custom relay override: `OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com`
   This must be a plain `https://host[:port][/path]` base URL without whitespace, query params, fragments, or xcconfig metacharacters.
 
 Archive without upload:
@@ -118,7 +119,7 @@ scripts/ios-asc-keychain-setup.sh \
 
 This should create `apps/ios/fastlane/.env` with the non-secret ASC variables while the private key stays in Keychain.
 
-3. Set the official/TestFlight relay URL for the build:
+3. Optional: set a custom official/TestFlight relay URL for the build. If unset, the beta flow uses `https://ios-push-relay.openclaw.ai`.
 
 ```bash
 export OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com

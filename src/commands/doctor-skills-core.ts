@@ -1,5 +1,5 @@
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
 
 export function collectUnavailableAgentSkills(report: SkillStatusReport): SkillStatusEntry[] {
   return report.skills.filter(

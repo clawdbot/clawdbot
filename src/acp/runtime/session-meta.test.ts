@@ -11,7 +11,8 @@ const hoisted = vi.hoisted(() => {
 });
 
 vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: (storePath: string) => hoisted.loadSessionStoreMock(storePath),
+  loadSessionStore: (storePath: string, opts?: unknown) =>
+    hoisted.loadSessionStoreMock(storePath, opts),
 }));
 
 vi.mock("../../config/sessions/targets.js", () => ({
@@ -57,7 +58,10 @@ describe("listAcpSessionEntries", () => {
     const entries = await listAcpSessionEntries({ cfg });
 
     expect(hoisted.resolveAllAgentSessionStoreTargetsMock).toHaveBeenCalledWith(cfg, undefined);
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/custom/sessions/ops.json");
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith(
+      "/custom/sessions/ops.json",
+      undefined,
+    );
     expect(entries).toEqual([
       {
         acp: storedEntry.acp,
@@ -68,5 +72,19 @@ describe("listAcpSessionEntries", () => {
         storeSessionKey: "agent:ops:acp:s1",
       },
     ]);
+  });
+
+  it("can skip cloning for maintenance callers that only inspect ACP entries", async () => {
+    const cfg = { session: { store: "/custom/sessions/{agentId}.json" } } as OpenClawConfig;
+    hoisted.resolveAllAgentSessionStoreTargetsMock.mockResolvedValue([
+      { agentId: "ops", storePath: "/custom/sessions/ops.json" },
+    ]);
+    hoisted.loadSessionStoreMock.mockReturnValue({});
+
+    await listAcpSessionEntries({ cfg, clone: false });
+
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/custom/sessions/ops.json", {
+      clone: false,
+    });
   });
 });

@@ -4,17 +4,6 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
-import {
-  installSkillFromClawHub,
-  readTrackedClawHubSkillSlugs,
-  resolveClawHubSkillVerificationTarget,
-  searchSkillsFromClawHub,
-  updateSkillsFromClawHub,
-} from "../agents/skills-clawhub.js";
-import {
-  installSkillFromSource,
-  isSkillSourceInstallSpec,
-} from "../agents/skills-source-install.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   fetchClawHubSkillCard,
@@ -23,6 +12,17 @@ import {
 } from "../infra/clawhub.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import {
+  installSkillFromClawHub,
+  readTrackedClawHubSkillSlugs,
+  resolveClawHubSkillVerificationTarget,
+  searchSkillsFromClawHub,
+  updateSkillsFromClawHub,
+} from "../skills/lifecycle/clawhub.js";
+import {
+  installSkillFromSource,
+  isSkillSourceInstallSpec,
+} from "../skills/lifecycle/source-install.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -38,7 +38,7 @@ export type {
 export { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 type SkillStatusReport = Awaited<
-  ReturnType<(typeof import("../agents/skills-status.js"))["buildWorkspaceSkillStatus"]>
+  ReturnType<(typeof import("../skills/discovery/status.js"))["buildWorkspaceSkillStatus"]>
 >;
 type ResolvedClawHubSkillVerificationTarget = Extract<
   Awaited<ReturnType<typeof resolveClawHubSkillVerificationTarget>>,
@@ -79,7 +79,7 @@ async function loadSkillsStatusReport(
   options?: ResolveSkillsWorkspaceOptions,
 ): Promise<SkillStatusReport> {
   const { config, workspaceDir, agentId } = resolveSkillsWorkspace(options);
-  const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
+  const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
   return buildWorkspaceSkillStatus(workspaceDir, { config, agentId });
 }
 

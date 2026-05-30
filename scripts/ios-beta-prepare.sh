@@ -4,6 +4,9 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
+  scripts/ios-beta-prepare.sh --build-number 7 [--team-id TEAMID]
+
+Optional custom relay:
   OPENCLAW_PUSH_RELAY_BASE_URL=https://relay.example.com \
     scripts/ios-beta-prepare.sh --build-number 7 [--team-id TEAMID]
 
@@ -26,7 +29,8 @@ VERSION_SYNC_HELPER="${ROOT_DIR}/scripts/ios-sync-versioning.ts"
 
 BUILD_NUMBER=""
 TEAM_ID="${IOS_DEVELOPMENT_TEAM:-}"
-PUSH_RELAY_BASE_URL="${OPENCLAW_PUSH_RELAY_BASE_URL:-${IOS_PUSH_RELAY_BASE_URL:-}}"
+DEFAULT_IOS_PUSH_RELAY_BASE_URL="https://ios-push-relay.openclaw.ai"
+PUSH_RELAY_BASE_URL="${OPENCLAW_PUSH_RELAY_BASE_URL:-${IOS_PUSH_RELAY_BASE_URL:-${DEFAULT_IOS_PUSH_RELAY_BASE_URL}}}"
 PUSH_RELAY_BASE_URL_XCCONFIG=""
 IOS_VERSION=""
 
@@ -115,11 +119,6 @@ fi
 
 if [[ -z "${TEAM_ID}" ]]; then
   echo "Could not resolve Apple Team ID. Set IOS_DEVELOPMENT_TEAM or sign into Xcode." >&2
-  exit 1
-fi
-
-if [[ -z "${PUSH_RELAY_BASE_URL}" ]]; then
-  echo "Missing OPENCLAW_PUSH_RELAY_BASE_URL (or IOS_PUSH_RELAY_BASE_URL) for beta relay registration." >&2
   exit 1
 fi
 

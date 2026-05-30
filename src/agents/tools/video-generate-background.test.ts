@@ -207,7 +207,8 @@ describe("video generate background helpers", () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: false,
       path: "direct",
-      error: "completion agent did not deliver through the message tool",
+      reason: "generated_media_missing",
+      error: "completion agent did not deliver generated media",
     });
 
     await wakeVideoGenerationTaskCompletion({

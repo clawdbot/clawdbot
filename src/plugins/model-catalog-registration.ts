@@ -1,13 +1,13 @@
 import {
+  synthesizeMediaGenerationCatalogEntries,
+  type MediaGenerationCatalogKind,
+  type MediaGenerationCatalogProvider,
+} from "../../packages/media-generation-core/src/catalog.js";
+import {
   synthesizeVoiceModelCatalogEntries,
   type VoiceModelCapabilities,
   type VoiceModelProvider,
 } from "../../packages/speech-core/voice-models.js";
-import {
-  synthesizeMediaGenerationCatalogEntries,
-  type MediaGenerationCatalogKind,
-  type MediaGenerationCatalogProvider,
-} from "../media-generation/catalog.js";
 import type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogSource,

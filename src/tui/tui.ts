@@ -35,7 +35,7 @@ import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
-import { formatTokens } from "./tui-formatters.js";
+import { formatGoalFooter, formatTokens } from "./tui-formatters.js";
 import {
   buildTuiLastSessionScopeKey,
   readTuiLastSessionKey,
@@ -1164,6 +1164,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       `agent ${agentLabel}`,
       `session ${sessionLabel}`,
       modelLabel,
+      formatGoalFooter(sessionInfo.goal),
       think !== "off" ? `think ${think}` : null,
       fast ? "fast" : null,
       verbose !== "off" ? `verbose ${verbose}` : null,

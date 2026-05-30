@@ -103,6 +103,11 @@ export type MsgContext = {
   To?: string;
   SessionKey?: string;
   /**
+   * Resolved agent scope for canonical session keys that do not encode the agent
+   * id, such as selected-agent global sessions.
+   */
+  AgentId?: string;
+  /**
    * Session-like key used for runtime policy (sandbox/tool policy) when the
    * conversation key intentionally remains broader, such as a main-session DM.
    */

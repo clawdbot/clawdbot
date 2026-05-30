@@ -96,6 +96,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
   }
 
   async function runDefaultsHeartbeat(params: {
+    every?: string;
+    defaultTimeoutSeconds?: number;
     model?: string;
     suppressToolErrorWarnings?: boolean;
     timeoutSeconds?: number;
@@ -107,8 +109,9 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         agents: {
           defaults: {
             workspace: tmpDir,
+            timeoutSeconds: params.defaultTimeoutSeconds,
             heartbeat: {
-              every: "5m",
+              every: params.every ?? "5m",
               target: "whatsapp",
               model: params.model,
               suppressToolErrorWarnings: params.suppressToolErrorWarnings,
@@ -206,6 +209,30 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
       timeoutOverrideSeconds: 45,
+    });
+  });
+
+  it("uses heartbeat cadence as the default reply-run timeout override", async () => {
+    const replyOpts = await runDefaultsHeartbeat({});
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 300,
+    });
+  });
+
+  it("caps the default heartbeat reply-run timeout override", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ every: "30m" });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 600,
+    });
+  });
+
+  it("preserves explicit default agent timeout for heartbeat runs", async () => {
+    const replyOpts = await runDefaultsHeartbeat({ defaultTimeoutSeconds: 60, every: "30m" });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 60,
     });
   });
 

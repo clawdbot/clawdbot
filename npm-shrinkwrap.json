@@ -1,12 +1,12 @@
 {
   "name": "openclaw",
-  "version": "2026.5.28",
+  "version": "2026.5.30",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "openclaw",
-      "version": "2026.5.28",
+      "version": "2026.5.30",
       "hasInstallScript": true,
       "license": "MIT",
       "dependencies": {
@@ -46,7 +46,6 @@
         "jszip": "3.10.1",
         "kysely": "0.29.2",
         "linkedom": "0.18.12",
-        "markdown-it": "14.2.0",
         "minimatch": "10.2.5",
         "node-edge-tts": "1.2.10",
         "openai": "6.39.0",
@@ -57,7 +56,6 @@
         "quickjs-wasi": "3.0.0",
         "rastermill": "0.3.0",
         "tar": "7.5.15",
-        "tokenjuice": "0.8.0",
         "tree-sitter-bash": "0.25.1",
         "tslog": "4.10.2",
         "typebox": "1.1.38",
@@ -1053,12 +1051,6 @@
       "funding": {
         "url": "https://github.com/chalk/ansi-styles?sponsor=1"
       }
-    },
-    "node_modules/argparse": {
-      "version": "2.0.1",
-      "resolved": "https://registry.npmjs.org/argparse/-/argparse-2.0.1.tgz",
-      "integrity": "sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==",
-      "license": "Python-2.0"
     },
     "node_modules/asn1.js": {
       "version": "5.4.1",
@@ -2504,25 +2496,6 @@
         }
       }
     },
-    "node_modules/linkify-it": {
-      "version": "5.0.1",
-      "resolved": "https://registry.npmjs.org/linkify-it/-/linkify-it-5.0.1.tgz",
-      "integrity": "sha512-wVoTjP4Q6R0NW5hiZkVJaFZPWgtXfoGF+6LucL3/FtiNjmcHhYjEr5f1Kqjirc1nBW07J/ZuRFumqr2oqccEWg==",
-      "funding": [
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/puzrin"
-        },
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/markdown-it"
-        }
-      ],
-      "license": "MIT",
-      "dependencies": {
-        "uc.micro": "^2.0.0"
-      }
-    },
     "node_modules/locate-path": {
       "version": "5.0.0",
       "resolved": "https://registry.npmjs.org/locate-path/-/locate-path-5.0.0.tgz",
@@ -2550,33 +2523,6 @@
         "node": "20 || >=22"
       }
     },
-    "node_modules/markdown-it": {
-      "version": "14.2.0",
-      "resolved": "https://registry.npmjs.org/markdown-it/-/markdown-it-14.2.0.tgz",
-      "integrity": "sha512-1TGiQiJVRQ3NPmZH6sx5Cfnmg6GQm9jvC1ch4TK511NjSJvjzKLzn5pPfZRNZkRPZP0HqCioSndqH8v2nRaWVQ==",
-      "funding": [
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/puzrin"
-        },
-        {
-          "type": "github",
-          "url": "https://github.com/sponsors/markdown-it"
-        }
-      ],
-      "license": "MIT",
-      "dependencies": {
-        "argparse": "^2.0.1",
-        "entities": "^4.4.0",
-        "linkify-it": "^5.0.1",
-        "mdurl": "^2.0.0",
-        "punycode.js": "^2.3.1",
-        "uc.micro": "^2.1.0"
-      },
-      "bin": {
-        "markdown-it": "bin/markdown-it.mjs"
-      }
-    },
     "node_modules/marked": {
       "version": "15.0.12",
       "resolved": "https://registry.npmjs.org/marked/-/marked-15.0.12.tgz",
@@ -2597,12 +2543,6 @@
       "engines": {
         "node": ">= 0.4"
       }
-    },
-    "node_modules/mdurl": {
-      "version": "2.0.0",
-      "resolved": "https://registry.npmjs.org/mdurl/-/mdurl-2.0.0.tgz",
-      "integrity": "sha512-Lf+9+2r+Tdp5wXDXC4PcIBjTDtq4UKjCPMQhKIuzpJNW0b96kVqSwW0bT7FhRSfmAiFYgP+SCRvdrDozfh0U5w==",
-      "license": "MIT"
     },
     "node_modules/media-typer": {
       "version": "1.1.0",
@@ -3047,15 +2987,6 @@
       },
       "engines": {
         "node": ">= 0.10"
-      }
-    },
-    "node_modules/punycode.js": {
-      "version": "2.3.1",
-      "resolved": "https://registry.npmjs.org/punycode.js/-/punycode.js-2.3.1.tgz",
-      "integrity": "sha512-uxFIHU0YlHYhDQtV4R9J6a52SLx28BCjT+4ieh7IGbgwVJWO+km431c4yRlREUAsAmt/uMjQUyQHNEPf0M39CA==",
-      "license": "MIT",
-      "engines": {
-        "node": ">=6"
       }
     },
     "node_modules/qrcode": {
@@ -3750,22 +3681,6 @@
         "url": "https://github.com/sponsors/Borewit"
       }
     },
-    "node_modules/tokenjuice": {
-      "version": "0.8.0",
-      "resolved": "https://registry.npmjs.org/tokenjuice/-/tokenjuice-0.8.0.tgz",
-      "integrity": "sha512-8jSOhyW3NzYNx7HbbGDkNVltQPiGaZB10Tty5Ovqpsw1VOBw7y+FikykNZ4+Gp9Ze94UubtcPDak7kkyv6F2cg==",
-      "license": "MIT",
-      "bin": {
-        "tokenjuice": "dist/cli/main.js"
-      },
-      "engines": {
-        "node": ">=20"
-      },
-      "funding": {
-        "type": "github",
-        "url": "https://github.com/sponsors/vincentkoc"
-      }
-    },
     "node_modules/tr46": {
       "version": "0.0.3",
       "resolved": "https://registry.npmjs.org/tr46/-/tr46-0.0.3.tgz",
@@ -3864,12 +3779,6 @@
       "engines": {
         "node": ">=14.17"
       }
-    },
-    "node_modules/uc.micro": {
-      "version": "2.1.0",
-      "resolved": "https://registry.npmjs.org/uc.micro/-/uc.micro-2.1.0.tgz",
-      "integrity": "sha512-ARDJmphmdvUk6Glw7y9DQ2bFkKBHwQHLi2lsaH6PPmz/Ka9sFOBsBluozhDltWmnv9u/cF6Rt87znRTPV+yp/A==",
-      "license": "MIT"
     },
     "node_modules/uhyphen": {
       "version": "0.2.0",

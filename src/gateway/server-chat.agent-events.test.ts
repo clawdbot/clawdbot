@@ -1529,6 +1529,57 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("loads selected-agent global session snapshots for tool events", () => {
+    const { broadcastToConnIds, chatRunState, sessionEventSubscribers, handler } = createHarness();
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "global",
+      kind: "global",
+      model: "work-model",
+      goal: {
+        schemaVersion: 1,
+        id: "goal-work",
+        objective: "ship scoped goals",
+        status: "active",
+        createdAt: 1_000,
+        updatedAt: 1_100,
+        tokenStart: 0,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      },
+      status: "running",
+      updatedAt: 1_200,
+    });
+    chatRunState.registry.add("run-global-tool", {
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "client-global-tool",
+    });
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "run-global-tool",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: { phase: "start", name: "exec", toolCallId: "tool-global-1" },
+    });
+
+    expect(loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(requireMockArg(broadcastToConnIds, 0, 0, "session tool event")).toBe("session.tool");
+    expect(requireMockPayload(broadcastToConnIds, 0, 1, "session tool payload")).toEqual(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+        model: "work-model",
+        goal: expect.objectContaining({
+          objective: "ship scoped goals",
+          status: "active",
+        }),
+        status: "running",
+      }),
+    );
+  });
+
   it("does not duplicate tool events to clients subscribed by run and session", () => {
     const { broadcastToConnIds, sessionEventSubscribers, toolEventRecipients, handler } =
       createHarness({
@@ -2040,6 +2091,47 @@ describe("agent event handler", () => {
     });
   });
 
+  it("omits goal state from unscoped global lifecycle snapshots", () => {
+    vi.mocked(loadGatewaySessionRow).mockReturnValue({
+      key: "global",
+      kind: "global",
+      updatedAt: 1_650,
+      status: "running",
+      goal: {
+        schemaVersion: 1,
+        id: "goal-default",
+        objective: "Wrong agent goal",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 2,
+        tokenStart: 0,
+        tokensUsed: 42,
+        continuationTurns: 0,
+      },
+    });
+
+    const { broadcastToConnIds, sessionEventSubscribers, handler } = createHarness({
+      resolveSessionKeyForRun: () => "global",
+    });
+
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "run-global",
+      seq: 2,
+      stream: "lifecycle",
+      ts: 1_800,
+      data: { phase: "end", endedAt: 1_700 },
+    });
+
+    const payload = requireRecord(
+      requireMockArg(broadcastToConnIds, 0, 1, "sessions changed payload"),
+      "sessions changed payload",
+    );
+    expect(payload).not.toHaveProperty("goal");
+    expect(requireRecord(payload.session, "nested session")).not.toHaveProperty("goal");
+  });
+
   it("keeps tool output for Control UI recipients when verbose is on", () => {
     const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
@@ -2139,6 +2231,139 @@ describe("agent event handler", () => {
     expect(nodeCalls).toHaveLength(1);
     const nodePayload = nodeCalls[0]?.[2] as { runId?: string };
     expect(nodePayload.runId).toBe("run-fallback-client");
+  });
+
+  it("keeps selected-agent global chat events scoped to the linked agent", () => {
+    const { broadcast, nodeSendToSession, chatRunState, handler } = createHarness();
+    chatRunState.registry.add("run-global-main", {
+      sessionKey: "global",
+      agentId: "main",
+      clientRunId: "client-global-main",
+    });
+
+    handler({
+      runId: "run-global-main",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "main global reply" },
+    });
+
+    const chatPayload = chatBroadcastCalls(broadcast)[0]?.[1] as {
+      agentId?: string;
+      sessionKey?: string;
+    };
+    expect(chatPayload).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "global",
+      }),
+    );
+    const nodeCalls = sessionChatCalls(nodeSendToSession);
+    expect(nodeCalls[0]?.[0]).toBe("agent:main:global");
+    expect(nodeCalls.map(([sessionKey]) => sessionKey)).toContain("global");
+  });
+
+  it("persists selected-agent global lifecycle state with the linked agent", () => {
+    const { broadcastToConnIds, chatRunState, handler, sessionEventSubscribers } = createHarness();
+    sessionEventSubscribers.subscribe("conn-1");
+    chatRunState.registry.add("run-global-work", {
+      sessionKey: "global",
+      agentId: "work",
+      clientRunId: "client-global-work",
+    });
+
+    handler({
+      runId: "run-global-work",
+      seq: 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "start" },
+    });
+
+    expect(persistGatewaySessionLifecycleEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+      }),
+    );
+    expect(loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "work" });
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+      }),
+      new Set(["conn-1"]),
+      { dropIfSlow: true },
+    );
+  });
+
+  it("routes hidden selected-agent global chat events only to matching subscribers", () => {
+    const { broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
+      createHarness();
+    sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
+    sessionMessageSubscribers.subscribe("conn-work", "agent:work:global");
+    chatRunState.registry.add("run-hidden-main", {
+      sessionKey: "global",
+      agentId: "main",
+      clientRunId: "client-hidden-main",
+    });
+    registerAgentRunContext("run-hidden-main", {
+      sessionKey: "global",
+      isControlUiVisible: false,
+    });
+
+    handler({
+      runId: "run-hidden-main",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "hidden main global reply" },
+    });
+
+    const chatCall = broadcastToConnIds.mock.calls.find(([event]) => event === "chat");
+    expect(chatCall?.[2]).toEqual(new Set(["conn-main"]));
+    expect(chatCall?.[1]).toEqual(
+      expect.objectContaining({
+        agentId: "main",
+        sessionKey: "global",
+      }),
+    );
+  });
+
+  it("routes hidden bare global chat events to the configured default agent subscriber", () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+    });
+    const { broadcastToConnIds, chatRunState, handler, sessionMessageSubscribers } =
+      createHarness();
+    sessionMessageSubscribers.subscribe("conn-main", "agent:main:global");
+    sessionMessageSubscribers.subscribe("conn-ops", "agent:ops:global");
+    chatRunState.registry.add("run-hidden-default", {
+      sessionKey: "global",
+      clientRunId: "client-hidden-default",
+    });
+    registerAgentRunContext("run-hidden-default", {
+      sessionKey: "global",
+      isControlUiVisible: false,
+    });
+
+    handler({
+      runId: "run-hidden-default",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: { text: "hidden default global reply" },
+    });
+
+    const chatCall = broadcastToConnIds.mock.calls.find(([event]) => event === "chat");
+    expect(chatCall?.[2]).toEqual(new Set(["conn-ops"]));
+    expect(chatCall?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: "global",
+      }),
+    );
   });
 
   it("keeps chat-linked run remapping alive across per-attempt lifecycle errors", () => {
@@ -2441,15 +2666,20 @@ describe("agent event handler", () => {
       state?: string;
       errorKind?: string;
       errorMessage?: string;
+      message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
     };
     expect(payload.state).toBe("error");
     expect(payload.errorKind).toBe("rate_limit");
     expect(payload.errorMessage).toContain("Too many requests");
+    expect(payload.message?.role).toBe("assistant");
+    expect(payload.message?.content?.[0]?.text).toContain("Too many requests");
 
     const nodePayload = sessionChatCalls(nodeSendToSession).at(-1)?.[2] as {
       errorKind?: string;
+      message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
     };
     expect(nodePayload.errorKind).toBe("rate_limit");
+    expect(nodePayload.message?.content?.[0]?.text).toContain("Too many requests");
   });
 
   it("suppresses delayed lifecycle chat errors for active chat.send runs while still cleaning up", () => {

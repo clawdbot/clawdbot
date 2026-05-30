@@ -144,6 +144,65 @@ describe("comfy video-generation provider", () => {
     });
   });
 
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            "local-video-1": {
+              outputs: {
+                "9": {
+                  gifs: [{ filename: "generated.mp4", subfolder: "", type: "output" }],
+                },
+              },
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("too-large"), {
+          status: 200,
+          headers: { "content-type": "video/mp4" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const provider = buildComfyVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "animate a lobster",
+        cfg: {
+          ...buildComfyConfig({
+            video: {
+              workflow: {
+                "6": { inputs: { text: "" } },
+                "9": { inputs: {} },
+              },
+              promptNodeId: "6",
+              outputNodeId: "9",
+            },
+          }),
+          agents: { defaults: { mediaMaxMb: 0.000001 } },
+        } as never,
+      }),
+    ).rejects.toThrow("Comfy video output download exceeds 1 bytes");
+  });
+
   it("uses cloud endpoints for video workflows", async () => {
     mockComfyProviderApiKey();
     setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);

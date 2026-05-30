@@ -6,6 +6,7 @@ import {
   type BundleMcpDiagnostic,
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
@@ -46,11 +47,13 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
 export function loadMergedBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   mapConfiguredServer?: BundleMcpServerMapper;
 }): MergedBundleMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    manifestRegistry: params.manifestRegistry,
   });
   const configuredMcp = normalizeConfiguredMcpServers(params.cfg?.mcp?.servers);
   const mapConfiguredServer = params.mapConfiguredServer ?? ((server) => server);

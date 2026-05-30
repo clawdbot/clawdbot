@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
@@ -50,11 +51,7 @@ function coerceFeatureMask(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
     return value;
   }
-  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
-    const parsed = Number(value.trim());
-    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
-  }
-  return undefined;
+  return parseStrictNonNegativeInteger(value);
 }
 
 function formatMissingResponseFeatureMessage(bot: NextcloudTalkBotAdminEntry, features?: number) {

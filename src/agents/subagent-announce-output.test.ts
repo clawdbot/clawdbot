@@ -315,6 +315,47 @@ describe("applySubagentWaitOutcome", () => {
     });
   });
 
+  it("keeps provider hard timeouts stronger than blocked wait metadata", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "error",
+        startedAt: 100,
+        endedAt: 150,
+        livenessState: "blocked",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "model timed out",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
+  it("keeps rpc timeout wait snapshots as timeout outcomes", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 150,
+        stopReason: "rpc",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "timeout",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
+
   it("treats aborted ok wait snapshots as terminated subagent errors", () => {
     const applied = applySubagentWaitOutcome({
       wait: {

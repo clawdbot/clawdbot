@@ -6,12 +6,14 @@ import {
   captureHttpExchange,
   isDebugProxyGlobalFetchPatchInstalled,
 } from "openclaw/plugin-sdk/proxy-capture";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_TTS_MAX_BYTES = 16 * 1024 * 1024;
 
 export const OPENAI_TTS_MODELS = ["gpt-4o-mini-tts", "tts-1", "tts-1-hd"] as const;
 
@@ -100,6 +102,7 @@ export async function openaiTTS(params: {
   responseFormat: "mp3" | "opus" | "pcm" | "wav";
   extraBody?: Record<string, unknown>;
   timeoutMs: number;
+  maxBytes?: number;
 }): Promise<Buffer> {
   const {
     text,
@@ -112,6 +115,7 @@ export async function openaiTTS(params: {
     responseFormat,
     extraBody,
     timeoutMs,
+    maxBytes = DEFAULT_TTS_MAX_BYTES,
   } = params;
   const effectiveInstructions = resolveOpenAITtsInstructions(model, instructions, baseUrl);
 
@@ -177,7 +181,10 @@ export async function openaiTTS(params: {
 
     await assertOkOrThrowProviderError(response, "OpenAI TTS API error");
 
-    return Buffer.from(await response.arrayBuffer());
+    return await readResponseWithLimit(response, maxBytes, {
+      onOverflow: ({ maxBytes }) =>
+        new Error(`OpenAI TTS audio response exceeds ${maxBytes} bytes`),
+    });
   } finally {
     await release();
   }

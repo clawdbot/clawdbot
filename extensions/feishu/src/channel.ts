@@ -28,6 +28,7 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -557,25 +558,14 @@ function readFirstString(
   return undefined;
 }
 
-function isPositiveSafeInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value > 0;
-}
-
 function readOptionalPositiveInteger(
   params: Record<string, unknown>,
   keys: string[],
 ): number | undefined {
   for (const key of keys) {
-    const value = params[key];
-    if (typeof value === "number" && isPositiveSafeInteger(value)) {
-      return value;
-    }
-    if (typeof value === "string" && value.trim()) {
-      const trimmed = value.trim();
-      const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-      if (isPositiveSafeInteger(parsed)) {
-        return parsed;
-      }
+    const parsed = parseStrictPositiveInteger(params[key]);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return undefined;

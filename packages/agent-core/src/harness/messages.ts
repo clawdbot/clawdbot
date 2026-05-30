@@ -1,5 +1,6 @@
-import type { ImageContent, Message, TextContent } from "../llm.js";
+import type { ImageContent, Message, TextContent } from "../../../llm-core/src/index.js";
 import type { AgentMessage } from "../types.js";
+import { requireSessionTimestampMs } from "./session/timestamps.js";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
 
@@ -87,7 +88,7 @@ export function createBranchSummaryMessage(
     role: "branchSummary",
     summary,
     fromId,
-    timestamp: new Date(timestamp).getTime(),
+    timestamp: requireSessionTimestampMs(timestamp, "branch summary timestamp"),
   };
 }
 
@@ -100,7 +101,7 @@ export function createCompactionSummaryMessage(
     role: "compactionSummary",
     summary,
     tokensBefore,
-    timestamp: new Date(timestamp).getTime(),
+    timestamp: requireSessionTimestampMs(timestamp, "compaction summary timestamp"),
   };
 }
 
@@ -117,7 +118,7 @@ export function createCustomMessage(
     content,
     display,
     details,
-    timestamp: new Date(timestamp).getTime(),
+    timestamp: requireSessionTimestampMs(timestamp, "custom message timestamp"),
   };
 }
 

@@ -104,6 +104,54 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("passes selected-agent scope for global model changes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("gpt-5-mini", "openai");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "model",
+      "gpt-5-mini",
+      {
+        agentId: "work",
+        chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
+      },
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "work",
+      model: "gpt-5-mini",
+    });
+  });
+
+  it("passes selected-agent scope for global compaction", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.compact") {
+        return { ok: true, compacted: false };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "compact",
+      "",
+      { agentId: "work" },
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.compact", {
+      key: "global",
+      agentId: "work",
+    });
+  });
+
   it("uses the local model catalog to qualify raw /model overrides when the patch response omits provider", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
@@ -774,6 +822,65 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     expect(chatSend.payload.deliver).toBe(false);
   });
 
+  it("passes selected-agent scope when steering the selected global session", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("global", { status: "running" })] };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-global", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "steer",
+      "try a different approach",
+      { agentId: "work" },
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload).toMatchObject({
+      sessionKey: "global",
+      agentId: "work",
+      message: "try a different approach",
+      deliver: false,
+    });
+  });
+
+  it("passes selected-agent scope when steering a selected-global alias", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("global", { status: "running" })] };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-global", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:work:main",
+      "steer",
+      "try the alias",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload).toMatchObject({
+      sessionKey: "agent:work:main",
+      agentId: "work",
+      message: "try the alias",
+      deliver: false,
+    });
+  });
+
   it("uses cached sessions to avoid an extra sessions.list round trip", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "chat.send") {
@@ -973,6 +1080,31 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main:main",
       message: "start over with a new plan",
+    });
+  });
+
+  it("passes selected-agent scope when redirecting the selected global session", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.steer") {
+        return { status: "started", runId: "run-global", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "redirect",
+      "start over",
+      { agentId: "work" },
+    );
+
+    expect(result.content).toBe("Redirected.");
+    expect(result.trackRunId).toBe("run-global");
+    expect(request).toHaveBeenCalledWith("sessions.steer", {
+      key: "global",
+      agentId: "work",
+      message: "start over",
     });
   });
 

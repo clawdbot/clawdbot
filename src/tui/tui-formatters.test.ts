@@ -4,9 +4,45 @@ import {
   extractContentFromMessage,
   extractTextFromMessage,
   extractThinkingFromMessage,
+  formatGoalFooter,
   isCommandMessage,
   sanitizeRenderableText,
 } from "./tui-formatters.js";
+
+describe("formatGoalFooter", () => {
+  it("renders active goal usage", () => {
+    expect(
+      formatGoalFooter({
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "land PR",
+        status: "active",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 0,
+        tokensUsed: 12_000,
+        tokenBudget: 30_000,
+        continuationTurns: 0,
+      }),
+    ).toBe("Pursuing goal (12k/30k)");
+  });
+
+  it("renders resumable blocked goals", () => {
+    expect(
+      formatGoalFooter({
+        schemaVersion: 1,
+        id: "goal-1",
+        objective: "land PR",
+        status: "blocked",
+        createdAt: 1,
+        updatedAt: 1,
+        tokenStart: 0,
+        tokensUsed: 0,
+        continuationTurns: 0,
+      }),
+    ).toBe("Goal blocked (/goal resume)");
+  });
+});
 
 describe("extractTextFromMessage", () => {
   it("prefers final_answer text over commentary text for assistant messages", () => {

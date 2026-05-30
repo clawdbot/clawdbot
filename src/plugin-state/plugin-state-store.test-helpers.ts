@@ -1,4 +1,4 @@
-import { seedPluginStateSqliteEntriesForTests } from "./plugin-state-store.sqlite.js";
+import { seedPluginStateDatabaseEntriesForTests } from "./plugin-state-store.sqlite.js";
 
 export type PluginStateSeedEntry = {
   pluginId: string;
@@ -14,7 +14,7 @@ export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]):
     return;
   }
 
-  seedPluginStateSqliteEntriesForTests(
+  seedPluginStateDatabaseEntriesForTests(
     entries.map((entry) => {
       const valueJson = JSON.stringify(entry.value);
       if (valueJson == null) {

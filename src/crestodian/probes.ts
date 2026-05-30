@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 export type LocalCommandProbe = {
   command: string;
@@ -20,9 +21,13 @@ export async function probeLocalCommand(
   args: string[] = ["--version"],
   opts: { outputLimit?: number; timeoutKillGraceMs?: number; timeoutMs?: number } = {},
 ): Promise<LocalCommandProbe> {
-  const timeoutMs = opts.timeoutMs ?? 1_500;
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1_500);
   const outputLimit = opts.outputLimit ?? LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS;
-  const timeoutKillGraceMs = opts.timeoutKillGraceMs ?? LOCAL_COMMAND_PROBE_KILL_GRACE_MS;
+  const timeoutKillGraceMs = resolveTimerTimeoutMs(
+    opts.timeoutKillGraceMs,
+    LOCAL_COMMAND_PROBE_KILL_GRACE_MS,
+    0,
+  );
   return await new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
@@ -51,15 +56,12 @@ export async function probeLocalCommand(
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGTERM");
-      killTimer = setTimeout(
-        () => {
-          child.kill("SIGKILL");
-          child.stdout.destroy();
-          child.stderr.destroy();
-          finish(timeoutResult());
-        },
-        Math.max(0, timeoutKillGraceMs),
-      );
+      killTimer = setTimeout(() => {
+        child.kill("SIGKILL");
+        child.stdout.destroy();
+        child.stderr.destroy();
+        finish(timeoutResult());
+      }, timeoutKillGraceMs);
       killTimer.unref?.();
     }, timeoutMs);
     child.stdout.setEncoding("utf8");
@@ -99,8 +101,9 @@ export async function probeGatewayUrl(
 ): Promise<{ reachable: boolean; url: string; error?: string }> {
   const httpUrl = url.replace(/^ws:/, "http:").replace(/^wss:/, "https:");
   const healthUrl = new URL("/healthz", httpUrl).toString();
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 900);
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 900);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(healthUrl, {
       method: "GET",

@@ -9,7 +9,12 @@ import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-sou
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
-import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+import {
+  loadExecApprovals,
+  type ExecAsk,
+  type ExecMode,
+  type ExecSecurity,
+} from "../infra/exec-approvals.js";
 import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
 import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
@@ -89,15 +94,17 @@ function collectExecPolicyConflictWarnings(cfg: OpenClawConfig): string[] {
 
   const maybeWarn = (params: {
     scopeLabel: string;
-    scopeExecConfig: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
-    globalExecConfig?: { security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    scopeExecConfig: { mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk } | undefined;
+    globalExecConfig?: { mode?: ExecMode; security?: ExecSecurity; ask?: ExecAsk } | undefined;
     agentId?: string;
   }) => {
     const scopeExecConfig = params.scopeExecConfig;
     const globalExecConfig = params.globalExecConfig;
     if (
+      !scopeExecConfig?.mode &&
       !scopeExecConfig?.security &&
       !scopeExecConfig?.ask &&
+      !globalExecConfig?.mode &&
       !globalExecConfig?.security &&
       !globalExecConfig?.ask
     ) {

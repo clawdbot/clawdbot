@@ -1,3 +1,4 @@
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { asBoolean } from "../utils/boolean.js";
 import { supportsOpenAIReasoningEffort } from "./openai-reasoning-effort.js";
@@ -268,11 +269,7 @@ function parsePositiveInteger(value: unknown): number | undefined {
     return Math.floor(value);
   }
   if (typeof value === "string") {
-    const trimmed = value.trim();
-    const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-    if (Number.isSafeInteger(parsed) && parsed > 0) {
-      return parsed;
-    }
+    return parseStrictPositiveInteger(value);
   }
   return undefined;
 }

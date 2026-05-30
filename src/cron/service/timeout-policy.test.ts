@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import type { CronJob } from "../types.js";
 import {
   AGENT_TURN_SAFETY_TIMEOUT_MS,
@@ -45,5 +46,12 @@ describe("timeout-policy", () => {
       makeJob({ kind: "agentTurn", message: "hi", timeoutSeconds: 1.9 }),
     );
     expect(timeout).toBe(1_900);
+  });
+
+  it("caps oversized explicit timeoutSeconds at the timer-safe ceiling", () => {
+    const timeout = resolveCronJobTimeoutMs(
+      makeJob({ kind: "agentTurn", message: "hi", timeoutSeconds: Number.MAX_SAFE_INTEGER }),
+    );
+    expect(timeout).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 });

@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForWebSocketOpen } from "../../scripts/e2e/mcp-websocket-open.ts";
 
 class FakeWebSocket extends EventEmitter {
@@ -20,6 +20,10 @@ class FakeWebSocket extends EventEmitter {
 }
 
 describe("mcp channel WebSocket open guard", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   it("consumes abort errors after open timeouts", async () => {
     const ws = new FakeWebSocket();
     const keepAlive = setTimeout(() => {}, 100);

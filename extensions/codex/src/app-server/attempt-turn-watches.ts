@@ -380,9 +380,21 @@ export function createCodexAttemptTurnWatchController(params: {
       }
       scheduleProgressWatches();
     },
-    noteNotificationReceived: (method: string) => {
+    noteNotificationReceived: (
+      method: string,
+      options?: { details?: Record<string, unknown>; attemptProgress?: boolean },
+    ) => {
       completionLastActivityAt = Date.now();
       completionLastActivityReason = `notification:${method}`;
+      if (options?.details !== undefined) {
+        completionLastActivityDetails = options.details;
+      }
+      if (options?.attemptProgress) {
+        attemptLastProgressAt = completionLastActivityAt;
+        attemptLastProgressReason = completionLastActivityReason;
+        attemptLastProgressDetails = options.details;
+        params.onAttemptProgress(completionLastActivityReason, options.details);
+      }
     },
     scheduleProgressWatches,
     clearCompletionIdleTimer,

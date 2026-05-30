@@ -35,16 +35,18 @@ describe("requestCodexAppServerJson sandbox guard", () => {
   });
 
   it("fails closed before raw app-server bypass methods when exec host=node is active", async () => {
-    await expect(
-      requestCodexAppServerJson({
-        method: "command/exec",
-        requestParams: { command: ["sh", "-lc", "id"] },
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-        sessionKey: "node-session",
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `command/exec` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
+    for (const method of ["command/exec", "process/spawn"]) {
+      await expect(
+        requestCodexAppServerJson({
+          method,
+          requestParams: { command: ["sh", "-lc", "id"] },
+          config: { tools: { exec: { host: "node", node: "worker-1" } } },
+          sessionKey: "node-session",
+        }),
+      ).rejects.toThrow(
+        `Codex-native app-server method \`${method}\` is unavailable because OpenClaw exec host=node is active for this session.`,
+      );
+    }
 
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
@@ -63,21 +65,6 @@ describe("requestCodexAppServerJson sandbox guard", () => {
     ).resolves.toEqual({ ok: true });
 
     expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, { timeoutMs: 60_000 });
-  });
-
-  it("fails closed before raw app-server bypass methods when exec host=node is active", async () => {
-    await expect(
-      requestCodexAppServerJson({
-        method: "process/spawn",
-        requestParams: { command: ["sh", "-lc", "id"] },
-        config: { tools: { exec: { host: "node", node: "worker-1" } } },
-        sessionKey: "node-session",
-      }),
-    ).rejects.toThrow(
-      "Codex-native app-server method `process/spawn` is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
   it("fails closed for config-level exec host=node even without a session key", async () => {

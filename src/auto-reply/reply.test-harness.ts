@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, vi, type Mock } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { withFastReplyConfig } from "./reply/get-reply-fast-path.js";
 
 type ReplyRuntimeMocks = {
@@ -44,7 +45,7 @@ vi.mock("../commands-registry.runtime.js", () => ({
   listChatCommands: () => [],
 }));
 
-vi.mock("../skill-commands.runtime.js", () => ({
+vi.mock("../skills/discovery/chat-commands.runtime.js", () => ({
   listSkillCommandsForWorkspace: () => [],
 }));
 
@@ -119,35 +120,14 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
   },
 }));
 
-type HomeEnvSnapshot = {
-  HOME: string | undefined;
-  USERPROFILE: string | undefined;
-  HOMEDRIVE: string | undefined;
-  HOMEPATH: string | undefined;
-  OPENCLAW_STATE_DIR: string | undefined;
-  OPENCLAW_AGENT_DIR: string | undefined;
-};
-
-function snapshotHomeEnv(): HomeEnvSnapshot {
-  return {
-    HOME: process.env.HOME,
-    USERPROFILE: process.env.USERPROFILE,
-    HOMEDRIVE: process.env.HOMEDRIVE,
-    HOMEPATH: process.env.HOMEPATH,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
-  };
-}
-
-function restoreHomeEnv(snapshot: HomeEnvSnapshot) {
-  for (const [key, value] of Object.entries(snapshot)) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
+const HOME_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "HOMEDRIVE",
+  "HOMEPATH",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_AGENT_DIR",
+] as const;
 
 export function createTempHomeHarness(options: { prefix: string; beforeEachCase?: () => void }) {
   let fixtureRoot = "";
@@ -167,7 +147,7 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
   async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     const home = path.join(fixtureRoot, `case-${++caseId}`);
     await fs.mkdir(path.join(home, ".openclaw", "agents", "main", "sessions"), { recursive: true });
-    const envSnapshot = snapshotHomeEnv();
+    const envSnapshot = captureEnv([...HOME_ENV_KEYS]);
     process.env.HOME = home;
     process.env.USERPROFILE = home;
     process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
@@ -185,7 +165,7 @@ export function createTempHomeHarness(options: { prefix: string; beforeEachCase?
       options.beforeEachCase?.();
       return await fn(home);
     } finally {
-      restoreHomeEnv(envSnapshot);
+      envSnapshot.restore();
     }
   }
 

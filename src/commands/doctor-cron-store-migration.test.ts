@@ -159,13 +159,28 @@ describe("normalizeStoredCronJobs", () => {
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
         payload: { kind: "agentTurn", message: ["tick"] },
       }),
+      makeLegacyJob({
+        id: "missing-schedule",
+        schedule: undefined,
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+      makeLegacyJob({
+        id: "missing-payload",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: undefined,
+      }),
+      makeLegacyJob({
+        id: "incomplete-system-payload",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        payload: { kind: "systemEvent" },
+      }),
     ];
 
     const result = normalizeStoredCronJobs(jobs);
 
     expect(result.mutated).toBe(true);
-    expect(result.issues.invalidSchedule).toBe(1);
-    expect(result.issues.invalidPayload).toBe(1);
+    expect(result.issues.invalidSchedule).toBe(2);
+    expect(result.issues.invalidPayload).toBe(3);
     expect(jobs.map((job) => job.id)).toEqual(["valid"]);
     expect(result.jobs.map((job) => job.id)).toEqual(["valid"]);
   });

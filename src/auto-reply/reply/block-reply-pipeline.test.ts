@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {
   createBlockReplyContentKey,
@@ -14,6 +14,14 @@ const waitForAbort = (signal: AbortSignal | undefined): Promise<void> =>
     }
     signal.addEventListener("abort", () => resolve(), { once: true });
   });
+
+beforeEach(() => {
+  vi.useRealTimers();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("createBlockReplyPayloadKey", () => {
   it("produces different keys for payloads differing only by replyToId", () => {
@@ -284,6 +292,8 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
 describe("createBlockReplyPipeline content coverage dedup", () => {
   it("matches final assembled text to successfully streamed text chunks after abort", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (_payload, options) => {
@@ -298,7 +308,9 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
     pipeline.enqueue({ text: "Third paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);
@@ -306,6 +318,8 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
   });
 
   it("does not match final assembled text with content that was not streamed", async () => {
+    vi.useFakeTimers();
+
     let callCount = 0;
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async (_payload, options) => {
@@ -319,7 +333,9 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
 
     pipeline.enqueue({ text: "First paragraph." });
     pipeline.enqueue({ text: "Second paragraph." });
-    await pipeline.flush({ force: true });
+    const flushing = pipeline.flush({ force: true });
+    await vi.advanceTimersByTimeAsync(1);
+    await flushing;
 
     expect(pipeline.didStream()).toBe(true);
     expect(pipeline.isAborted()).toBe(true);

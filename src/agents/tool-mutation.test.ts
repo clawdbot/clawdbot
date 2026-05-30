@@ -61,6 +61,16 @@ describe("tool mutation helpers", () => {
       buildToolMutationState("subagents", { action: "steer", target: "worker-1" }).mutatingAction,
     ).toBe(true);
     expect(buildToolMutationState("subagents", { action: "list" }).mutatingAction).toBe(false);
+    expect(buildToolMutationState("get_goal", { sessionKey: "agent:main" }).mutatingAction).toBe(
+      false,
+    );
+    expect(buildToolMutationState("create_goal", { sessionKey: "agent:main" }).mutatingAction).toBe(
+      true,
+    );
+    expect(
+      buildToolMutationState("update_goal", { sessionKey: "agent:main", status: "complete" })
+        .mutatingAction,
+    ).toBe(true);
   });
 
   it("matches tool actions by fingerprint and fails closed on asymmetric data", () => {

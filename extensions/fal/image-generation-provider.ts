@@ -12,6 +12,7 @@ import {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
@@ -89,6 +90,7 @@ const NANO_BANANA_SUPPORTED_ASPECT_RATIOS = [
 const KREA_CREATIVITY_LEVELS = ["raw", "low", "medium", "high"] as const;
 
 const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
+const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 type FalImageSize = string | { width: number; height: number };
 type FalImageModelSchema = {
@@ -472,9 +474,20 @@ function formatFalReferenceLimitError(
   return `${schema.referenceLimitLabel} supports at most ${limit} ${noun} (requested ${inputImageCount})`;
 }
 
+function resolveGeneratedImageMaxBytes(req: {
+  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
+}): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_IMAGE_MAX_BYTES;
+}
+
 async function fetchImageBuffer(
   url: string,
   networkPolicy?: FalNetworkPolicy,
+  maxBytes = DEFAULT_GENERATED_IMAGE_MAX_BYTES,
 ): Promise<{ buffer: Buffer; mimeType: string }> {
   const downloadPolicy = (() => {
     const trustedSuffix = networkPolicy?.trustedDownloadHostSuffix;
@@ -497,8 +510,13 @@ async function fetchImageBuffer(
   try {
     await assertOkOrThrowProviderError(response, "fal image download failed");
     const mimeType = response.headers.get("content-type")?.trim() || "image/png";
-    const arrayBuffer = await response.arrayBuffer();
-    return { buffer: Buffer.from(arrayBuffer), mimeType };
+    return {
+      buffer: await readResponseWithLimit(response, maxBytes, {
+        onOverflow: ({ maxBytes }) =>
+          new Error(`fal generated image download exceeds ${maxBytes} bytes`),
+      }),
+      mimeType,
+    };
   } finally {
     await release();
   }
@@ -580,6 +598,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "image" });
       const networkPolicy = resolveFalNetworkPolicy({ baseUrl, allowPrivateNetwork });
+      const maxImageBytes = resolveGeneratedImageMaxBytes(req);
       const requestBody: Record<string, unknown> = {
         prompt: req.prompt,
         ...(schema.supportsCount ? { num_images: req.count ?? 1 } : {}),
@@ -633,7 +652,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           if (!url) {
             throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
           }
-          const downloaded = await fetchImageBuffer(url, networkPolicy);
+          const downloaded = await fetchImageBuffer(url, networkPolicy, maxImageBytes);
           imageIndex += 1;
           images.push({
             buffer: downloaded.buffer,

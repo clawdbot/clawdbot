@@ -1,6 +1,10 @@
 import type { Command } from "commander";
 import { runCommandWithRuntime } from "../core-api.js";
-import { callBrowserRequest, type BrowserParentOpts } from "./browser-cli-shared.js";
+import {
+  callBrowserRequest,
+  parseBrowserPositiveIntegerValue,
+  type BrowserParentOpts,
+} from "./browser-cli-shared.js";
 import {
   danger,
   defaultRuntime,
@@ -113,8 +117,7 @@ function runBrowserCommand(action: () => Promise<void>) {
 }
 
 function parseTabIndex(value: string): number {
-  const trimmed = value.trim();
-  return /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  return parseBrowserPositiveIntegerValue(value) ?? Number.NaN;
 }
 
 function logBrowserTabs(tabs: BrowserTab[], json?: boolean) {

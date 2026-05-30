@@ -57,14 +57,15 @@ describe("createGlobalCommandRunner", () => {
     try {
       expect(parseTimeoutMsOrExit("1.5")).toBeNull();
       expect(parseTimeoutMsOrExit("10abc")).toBeNull();
+      expect(parseTimeoutMsOrExit("0x10")).toBeNull();
       expect(parseTimeoutMsOrExit("0")).toBeNull();
       expect(parseTimeoutMsOrExit("-1")).toBeNull();
       expect(parseTimeoutMsOrExit("   ")).toBeNull();
       expect(parseTimeoutMsOrExit(String(Number.MAX_SAFE_INTEGER))).toBeNull();
 
-      expect(error).toHaveBeenCalledTimes(6);
+      expect(error).toHaveBeenCalledTimes(7);
       expect(error).toHaveBeenCalledWith("--timeout must be a positive integer (seconds)");
-      expect(exit).toHaveBeenCalledTimes(6);
+      expect(exit).toHaveBeenCalledTimes(7);
       expect(exit).toHaveBeenCalledWith(1);
     } finally {
       error.mockRestore();
@@ -78,6 +79,7 @@ describe("createGlobalCommandRunner", () => {
 
     try {
       expect(parseTimeoutMsOrExit(" 10 ")).toBe(10_000);
+      expect(parseTimeoutMsOrExit("+10")).toBe(10_000);
       expect(parseTimeoutMsOrExit("001")).toBe(1_000);
       expect(parseTimeoutMsOrExit()).toBeUndefined();
       expect(error).not.toHaveBeenCalled();

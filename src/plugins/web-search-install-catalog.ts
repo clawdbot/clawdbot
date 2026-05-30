@@ -11,7 +11,7 @@ import {
   resolveOfficialExternalPluginLabel,
   type OfficialExternalWebSearchProvider,
 } from "./official-external-plugin-catalog.js";
-import type { PluginWebSearchProviderEntry } from "./types.js";
+import type { PluginWebSearchProviderEntry } from "./web-provider-types.js";
 
 export type WebSearchInstallCatalogEntry = {
   pluginId: string;

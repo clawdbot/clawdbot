@@ -1,4 +1,5 @@
 import path from "node:path";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { mimeFromExtension } from "../shared/mime.js";
 import {
@@ -63,12 +64,7 @@ function parsePageOffset(input: unknown): number {
   if (typeof input !== "string") {
     return 0;
   }
-  const trimmed = input.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return 0;
-  }
-  const offset = Number(trimmed);
-  return Number.isSafeInteger(offset) ? offset : 0;
+  return parseStrictNonNegativeInteger(input) ?? 0;
 }
 
 function classifyFsError(err: unknown): DirListErrCode {

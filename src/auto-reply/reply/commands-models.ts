@@ -28,6 +28,7 @@ import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseStrictPositiveInteger } from "../../shared/number-coercion.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -345,17 +346,15 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
       continue;
     }
     if (lower.startsWith("page=")) {
-      const value = parsePositiveIntegerToken(lower.slice("page=".length));
+      const value = parseStrictPositiveInteger(lower.slice("page=".length));
       if (value !== undefined) {
         page = value;
       }
       continue;
     }
-    if (/^[0-9]+$/.test(lower)) {
-      const value = Number.parseInt(lower, 10);
-      if (Number.isFinite(value) && value > 0) {
-        page = value;
-      }
+    const pageToken = parseStrictPositiveInteger(lower);
+    if (pageToken !== undefined) {
+      page = pageToken;
     }
   }
 
@@ -364,7 +363,7 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
     const lower = normalizeLowercaseStringOrEmpty(token);
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
       const rawValue = lower.slice(lower.indexOf("=") + 1);
-      const value = parsePositiveIntegerToken(rawValue);
+      const value = parseStrictPositiveInteger(rawValue);
       if (value !== undefined) {
         pageSize = Math.min(PAGE_SIZE_MAX, value);
       }
@@ -378,15 +377,6 @@ function parseListArgs(tokens: string[]): Extract<ParsedModelsCommand, { action:
     pageSize,
     all,
   };
-}
-
-function parsePositiveIntegerToken(raw: string): number | undefined {
-  const trimmed = raw.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 function parseModelsArgs(raw: string): ParsedModelsCommand {

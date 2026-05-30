@@ -755,9 +755,12 @@ export async function loadCompactHooksHarness(): Promise<{
     limitHistoryTurns: vi.fn((msgs: unknown[]) => msgs.slice(0, 2)),
   }));
 
-  vi.doMock("../skills.js", () => ({
+  vi.doMock("../../skills/runtime/env-overrides.js", () => ({
     applySkillEnvOverrides: vi.fn(() => () => {}),
     applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
+  }));
+
+  vi.doMock("../../skills/loading/workspace.js", () => ({
     loadWorkspaceSkillEntries: vi.fn(() => []),
     resolveSkillsPromptForRun: vi.fn(() => undefined),
   }));
@@ -842,6 +845,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("./sandbox-info.js", () => ({
     buildEmbeddedSandboxInfo: vi.fn(() => undefined),
+    resolveEmbeddedSandboxInfoExecPolicy: vi.fn(() => ({})),
   }));
 
   vi.doMock("./model.js", () => ({

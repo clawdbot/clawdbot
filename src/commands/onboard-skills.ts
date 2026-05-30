@@ -1,11 +1,11 @@
-import { installSkill } from "../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable } from "../infra/brew.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { patchSkillConfigEntry } from "../skills/config/mutations.js";
+import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import { installSkill } from "../skills/lifecycle/install.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
@@ -42,23 +42,6 @@ function isBrewOnlyInstallableSkill(skill: {
     skill.missing.bins.length > 0 &&
     skill.install.every((option) => option.kind === "brew")
   );
-}
-
-function upsertSkillEntry(
-  cfg: OpenClawConfig,
-  skillKey: string,
-  patch: { apiKey?: string },
-): OpenClawConfig {
-  const entries = { ...cfg.skills?.entries };
-  const existing = (entries[skillKey] as { apiKey?: string } | undefined) ?? {};
-  entries[skillKey] = { ...existing, ...patch };
-  return {
-    ...cfg,
-    skills: {
-      ...cfg.skills,
-      entries,
-    },
-  };
 }
 
 export async function setupSkills(
@@ -262,7 +245,7 @@ export async function setupSkills(
       validate: (value) => (value?.trim() ? undefined : t("common.required")),
       sensitive: true,
     });
-    next = upsertSkillEntry(next, skill.skillKey, { apiKey: normalizeSecretInput(apiKey) });
+    next = patchSkillConfigEntry(next, skill.skillKey, { apiKey });
   }
 
   return next;

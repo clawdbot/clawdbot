@@ -4,6 +4,7 @@ import {
   type ModelsProviderData,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -62,11 +63,8 @@ function readContextNumber(context: Record<string, unknown>, key: string): numbe
   if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
-    const parsed = Number(value.trim());
-    if (Number.isSafeInteger(parsed)) {
-      return parsed;
-    }
+  if (typeof value === "string") {
+    return parseStrictInteger(value);
   }
   return undefined;
 }

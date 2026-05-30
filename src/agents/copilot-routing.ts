@@ -5,8 +5,7 @@ import { parseModelRefProvider } from "./openai-codex-routing.js";
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot";
 
 /**
- * Canonical id of the Copilot agent runtime plugin
- * (see `extensions/copilot/index.ts`, which registers as `id: "copilot"`).
+ * Canonical id of the Copilot agent runtime plugin.
  */
 export const COPILOT_RUNTIME_ID = "copilot";
 
@@ -23,8 +22,8 @@ function parseModelRefId(model: string | undefined): string | undefined {
 }
 
 /**
- * Returns true when the selected model should trigger the on-demand
- * install of `@github/copilot-sdk` for the Copilot agent runtime.
+ * Returns true when the selected model should trigger the external
+ * `@openclaw/copilot` runtime plugin install.
  *
  * Gating contract (review #2, P1):
  *   - Model ref must use the `github-copilot/*` provider prefix.
@@ -34,10 +33,10 @@ function parseModelRefId(model: string | undefined): string | undefined {
  *
  * Without the explicit opt-in we fall through to the built-in GitHub
  * Copilot provider, which has shipped support for `github-copilot/*`
- * models for a long time and must not surface a 260 MB SDK install
- * prompt to users who never asked for the runtime.
+ * models for a long time and must not install the runtime plugin for
+ * users who never asked for it.
  */
-export function modelSelectionShouldEnsureCopilotSdk(params: {
+export function modelSelectionShouldEnsureCopilotRuntimePlugin(params: {
   model?: string;
   config?: OpenClawConfig;
 }): boolean {

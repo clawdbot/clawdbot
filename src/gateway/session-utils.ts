@@ -52,6 +52,7 @@ import {
   resolveAllAgentSessionStoreTargetsSync,
   resolveAgentMainSessionKey,
   resolveFreshSessionTotalTokens,
+  resolveSessionGoalDisplayState,
   resolveStorePath,
   type SessionEntry,
   type SessionStoreTarget,
@@ -809,6 +810,7 @@ function resolveTranscriptUsageFallback(params: {
   fallbackModel?: string;
   maxTranscriptBytes?: number;
   rowContext?: SessionListRowContext;
+  agentId?: string;
 }): {
   estimatedCostUsd?: number;
   totalTokens?: number;
@@ -824,7 +826,7 @@ function resolveTranscriptUsageFallback(params: {
   const parsed = parseAgentSessionKey(params.key);
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
-    : resolveDefaultAgentId(params.cfg);
+    : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
   const snapshot = readRecentSessionUsageFromTranscript(
     entry.sessionId,
     params.storePath,
@@ -1019,11 +1021,13 @@ export function migrateAndPruneGatewaySessionStoreKey(params: {
   cfg: OpenClawConfig;
   key: string;
   store: Record<string, SessionEntry>;
+  agentId?: string;
 }) {
   const target = resolveGatewaySessionStoreTarget({
     cfg: params.cfg,
     key: params.key,
     store: params.store,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   const primaryKey = target.canonicalKey;
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(
@@ -1787,6 +1791,7 @@ export function buildGatewaySessionRow(params: {
   transcriptUsageMaxBytes?: number;
   storeChildSessionsByKey?: Map<string, string[]>;
   rowContext?: SessionListRowContext;
+  agentId?: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
 }): GatewaySessionRow {
@@ -1819,7 +1824,9 @@ export function buildGatewaySessionRow(params: {
     originLabel;
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
-  const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
+  const sessionAgentId = normalizeAgentId(
+    parsedAgent?.agentId ?? params.agentId ?? resolveDefaultAgentId(cfg),
+  );
   const rowContext = params.rowContext;
   const subagentRun = rowContext
     ? rowContext.subagentRuns.getDisplaySubagentRun(key)
@@ -1912,6 +1919,7 @@ export function buildGatewaySessionRow(params: {
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
           maxTranscriptBytes: params.transcriptUsageMaxBytes,
           rowContext: params.rowContext,
+          agentId: sessionAgentId,
         })
       : null;
   const preferLiveSubagentModelIdentity =
@@ -1938,6 +1946,19 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
+  const goal = entry?.goal
+    ? resolveSessionGoalDisplayState(
+        {
+          goal: entry.goal,
+          totalTokens,
+          totalTokensFresh,
+        },
+        now,
+        // Session listing is read-only; stale goal baselines are adopted only
+        // by goal commands/tools that can persist the first fresh snapshot.
+        { adoptFreshBaseline: false },
+      )
+    : undefined;
   const childSessions = params.storeChildSessionsByKey
     ? mergeChildSessionKeys(
         resolveRuntimeChildSessionKeys(key, now, rowContext?.subagentRuns),
@@ -2065,6 +2086,7 @@ export function buildGatewaySessionRow(params: {
     outputTokens: entry?.outputTokens,
     totalTokens,
     totalTokensFresh,
+    goal,
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     subagentRunState,
@@ -2179,6 +2201,7 @@ function resolveSessionListSearchModelFields(params: {
 export function loadGatewaySessionRow(
   sessionKey: string,
   options?: {
+    agentId?: string;
     includeDerivedTitles?: boolean;
     includeLastMessage?: boolean;
     now?: number;
@@ -2188,6 +2211,7 @@ export function loadGatewaySessionRow(
   const now = options?.now ?? Date.now();
   const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(sessionKey, {
     clone: false,
+    ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
   if (!entry) {
     return null;
@@ -2209,6 +2233,7 @@ export function loadGatewaySessionRow(
     includeLastMessage: options?.includeLastMessage,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
+    ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
 }
 
@@ -2324,7 +2349,10 @@ function filterSessionEntries(params: {
         return false;
       }
       if (agentId) {
-        if (key === "global" || key === "unknown") {
+        if (key === "global") {
+          return includeGlobal;
+        }
+        if (key === "unknown") {
           return false;
         }
         const parsed = parseAgentSessionKey(key);
@@ -2472,12 +2500,17 @@ export function listSessionsFromStore(params: {
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
+    const rowAgentId =
+      key === "global" && typeof opts.agentId === "string"
+        ? normalizeAgentId(opts.agentId)
+        : undefined;
     return buildGatewaySessionRow({
       cfg,
       storePath,
       store,
       key,
       entry,
+      agentId: rowAgentId,
       modelCatalog: params.modelCatalog,
       now,
       includeDerivedTitles: includeTranscriptFields && includeDerivedTitles,
@@ -2549,12 +2582,17 @@ export async function listSessionsFromStoreAsync(params: {
   for (let i = 0; i < entries.length; i++) {
     const [key, entry] = entries[i];
     const includeTranscriptFields = i < sessionListTranscriptFieldRows;
+    const rowAgentId =
+      key === "global" && typeof opts.agentId === "string"
+        ? normalizeAgentId(opts.agentId)
+        : undefined;
     const row = buildGatewaySessionRow({
       cfg,
       storePath,
       store,
       key,
       entry,
+      agentId: rowAgentId,
       modelCatalog: params.modelCatalog,
       now,
       includeDerivedTitles: false,
@@ -2571,9 +2609,9 @@ export async function listSessionsFromStoreAsync(params: {
       (includeDerivedTitles || includeLastMessage)
     ) {
       const parsed = parseAgentSessionKey(key);
-      const sessionAgentId = parsed?.agentId
-        ? normalizeAgentId(parsed.agentId)
-        : resolveDefaultAgentId(cfg);
+      const sessionAgentId =
+        rowAgentId ??
+        (parsed?.agentId ? normalizeAgentId(parsed.agentId) : resolveDefaultAgentId(cfg));
       const fields = await readSessionTitleFieldsFromTranscriptAsync(
         entry.sessionId,
         storePath,

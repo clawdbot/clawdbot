@@ -191,6 +191,25 @@ describe("sendMessage", () => {
     expect(payload).toEqual({ text: "Hello" });
   });
 
+  it("accepts plus-signed numeric user ids", async () => {
+    mockSuccessResponse();
+    await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", "+042"));
+
+    const request = vi.mocked(https.request).mock.results[0]?.value as ClientRequest | undefined;
+    if (!request) {
+      throw new Error("expected Synology Chat webhook request");
+    }
+    const body = vi.mocked(request.write).mock.calls[0]?.[0];
+    if (typeof body !== "string") {
+      throw new Error("expected Synology Chat webhook body");
+    }
+    const payload = JSON.parse(decodeURIComponent(body.replace(/^payload=/, ""))) as Record<
+      string,
+      unknown
+    >;
+    expect(payload).toEqual({ text: "Hello", user_ids: [42] });
+  });
+
   it("only disables TLS verification when explicitly requested", async () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));

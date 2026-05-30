@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { modelSelectionShouldEnsureCopilotSdk } from "./copilot-routing.js";
+import { modelSelectionShouldEnsureCopilotRuntimePlugin } from "./copilot-routing.js";
 
 const emptyCfg = {} as OpenClawConfig;
 
@@ -26,12 +26,12 @@ function cfgWithModelRuntime(modelId: string, id: string): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
-describe("modelSelectionShouldEnsureCopilotSdk", () => {
+describe("modelSelectionShouldEnsureCopilotRuntimePlugin", () => {
   it("returns false for github-copilot/* without explicit agentRuntime opt-in", () => {
     // Built-in GitHub Copilot provider already supports these models;
-    // we must not nag users with a 260 MB SDK install prompt.
+    // we must not install the runtime plugin unless users opted in.
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/gpt-4o",
         config: emptyCfg,
       }),
@@ -40,7 +40,7 @@ describe("modelSelectionShouldEnsureCopilotSdk", () => {
 
   it("returns true when the provider config sets agentRuntime.id = copilot", () => {
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/gpt-4o",
         config: cfgWithProviderRuntime("copilot"),
       }),
@@ -49,7 +49,7 @@ describe("modelSelectionShouldEnsureCopilotSdk", () => {
 
   it("returns true when a model override sets agentRuntime.id = copilot", () => {
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/claude-sonnet-4",
         config: cfgWithModelRuntime("claude-sonnet-4", "copilot"),
       }),
@@ -58,7 +58,7 @@ describe("modelSelectionShouldEnsureCopilotSdk", () => {
 
   it("normalizes id casing/whitespace before matching", () => {
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/gpt-4o",
         config: cfgWithProviderRuntime("  Copilot  "),
       }),
@@ -67,13 +67,13 @@ describe("modelSelectionShouldEnsureCopilotSdk", () => {
 
   it("returns false when the runtime id is anything other than copilot", () => {
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/gpt-4o",
         config: cfgWithProviderRuntime("pi"),
       }),
     ).toBe(false);
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/gpt-4o",
         config: cfgWithProviderRuntime("codex"),
       }),
@@ -92,14 +92,14 @@ describe("modelSelectionShouldEnsureCopilotSdk", () => {
       },
     } as unknown as OpenClawConfig;
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/gpt-4o",
         config: cfg,
       }),
     ).toBe(false);
     // A different model that has no override still inherits the provider-level opt-in.
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "github-copilot/claude-sonnet-4",
         config: cfg,
       }),
@@ -114,17 +114,17 @@ describe("modelSelectionShouldEnsureCopilotSdk", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    expect(modelSelectionShouldEnsureCopilotSdk({ model: "openai/gpt-4o", config: cfg })).toBe(
-      false,
-    );
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({ model: "openai/gpt-4o", config: cfg }),
+    ).toBe(false);
+    expect(
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "anthropic/claude-3",
         config: emptyCfg,
       }),
     ).toBe(false);
     expect(
-      modelSelectionShouldEnsureCopilotSdk({
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
         model: "openai-codex/gpt-4o",
         config: emptyCfg,
       }),
@@ -132,11 +132,18 @@ describe("modelSelectionShouldEnsureCopilotSdk", () => {
   });
 
   it("returns false for undefined, empty, or unprefixed model refs", () => {
-    expect(modelSelectionShouldEnsureCopilotSdk({ config: emptyCfg })).toBe(false);
-    expect(modelSelectionShouldEnsureCopilotSdk({ model: "", config: emptyCfg })).toBe(false);
-    expect(modelSelectionShouldEnsureCopilotSdk({ model: "gpt-4o", config: emptyCfg })).toBe(false);
+    expect(modelSelectionShouldEnsureCopilotRuntimePlugin({ config: emptyCfg })).toBe(false);
+    expect(modelSelectionShouldEnsureCopilotRuntimePlugin({ model: "", config: emptyCfg })).toBe(
+      false,
+    );
     expect(
-      modelSelectionShouldEnsureCopilotSdk({ model: "github-copilot/", config: emptyCfg }),
+      modelSelectionShouldEnsureCopilotRuntimePlugin({ model: "gpt-4o", config: emptyCfg }),
+    ).toBe(false);
+    expect(
+      modelSelectionShouldEnsureCopilotRuntimePlugin({
+        model: "github-copilot/",
+        config: emptyCfg,
+      }),
     ).toBe(false);
   });
 });

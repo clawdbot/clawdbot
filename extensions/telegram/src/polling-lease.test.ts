@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireTelegramPollingLease,
@@ -98,6 +99,33 @@ describe("Telegram polling lease", () => {
       replacement.release();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("caps oversized duplicate-poller wait timers before scheduling", async () => {
+    vi.useFakeTimers();
+    try {
+      const oldAbort = new AbortController();
+      const first = await acquireTelegramPollingLease({
+        token: "123:abc",
+        accountId: "old",
+        abortSignal: oldAbort.signal,
+      });
+      oldAbort.abort();
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      void acquireTelegramPollingLease({
+        token: "123:abc",
+        accountId: "new",
+        waitMs: Number.MAX_SAFE_INTEGER,
+      }).catch(() => undefined);
+      await Promise.resolve();
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      first.release();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
     }
   });
 

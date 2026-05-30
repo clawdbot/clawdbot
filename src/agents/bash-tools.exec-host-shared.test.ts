@@ -330,6 +330,23 @@ describe("enforceStrictInlineEvalApprovalBoundary", () => {
     });
   });
 
+  it("denies timeout-based fallback when auto-review defers to human approval", () => {
+    const params = {
+      baseDecision: { timedOut: true },
+      approvedByAsk: true,
+      deniedReason: null,
+      requiresInlineEvalApproval: false,
+      requiresAutoReviewHumanApproval: true,
+    } satisfies Parameters<typeof enforceStrictInlineEvalApprovalBoundary>[0] & {
+      requiresAutoReviewHumanApproval: true;
+    };
+
+    expect(enforceStrictInlineEvalApprovalBoundary(params)).toEqual({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+    });
+  });
+
   it("keeps explicit approvals intact for strict inline-eval commands", () => {
     expect(
       enforceStrictInlineEvalApprovalBoundary({

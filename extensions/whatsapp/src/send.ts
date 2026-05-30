@@ -33,6 +33,49 @@ function supportsForcedDocumentDelivery(kind: "image" | "audio" | "video" | "doc
   return kind === "image" || kind === "video";
 }
 
+type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
+
+type WhatsAppMediaSendState = {
+  mediaBuffer: Buffer;
+  mediaType: string;
+  text: string;
+  forceDocumentDelivery: boolean;
+  documentFileName?: string;
+  visibleTextAfterVoice?: string;
+};
+
+function buildWhatsAppMediaSendState(params: {
+  media: PreparedWhatsAppOutboundMedia;
+  caption?: string;
+  forceDocument?: boolean;
+}): WhatsAppMediaSendState {
+  const { media, caption } = params;
+  const forceDocumentDelivery = Boolean(
+    params.forceDocument && supportsForcedDocumentDelivery(media.kind),
+  );
+  let text = caption ?? "";
+  let documentFileName = media.kind === "document" ? media.fileName : undefined;
+  let visibleTextAfterVoice: string | undefined;
+  if (media.kind === "audio" && caption) {
+    visibleTextAfterVoice = caption;
+    text = "";
+  }
+  if (forceDocumentDelivery) {
+    documentFileName ??= resolveWhatsAppDocumentFileName({
+      fileName: media.fileName,
+      mimetype: media.mimetype,
+    });
+  }
+  return {
+    mediaBuffer: media.buffer,
+    mediaType: media.mimetype,
+    text,
+    forceDocumentDelivery,
+    ...(documentFileName ? { documentFileName } : {}),
+    ...(visibleTextAfterVoice ? { visibleTextAfterVoice } : {}),
+  };
+}
+
 function resolveOutboundWhatsAppAccountId(params: {
   cfg: OpenClawConfig;
   accountId?: string;
@@ -148,31 +191,11 @@ export async function sendMessageWhatsApp(
     let documentFileName: string | undefined;
     let visibleTextAfterVoice: string | undefined;
     let forceDocumentDelivery = false;
+    let media: PreparedWhatsAppOutboundMedia | undefined;
     if (mediaPayload) {
-      const media = await prepareWhatsAppOutboundMedia(mediaPayload, primaryMediaUrl);
-      const caption = text || undefined;
-      mediaBuffer = media.buffer;
-      mediaType = media.mimetype;
-      forceDocumentDelivery = Boolean(
-        options.forceDocument && supportsForcedDocumentDelivery(media.kind),
-      );
-      if (media.kind === "audio" && caption) {
-        visibleTextAfterVoice = caption;
-        text = "";
-      } else if (media.kind === "document") {
-        text = caption ?? "";
-        documentFileName = media.fileName;
-      } else {
-        text = caption ?? "";
-      }
-      if (forceDocumentDelivery) {
-        documentFileName ??= resolveWhatsAppDocumentFileName({
-          fileName: media.fileName,
-          mimetype: media.mimetype,
-        });
-      }
+      media = await prepareWhatsAppOutboundMedia(mediaPayload, primaryMediaUrl);
     } else if (primaryMediaUrl) {
-      const media = await prepareWhatsAppOutboundMedia(
+      media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
           maxBytes: resolveWhatsAppMediaMaxBytes(account),
           optimizeImages: options.forceDocument ? false : undefined,
@@ -182,27 +205,19 @@ export async function sendMessageWhatsApp(
         }),
         primaryMediaUrl,
       );
-      const caption = text || undefined;
-      mediaBuffer = media.buffer;
-      mediaType = media.mimetype;
-      forceDocumentDelivery = Boolean(
-        options.forceDocument && supportsForcedDocumentDelivery(media.kind),
-      );
-      if (media.kind === "audio" && caption) {
-        visibleTextAfterVoice = caption;
-        text = "";
-      } else if (media.kind === "document") {
-        text = caption ?? "";
-        documentFileName = media.fileName;
-      } else {
-        text = caption ?? "";
-      }
-      if (forceDocumentDelivery) {
-        documentFileName ??= resolveWhatsAppDocumentFileName({
-          fileName: media.fileName,
-          mimetype: media.mimetype,
-        });
-      }
+    }
+    if (media) {
+      const mediaSendState = buildWhatsAppMediaSendState({
+        media,
+        caption: text || undefined,
+        forceDocument: options.forceDocument,
+      });
+      mediaBuffer = mediaSendState.mediaBuffer;
+      mediaType = mediaSendState.mediaType;
+      documentFileName = mediaSendState.documentFileName;
+      visibleTextAfterVoice = mediaSendState.visibleTextAfterVoice;
+      forceDocumentDelivery = mediaSendState.forceDocumentDelivery;
+      text = mediaSendState.text;
     }
     outboundLog.info(`Sending message -> ${redactedJid}${hasMedia ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia }, "sending message");

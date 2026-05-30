@@ -92,6 +92,7 @@ import {
 } from "../replies.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../reply.runtime.js";
 import { finalizeSlackPreviewEdit } from "./preview-finalize.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 // Slack reactions.add/remove expect shortcode names, not raw unicode emoji.
@@ -125,11 +126,7 @@ const SLACK_THINKING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Thinking\.{0,3}(?=\s*(?:\n|
 
 function resolveSlackMessageTimestampMs(message: SlackMessageEvent): number | undefined {
   const ts = message.event_ts ?? message.ts;
-  if (!ts) {
-    return undefined;
-  }
-  const parsed = Number(ts);
-  return Number.isFinite(parsed) ? Math.trunc(parsed * 1000) : undefined;
+  return resolveSlackTimestampMs(ts);
 }
 
 function resolveSlackBotLoopProtection(

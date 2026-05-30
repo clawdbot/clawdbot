@@ -133,8 +133,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["yolo", "guardian"],
-            "default": "yolo"
+            "enum": ["yolo", "guardian"]
           },
           "transport": {
             "type": "string",
@@ -177,7 +176,8 @@
           },
           "postToolRawAssistantCompletionIdleTimeoutMs": {
             "type": "number",
-            "minimum": 1
+            "minimum": 1,
+            "default": 300000
           },
           "approvalPolicy": {
             "type": "string",
@@ -305,7 +305,7 @@
     },
     "appServer.mode": {
       "label": "Execution Mode",
-      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
+      "help": "Legacy Codex app-server preset. Prefer tools.exec.mode=auto for normalized Guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {
@@ -361,7 +361,7 @@
     },
     "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
       "label": "Post-Tool Raw Assistant Completion Idle Timeout",
-      "help": "Completion-idle guard after a tool handoff when Codex emits raw assistant completion or progress without turn/completed. Defaults to the assistant completion idle timeout when unset.",
+      "help": "Completion-idle guard after a tool handoff when Codex emits raw assistant completion or progress without turn/completed. Defaults to 300000 ms when unset.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

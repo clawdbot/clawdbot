@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -152,6 +152,229 @@ test("sessions.reset emits before_reset hook with transcript context", async () 
     content: "hello from transcript",
   });
   expectMainHookContext(context, "sess-main");
+});
+
+test("sessions.reset infers selected global agent from agent-prefixed aliases", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  await writeSessionStore({
+    entries: {},
+    storePath: path.join(dir, "prime-sessions.json"),
+  });
+  const mainStorePath = storeTemplate.replace("{agentId}", "main");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(
+    mainStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
+    "utf-8",
+  );
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
+    "utf-8",
+  );
+  const configPath = expectStringValue(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
+    await import("../config/config.js");
+  const { resolveGatewaySessionStoreTarget } = await import("./session-utils.js");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const reset = await performGatewaySessionReset({
+    key: "agent:work:main",
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+  });
+
+  expect(reset.ok).toBe(true);
+  if (!reset.ok) {
+    throw new Error("expected reset to succeed");
+  }
+  expect(reset.key).toBe("global");
+  const resetTarget = resolveGatewaySessionStoreTarget({
+    cfg: getRuntimeConfig(),
+    key: "agent:work:main",
+    agentId: "work",
+  });
+  expect(resetTarget.storePath).toBe(workStorePath);
+  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as {
+    global?: { sessionId?: string };
+  };
+  const workStore = JSON.parse(await fs.readFile(resetTarget.storePath, "utf-8")) as {
+    global?: { sessionId?: string };
+  };
+  expect(mainStore.global?.sessionId).toBe("sess-main-global");
+  expect(workStore.global?.sessionId).toBe(reset.entry.sessionId);
+  expect(workStore.global?.sessionId).not.toBe("sess-work-global");
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
+test("sessions.reset rejects selected global agentId conflicts", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  const configPath = expectStringValue(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  const { performGatewaySessionReset } = await import("./session-reset-service.js");
+  const reset = await performGatewaySessionReset({
+    key: "agent:main:main",
+    agentId: "work",
+    reason: "reset",
+    commandSource: "gateway:sessions.reset",
+  });
+
+  expect(reset.ok).toBe(false);
+  if (reset.ok) {
+    throw new Error("expected reset to fail");
+  }
+  expect(reset.error.message).toBe("session key agent does not match agentId");
+  testState.sessionStorePath = undefined;
+  testState.sessionConfig = undefined;
+  await fs.writeFile(configPath, "{}\n", "utf-8");
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+});
+
+test("sessions.reset rejects unknown selected global agents", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  const configPath = expectStringValue(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  try {
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+    const reset = await performGatewaySessionReset({
+      key: "agent:typo:main",
+      reason: "reset",
+      commandSource: "gateway:sessions.reset",
+    });
+
+    expect(reset.ok).toBe(false);
+    if (reset.ok) {
+      throw new Error("expected reset to fail");
+    }
+    expect(reset.error.message).toBe("Unknown agent id: typo");
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+  }
+});
+
+test("sessions.reset emits inferred selected global agent scope", async () => {
+  const { dir } = await createSessionStoreDir();
+  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+  const workStorePath = storeTemplate.replace("{agentId}", "work");
+  const configPath = expectStringValue(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
+  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
+  testState.sessionStorePath = storeTemplate;
+  testState.sessionConfig = { scope: "global" };
+  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
+  await fs.writeFile(
+    workStorePath,
+    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
+    "utf-8",
+  );
+  await fs.writeFile(
+    configPath,
+    `${JSON.stringify(
+      {
+        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        session: { scope: "global", store: storeTemplate },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf-8",
+  );
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
+
+  try {
+    const broadcast = vi.fn();
+    const reset = await directSessionReq<{ ok: true; key: string }>(
+      "sessions.reset",
+      { key: "agent:work:main", reason: "reset" },
+      {
+        context: {
+          broadcastToConnIds: broadcast,
+          getSessionEventSubscriberConnIds: () => new Set(["conn-work"]),
+        },
+      },
+    );
+
+    expect(reset.ok).toBe(true);
+    expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+    expect(broadcast.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "work",
+        reason: "reset",
+      }),
+    );
+    expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+  } finally {
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+  }
 });
 
 test("sessions.reset emits enriched session_end and session_start hooks", async () => {

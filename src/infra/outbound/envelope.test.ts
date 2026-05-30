@@ -29,6 +29,25 @@ describe("buildOutboundResultEnvelope", () => {
         meta: { ok: true },
       },
     },
+    {
+      input: {
+        payloads: [],
+        delivery,
+        meta: { delivered: true },
+      },
+      expected: {
+        payloads: [],
+        meta: { delivered: true },
+        delivery,
+      },
+    },
+    {
+      input: {
+        delivery,
+        flattenDelivery: false,
+      },
+      expected: { delivery },
+    },
   ])("formats outbound envelope for %j", ({ input, expected }) => {
     const envelope = buildOutboundResultEnvelope(input);
     expect(envelope).toEqual(expected);

@@ -1,4 +1,4 @@
-import type { Message } from "../../llm.js";
+import type { Message } from "../../../../llm-core/src/index.js";
 import type { AgentMessage } from "../../types.js";
 
 /** File paths touched by a session branch or compaction range. */

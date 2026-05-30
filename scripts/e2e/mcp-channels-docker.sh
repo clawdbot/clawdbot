@@ -77,4 +77,5 @@ if [ "$status" -ne 0 ]; then
   exit "$status"
 fi
 
+cat "$CLIENT_LOG"
 echo "OK"

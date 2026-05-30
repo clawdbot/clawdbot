@@ -6,8 +6,12 @@ import {
   evaluateClawSweeperExactHeadProof,
   evaluateRealBehaviorProof,
   isMaintainerTeamMember,
+  readBoundedGitHubApiJson,
   withGitHubApiTimeout,
 } from "./real-behavior-proof-policy.mjs";
+
+const PROOF_COMMENTS_PER_PAGE = 100;
+const MAX_PROOF_COMMENT_PAGES = 10;
 
 function escapeCommandValue(value) {
   return String(value)
@@ -15,6 +19,100 @@ function escapeCommandValue(value) {
     .replace(/\r/g, "%0D")
     .replace(/\n/g, "%0A")
     .replace(/:/g, "%3A");
+}
+
+function isTooLargeBodyError(error) {
+  return error?.code === "ETOOBIG";
+}
+
+async function fetchProofCommentPage({
+  owner,
+  repo,
+  issueNumber,
+  token,
+  fetchImpl,
+  timeoutMs,
+  page,
+  perPage,
+}) {
+  const url = new URL(
+    `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
+  );
+  url.searchParams.set("per_page", String(perPage));
+  url.searchParams.set("page", String(page));
+  const response = await withGitHubApiTimeout(
+    `proof comment lookup page ${page}`,
+    timeoutMs,
+    (signal) =>
+      fetchImpl(url, {
+        headers: {
+          Accept: "application/vnd.github+json",
+          Authorization: `Bearer ${token}`,
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        signal,
+      }),
+  );
+  if (!response.ok) {
+    throw new Error(`comments API returned ${response.status}`);
+  }
+  return await withGitHubApiTimeout(`proof comment response page ${page}`, timeoutMs, (signal) =>
+    readBoundedGitHubApiJson(response, `proof comment response page ${page}`, undefined, {
+      signal,
+    }),
+  );
+}
+
+async function fetchOversizedProofCommentPageIndividually({
+  owner,
+  repo,
+  issueNumber,
+  token,
+  fetchImpl,
+  timeoutMs,
+  page,
+  perPage,
+}) {
+  const comments = [];
+  const firstSinglePage = (page - 1) * perPage + 1;
+  for (let offset = 0; offset < perPage; offset += 1) {
+    try {
+      const pageComments = await fetchProofCommentPage({
+        owner,
+        repo,
+        issueNumber,
+        token,
+        fetchImpl,
+        timeoutMs,
+        page: firstSinglePage + offset,
+        perPage: 1,
+      });
+      comments.push(...pageComments);
+      if (pageComments.length === 0) {
+        return { comments, exhausted: true };
+      }
+    } catch (error) {
+      if (!isTooLargeBodyError(error)) {
+        throw error;
+      }
+    }
+  }
+  return { comments, exhausted: false };
+}
+
+async function fetchProofCommentPageWithFallback(params) {
+  try {
+    const comments = await fetchProofCommentPage(params);
+    return {
+      comments,
+      exhausted: comments.length < params.perPage,
+    };
+  } catch (error) {
+    if (!isTooLargeBodyError(error) || params.perPage === 1) {
+      throw error;
+    }
+    return await fetchOversizedProofCommentPageIndividually(params);
+  }
 }
 
 export async function fetchProofComments({
@@ -29,35 +127,19 @@ export async function fetchProofComments({
   for (const token of tokens.filter(Boolean)) {
     const comments = [];
     try {
-      for (let page = 1; page <= 10; page += 1) {
-        const url = new URL(
-          `https://api.github.com/repos/${owner}/${repo}/issues/${issueNumber}/comments`,
-        );
-        url.searchParams.set("per_page", "100");
-        url.searchParams.set("page", String(page));
-        const response = await withGitHubApiTimeout(
-          `proof comment lookup page ${page}`,
+      for (let page = 1; page <= MAX_PROOF_COMMENT_PAGES; page += 1) {
+        const result = await fetchProofCommentPageWithFallback({
+          owner,
+          repo,
+          issueNumber,
+          token,
+          fetchImpl,
           timeoutMs,
-          (signal) =>
-            fetchImpl(url, {
-              headers: {
-                Accept: "application/vnd.github+json",
-                Authorization: `Bearer ${token}`,
-                "X-GitHub-Api-Version": "2022-11-28",
-              },
-              signal,
-            }),
-        );
-        if (!response.ok) {
-          throw new Error(`comments API returned ${response.status}`);
-        }
-        const pageComments = await withGitHubApiTimeout(
-          `proof comment response page ${page}`,
-          timeoutMs,
-          () => response.json(),
-        );
-        comments.push(...pageComments);
-        if (pageComments.length < 100) {
+          page,
+          perPage: PROOF_COMMENTS_PER_PAGE,
+        });
+        comments.push(...result.comments);
+        if (result.exhausted) {
           break;
         }
       }

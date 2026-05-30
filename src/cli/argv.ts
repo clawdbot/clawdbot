@@ -4,6 +4,7 @@ import {
   FLAG_TERMINATOR,
   isValueToken,
 } from "../infra/cli-root-options.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
 import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
@@ -76,12 +77,7 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
 }
 
 function parsePositiveInt(value: string): number | undefined {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined;
-  }
-  const parsed = Number(trimmed);
-  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return parseStrictPositiveInteger(value);
 }
 
 export function hasFlag(argv: string[], name: string): boolean {
@@ -166,8 +162,19 @@ export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
-export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
-  const positionals: Array<{ value: string; index: number }> = [];
+type HelpNormalizationPositional = { value: string; index: number };
+
+type HelpNormalizationScanResult =
+  | {
+      ok: true;
+      positionals: HelpNormalizationPositional[];
+      rootOptions: string[];
+      helpFlagIndex: number | null;
+    }
+  | { ok: false };
+
+function scanHelpNormalizationArgv(argv: string[]): HelpNormalizationScanResult {
+  const positionals: HelpNormalizationPositional[] = [];
   const rootOptions: string[] = [];
   let helpFlagIndex: number | null = null;
 
@@ -187,11 +194,20 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
       continue;
     }
     if (arg.startsWith("-")) {
-      return argv;
+      return { ok: false };
     }
     positionals.push({ value: arg, index });
   }
 
+  return { ok: true, positionals, rootOptions, helpFlagIndex };
+}
+
+export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
+  const scan = scanHelpNormalizationArgv(argv);
+  if (!scan.ok) {
+    return argv;
+  }
+  const { positionals, rootOptions, helpFlagIndex } = scan;
   const [primary, secondary, target] = positionals;
   if (
     !primary ||
@@ -217,30 +233,11 @@ export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
 }
 
 export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
-  const positionals: Array<{ value: string; index: number }> = [];
-  const rootOptions: string[] = [];
-  let helpFlagIndex: number | null = null;
-
-  for (let index = 2; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (!arg || arg === FLAG_TERMINATOR) {
-      break;
-    }
-    const consumed = consumeRootOptionToken(argv, index);
-    if (consumed > 0) {
-      rootOptions.push(...argv.slice(index, index + consumed));
-      index += consumed - 1;
-      continue;
-    }
-    if (HELP_FLAGS.has(arg)) {
-      helpFlagIndex = index;
-      continue;
-    }
-    if (arg.startsWith("-")) {
-      return argv;
-    }
-    positionals.push({ value: arg, index });
+  const scan = scanHelpNormalizationArgv(argv);
+  if (!scan.ok) {
+    return argv;
   }
+  const { positionals, rootOptions, helpFlagIndex } = scan;
 
   const [help, target] = positionals;
   if (
@@ -455,7 +452,7 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
     return true;
   }
   const [primary, secondary] = path;
-  if (primary === "health" || primary === "status" || primary === "sessions") {
+  if (primary === "health" || primary === "sessions") {
     return false;
   }
   if (primary === "update" && secondary === "status") {

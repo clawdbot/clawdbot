@@ -322,6 +322,32 @@ describe("openai tts", () => {
       ).rejects.toThrow("OpenAI TTS API error (503): temporary upstream outage");
     });
 
+    it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
+      const streamed = createStreamingErrorResponse({
+        status: 200,
+        chunkCount: 20,
+        chunkSize: 1024,
+        byte: 121,
+      });
+      const fetchMock = vi.fn(async () => streamed.response);
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+          maxBytes: 2048,
+        }),
+      ).rejects.toThrow("OpenAI TTS audio response exceeds 2048 bytes");
+
+      expect(streamed.getReadCount()).toBeLessThan(20);
+    });
+
     it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
       const streamed = createStreamingErrorResponse({
         status: 503,

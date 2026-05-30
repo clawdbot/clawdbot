@@ -4,6 +4,7 @@ import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 import {
   claimUnprocessedFeishuMessage,
+  forgetProcessedFeishuMessage,
   recordProcessedFeishuMessage,
   releaseFeishuMessageProcessing,
 } from "./dedup.js";
@@ -131,18 +132,20 @@ export function createFeishuBotMenuHandler(params: {
         .then(async (handledMenu) => {
           if (handledMenu) {
             await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
-            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
             return;
           }
           return await handleLegacyMenu();
         })
         .catch(async (err) => {
           if (isFeishuRetryableSyntheticEventError(err)) {
-            releaseFeishuMessageProcessing(syntheticMessageId, accountId);
+            await forgetProcessedFeishuMessage(syntheticMessageId, accountId, log);
           } else {
             await recordProcessedFeishuMessage(syntheticMessageId, accountId, log);
           }
           throw err;
+        })
+        .finally(() => {
+          releaseFeishuMessageProcessing(syntheticMessageId, accountId);
         });
       if (fireAndForget) {
         promise.catch((err) => {

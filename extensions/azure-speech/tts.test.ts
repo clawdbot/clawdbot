@@ -12,6 +12,31 @@ import {
 describe("azure speech tts", () => {
   installPinnedHostnameTestHooks();
 
+  function createStreamingAudioResponse(params: {
+    chunkCount: number;
+    chunkSize: number;
+    byte: number;
+  }): { response: Response; getReadCount: () => number } {
+    let reads = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (reads >= params.chunkCount) {
+          controller.close();
+          return;
+        }
+        reads += 1;
+        controller.enqueue(new Uint8Array(params.chunkSize).fill(params.byte));
+      },
+    });
+    return {
+      response: new Response(stream, {
+        status: 200,
+        headers: { "Content-Type": "audio/mpeg" },
+      }),
+      getReadCount: () => reads,
+    };
+  }
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
@@ -80,6 +105,30 @@ describe("azure speech tts", () => {
     expect(headers.get("X-Microsoft-OutputFormat")).toBe("audio-24khz-48kbitrate-mono-mp3");
     expect(init.body).toContain(`<voice name="en-US-JennyNeural">hello</voice>`);
     expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
+    const streamed = createStreamingAudioResponse({
+      chunkCount: 20,
+      chunkSize: 1024,
+      byte: 121,
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(streamed.response));
+
+    await expect(
+      azureSpeechTTS({
+        text: "hello",
+        apiKey: "speech-key",
+        region: "eastus",
+        voice: "en-US-JennyNeural",
+        lang: "en-US",
+        outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+        timeoutMs: 1234,
+        maxBytes: 2048,
+      }),
+    ).rejects.toThrow("Azure Speech TTS audio response exceeds 2048 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
   it("lists voices with timeout and filters deprecated entries", async () => {

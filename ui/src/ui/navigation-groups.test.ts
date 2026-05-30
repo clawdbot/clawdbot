@@ -19,6 +19,7 @@ describe("TAB_GROUPS", () => {
     expect(control?.tabs).toEqual([
       "overview",
       "activity",
+      "workboard",
       "instances",
       "sessions",
       "usage",

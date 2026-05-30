@@ -101,6 +101,8 @@ export async function suspendSession(params: {
     await applySessionStoreEntryPatch({
       storePath,
       sessionKey,
+      skipMaintenance: true,
+      takeCacheOwnership: true,
       patch: {
         quotaSuspension: {
           schemaVersion: 1,

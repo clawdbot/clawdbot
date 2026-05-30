@@ -2,6 +2,7 @@ export {
   createChannelApprovalForwardingEvaluator,
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
+  createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
   nativeApprovalTargetsMatch,
   resolveApprovalKind,

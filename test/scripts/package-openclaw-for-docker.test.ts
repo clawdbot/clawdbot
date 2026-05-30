@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   buildPackageArtifacts,
+  packOpenClawPackageForDocker,
   runCommandForTest,
 } from "../../scripts/package-openclaw-for-docker.mjs";
 
@@ -115,6 +116,56 @@ describe("package-openclaw-for-docker", () => {
     ]);
   });
 
+  it("trims and restores the changelog around ignore-scripts package artifacts", async () => {
+    const calls: string[] = [];
+    const tarball = await packOpenClawPackageForDocker("/repo", "/out", {
+      prepareChangelog: async (cwd: string) => {
+        calls.push(`prepare:${cwd}`);
+      },
+      restoreChangelog: async (cwd: string) => {
+        calls.push(`restore:${cwd}`);
+      },
+      runCaptureImpl: async (
+        command: string,
+        args: string[],
+        cwd: string,
+        options: { deferForwardedSignalExit?: boolean },
+      ) => {
+        calls.push(`${command}:${args.join(" ")}:${cwd}`);
+        expect(options.deferForwardedSignalExit).toBe(true);
+        return "openclaw-2026.5.28.tgz\n";
+      },
+    });
+
+    expect(tarball).toBe(path.join("/out", "openclaw-2026.5.28.tgz"));
+    expect(calls).toEqual([
+      "prepare:/repo",
+      "npm:pack --silent --ignore-scripts --pack-destination /out:/repo",
+      "restore:/repo",
+    ]);
+  });
+
+  it("restores the changelog when ignore-scripts packaging fails", async () => {
+    const calls: string[] = [];
+
+    await expect(
+      packOpenClawPackageForDocker("/repo", "/out", {
+        prepareChangelog: async (cwd: string) => {
+          calls.push(`prepare:${cwd}`);
+        },
+        restoreChangelog: async (cwd: string) => {
+          calls.push(`restore:${cwd}`);
+        },
+        runCaptureImpl: async () => {
+          calls.push("pack");
+          throw new Error("pack failed");
+        },
+      }),
+    ).rejects.toThrow("pack failed");
+
+    expect(calls).toEqual(["prepare:/repo", "pack", "restore:/repo"]);
+  });
+
   it("kills timed-out child process groups", async () => {
     if (process.platform === "win32") {
       return;
@@ -138,10 +189,10 @@ describe("package-openclaw-for-docker", () => {
 
       const runPromise = runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
         env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-        killAfterMs: 50,
-        timeoutMs: 1500,
+        killAfterMs: 25,
+        timeoutMs: 1000,
       });
-      const timeoutAssertion = expect(runPromise).rejects.toThrow(/timed out after 1500ms/u);
+      const timeoutAssertion = expect(runPromise).rejects.toThrow(/timed out after 1000ms/u);
       await waitForFile(childPidPath, 2000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       await timeoutAssertion;
@@ -177,10 +228,10 @@ describe("package-openclaw-for-docker", () => {
       await expect(
         runCommandForTest(process.execPath, ["-e", parentScript], process.cwd(), {
           env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-          killAfterMs: 50,
-          timeoutMs: 2000,
+          killAfterMs: 25,
+          timeoutMs: 1000,
         }),
-      ).rejects.toThrow(/timed out after 2000ms/u);
+      ).rejects.toThrow(/timed out after 1000ms/u);
 
       await waitForFile(childPidPath, 2000);
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));

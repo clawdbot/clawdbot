@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as execApprovals from "../infra/exec-approvals.js";
 import { buildEmbeddedSandboxInfo } from "./embedded-agent-runner.js";
-import { resolveEmbeddedFullAccessState } from "./embedded-agent-runner/sandbox-info.js";
+import {
+  resolveEmbeddedFullAccessState,
+  resolveEmbeddedSandboxInfoExecPolicy,
+} from "./embedded-agent-runner/sandbox-info.js";
 import type { SandboxContext } from "./sandbox.js";
 
 function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
@@ -41,6 +45,14 @@ function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxConte
 }
 
 describe("buildEmbeddedSandboxInfo", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(execApprovals, "loadExecApprovals").mockReturnValue({
+      version: 1,
+      agents: {},
+    });
+  });
+
   it("returns undefined when sandbox is missing", () => {
     expect(buildEmbeddedSandboxInfo()).toBeUndefined();
   });
@@ -111,6 +123,169 @@ describe("buildEmbeddedSandboxInfo", () => {
         fullAccessAvailable: false,
         fullAccessBlockedReason: "runtime",
       },
+    });
+  });
+
+  it("marks full access unavailable when exec policy denies execution", () => {
+    const sandbox = createSandboxContext();
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        { mode: "deny" },
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
+    });
+  });
+
+  it("uses config exec mode when building prompt full-access state", () => {
+    const sandbox = createSandboxContext();
+    const execPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: {
+        tools: {
+          exec: {
+            mode: "auto",
+          },
+        },
+      },
+      agentId: "main",
+      sandboxAvailable: true,
+    });
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        execPolicy,
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
+    });
+  });
+
+  it("uses elevated host policy when sandbox is active and exec policy is unset", () => {
+    const sandbox = createSandboxContext();
+    const execPolicy = resolveEmbeddedSandboxInfoExecPolicy({
+      config: {
+        tools: {
+          exec: {
+            host: "auto",
+          },
+        },
+      },
+      agentId: "main",
+      sandboxAvailable: true,
+    });
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        execPolicy,
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: true,
+    });
+  });
+
+  it("marks full access unavailable when host approval defaults deny execution", () => {
+    const sandbox = createSandboxContext();
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        { mode: "full", security: "full" },
+        { security: "deny" },
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
+    });
+  });
+
+  it("marks full access unavailable when host approval floors still require review", () => {
+    const sandbox = createSandboxContext();
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        { mode: "full", security: "full", ask: "off" },
+        { security: "allowlist", ask: "off" },
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
+    });
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        { mode: "full", security: "full", ask: "off" },
+        { security: "full", ask: "always" },
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
+    });
+
+    expect(
+      buildEmbeddedSandboxInfo(
+        sandbox,
+        {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        },
+        { mode: "full", security: "full", ask: "on-miss" },
+        { security: "full", ask: "on-miss" },
+      )?.elevated,
+    ).toEqual({
+      allowed: true,
+      defaultLevel: "full",
+      fullAccessAvailable: true,
     });
   });
 });

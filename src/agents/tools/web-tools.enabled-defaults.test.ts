@@ -40,7 +40,7 @@ function readConfiguredSearchProvider(config: unknown): string | undefined {
 }
 
 vi.mock("../../secrets/runtime-state.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => activeSecretsRuntimeSnapshot.current,
+  getActiveSecretsRuntimeConfigSnapshot: () => activeSecretsRuntimeSnapshot.current,
 }));
 
 vi.mock("../../web-search/runtime.js", async () => {

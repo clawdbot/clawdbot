@@ -309,4 +309,63 @@ describe("agent-runner-utils", () => {
     expect(context.currentChannelId).toBe("channel:123456789012345678");
     expect(context.currentMessageId).toBe("msg-9");
   });
+
+  it("does not expose restart-sentinel synthetic ids as message-tool reply targets", () => {
+    hoisted.getChannelPluginMock.mockReturnValue({
+      threading: {
+        buildToolContext: ({
+          context,
+        }: {
+          context: { To?: string; MessageThreadId?: string | number };
+        }) => ({
+          currentChannelId: context.To,
+          currentThreadTs:
+            context.MessageThreadId != null ? String(context.MessageThreadId) : undefined,
+        }),
+      },
+    });
+
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1003841603622:topic:928",
+        MessageThreadId: 928,
+        MessageSid: "restart-sentinel:agent:main:telegram:agentTurn:123",
+        InputProvenance: {
+          kind: "internal_system",
+          sourceChannel: "telegram",
+          sourceTool: "restart-sentinel",
+        },
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context.currentChannelId).toBe("telegram:-1003841603622:topic:928");
+    expect(context.currentThreadTs).toBe("928");
+    expect(context.currentMessageId).toBeUndefined();
+  });
+
+  it("uses restart-sentinel reply target when one exists", () => {
+    const context = buildThreadingToolContext({
+      sessionCtx: {
+        Provider: "webchat",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "whatsapp:+15550002",
+        ReplyToId: "provider-reply-id",
+        MessageSid: "restart-sentinel:agent:main:whatsapp:agentTurn:123",
+        InputProvenance: {
+          kind: "internal_system",
+          sourceChannel: "whatsapp",
+          sourceTool: "restart-sentinel",
+        },
+      },
+      config: {},
+      hasRepliedRef: undefined,
+    });
+
+    expect(context.currentChannelId).toBe("whatsapp:+15550002");
+    expect(context.currentMessageId).toBe("provider-reply-id");
+  });
 });

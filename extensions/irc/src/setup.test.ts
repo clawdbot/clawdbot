@@ -303,6 +303,12 @@ describe("irc setup", () => {
 
     expect(
       validateInput({
+        input: { host: "irc.libera.chat", nick: "openclaw", port: "+07000" },
+      } as never),
+    ).toBeNull();
+
+    expect(
+      validateInput({
         input: { host: "irc.libera.chat", nick: "openclaw", port: "7000x" },
       } as never),
     ).toBe("IRC port must be between 1 and 65535.");
@@ -408,6 +414,7 @@ describe("irc setup", () => {
     }
 
     expect(portPrompt.validate({ value: "7000x" } as never)).toBe("Use a port between 1 and 65535");
+    expect(portPrompt.validate({ value: "+07000" } as never)).toBeUndefined();
     expect(portPrompt.validate({ value: "7000" } as never)).toBeUndefined();
   });
 

@@ -179,9 +179,21 @@ export function isNativeToolProgressNotification(notification: CodexServerNotifi
   }
 }
 
-export function isRawAssistantCompletionNotification(
+export function isNativeResponseStreamDeltaNotification(
   notification: CodexServerNotification,
 ): boolean {
+  return notification.method.startsWith("response.") && notification.method.endsWith(".delta");
+}
+
+export function isFileChangePatchUpdatedNotification(
+  notification: CodexServerNotification,
+): boolean {
+  return (
+    notification.method === "item/fileChange/patchUpdated" && isJsonObject(notification.params)
+  );
+}
+
+export function isRawAssistantProgressNotification(notification: CodexServerNotification): boolean {
   if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
     return false;
   }
@@ -190,9 +202,18 @@ export function isRawAssistantCompletionNotification(
     item &&
     readString(item, "type") === "message" &&
     readString(item, "role") === "assistant" &&
-    readString(item, "phase") !== "commentary" &&
     readRawAssistantTextPreview(item),
   );
+}
+
+export function isRawAssistantCompletionNotification(
+  notification: CodexServerNotification,
+): boolean {
+  if (!isRawAssistantProgressNotification(notification) || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return Boolean(item && readString(item, "phase") !== "commentary");
 }
 
 function readRawAssistantTextPreview(item: JsonObject): string | undefined {
