@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-indicator-types",
+  "name": "VC Trader AI List Indicator Types",
+  "description": "Read-only catalogue listing of indicator types. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/indicator-types.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_indicator_types"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

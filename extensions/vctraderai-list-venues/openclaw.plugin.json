@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-venues",
+  "name": "VC Trader AI List Venues",
+  "description": "Read-only catalogue listing of trading venues. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/venues.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_venues"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

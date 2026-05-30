@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-stop-loss-types",
+  "name": "VC Trader AI List Stop Loss Types",
+  "description": "Read-only catalogue listing of stop-loss types. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/stop-loss-types.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_stop_loss_types"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

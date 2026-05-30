@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-traders",
+  "name": "VC Trader AI List Traders",
+  "description": "Read-only catalogue listing of traders. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/traders.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_traders"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,58 @@
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
+import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
+
+// VC Trader AI: get_strategy.
+//
+// READ_ONLY per ADR 0078. Calls the BFF `/api/v1/openclaw/catalogue/strategies/${strategy_id}` endpoint and
+// returns the raw envelope produced by the propfirm_manager
+// `engine.agent.tools.data_tools.get_strategy` function.
+
+export const GET_STRATEGY_TOOL_NAME = "get_strategy";
+
+export type GetStrategyDeps = {
+  fetchImpl?: typeof globalThis.fetch;
+  bffFetch?: BffFetchFn;
+};
+
+export type GetStrategyParams = {
+  strategy_id: string;
+};
+
+export async function runGetStrategy(
+  params: GetStrategyParams,
+  deps: GetStrategyDeps = {},
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  return bffFetch(
+    `/api/v1/openclaw/catalogue/strategies/${encodeURIComponent(params.strategy_id)}`,
+    {
+      signal,
+    },
+  );
+}
+
+export default defineToolPlugin({
+  id: "vctraderai-get-strategy",
+  name: "VC Trader AI Get Strategy",
+  description: "Read-only catalogue lookup of a single strategy.",
+  tools: (tool) => [
+    tool({
+      name: GET_STRATEGY_TOOL_NAME,
+      label: "Get Strategy",
+      description:
+        "Return a single strategy row from the propfirm_manager core.strategies catalogue. READ_ONLY per ADR 0078 - no mutation.",
+      parameters: Type.Object({
+        strategy_id: Type.String({
+          description: "Strategy identifier (UUID or short slug).",
+          minLength: 1,
+        }),
+      }),
+      async execute(params, _config, context) {
+        context.signal?.throwIfAborted();
+        return runGetStrategy(params, {}, context.signal);
+      },
+    }),
+  ],
+});

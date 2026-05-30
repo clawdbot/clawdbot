@@ -1,0 +1,19 @@
+{
+  "name": "@openclaw/vctraderai-list-risk-managers",
+  "version": "2026.5.30",
+  "private": true,
+  "description": "VC Trader AI read-only risk managers catalogue tool.",
+  "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

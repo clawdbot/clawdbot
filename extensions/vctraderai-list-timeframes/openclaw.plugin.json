@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-timeframes",
+  "name": "VC Trader AI List Timeframes",
+  "description": "Read-only catalogue listing of timeframes. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/timeframes.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_timeframes"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

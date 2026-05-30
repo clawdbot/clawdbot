@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-strategies",
+  "name": "VC Trader AI List Strategies",
+  "description": "Read-only catalogue listing of strategies. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/strategies.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_strategies"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

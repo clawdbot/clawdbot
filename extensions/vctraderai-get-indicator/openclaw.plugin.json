@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-indicator",
+  "name": "VC Trader AI Get Indicator",
+  "description": "Read-only catalogue lookup of a single indicator. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/indicators/${indicator_id}.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_indicator"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

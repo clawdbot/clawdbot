@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-prop-firm-challenges",
+  "name": "VC Trader AI List Prop-Firm Challenges",
+  "description": "Read-only catalogue listing of prop-firm challenges. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/prop-firm-challenges.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_prop_firm_challenges"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

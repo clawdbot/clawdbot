@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-risk-manager-source",
+  "name": "VC Trader AI Get Risk Manager Source",
+  "description": "Read-only catalogue source for a risk manager. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/risk-managers/${risk_manager_id}/source.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_risk_manager_source"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

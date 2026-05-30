@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-strategy",
+  "name": "VC Trader AI Get Strategy",
+  "description": "Read-only catalogue lookup of a single strategy. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/strategies/${strategy_id}.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_strategy"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

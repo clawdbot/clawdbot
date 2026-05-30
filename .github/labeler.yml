@@ -627,3 +627,83 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/vctraderai-list-tree/**"
+"plugin: vctraderai-list-timeframes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-timeframes/**"
+"plugin: vctraderai-list-sessions":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-sessions/**"
+"plugin: vctraderai-list-strategy-types":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-strategy-types/**"
+"plugin: vctraderai-list-indicator-types":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-indicator-types/**"
+"plugin: vctraderai-list-instruments":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-instruments/**"
+"plugin: vctraderai-list-venues":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-venues/**"
+"plugin: vctraderai-list-stop-loss-types":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-stop-loss-types/**"
+"plugin: vctraderai-get-component-creation-guide":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-component-creation-guide/**"
+"plugin: vctraderai-list-strategies":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-strategies/**"
+"plugin: vctraderai-get-strategy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-strategy/**"
+"plugin: vctraderai-get-strategy-source":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-strategy-source/**"
+"plugin: vctraderai-list-indicators":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-indicators/**"
+"plugin: vctraderai-get-indicator":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-indicator/**"
+"plugin: vctraderai-get-indicator-source":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-indicator-source/**"
+"plugin: vctraderai-list-risk-managers":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-risk-managers/**"
+"plugin: vctraderai-get-risk-manager":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-risk-manager/**"
+"plugin: vctraderai-get-risk-manager-source":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-risk-manager-source/**"
+"plugin: vctraderai-list-traders":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-traders/**"
+"plugin: vctraderai-get-trader":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-trader/**"
+"plugin: vctraderai-list-prop-firm-challenges":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-prop-firm-challenges/**"

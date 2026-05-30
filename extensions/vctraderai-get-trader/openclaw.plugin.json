@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-trader",
+  "name": "VC Trader AI Get Trader",
+  "description": "Read-only catalogue lookup of a single trader. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/traders/${trader_id}.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_trader"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

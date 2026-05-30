@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-sessions",
+  "name": "VC Trader AI List Sessions",
+  "description": "Read-only catalogue listing of trading sessions. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/sessions.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_sessions"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-strategy-types",
+  "name": "VC Trader AI List Strategy Types",
+  "description": "Read-only catalogue listing of strategy types. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/strategy-types.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_strategy_types"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

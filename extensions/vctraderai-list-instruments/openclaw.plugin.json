@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-instruments",
+  "name": "VC Trader AI List Instruments",
+  "description": "Read-only catalogue listing of tradeable instruments. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/instruments.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_instruments"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

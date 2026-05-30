@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-list-risk-managers",
+  "name": "VC Trader AI List Risk Managers",
+  "description": "Read-only catalogue listing of risk managers. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/risk-managers.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "list_risk_managers"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

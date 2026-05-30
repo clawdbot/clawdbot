@@ -1,0 +1,55 @@
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+import { Type } from "typebox";
+import { createBffFetch, type BffFetchFn } from "./src/internal-http-client.js";
+
+// VC Trader AI: get_trader.
+//
+// READ_ONLY per ADR 0078. Calls the BFF `/api/v1/openclaw/catalogue/traders/${trader_id}` endpoint and
+// returns the raw envelope produced by the propfirm_manager
+// `engine.agent.tools.data_tools.get_trader` function.
+
+export const GET_TRADER_TOOL_NAME = "get_trader";
+
+export type GetTraderDeps = {
+  fetchImpl?: typeof globalThis.fetch;
+  bffFetch?: BffFetchFn;
+};
+
+export type GetTraderParams = {
+  trader_id: string;
+};
+
+export async function runGetTrader(
+  params: GetTraderParams,
+  deps: GetTraderDeps = {},
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const bffFetch = deps.bffFetch ?? createBffFetch({ fetchImpl: deps.fetchImpl });
+  return bffFetch(`/api/v1/openclaw/catalogue/traders/${encodeURIComponent(params.trader_id)}`, {
+    signal,
+  });
+}
+
+export default defineToolPlugin({
+  id: "vctraderai-get-trader",
+  name: "VC Trader AI Get Trader",
+  description: "Read-only catalogue lookup of a single trader.",
+  tools: (tool) => [
+    tool({
+      name: GET_TRADER_TOOL_NAME,
+      label: "Get Trader",
+      description:
+        "Return a single trader row from the propfirm_manager core.traders catalogue. READ_ONLY per ADR 0078 - no mutation.",
+      parameters: Type.Object({
+        trader_id: Type.String({
+          description: "Trader identifier (UUID or short slug).",
+          minLength: 1,
+        }),
+      }),
+      async execute(params, _config, context) {
+        context.signal?.throwIfAborted();
+        return runGetTrader(params, {}, context.signal);
+      },
+    }),
+  ],
+});

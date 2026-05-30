@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-component-creation-guide",
+  "name": "VC Trader AI Get Component Creation Guide",
+  "description": "Read-only catalogue component-creation guide envelope. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/component-creation-guide.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_component_creation_guide"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

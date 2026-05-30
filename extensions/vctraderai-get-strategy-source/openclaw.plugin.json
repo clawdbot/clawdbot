@@ -1,0 +1,18 @@
+{
+  "id": "vctraderai-get-strategy-source",
+  "name": "VC Trader AI Get Strategy Source",
+  "description": "Read-only catalogue source for a strategy. Calls back into propfirm_manager BFF at /api/v1/openclaw/catalogue/strategies/${strategy_id}/source.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "get_strategy_source"
+    ]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
