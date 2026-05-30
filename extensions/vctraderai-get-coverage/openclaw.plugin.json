@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-get-coverage",
+  "name": "VC Trader AI Get Coverage",
+  "description": "Read-only data coverage report for an instrument across timeframes. Calls back into propfirm_manager BFF at /api/v1/openclaw/data/coverage.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["get_coverage"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -6,7 +6,7 @@ const WORKSPACE_ID = "11111111-2222-3333-4444-555555555555";
 
 function buildFetch(handlers: Record<string, unknown>): typeof globalThis.fetch {
   return (async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input.toString();
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const match = Object.entries(handlers).find(([path]) => url.endsWith(path));
     if (!match) {
       return new Response("not found", { status: 404, statusText: "Not Found" });

@@ -4,10 +4,12 @@
   "private": true,
   "description": "VC Trader AI read-only agent-thread audit-timeline tool.",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.38"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "openclaw": "workspace:*",
-    "typebox": "1.1.38"
+    "openclaw": "workspace:*"
   },
   "openclaw": {
     "extensions": [

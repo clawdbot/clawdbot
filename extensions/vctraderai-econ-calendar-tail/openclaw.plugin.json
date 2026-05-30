@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-econ-calendar-tail",
+  "name": "VC Trader AI Econ Calendar Tail",
+  "description": "Read-only tail of recent economic-calendar events. Calls back into propfirm_manager BFF at /api/v1/openclaw/data/econ-calendar/tail.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["econ_calendar_tail"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,9 +1,11 @@
 // VC Trader AI BFF HTTP client.
 //
 // Wraps `globalThis.fetch` with an in-plugin allowlist guard that complements
-// the Docker sandbox egress policy. The regex enforces the workspace-scoped
-// BFF surface declared by ADR 0078; any non-allowlisted path is rejected
-// before a socket is opened, so a buggy or malicious tool body cannot reach
+// the Docker sandbox egress policy. The regex enforces the BFF surfaces this
+// plugin is allowed to call: workspace-scoped paths (ADR 0078) AND the
+// workspace-agnostic `/api/v1/openclaw/data/*` data-tool endpoints that the
+// cluster A read-only tools call. Any non-allowlisted path is rejected before
+// a socket is opened, so a buggy or malicious tool body cannot reach
 // admin/system surfaces by accident.
 //
 // We deliberately ship this helper per-plugin rather than via a shared package:
@@ -11,7 +13,8 @@
 // (`extensions/AGENTS.md`) and a single shared helper is also worth de-duping
 // later, not pre-duping now.
 
-const ALLOWLIST_PATH_PATTERN = /^\/api\/v1\/workspaces\/[0-9a-f-]+\/.+$/;
+const ALLOWLIST_PATH_PATTERN =
+  /^(\/api\/v1\/workspaces\/[0-9a-f-]+\/.+|\/api\/v1\/openclaw\/data\/[a-z0-9-/]+)(\?.*)?$/;
 const DEFAULT_BFF_BASE_URL = "http://web_api.local";
 
 export type BffFetchOptions = {
@@ -30,7 +33,7 @@ export type BffError = {
 export class BffEgressViolation extends Error {
   readonly path: string;
   constructor(path: string) {
-    super(`vctraderai bff egress violation: path ${path} is not in the workspace-scoped allowlist`);
+    super(`vctraderai bff egress violation: path ${path} is not in the allowlist`);
     this.name = "BffEgressViolation";
     this.path = path;
   }
@@ -67,13 +70,18 @@ export function buildQueryString(query: Record<string, string | undefined> | und
 }
 
 function assertAllowlistedPath(path: string): void {
+  if (path.includes("\n") || path.includes("\r") || path.includes("\0")) {
+    throw new BffEgressViolation(path);
+  }
+  if (path.includes("/..") || path.includes("../") || path.includes("/./")) {
+    throw new BffEgressViolation(path);
+  }
   if (!ALLOWLIST_PATH_PATTERN.test(path)) {
     throw new BffEgressViolation(path);
   }
 }
 
 export type BffClientDeps = {
-  // Injectable for tests; falls back to globalThis.fetch otherwise.
   fetchImpl?: typeof globalThis.fetch;
 };
 
@@ -110,5 +118,4 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
   };
 }
 
-// Exposed for tests that want to assert the regex shape directly.
 export const VCTRADERAI_BFF_ALLOWLIST_PATH_PATTERN = ALLOWLIST_PATH_PATTERN;

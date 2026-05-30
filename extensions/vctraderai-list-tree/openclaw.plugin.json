@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-list-tree",
+  "name": "VC Trader AI List Tree",
+  "description": "Read-only sandbox-scoped filesystem listing under the configured data root. Calls back into propfirm_manager BFF at /api/v1/openclaw/data/tree.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["list_tree"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

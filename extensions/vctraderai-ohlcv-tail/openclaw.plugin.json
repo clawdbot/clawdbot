@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-ohlcv-tail",
+  "name": "VC Trader AI OHLCV Tail",
+  "description": "Read-only bounded OHLCV tail rows for a symbol + timeframe. Calls back into propfirm_manager BFF at /api/v1/openclaw/data/ohlcv/tail.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["ohlcv_tail"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

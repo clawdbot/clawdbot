@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-parquet-preview-tail",
+  "name": "VC Trader AI Parquet Preview Tail",
+  "description": "Read-only preview of the last N rows of a parquet file. Calls back into propfirm_manager BFF at /api/v1/openclaw/data/parquet/preview-tail.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["parquet_preview_tail"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

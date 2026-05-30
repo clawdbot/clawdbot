@@ -1,8 +1,8 @@
 {
-  "name": "@openclaw/vctraderai-account-state",
-  "version": "2026.5.29",
+  "name": "@openclaw/vctraderai-ohlcv-tail",
+  "version": "2026.5.30",
   "private": true,
-  "description": "VC Trader AI read-only account state tool (workspace dashboard + accounts list).",
+  "description": "VC Trader AI read-only bounded OHLCV tail tool.",
   "type": "module",
   "dependencies": {
     "typebox": "1.1.38"

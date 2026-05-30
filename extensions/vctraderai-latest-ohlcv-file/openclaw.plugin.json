@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-latest-ohlcv-file",
+  "name": "VC Trader AI Latest OHLCV File",
+  "description": "Read-only locator for the most recent OHLCV parquet file for an instrument + timeframe. Calls back into propfirm_manager BFF at /api/v1/openclaw/data/ohlcv/latest.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["latest_ohlcv_file"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

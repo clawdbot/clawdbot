@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-get-data-root",
+  "name": "VC Trader AI Get Data Root",
+  "description": "Read-only resolver for the propfirm_manager data root (local path or s3 URI). Calls back into propfirm_manager BFF at /api/v1/openclaw/data/root.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["get_data_root"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

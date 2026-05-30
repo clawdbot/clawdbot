@@ -1,0 +1,16 @@
+{
+  "id": "vctraderai-describe-parquet",
+  "name": "VC Trader AI Describe Parquet",
+  "description": "Read-only parquet schema + row-group describe by path. Calls back into propfirm_manager BFF at /api/v1/openclaw/data/parquet/describe.",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["describe_parquet"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -1,9 +1,11 @@
 // VC Trader AI BFF HTTP client.
 //
 // Wraps `globalThis.fetch` with an in-plugin allowlist guard that complements
-// the Docker sandbox egress policy. The regex enforces the workspace-scoped
-// BFF surface declared by ADR 0078; any non-allowlisted path is rejected
-// before a socket is opened, so a buggy or malicious tool body cannot reach
+// the Docker sandbox egress policy. The regex enforces the BFF surfaces this
+// plugin is allowed to call: workspace-scoped paths (ADR 0078) AND the
+// workspace-agnostic `/api/v1/openclaw/data/*` data-tool endpoints that the
+// cluster A read-only tools call. Any non-allowlisted path is rejected before
+// a socket is opened, so a buggy or malicious tool body cannot reach
 // admin/system surfaces by accident.
 //
 // We deliberately ship this helper per-plugin rather than via a shared package:
@@ -11,7 +13,8 @@
 // (`extensions/AGENTS.md`) and a single shared helper is also worth de-duping
 // later, not pre-duping now.
 
-const ALLOWLIST_PATH_PATTERN = /^\/api\/v1\/workspaces\/[0-9a-f-]+\/.+$/;
+const ALLOWLIST_PATH_PATTERN =
+  /^(\/api\/v1\/workspaces\/[0-9a-f-]+\/.+|\/api\/v1\/openclaw\/data\/[a-z0-9-/]+)(\?.*)?$/;
 const DEFAULT_BFF_BASE_URL = "http://web_api.local";
 
 export type BffFetchOptions = {
@@ -30,7 +33,7 @@ export type BffError = {
 export class BffEgressViolation extends Error {
   readonly path: string;
   constructor(path: string) {
-    super(`vctraderai bff egress violation: path ${path} is not in the workspace-scoped allowlist`);
+    super(`vctraderai bff egress violation: path ${path} is not in the allowlist`);
     this.name = "BffEgressViolation";
     this.path = path;
   }
@@ -67,6 +70,18 @@ export function buildQueryString(query: Record<string, string | undefined> | und
 }
 
 function assertAllowlistedPath(path: string): void {
+  // Defence in depth: reject paths containing newlines, null bytes, or
+  // parent-traversal segments before the regex check. Each of these is
+  // technically rejected by the regex (newlines/nulls do not match the
+  // character class, and `..` does not match `[a-z0-9-/]`), but explicit
+  // rejection produces a clearer error and shields against future regex
+  // edits that might inadvertently widen the surface.
+  if (path.includes("\n") || path.includes("\r") || path.includes("\0")) {
+    throw new BffEgressViolation(path);
+  }
+  if (path.includes("/..") || path.includes("../") || path.includes("/./")) {
+    throw new BffEgressViolation(path);
+  }
   if (!ALLOWLIST_PATH_PATTERN.test(path)) {
     throw new BffEgressViolation(path);
   }

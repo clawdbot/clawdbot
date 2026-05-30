@@ -14,7 +14,7 @@ function recordingFetch(): {
 } {
   const urls: string[] = [];
   const fetchImpl = (async (input: RequestInfo | URL) => {
-    const url = typeof input === "string" ? input : input.toString();
+    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     urls.push(url);
     return new Response(JSON.stringify({}), { status: 200 });
   }) as typeof globalThis.fetch;

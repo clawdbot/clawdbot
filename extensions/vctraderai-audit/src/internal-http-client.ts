@@ -90,8 +90,8 @@ export function createBffFetch(deps: BffClientDeps = {}): BffFetchFn {
     const url = `${baseUrl}${path}${queryString}`;
     const headers: Record<string, string> = {
       accept: "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(options.headers ?? {}),
+      ...(token ? { authorization: `Bearer ${token}` } : undefined),
+      ...options.headers,
     };
     const response = await fetchImpl(url, {
       method: options.method ?? "GET",

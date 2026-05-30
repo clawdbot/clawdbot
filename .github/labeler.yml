@@ -595,3 +595,35 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/vctraderai-audit/**"
+"plugin: vctraderai-get-data-root":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-data-root/**"
+"plugin: vctraderai-get-coverage":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-get-coverage/**"
+"plugin: vctraderai-latest-ohlcv-file":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-latest-ohlcv-file/**"
+"plugin: vctraderai-describe-parquet":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-describe-parquet/**"
+"plugin: vctraderai-parquet-preview-tail":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-parquet-preview-tail/**"
+"plugin: vctraderai-ohlcv-tail":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-ohlcv-tail/**"
+"plugin: vctraderai-econ-calendar-tail":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-econ-calendar-tail/**"
+"plugin: vctraderai-list-tree":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/vctraderai-list-tree/**"
