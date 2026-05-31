@@ -1,4 +1,5 @@
 // Nextcloud Talk tests cover inbound.behavior plugin behavior.
+import { resolveChannelMessageSourceReplyDeliveryMode } from "openclaw/plugin-sdk/channel-outbound";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OutboundReplyPayload, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -421,5 +422,69 @@ describe("nextcloud-talk inbound behavior", () => {
         replyTo: "reply-1",
       },
     ]);
+  });
+
+  it("keeps group visible-reply delivery on the shared message-tool policy and its fallback", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setNextcloudTalkRuntime(coreRuntime as unknown as PluginRuntime);
+    createChannelPairingControllerMock.mockReturnValue({
+      readStoreForDmPolicy: vi.fn(async () => []),
+      issueChallenge: vi.fn(),
+    });
+    resolveNextcloudTalkRoomKindMock.mockResolvedValue("group");
+    const cfg = {
+      messages: {
+        groupChat: { visibleReplies: "message_tool" },
+      },
+      channels: { "nextcloud-talk": {} },
+    } as CoreConfig;
+
+    await handleNextcloudTalkInbound({
+      message: createMessage({
+        roomToken: "room-group",
+        roomName: "Ops",
+        isGroupChat: true,
+        text: "hello team",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+          rooms: {
+            "room-group": {
+              allowFrom: ["user-1"],
+              requireMention: false,
+            },
+          },
+        },
+      }),
+      config: cfg,
+      runtime: createRuntimeEnv(),
+    });
+
+    const assembledRequest = requireFirstMockArg(
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
+      "Nextcloud Talk assembled request",
+    ) as {
+      ctxPayload: Parameters<typeof resolveChannelMessageSourceReplyDeliveryMode>[0]["ctx"];
+      replyOptions?: unknown;
+    };
+
+    expect(assembledRequest.replyOptions).not.toHaveProperty("sourceReplyDeliveryMode");
+    expect(
+      resolveChannelMessageSourceReplyDeliveryMode({
+        cfg,
+        ctx: assembledRequest.ctxPayload,
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveChannelMessageSourceReplyDeliveryMode({
+        cfg,
+        ctx: assembledRequest.ctxPayload,
+        messageToolAvailable: false,
+      }),
+    ).toBe("automatic");
   });
 });

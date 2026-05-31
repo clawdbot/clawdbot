@@ -533,11 +533,6 @@ export async function handleNextcloudTalkInbound(params: {
       skillFilter: roomConfig?.skills,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
-      // Nextcloud Talk bots reply directly in the room — automatic delivery is
-      // always correct here. Without this, group chats fall back to
-      // "message_tool_only" mode which suppresses the reply when the message
-      // tool has no applicable actions for this channel.
-      sourceReplyDeliveryMode: "automatic",
     },
     record: {
       onRecordError: (err) => {
